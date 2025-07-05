@@ -1,0 +1,23 @@
+import { IsNotEmpty, IsNumber, IsUUID, IsInt, IsOptional } from 'class-validator';
+
+export class CreateBudgetDto {
+  @IsUUID()
+  @IsOptional()
+  projectGroupId?: string;
+
+  @IsUUID()
+  @IsOptional()
+  projectVersionId?: number;
+
+  @IsInt()
+  year: number;
+
+  @IsInt()
+  @IsOptional()
+  quarter?: number;
+
+  @IsNumber()
+  @IsOptional()
+  quantity: number;
+}
+
