@@ -95,7 +95,7 @@ export class WorkHistoryService {
   /**
    * Get all work histories
    */
-  async findAll(status?: string): Promise<WorkHistory[]> {
+async findAll(status?: string , role? : string): Promise<WorkHistory[]> {
     try {
       const query = this.workHistoryRepository.createQueryBuilder('work_history')
         .leftJoinAndSelect('work_history.user', 'user')
@@ -106,6 +106,9 @@ export class WorkHistoryService {
 
       if (status) {
         query.andWhere('work_history.status = :status', { status });
+      }
+      if (role) {
+        query.andWhere('work_history.role = :role', { role });
       }
       return query.getMany()
     } catch (error) {

@@ -42,16 +42,16 @@ export class WorkHistoryController {
    * @description Get all work histories
    */
   @Get()
-  async findAll(@Query('status') status : string) {
-    this.logger.log(`Fetching all admin work histories${status ? ` with status: ${status}` : ''}`);
+  async findAll(@Query('status') status: string, @Query('role') role: string) {
+    this.logger.log(`Fetching all admin work histories${status ? ` with status: ${status}` : ''}${role ? ` and role: ${role}` : ''}`);
     try {
-      return await this.workHistoryService.findAll(status);
+      // Pass both parameters to the service, perhaps as a filter object
+      return await this.workHistoryService.findAll( status, role );
     } catch (error) {
       this.logger.error('Error fetching work histories', error.stack);
       throw this.handleException(error);
     }
   }
-
   /**
    * @description Get all work histories grouped by user
    */

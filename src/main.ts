@@ -5,7 +5,7 @@ import { ClassSerializerInterceptor, ValidationPipe, VersioningType } from '@nes
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.enableCors({
-    origin: ['http://localhost:5173', 'https://67e3-122-155-108-226.ngrok-free.app'], // ✅ ระบุให้ตรง
+    origin: ['http://localhost:5173', 'https://9094fafecec2.ngrok-free.app'], // ✅ ระบุให้ตรง
     credentials: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     allowedHeaders: ['Content-Type', 'Authorization', 'Secret-Key'], // ✅ สำหรับ custom header
