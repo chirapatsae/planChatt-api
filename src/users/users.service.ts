@@ -1,18 +1,16 @@
 import {
   BadRequestException,
   Injectable,
-  InternalServerErrorException,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull, Not, DataSource, FindOptionsWhere } from 'typeorm';
+import { Repository } from 'typeorm';
 import { User } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { decryption, encryption, hashCitizenId } from 'src/util/encryption.util';
-import { plainToInstance } from 'class-transformer';
-import { WorkHistory } from 'src/work-history/entities/work-history.entity';
+import { handleException } from 'src/util/handleException';
 
 @Injectable()
 export class UsersService {
@@ -21,24 +19,15 @@ export class UsersService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-    @InjectRepository(WorkHistory)
-    private readonly workHistoryRepository: Repository<WorkHistory>,
-    private readonly dataSource: DataSource,
-  ) { }
+  ) {}
 
   /**
-     * Creates a new user after validating for uniqueness.
-     * @param createUserDto - Data for the new user.
-     * @returns The newly created user entity.
-     */
+   * Creates a new user. Unique constraints are handled by the database.
+   */
   async create(createUserDto: CreateUserDto): Promise<User> {
     try {
-      const { citizenId, email, phone } = createUserDto;
-      const hashedCid = hashCitizenId(citizenId);
-
-      await this._validateUniqueFields({ email, phone, citizenIdHash: hashedCid });
-
-      const encryptedCid = await encryption(citizenId);
+      const hashedCid = hashCitizenId(createUserDto.citizenId);
+      const encryptedCid = await encryption(createUserDto.citizenId);
 
       const user = this.userRepository.create({
         ...createUserDto,
@@ -46,169 +35,116 @@ export class UsersService {
         citizenIdHash: hashedCid,
       });
 
-      return await this.userRepository.save(user);
+      const savedUser = await this.userRepository.save(user);
+      savedUser.citizenId = await decryption(savedUser.citizenId); // Decrypt for the response
+      return savedUser;
     } catch (error) {
-      this.logger.error('Create user failed', error.stack);
-
-      // --- Logic from handleDBError is now inlined here ---
-      if (error instanceof BadRequestException || error instanceof NotFoundException) {
-        throw error;
-      }
-
-      // Handle unique constraint violation (PostgreSQL: 23505, MySQL: 1062)
-      if (error.code === '23505' || error.errno === 1062) {
-        const message: string = error.detail || error.message;
-        if (message.includes('email')) {
-          throw new BadRequestException('Email already exists.');
-        }
-        if (message.includes('phone')) {
-          throw new BadRequestException('Phone number already exists.');
-        }
-        if (message.includes('citizen_id_hash')) {
-          throw new BadRequestException('Citizen ID already exists.');
-        }
-      }
-
-      throw new InternalServerErrorException('An unexpected database error occurred.');
-      // --- End of inlined logic ---
+      handleException(this.logger, error);
     }
   }
 
   /**
-   * Retrieves all non-deleted users and decrypts their citizen IDs.
-   * @returns A list of all user entities.
+   * Retrieves all users. Does not decrypt sensitive data for performance.
    */
   async findAll(): Promise<User[]> {
     try {
-      const users = await this.userRepository.find({
-        where: { deletedAt: IsNull() },
-        relations: ['workHistory'],
+      // For list views, we avoid slow decryption operations.
+      // The encrypted citizenId is returned by default.
+      return await this.userRepository.find({
+        relations: { workHistory: true },
       });
-
-      // Decrypt citizen ID for each user.
-      // Note: This can be a performance bottleneck on large datasets.
-      // Consider pagination or returning a DTO without the decrypted ID for list views.
-      const decryptedUsers = await Promise.all(
-        users.map(async (user) => ({
-          ...user,
-          citizenId: await decryption(user.citizenId),
-        })),
-      );
-
-      return plainToInstance(User, decryptedUsers);
     } catch (error) {
-      this.logger.error('Find all users failed', error.stack);
-      throw new InternalServerErrorException('Failed to retrieve users');
+      handleException(this.logger, error);
     }
   }
 
   /**
-   * Finds a single user by ID, decrypts their citizen ID, and attaches the latest work history.
-   * @param id - The UUID of the user.
-   * @returns The user entity with decrypted data.
+   * Finds a single user by ID and decrypts their sensitive data.
    */
   async findOne(id: string): Promise<User> {
     try {
-      const user = await this.getUserOrThrow(id);
-
-      const latestHistory = await this.workHistoryRepository.findOne({
-        where: { user: { id } },
-        order: { createAt: 'DESC' },
+      const user = await this.userRepository.findOne({
+        where: { id },
+        relations: {
+          workHistory: {
+            localAdministrativeOrganization: true, // Example of nested relation
+          },
+        },
       });
 
-      const decryptedCitizenId = await decryption(user.citizenId);
+      if (!user) {
+        throw new NotFoundException(`User with ID ${id} not found`);
+      }
 
-      return plainToInstance(User, {
-        ...user,
-        citizenId: decryptedCitizenId,
-        workHistory: latestHistory, // This might already be on the user if relations are loaded
-      });
+      user.citizenId = await decryption(user.citizenId);
+      return user;
     } catch (error) {
-      this.logger.error(`Find user ${id} failed`, error.stack);
-      if (error instanceof NotFoundException) throw error;
-      throw new InternalServerErrorException(`Failed to retrieve user with ID ${id}`);
+      handleException(this.logger, error);
     }
   }
 
   /**
-   * Updates a user's details after validating new unique fields.
-   * @param id - The UUID of the user to update.
-   * @param updateUserDto - The data to update.
-   * @returns The updated user entity.
+   * Updates a user's details using the 'preload' pattern.
    */
   async update(id: string, updateUserDto: UpdateUserDto): Promise<User> {
     try {
-      await this.getUserOrThrow(id); // Ensure user exists before proceeding
+      const { citizenId, ...otherDetails } = updateUserDto;
+      const updatePayload: Partial<UpdateUserDto> = { ...otherDetails };
 
-      const { citizenId, email, phone } = updateUserDto;
-      let hashedCid: string | undefined;
-      let encryptedCid: string | undefined;
-
-      // Prepare data for validation and update
       if (citizenId) {
-        hashedCid = hashCitizenId(citizenId);
-        encryptedCid = await encryption(citizenId);
-        await this._validateUniqueFields({ citizenIdHash: hashedCid }, id);
+        updatePayload['citizenId'] = await encryption(citizenId);
+        updatePayload['citizenIdHash'] = hashCitizenId(citizenId);
       }
-      if (email) await this._validateUniqueFields({ email }, id);
-      if (phone) await this._validateUniqueFields({ phone }, id);
+      
+      const userToUpdate = await this.userRepository.preload({
+        id,
+        ...updatePayload,
+      });
 
-      const updatePayload = {
-        ...updateUserDto,
-        ...(encryptedCid && { citizenId: encryptedCid }),
-        ...(hashedCid && { citizenIdHash: hashedCid }),
-      };
+      if (!userToUpdate) {
+        throw new NotFoundException(`User with ID ${id} not found to update`);
+      }
 
-      // TypeORM's save method with an ID will perform an update.
-      await this.userRepository.save({ id, ...updatePayload });
-
-      return this.findOne(id); // Return the full, updated user entity
+      const savedUser = await this.userRepository.save(userToUpdate);
+      savedUser.citizenId = await decryption(savedUser.citizenId); // Decrypt for the response
+      return savedUser;
     } catch (error) {
-      this.logger.error(`Update user ${id} failed`, error.stack);
-      if (error instanceof BadRequestException || error instanceof NotFoundException) {
-        throw error;
-      }
-      throw new InternalServerErrorException(`Failed to update user with ID ${id}`);
+      handleException(this.logger, error);
     }
   }
 
-
-
   /**
-   * Soft deletes a user by setting the `deletedAt` timestamp.
-   * @param id - The UUID of the user to soft delete.
+   * Soft deletes a user by ID.
    */
   async softRemove(id: string): Promise<{ message: string }> {
     try {
-      const user = await this.getUserOrThrow(id);
-      await this.userRepository.softRemove(user);
-      return { message: `User with ID ${id} has been soft deleted` };
+      const result = await this.userRepository.softDelete(id);
+      if (result.affected === 0) {
+        throw new NotFoundException(`User with ID ${id} not found`);
+      }
+      return { message: `User with ID ${id} has been soft-deleted.` };
     } catch (error) {
-      this.logger.error(`Soft delete user ${id} failed`, error.stack);
-      if (error instanceof NotFoundException) throw error;
-      throw new InternalServerErrorException(`Failed to soft delete user with ID ${id}`);
+      handleException(this.logger, error);
     }
   }
 
   /**
-   * Permanently deletes a user from the database.
-   * @param id - The UUID of the user to permanently delete.
+   * Permanently deletes a user by ID.
    */
   async remove(id: string): Promise<{ message: string }> {
     try {
-      const user = await this.getUserOrThrow(id);
-      await this.userRepository.remove(user);
-      return { message: `User with ID ${id} has been permanently deleted` };
+      const result = await this.userRepository.delete(id);
+      if (result.affected === 0) {
+        throw new NotFoundException(`User with ID ${id} not found`);
+      }
+      return { message: `User with ID ${id} has been permanently removed.` };
     } catch (error) {
-      this.logger.error(`Permanent delete user ${id} failed`, error.stack);
-      if (error instanceof NotFoundException) throw error;
-      throw new InternalServerErrorException(`Failed to permanently delete user with ID ${id}`);
+      handleException(this.logger, error);
     }
   }
 
   /**
    * Restores a soft-deleted user.
-   * @param id - The UUID of the user to restore.
    */
   async restore(id: string): Promise<{ message: string }> {
     try {
@@ -216,67 +152,9 @@ export class UsersService {
       if (result.affected === 0) {
         throw new NotFoundException(`Soft-deleted user with ID ${id} not found`);
       }
-      return { message: `User with ID ${id} has been restored` };
+      return { message: `User with ID ${id} has been restored.` };
     } catch (error) {
-      this.logger.error(`Restore user ${id} failed`, error.stack);
-      if (error instanceof NotFoundException) throw error;
-      throw new InternalServerErrorException(`Failed to restore user with ID ${id}`);
+      handleException(this.logger, error);
     }
   }
-
-  // =================================================================================
-  // PRIVATE HELPER METHODS
-  // =================================================================================
-
-  /**
-   * A reusable helper to fetch a user by ID or throw a NotFoundException.
-   * @param id - The UUID of the user.
-   * @returns The user entity.
-   * @private
-   */
-  private async getUserOrThrow(id: string): Promise<User> {
-    const user = await this.userRepository.findOneBy({ id });
-    if (!user) {
-      throw new NotFoundException(`User with ID ${id} not found`);
-    }
-    return user;
-  }
-
-  /**
-   * Checks for the existence of a user based on unique fields (email, phone, citizenIdHash).
-   * Throws a BadRequestException if a duplicate is found.
-   * @param fields - The fields to check for uniqueness.
-   * @param excludeId - An optional user ID to exclude from the check (used during updates).
-   * @private
-   */
-  private async _validateUniqueFields(
-    fields: { email?: string; phone?: string; citizenIdHash?: string },
-    excludeId?: string,
-  ): Promise<void> {
-    const whereClauses: FindOptionsWhere<User>[] = [];
-
-    if (fields.email) whereClauses.push({ email: fields.email });
-    if (fields.phone) whereClauses.push({ phone: fields.phone });
-    if (fields.citizenIdHash) whereClauses.push({ citizenIdHash: fields.citizenIdHash });
-
-    if (whereClauses.length === 0) return;
-
-    // Add exclusion for the current user's ID if provided
-    const finalWhere = excludeId ? whereClauses.map(clause => ({ ...clause, id: Not(excludeId) })) : whereClauses;
-
-    const existingUser = await this.userRepository.findOne({ where: finalWhere });
-
-    if (existingUser) {
-      if (fields.email && existingUser.email === fields.email) {
-        throw new BadRequestException('Email already exists');
-      }
-      if (fields.phone && existingUser.phone === fields.phone) {
-        throw new BadRequestException('Phone number already exists');
-      }
-      if (fields.citizenIdHash && existingUser.citizenIdHash === fields.citizenIdHash) {
-        throw new BadRequestException('Citizen ID already exists');
-      }
-    }
-  }
-
 }

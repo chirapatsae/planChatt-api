@@ -1,16 +1,16 @@
 import {
   BadRequestException,
   Injectable,
-  InternalServerErrorException,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { CreateLocalAdministrativeOrganizationDto } from './dto/create-local-administrative-organization.dto';
 import { UpdateLocalAdministrativeOrganizationDto } from './dto/update-local-administrative-organization.dto';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Not, Repository } from 'typeorm';
-import { User } from 'src/users/entities/user.entity';
 import { LocalAdministrativeOrganization } from './entities/local-administrative-organization.entity';
+import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
+import { handleException } from 'src/util/handleException';
 
 @Injectable()
 export class LocalAdministrativeOrganizationsService {
@@ -20,125 +20,142 @@ export class LocalAdministrativeOrganizationsService {
     @InjectRepository(LocalAdministrativeOrganization)
     private readonly laoRepository: Repository<LocalAdministrativeOrganization>,
 
-    @InjectRepository(User)
-    private readonly userRepository: Repository<User>,
+    @InjectRepository(Amphoe)
+    private readonly amphoeRepository: Repository<Amphoe>,
   ) {}
 
+  /**
+   * Creates a new Local Administrative Organization.
+   */
   async create(dto: CreateLocalAdministrativeOrganizationDto): Promise<LocalAdministrativeOrganization> {
     try {
-      const { code, name } = dto;
+      const { code, name, type, amphoeId } = dto;
 
-      const existingLao = await this.laoRepository.findOne({ where: { id : code } });
-      if (existingLao) {
-        throw new BadRequestException('Amphoe with this code already exists');
+      const amphoe = await this.amphoeRepository.findOneBy({ id: amphoeId });
+      if (!amphoe) {
+        throw new NotFoundException(`Amphoe with ID ${amphoeId} not found`);
       }
 
-      const lao = this.laoRepository.create({ id : code, name});
+      const lao = this.laoRepository.create({
+        id: code,
+        name,
+        type,
+        amphoe,
+      });
+
       return await this.laoRepository.save(lao);
     } catch (error) {
-      this.logger.error('Failed to create LAO', error.stack);
-      this.handleException(error);
+      // Handles unique constraint violations and other errors
+      handleException(this.logger, error);
     }
   }
 
+  /**
+   * Retrieves all Local Administrative Organizations with their Amphoe relation.
+   */
   async findAll(): Promise<LocalAdministrativeOrganization[]> {
     try {
-      return await this.laoRepository.find();
+      return await this.laoRepository.find({
+        relations: ['amphoe'],
+      });
     } catch (error) {
-      this.logger.error('Failed to fetch all LAOs', error.stack);
-      this.handleException(error);
+      handleException(this.logger, error);
     }
   }
 
+  /**
+   * Retrieves a single Local Administrative Organization by ID with its Amphoe relation.
+   */
   async findOne(id: string): Promise<LocalAdministrativeOrganization> {
     try {
-      const lao = await this.laoRepository.findOneBy({ id });
+      const lao = await this.laoRepository.findOne({
+        where: { id },
+        relations: ['amphoe'],
+      });
+
       if (!lao) {
-        throw new NotFoundException('Local Administrative Organization not found');
+        throw new NotFoundException(`Local Administrative Organization with ID ${id} not found`);
       }
       return lao;
     } catch (error) {
-      this.logger.error(`Failed to fetch LAO with id ${id}`, error.stack);
-      this.handleException(error);
+      handleException(this.logger, error);
     }
   }
 
+  /**
+   * Updates a Local Administrative Organization.
+   */
   async update(id: string, dto: UpdateLocalAdministrativeOrganizationDto): Promise<LocalAdministrativeOrganization> {
     try {
+      // Use a partial type for the payload for better type safety
+      const updatePayload: Partial<UpdateLocalAdministrativeOrganizationDto> & { amphoe?: Amphoe } = { ...dto };
 
-      const existingCode = await this.laoRepository.findOne({
-        where: {  id: Not(id) },
+      if (dto.amphoeId) {
+        const amphoe = await this.amphoeRepository.findOneBy({ id: dto.amphoeId });
+        if (!amphoe) {
+          throw new NotFoundException(`Amphoe with ID ${dto.amphoeId} not found`);
+        }
+        updatePayload.amphoe = amphoe;
+      }
+
+      const laoToUpdate = await this.laoRepository.preload({
+        id: id,
+        ...updatePayload,
       });
-      if (existingCode) {
-        throw new BadRequestException('Amphoe with this code already exists');
+
+      if (!laoToUpdate) {
+        throw new NotFoundException(`Local Administrative Organization with ID ${id} not found`);
       }
 
-      const lao = await this.laoRepository.findOne({ where: { id } });
-      if (!lao) {
-        throw new NotFoundException('Local Administrative Organization not found');
-      }
-
-      Object.assign(lao, dto);
-      return await this.laoRepository.save(lao);
-    } catch (error) {
-      this.logger.error(`Failed to update LAO id ${id}`, error.stack);
-      this.handleException(error);
+      return await this.laoRepository.save(laoToUpdate);
+    } catch (error)
+    {
+      handleException(this.logger, error);
     }
   }
 
+  /**
+   * Permanently removes a Local Administrative Organization by its ID.
+   */
   async remove(id: string): Promise<{ message: string }> {
     try {
-      const lao = await this.laoRepository.findOne({ where: { id } });
-      if (!lao) {
-        throw new NotFoundException('Local Administrative Organization not found');
+      const result = await this.laoRepository.delete(id);
+      if (result.affected === 0) {
+        throw new NotFoundException(`LAO with ID ${id} not found`);
       }
-
-      await this.laoRepository.remove(lao);
-      this.logger.warn(`LAO with id ${id} has been permanently deleted`);
-      return { message: `LAO with id ${id} has been permanently deleted` };
+      return { message: `LAO with ID ${id} has been permanently removed.` };
     } catch (error) {
-      this.logger.error(`Failed to delete LAO id ${id}`, error.stack);
-      this.handleException(error);
+      handleException(this.logger, error);
     }
   }
 
+  /**
+   * Soft-deletes a Local Administrative Organization by its ID.
+   */
   async softRemove(id: string): Promise<{ message: string }> {
     try {
-      const lao = await this.laoRepository.findOne({ where: { id } });
-      if (!lao) {
-        throw new NotFoundException('Local Administrative Organization not found');
+      const result = await this.laoRepository.softDelete(id);
+      if (result.affected === 0) {
+        throw new NotFoundException(`LAO with ID ${id} not found`);
       }
-
-      await this.laoRepository.softRemove(lao);
-      this.logger.warn(`LAO with id ${id} has been soft-deleted`);
-      return { message: `LAO with id ${id} has been soft-deleted` };
+      return { message: `LAO with ID ${id} has been soft-removed.` };
     } catch (error) {
-      this.logger.error(`Failed to soft-delete LAO id ${id}`, error.stack);
-      this.handleException(error);
+      handleException(this.logger, error);
     }
   }
 
+  /**
+   * Restores a soft-deleted Local Administrative Organization by its ID.
+   */
   async restore(id: string): Promise<{ message: string }> {
     try {
-      const lao = await this.laoRepository.findOne({ where: { id }, withDeleted: true });
-      if (!lao) {
-        throw new NotFoundException('Local Administrative Organization not found');
+      const result = await this.laoRepository.restore(id);
+      if (result.affected === 0) {
+        throw new NotFoundException(`LAO with ID ${id} not found or was not deleted.`);
       }
-      await this.laoRepository.restore(id);
-      this.logger.log(`LAO with id ${id} has been restored`);
-
-      return { message: `LAO with id ${id} has been restored` };
+      return { message: `LAO with ID ${id} has been restored.` };
     } catch (error) {
-      this.logger.error(`Failed to restore LAO id ${id}`, error.stack);
-      this.handleException(error);
+      handleException(this.logger, error);
     }
-  }
-
-  private handleException(error: any): never {
-    if (error instanceof BadRequestException || error instanceof NotFoundException) {
-      throw error;
-    }
-
-    throw new InternalServerErrorException('Unexpected server error');
   }
 }

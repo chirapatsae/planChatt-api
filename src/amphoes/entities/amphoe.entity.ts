@@ -9,7 +9,7 @@ export class Amphoe {
     @PrimaryColumn()
     id: string;
 
-    @Column()
+    @Column({ unique: true })
     name: string;
 
     @Column({ default: () => 'CURRENT_TIMESTAMP', name: 'create_at' })

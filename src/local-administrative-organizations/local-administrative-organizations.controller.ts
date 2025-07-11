@@ -1,3 +1,5 @@
+// src/local-administrative-organizations/local-administrative-organizations.controller.ts
+
 import {
   Controller,
   Get,
@@ -6,111 +8,61 @@ import {
   Patch,
   Param,
   Delete,
-  Logger,
-  NotFoundException,
-  BadRequestException,
-  InternalServerErrorException,
+  Query,
+  UseGuards,
 } from '@nestjs/common';
 import { LocalAdministrativeOrganizationsService } from './local-administrative-organizations.service';
 import { CreateLocalAdministrativeOrganizationDto } from './dto/create-local-administrative-organization.dto';
 import { UpdateLocalAdministrativeOrganizationDto } from './dto/update-local-administrative-organization.dto';
-import { ParseUUIDPipe } from '@nestjs/common';
+import { JwtAuthGuard } from 'src/auth/auth.guard';
 
 @Controller({
   path: 'local-administrative-organizations',
   version: '1',
 })
+@UseGuards(JwtAuthGuard)
 export class LocalAdministrativeOrganizationsController {
-  private readonly logger = new Logger(LocalAdministrativeOrganizationsController.name);
-
   constructor(
     private readonly localAdministrativeOrganizationsService: LocalAdministrativeOrganizationsService,
   ) {}
 
   @Post()
-  async create(@Body() dto: CreateLocalAdministrativeOrganizationDto) {
-    this.logger.log(`Creating LAO with code: ${dto.code}`);
-    try {
-      return await this.localAdministrativeOrganizationsService.create(dto);
-    } catch (error) {
-      this.logger.error('Error creating LAO', error.stack);
-      throw this.handleException(error);
-    }
+  create(@Body() dto: CreateLocalAdministrativeOrganizationDto) {
+    // โค้ดคลีนขึ้นมาก! แค่เรียก service แล้ว return
+    return this.localAdministrativeOrganizationsService.create(dto);
   }
 
   @Get()
-  async findAll() {
-    this.logger.log('Fetching all LAOs');
+  findAll() {
     return this.localAdministrativeOrganizationsService.findAll();
   }
 
   @Get(':id')
-  async findOne(@Param('id', new ParseUUIDPipe()) id: string) {
-    this.logger.log(`Fetching LAO with id: ${id}`);
-    try {
-      return await this.localAdministrativeOrganizationsService.findOne(id);
-    } catch (error) {
-      this.logger.error(`Error fetching LAO ${id}`, error.stack);
-      throw this.handleException(error);
-    }
+  findOne(@Param('id') id: string) {
+    return this.localAdministrativeOrganizationsService.findOne(id);
   }
 
   @Patch(':id')
-  async update(
-    @Param('id', new ParseUUIDPipe()) id: string,
+  update(
+    @Param('id') id: string,
     @Body() dto: UpdateLocalAdministrativeOrganizationDto,
   ) {
-    this.logger.log(`Updating LAO id: ${id}`);
-    try {
-      return await this.localAdministrativeOrganizationsService.update(id, dto);
-    } catch (error) {
-      this.logger.error(`Error updating LAO ${id}`, error.stack);
-      throw this.handleException(error);
-    }
+    return this.localAdministrativeOrganizationsService.update(id, dto);
   }
 
   @Delete(':id')
-  async remove(@Param('id', new ParseUUIDPipe()) id: string) {
-    this.logger.warn(`Deleting LAO id: ${id}`);
-    try {
-      return await this.localAdministrativeOrganizationsService.remove(id);
-    } catch (error) {
-      this.logger.error(`Error deleting LAO ${id}`, error.stack);
-      throw this.handleException(error);
-    }
-  }
-
-  @Delete(':id/soft-remove')
-  async softRemove(@Param('id', new ParseUUIDPipe()) id: string) {
-    this.logger.warn(`Soft Deleting LAO id: ${id}`);
-    try {
-      return await this.localAdministrativeOrganizationsService.softRemove(id);
-    } catch (error) {
-      this.logger.error(`Error soft deleting LAO ${id}`, error.stack);
-      throw this.handleException(error);
-    }
+  remove(
+    @Param('id') id: string,
+    @Query('mode') mode: 'soft' | 'hard' = 'soft',
+  ) {
+    return mode === 'soft'
+      ? this.localAdministrativeOrganizationsService.softRemove(id)
+      : this.localAdministrativeOrganizationsService.remove(id);
   }
 
   @Patch(':id/restore')
-  async restore(@Param('id', new ParseUUIDPipe()) id: string) {
-    this.logger.log(`Restoring LAO id: ${id}`);
-    try {
-      return await this.localAdministrativeOrganizationsService.restore(id);
-    } catch (error) {
-      this.logger.error(`Error restoring LAO ${id}`, error.stack);
-      throw this.handleException(error);
-    }
+  restore(@Param('id') id: string) {
+    return this.localAdministrativeOrganizationsService.restore(id);
   }
 
-  private handleException(error: any) {
-    if (error instanceof BadRequestException || error instanceof NotFoundException) {
-      return error;
-    }
-
-    if (typeof error.message === 'string') {
-      return new BadRequestException(error.message);
-    }
-
-    return new InternalServerErrorException('Unexpected error occurred');
-  }
 }

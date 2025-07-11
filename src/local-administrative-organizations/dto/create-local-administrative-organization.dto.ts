@@ -11,9 +11,5 @@ export class CreateLocalAdministrativeOrganizationDto {
     type: string;
 
     @IsNotEmpty()
-    @IsUUID()
-    userId: string;
-
-    @IsNotEmpty()
-    amphoeId: number;
+    amphoeId: string;
 }
