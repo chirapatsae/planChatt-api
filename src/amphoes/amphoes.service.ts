@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  InternalServerErrorException,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
@@ -18,8 +19,7 @@ export class AmphoesService {
   constructor(
     @InjectRepository(Amphoe)
     private readonly amphoeRepository: Repository<Amphoe>,
-    @InjectRepository(User)
-    private readonly userRepository: Repository<User>,
+
   ) { }
 
   async create(dto: CreateAmphoeDto): Promise<Amphoe> {
@@ -32,10 +32,15 @@ export class AmphoesService {
       }
 
       const amphoe = this.amphoeRepository.create({ id: code, name, });
+      this.logger.log(amphoe)
       return await this.amphoeRepository.save(amphoe);
     } catch (error) {
-      this.logger.error('Create amphoe failed', error.stack);
-      throw error;
+      this.logger.error(`Failed to create amphoe. DTO: ${JSON.stringify(dto)}`, error.stack);
+      // If it's a known client error, re-throw it. Otherwise, wrap it.
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+      throw new InternalServerErrorException('An unexpected error occurred while creating the amphoe.');
     }
   }
 
@@ -62,19 +67,15 @@ export class AmphoesService {
 
   async update(id: string, dto: UpdateAmphoeDto): Promise<Amphoe> {
     try {
-      const { code } = dto;
 
-      const duplicate = await this.amphoeRepository.findOne({
-        where: { id: Not(id) },
+      const founded = await this.amphoeRepository.findOne({
+        where: { id: id },
       });
-      if (duplicate) {
-        throw new BadRequestException('Amphoe with this code already exists');
-      }
-
+      this.logger.log(founded)
+   
       const amphoe = await this.getAmphoeOrThrow(id);
 
-
-      Object.assign(amphoe, { id: code, ...dto });
+      Object.assign(amphoe, {  name : dto.name });
       return await this.amphoeRepository.save(amphoe);
     } catch (error) {
       this.logger.error(`Update amphoe ${id} failed`, error.stack);
@@ -139,14 +140,4 @@ export class AmphoesService {
     return amphoe;
   }
 
-  /**
-   * Reusable method: get user or throw
-   */
-  private async getUserOrThrow(id: string): Promise<User> {
-    const user = await this.userRepository.findOne({ where: { id } });
-    if (!user) {
-      throw new BadRequestException('User not found');
-    }
-    return user;
-  }
 }
