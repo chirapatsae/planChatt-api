@@ -29,7 +29,6 @@ export class AmphoesService {
       const amphoe = this.amphoeRepository.create({ id: code, name });
       return await this.amphoeRepository.save(amphoe);
     } catch (error) {
-      // Handles unique constraint violations and other errors
       handleException(this.logger, error);
     }
   }
@@ -39,7 +38,6 @@ export class AmphoesService {
    */
   async findAll(): Promise<Amphoe[]> {
     try {
-      // Using 'where' is more explicit for soft-delete checks
       return await this.amphoeRepository.find({
         where: { deletedAt: undefined },
         relations: ['localAdministrativeOrganization'],

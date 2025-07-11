@@ -39,6 +39,10 @@ import { AiService } from './ai/ai.service';
 import { AiModule } from './ai/ai.module';
 import { WorkHistoryAmphoeResponsibility } from './work-history/entities/work-history-amphoe-responsibility.entity';
 import { OnboardingModule } from './onboarding/onboarding.module';
+import { RolesModule } from './roles/roles.module';
+import { Role } from './roles/entities/role.entity';
+import { WorkStatusModule } from './work-status/work-status.module';
+import { WorkStatus } from './work-status/entities/work-status.entity';
 
 @Module({
   imports: [
@@ -52,7 +56,7 @@ import { OnboardingModule } from './onboarding/onboarding.module';
       username: 'postgres',
       password: 'Pao@1234!',
       database: 'project_bank',
-      entities: [User,Strategy,Tactic, Plan,PlanTactic,WorkHistoryAmphoeResponsibility, WorkHistory , Amphoe , LocalAdministrativeOrganization , Status ,  TrackingStatus , BudgetPlan , ProjectGroup , ProjectType , Budget , Comment],
+      entities: [User,Strategy,Tactic, Plan,PlanTactic,WorkHistoryAmphoeResponsibility, WorkHistory , Amphoe , LocalAdministrativeOrganization , Status ,  TrackingStatus , BudgetPlan , ProjectGroup , ProjectType , Budget , Comment , Role , WorkStatus] ,
       synchronize: true,
     }),
     AmphoesModule,
@@ -71,6 +75,8 @@ import { OnboardingModule } from './onboarding/onboarding.module';
     CommentsModule,
     AiModule,
     OnboardingModule,
+    RolesModule,
+    WorkStatusModule,
     ],
   controllers: [AppController, AiController],
   providers: [AppService, AiService],
