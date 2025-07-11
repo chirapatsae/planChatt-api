@@ -11,9 +11,10 @@ import {
   BadRequestException,
   InternalServerErrorException,
   UseGuards,
+  Query,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
-import { CreateUserDto, OnboardDto } from './dto/create-user.dto';
+import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 
@@ -21,9 +22,9 @@ import { JwtAuthGuard } from 'src/auth/auth.guard';
   path: 'users',
   version: '1',
 })
+// @UseGuards(JwtAuthGuard)
 export class UsersController {
   private readonly logger = new Logger(UsersController.name);
-
   constructor(private readonly usersService: UsersService) {}
 
   @Post()
@@ -38,7 +39,6 @@ export class UsersController {
   }
 
   @Get()
-  @UseGuards(JwtAuthGuard)
   async findAll() {
     this.logger.log('Fetching all users');
     try {
@@ -48,18 +48,6 @@ export class UsersController {
       throw this.handleException(error);
     }
   }
-  @Get()
-  @UseGuards(JwtAuthGuard)
-  async findAllAdmin() {
-    this.logger.log('Fetching all users');
-    try {
-      return await this.usersService.findAll();
-    } catch (error) {
-      this.logger.error('Error fetching users', error.stack);
-      throw this.handleException(error);
-    }
-  }
-
 
   @Get(':id')
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
@@ -69,18 +57,6 @@ export class UsersController {
     } catch (error) {
       this.logger.error(`Error fetching user ${id}`, error.stack);
       throw this.handleException(error);
-    }
-  }
-  @Post('/onboard')
-  async onBoard(
-    @Body() onBoardDto: OnboardDto,
-  ){
-    this.logger.log(`Onboarding user data`);
-    try {
-      return await this.usersService.onboardUserAndWorkHistory(onBoardDto)
-    } catch (error) {
-      this.logger.error(`Error Update user Data and Work History` , error.stack)
-      throw this.handleException(error)
     }
   }
 
@@ -98,24 +74,19 @@ export class UsersController {
     }
   }
 
-  @Delete(':id/softremove')
-  async softRemove(@Param('id', ParseUUIDPipe) id: string) {
-    this.logger.warn(`Soft removing user ${id}`);
-    try {
-      return await this.usersService.softRemove(id);
-    } catch (error) {
-      this.logger.error(`Error soft removing user ${id}`, error.stack);
-      throw this.handleException(error);
-    }
-  }
-
   @Delete(':id')
-  async remove(@Param('id', ParseUUIDPipe) id: string) {
-    this.logger.warn(`Removing user ${id}`);
+  async remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('mode') mode: 'soft' | 'hard' = 'soft',
+  ) {
+    const action = mode === 'soft' ? 'Soft removing' : 'Hard removing';
+    this.logger.warn(`${action} user ${id}`);
     try {
-      return await this.usersService.remove(id);
+      return mode === 'soft'
+        ? await this.usersService.softRemove(id)
+        : await this.usersService.remove(id);
     } catch (error) {
-      this.logger.error(`Error removing user ${id}`, error.stack);
+      this.logger.error(`Error ${action.toLowerCase()} user ${id}`, error.stack);
       throw this.handleException(error);
     }
   }

@@ -38,6 +38,7 @@ import { AiController } from './ai/ai.controller';
 import { AiService } from './ai/ai.service';
 import { AiModule } from './ai/ai.module';
 import { WorkHistoryAmphoeResponsibility } from './work-history/entities/work-history-amphoe-responsibility.entity';
+import { OnboardingModule } from './onboarding/onboarding.module';
 
 @Module({
   imports: [
@@ -69,6 +70,7 @@ import { WorkHistoryAmphoeResponsibility } from './work-history/entities/work-hi
     PdfModule,
     CommentsModule,
     AiModule,
+    OnboardingModule,
     ],
   controllers: [AppController, AiController],
   providers: [AppService, AiService],

@@ -34,9 +34,7 @@ export class BudgetPlanService {
       }
 
       // 🧠 ดึง budget plan เดิมทั้งหมดของ user
-      const existingPlans = await this.budgetPlanRepository.find({
-        where: { user: { id: userId } },
-      });
+      const existingPlans = await this.budgetPlanRepository.find();
 
       // ❌ เช็กว่า startYear กับ endYear ไม่ซ้ำ exact กับของเดิม
       const isExactDuplicate = existingPlans.some(
@@ -74,7 +72,6 @@ export class BudgetPlanService {
         startYear,
         endYear,
         isActive: true,
-        user,
       });
 
       const saved = await this.budgetPlanRepository.save(newBudgetPlan);

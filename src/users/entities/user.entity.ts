@@ -1,4 +1,3 @@
-import { BudgetPlan } from './../../budget_plan/entities/budget_plan.entity';
 import { Exclude } from 'class-transformer';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import {
@@ -18,29 +17,29 @@ export class User {
   citizenId: string;
 
   @Column({ name: 'citizen_id_hash', unique: true })
-  @Exclude() // 👈 ซ่อน
+  @Exclude()
   citizenIdHash: string;
 
   @Column()
-  prefix : string
+  prefix: string
 
   @Column()
-  firstname : string
+  firstname: string
 
   @Column()
-  lastname : string
+  lastname: string
 
-  @Column({   nullable : true })
+  @Column({ nullable: true })
   email?: string;
 
-  @Column({  nullable : true})
+  @Column({ nullable: true })
   phone?: string;
 
-  @Column({name : 'is_first_login' , default : false})
-  isFirstLogin : boolean
+  @Column({ name: 'is_first_login', default: true })
+  isFirstLogin: boolean
 
-  @DeleteDateColumn({ nullable: true })
-  @Exclude() // 👈 ซ่อน
+  @DeleteDateColumn({ nullable: true, name: 'delete_at' })
+  @Exclude()
   deletedAt?: Date;
 
   @Column({ default: () => 'CURRENT_TIMESTAMP', name: 'create_at' })
@@ -52,9 +51,4 @@ export class User {
   })
   workHistory: WorkHistory[];
 
-  @OneToMany(() => BudgetPlan, (budgetPlan) => budgetPlan.user, {
-    onDelete: 'CASCADE',
-    onUpdate: 'CASCADE',
-  })
-  budgetPlan: BudgetPlan[];
 }

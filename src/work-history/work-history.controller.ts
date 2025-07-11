@@ -27,7 +27,7 @@ import { JwtPayloadUser } from 'src/auth/jwt.strategy';
   path: 'work-history',
   version: '1',
 })
-@UseGuards(JwtAuthGuard)
+// @UseGuards(JwtAuthGuard)
 
 export class WorkHistoryController {
   private readonly logger = new Logger(WorkHistoryController.name);
