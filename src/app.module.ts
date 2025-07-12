@@ -43,6 +43,10 @@ import { RolesModule } from './roles/roles.module';
 import { Role } from './roles/entities/role.entity';
 import { WorkStatusModule } from './work-status/work-status.module';
 import { WorkStatus } from './work-status/entities/work-status.entity';
+import { PositionsModule } from './positions/positions.module';
+import { Position } from './positions/entities/position.entity';
+import { GovernmentAgenciesModule } from './government-agencies/government-agencies.module';
+import { GovernmentAgency } from './government-agencies/entities/government-agency.entity';
 
 @Module({
   imports: [
@@ -56,7 +60,7 @@ import { WorkStatus } from './work-status/entities/work-status.entity';
       username: 'postgres',
       password: 'Pao@1234!',
       database: 'project_bank',
-      entities: [User,Strategy,Tactic, Plan,PlanTactic,WorkHistoryAmphoeResponsibility, WorkHistory , Amphoe , LocalAdministrativeOrganization , Status ,  TrackingStatus , BudgetPlan , ProjectGroup , ProjectType , Budget , Comment , Role , WorkStatus] ,
+      entities: [User,Strategy,Tactic, Plan,PlanTactic,WorkHistoryAmphoeResponsibility, WorkHistory , Amphoe , LocalAdministrativeOrganization , Status ,  TrackingStatus , BudgetPlan , ProjectGroup , ProjectType , Budget , Comment , Role , WorkStatus, Position, GovernmentAgency] ,
       synchronize: true,
     }),
     AmphoesModule,
@@ -77,6 +81,8 @@ import { WorkStatus } from './work-status/entities/work-status.entity';
     OnboardingModule,
     RolesModule,
     WorkStatusModule,
+    PositionsModule,
+    GovernmentAgenciesModule,
     ],
   controllers: [AppController, AiController],
   providers: [AppService, AiService],
