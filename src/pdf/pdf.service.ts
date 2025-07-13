@@ -33,7 +33,7 @@ export class PdfService {
 
   async generateProjectReport(projects: any[]): Promise<Buffer> {
     // 1) load active budget plan
-    const bp = await this.budgetPlanRepo.findOneBy({ isActive: true });
+    const bp = await this.budgetPlanRepo.findOneBy({ isLatest: true });
     const budgetPlanName = bp?.name ?? 'ไม่พบแผนงบประมาณ';
 
     // 2) font definitions

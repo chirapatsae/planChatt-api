@@ -3,10 +3,10 @@ import { BudgetPlanService } from './budget_plan.service';
 import { BudgetPlanController } from './budget_plan.controller';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BudgetPlan } from './entities/budget_plan.entity';
-import { User } from 'src/users/entities/user.entity';
+import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 
 @Module({
-  imports : [TypeOrmModule.forFeature([BudgetPlan , User])], 
+  imports : [TypeOrmModule.forFeature([BudgetPlan , WorkHistory])], 
   controllers: [BudgetPlanController],
   providers: [BudgetPlanService],
 })

@@ -1,14 +1,18 @@
+import { Budget } from './../budget/entities/budget.entity';
 import {
   Injectable,
   NotFoundException,
   InternalServerErrorException,
   Logger,
+  BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Not, Repository } from 'typeorm';
 import { BudgetPlan } from './entities/budget_plan.entity';
 import { CreateBudgetPlanDto } from './dto/create-budget_plan.dto';
-import { User } from 'src/users/entities/user.entity';
+import { WorkHistory } from 'src/work-history/entities/work-history.entity';
+import { handleException } from 'src/util/handleException';
+import { UpdateBudgetPlanDto } from './dto/update-budget_plan.dto';
 
 @Injectable()
 export class BudgetPlanService {
@@ -18,71 +22,59 @@ export class BudgetPlanService {
     @InjectRepository(BudgetPlan)
     private readonly budgetPlanRepository: Repository<BudgetPlan>,
 
-    @InjectRepository(User)
-    private readonly userRepository: Repository<User>,
+    @InjectRepository(WorkHistory)
+    private readonly workHistoryRepository: Repository<WorkHistory>,
+    private readonly dataSource: DataSource
   ) { }
 
   async create(dto: CreateBudgetPlanDto, userId: string): Promise<BudgetPlan> {
     try {
       const { name, startYear, endYear } = dto;
 
-      const user = await this.userRepository.findOne({ where: { id: userId } });
+      const workHistory = await this.workHistoryRepository.findOne({
+        where: { user: { id: userId }, workStatus: { name: 'approved' } },
+      });
+      if (!workHistory) throw new NotFoundException('Work history not found for this user');
 
-      if (!user) {
-        this.logger.warn(`User not found: ${userId}`);
-        throw new NotFoundException(`User with id ${userId} not found`);
+      if (startYear >= endYear) {
+        throw new BadRequestException('Start year must be less than end year');
       }
 
-      // 🧠 ดึง budget plan เดิมทั้งหมดของ user
-      const existingPlans = await this.budgetPlanRepository.find();
+      return await this.dataSource.transaction(async (manager) => {
+        const existingPlans = await manager.find(BudgetPlan);
 
-      // ❌ เช็กว่า startYear กับ endYear ไม่ซ้ำ exact กับของเดิม
-      const isExactDuplicate = existingPlans.some(
-        (plan) => plan.startYear === startYear && plan.endYear === endYear,
-      );
-
-      if (isExactDuplicate) {
-        this.logger.warn(`BudgetPlan with same start and end year already exists`);
-        throw new InternalServerErrorException('Start and End year already used in an existing budget plan');
-      }
-
-      // ❌ เช็กว่าไม่ overlap
-      const isOverlapping = existingPlans.some((plan) => {
-        return (
-          (startYear >= plan.startYear && startYear <= plan.endYear) ||
-          (endYear >= plan.startYear && endYear <= plan.endYear) ||
-          (startYear <= plan.startYear && endYear >= plan.endYear)
+        const isExactDuplicate = existingPlans.some(
+          (plan) => plan.startYear === startYear && plan.endYear === endYear,
         );
+        if (isExactDuplicate) {
+          throw new BadRequestException('งบประมาณช่วงปีนี้มีอยู่แล้ว');
+        }
+
+        const isOverlapping = existingPlans.some((plan) => {
+          return (
+            (startYear >= plan.startYear && startYear <= plan.endYear) ||
+            (endYear >= plan.startYear && endYear <= plan.endYear) ||
+            (startYear <= plan.startYear && endYear >= plan.endYear)
+          );
+        });
+        if (isOverlapping) {
+          throw new BadRequestException('ช่วงปีนี้ซ้อนกับแผนงบประมาณที่มีอยู่แล้ว');
+        }
+
+        await manager.update(BudgetPlan, { isLatest: true }, { isLatest: false });
+
+        const newBudgetPlan = manager.create(BudgetPlan, {
+          name,
+          startYear,
+          endYear,
+          isLatest: true,
+          createdBy: { id: workHistory.id },
+        });
+
+        return await manager.save(newBudgetPlan);
       });
-
-      if (isOverlapping) {
-        this.logger.warn(`BudgetPlan years overlap with existing plans`);
-        throw new InternalServerErrorException('The specified budget year range overlaps with an existing plan');
-      }
-
-      // 🔁 deactivate ตัวที่ isActive อยู่
-      await this.budgetPlanRepository.update(
-        { isActive: true },
-        { isActive: false },
-      );
-
-      // ✅ สร้างใหม่
-      const newBudgetPlan = this.budgetPlanRepository.create({
-        name,
-        startYear,
-        endYear,
-        isActive: true,
-      });
-
-      const saved = await this.budgetPlanRepository.save(newBudgetPlan);
-      this.logger.log(`BudgetPlan created with id: ${saved.id}`);
-      return saved;
     } catch (error) {
-      this.logger.error(`Failed to create BudgetPlan`, error.stack);
-      if (error instanceof NotFoundException || error instanceof InternalServerErrorException) {
-        throw error;
-      }
-      throw new InternalServerErrorException('Unable to create BudgetPlan');
+      handleException(this.logger, error);
     }
   }
 
@@ -90,12 +82,11 @@ export class BudgetPlanService {
   async findAll(): Promise<BudgetPlan[]> {
     try {
       return await this.budgetPlanRepository.find({
-        where: { isActive: true },
+        relations: ['createdBy'],
         order: { createAt: 'DESC' },
       });
     } catch (error) {
-      this.logger.error(`Failed to fetch all BudgetPlans`, error.stack);
-      throw new InternalServerErrorException('Unable to fetch BudgetPlans');
+      handleException(this.logger, error);
     }
   }
 
@@ -113,8 +104,97 @@ export class BudgetPlanService {
 
       return budgetPlan;
     } catch (error) {
-      this.logger.error(`Failed to fetch BudgetPlan with id ${id}`, error.stack);
-      throw new InternalServerErrorException('Unable to fetch BudgetPlan');
+      handleException(this.logger, error);
     }
   }
+
+  async update(id: string, dto: UpdateBudgetPlanDto): Promise<BudgetPlan> {
+    try {
+      const budgetPlan = await this.budgetPlanRepository.findOneBy({ id });
+  
+      if (!budgetPlan) {
+        throw new NotFoundException(`Budget Plan with ID ${id} not found`);
+      }
+  
+      if (!budgetPlan.isLatest) {
+        throw new BadRequestException(`Only the latest budget plan can be updated`);
+      }
+  
+      const startYear = dto.startYear ?? budgetPlan.startYear;
+      const endYear = dto.endYear ?? budgetPlan.endYear;
+  
+      if (startYear >= endYear) {
+        throw new BadRequestException('startYear ต้องน้อยกว่า endYear');
+      }
+  
+      const otherPlans = await this.budgetPlanRepository.find({
+        where: { id: Not(id) },
+      });
+  
+      const isExactDuplicate = otherPlans.some(
+        (plan) => plan.startYear === startYear && plan.endYear === endYear,
+      );
+  
+      if (isExactDuplicate) {
+        throw new BadRequestException('ช่วงปีซ้ำกับแผนงบประมาณอื่น');
+      }
+  
+      const isOverlapping = otherPlans.some((plan) => {
+        return (
+          (startYear >= plan.startYear && startYear <= plan.endYear) ||
+          (endYear >= plan.startYear && endYear <= plan.endYear) ||
+          (startYear <= plan.startYear && endYear >= plan.endYear)
+        );
+      });
+  
+      if (isOverlapping) {
+        throw new BadRequestException('ช่วงปีซ้อนกับแผนงบประมาณอื่น');
+      }
+  
+      const updated = this.budgetPlanRepository.merge(budgetPlan, {
+        ...dto,
+      });
+  
+      return await this.budgetPlanRepository.save(updated);
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+  
+  async remove(id: string): Promise<{ message: string }> {
+    try {
+      const result = await this.budgetPlanRepository.delete(id);
+      if (result.affected === 0) {
+        throw new NotFoundException(`Amphoe with ID ${id} not found`);
+      }
+      return { message: `Amphoe with ID ${id} has been permanently removed.` };
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  async softRemove(id: string): Promise<{ message: string }> {
+    try {
+      const result = await this.budgetPlanRepository.softDelete(id);
+      if (result.affected === 0) {
+        throw new NotFoundException(`Amphoe with ID ${id} not found`);
+      }
+      return { message: `Amphoe with ID ${id} has been soft-removed.` };
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  async restore(id: string): Promise<{ message: string }> {
+    try {
+      const result = await this.budgetPlanRepository.restore(id);
+      if (result.affected === 0) {
+        throw new NotFoundException(`Amphoe with ID ${id} not found or was not deleted.`);
+      }
+      return { message: `Amphoe with ID ${id} has been restored.` };
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
 }

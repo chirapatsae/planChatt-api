@@ -1,5 +1,6 @@
 import { ProjectGroup } from "src/project-groups/entities/project-group.entity";
-import { Column, CreateDateColumn, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn } from "typeorm";
+import { WorkHistory } from "src/work-history/entities/work-history.entity";
+import { Column, CreateDateColumn, DeleteDateColumn, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn } from "typeorm";
 
 
 @Entity({ name: "budget_plan" })
@@ -16,17 +17,27 @@ export class BudgetPlan {
     @Column({name : 'end_year'})
     endYear : number
 
-    @Column({name : 'is_active'})
-    isActive : boolean
+    @Column({name : 'is_latest'})
+    isLatest : boolean
     
     @CreateDateColumn({name : 'create_at'})
     createAt : Date
+
+    @DeleteDateColumn({name : 'deleted_at' , nullable : true})
+    deletedAt ? : Date
+
+    @ManyToOne(()=> WorkHistory , (workHistory) => workHistory.budgetPlan ,{
+        onUpdate : 'CASCADE',
+        onDelete : 'CASCADE'
+    })
+    @JoinColumn({name : 'created_by'})
+    createdBy : WorkHistory
 
     @OneToMany(() => ProjectGroup , (projectGroup) => projectGroup.budgetPlanId ,{
         onUpdate : 'CASCADE',
         onDelete : 'CASCADE'
     })
-    projectGroup : ProjectGroup
+    projectGroup : ProjectGroup[]
 
     
 }

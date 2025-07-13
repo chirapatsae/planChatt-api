@@ -20,9 +20,6 @@ export class AmphoesService {
     private readonly amphoeRepository: Repository<Amphoe>,
   ) {}
 
-  /**
-   * Creates a new Amphoe.
-   */
   async create(dto: CreateAmphoeDto): Promise<Amphoe> {
     try {
       const { code, name } = dto;
@@ -33,9 +30,6 @@ export class AmphoesService {
     }
   }
 
-  /**
-   * Retrieves all non-deleted Amphoes.
-   */
   async findAll(): Promise<Amphoe[]> {
     try {
       return await this.amphoeRepository.find({
@@ -47,9 +41,6 @@ export class AmphoesService {
     }
   }
 
-  /**
-   * Retrieves a single Amphoe by its ID.
-   */
   async findOne(id: string): Promise<Amphoe> {
     try {
       const amphoe = await this.amphoeRepository.findOne({
@@ -66,9 +57,6 @@ export class AmphoesService {
     }
   }
 
-  /**
-   * Updates an Amphoe's data.
-   */
   async update(id: string, dto: UpdateAmphoeDto): Promise<Amphoe> {
     try {
       const amphoeToUpdate = await this.amphoeRepository.preload({
