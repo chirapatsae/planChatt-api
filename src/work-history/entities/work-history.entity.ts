@@ -1,13 +1,12 @@
 import { ProjectGroup } from './../../project-groups/entities/project-group.entity';
 import { Amphoe } from "src/amphoes/entities/amphoe.entity";
 import { User } from "src/users/entities/user.entity";
-import {  CreateDateColumn, DeleteDateColumn, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn } from "typeorm";
+import { CreateDateColumn, DeleteDateColumn, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
 import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
 import { GovernmentAgency } from 'src/government-agencies/entities/government-agency.entity';
 import { WorkStatus } from 'src/work-status/entities/work-status.entity';
 import { Role } from 'src/roles/entities/role.entity';
-import { Position } from 'src/positions/entities/position.entity';
 import { WorkHistoryAmphoeResponsibility } from 'src/work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity';
 
 @Entity({ name: "work_history" })
@@ -55,27 +54,30 @@ export class WorkHistory {
     onUpdate: 'CASCADE',
   })
   @JoinColumn({ name: 'government_agencies_id' })
-  governmentAgencies? : GovernmentAgency
-
-
+  governmentAgencies?: GovernmentAgency
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
-  @ManyToOne(() => WorkHistory, (workHistory) => workHistory.creator, {
-    onUpdate : 'CASCADE',
-    onDelete : 'CASCADE'
+  @ManyToOne(() => User, (user) => user.createdWorkHistory, {
+    onUpdate: 'CASCADE',
+    onDelete: 'CASCADE'
   })
   @JoinColumn({ name: 'created_by' })
-  createdBy?: WorkHistory;
+  createdBy?: User;
   
-  @OneToMany(() => WorkHistory, (workHistory) => workHistory.createdBy)
-  creator: WorkHistory[];
-  
-
   @DeleteDateColumn({ name: 'deleted_at', nullable: true })
   deletedAt?: Date;
 
+  @UpdateDateColumn({ name: 'updated_at' })
+  updatedAt: Date;
+
+  @ManyToOne(() => User, (user) => user.updatedWorkHistory, {
+    onUpdate: 'CASCADE',
+    onDelete: 'CASCADE'
+  })
+  @JoinColumn({ name: 'updated_by' })
+  updatedBy?: User;
 
   @OneToMany(() => ProjectGroup, (projectGroup) => projectGroup.workHistory, {
     onDelete: 'CASCADE',
@@ -93,16 +95,7 @@ export class WorkHistory {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',
   })
-  workHistoryResponsibleAdmins : WorkHistoryAmphoeResponsibility[];
-
-  @OneToMany(() => Position, (position) => position.workHistory, {
-    onDelete: 'CASCADE',
-    onUpdate: 'CASCADE',
-  })
-  position?: Position
-
-
-
+  workHistoryResponsibleAdmins: WorkHistoryAmphoeResponsibility[];
 
 }
 

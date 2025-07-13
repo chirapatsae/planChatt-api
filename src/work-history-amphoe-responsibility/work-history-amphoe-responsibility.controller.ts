@@ -9,6 +9,7 @@ import {
   ParseUUIDPipe,
   UseGuards,
   Request,
+  Query,
 } from '@nestjs/common';
 import { WorkHistoryAmphoeResponsibilityService } from './work-history-amphoe-responsibility.service';
 import { CreateWorkHistoryAmphoeResponsibilityDto } from './dto/create-work-history-amphoe-responsibility.dto';
@@ -33,18 +34,11 @@ export class WorkHistoryAmphoeResponsibilityController {
   }
 
   @Get()
-  findAll() {
-    return this.workHistoryAmphoeResponsibilityService.findAll();
-  }
-
-  @Get('work-history/:workHistoryId')
-  getResponsibilitiesByWorkHistory(@Param('workHistoryId', ParseUUIDPipe) workHistoryId: string) {
-    return this.workHistoryAmphoeResponsibilityService.getResponsibilitiesByWorkHistory(workHistoryId);
-  }
-
-  @Get('amphoe/:amphoeId')
-  getResponsibilitiesByAmphoe(@Param('amphoeId') amphoeId: string) {
-    return this.workHistoryAmphoeResponsibilityService.getResponsibilitiesByAmphoe(amphoeId);
+  findAll(
+    @Query('amphoe') amphoe?: string,
+    @Query('workHistory') workHistory?: string,
+  ) {
+    return this.workHistoryAmphoeResponsibilityService.findAll(amphoe , workHistory);
   }
 
   @Get(':id')
@@ -56,25 +50,17 @@ export class WorkHistoryAmphoeResponsibilityController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateWorkHistoryAmphoeResponsibilityDto,
-  ) {
-    return this.workHistoryAmphoeResponsibilityService.update(id, dto);
-  }
-
-  @Patch('transfer/:id')
-  transferResponsibility(
-    @Param('id', ParseUUIDPipe) responsibilityId: string,
-    @Body() dto: TransferResponsibilityDto,
     @Request() req: Request & { user: JwtPayloadUser },
   ) {
-    return this.workHistoryAmphoeResponsibilityService.transferResponsibility(
-      responsibilityId, 
-      dto.newWorkHistoryId, 
-      req.user.userId
-    );
+    return this.workHistoryAmphoeResponsibilityService.update(id, dto , req.user.userId);
   }
 
   @Delete(':id')
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.workHistoryAmphoeResponsibilityService.remove(id);
   }
+
+
+
+
 }

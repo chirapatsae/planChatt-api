@@ -38,17 +38,19 @@ export class WorkStatusService {
   }
 
   async findOne(id: string) {
-    const workStatus = await this.workStatusRepository.findOne({
-      where: { id },
-      relations: []
-    })
+    try {
+      const workStatus = await this.workStatusRepository.findOne({
+        where: { id },
+        relations: []
+      })
 
-    if (!workStatus) {
-      throw new NotFoundException(`Work Status with ID ${id} not found`)
+      if (!workStatus) {
+        throw new NotFoundException(`Work Status with ID ${id} not found`)
+      }
+      return workStatus
+    } catch(error) {
+      handleException(this.logger, error)
     }
-    return workStatus
-  } catch(error) {
-    handleException(this.logger, error)
   }
 
 

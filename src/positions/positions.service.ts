@@ -5,6 +5,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Position } from './entities/position.entity';
 import { Repository } from 'typeorm';
 import { handleException } from 'src/util/handleException';
+import { User } from 'src/users/entities/user.entity';
 
 @Injectable()
 export class PositionsService {
@@ -12,23 +13,42 @@ export class PositionsService {
   constructor(
     @InjectRepository(Position)
     private readonly positionRepository: Repository<Position>,
+
+    @InjectRepository(User)
+    private readonly userReposition: Repository<User>
+
   ) { }
 
   async create(createPositionDto: CreatePositionDto) {
     try {
-      const { name } = createPositionDto;
-      const position = this.positionRepository.create({ name })
-      return await this.positionRepository.save(position)
+      const { name, userId } = createPositionDto;
+  
+      const user = await this.userReposition.findOne({ where: { id: userId } });
+      if (!user) throw new NotFoundException('User not found');
+  
+      await this.positionRepository.update(
+        { user: { id: userId }, isLatest: true },
+        { isLatest: false }
+      );
+  
+      const position = this.positionRepository.create({
+        name,
+        isLatest: true,
+        user,
+      });
+  
+      return await this.positionRepository.save(position);
     } catch (error) {
-      handleException(this.logger, error)
+      handleException(this.logger, error);
     }
   }
+  
 
   async findAll() {
     try {
       return await this.positionRepository.find({
         where: { deletedAt: undefined },
-        relations: []
+        relations: ['user']
       })
     } catch (error) {
       handleException(this.logger, error)
@@ -39,7 +59,7 @@ export class PositionsService {
     try {
       const position = await this.positionRepository.findOne({
         where: { id },
-        relations: []
+        relations: ['user']
       })
 
       if (!position) {

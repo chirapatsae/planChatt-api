@@ -1,3 +1,4 @@
+import { User } from "src/users/entities/user.entity";
 import { WorkHistory } from "src/work-history/entities/work-history.entity";
 import { Column, CreateDateColumn, DeleteDateColumn, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn } from "typeorm";
 
@@ -9,18 +10,19 @@ export class Position {
     @Column()
     name: string;
 
+    @Column({default : true})
+    isLatest : boolean;
+
     @DeleteDateColumn({ name: 'deleted_at', nullable: true })
     deletedAt?: Date;
 
     @CreateDateColumn({ name: 'created_at' })
     createdAt: Date;
 
-    @ManyToOne(() => WorkHistory, (workHistory) => workHistory.position, {
+    @ManyToOne(() => User, (user) => user.position, {
         onDelete: 'CASCADE',
         onUpdate: 'CASCADE'
     })
-    @JoinColumn({name : 'work_history'})
-    workHistory: WorkHistory
-
+    user: User
     
 } 

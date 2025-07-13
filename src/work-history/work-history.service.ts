@@ -49,7 +49,7 @@ export class WorkHistoryService {
     private readonly positionRepository: Repository<Position>,
   ) { }
 
-  async create(dto: CreateWorkHistoryDto , userId : string): Promise<WorkHistory> {
+  async create(dto: CreateWorkHistoryDto , creatorId : string): Promise<WorkHistory> {
     try {
       const {
         amphoeId,
@@ -59,6 +59,9 @@ export class WorkHistoryService {
         roleId,
         governmentAgenciesId,
       } = dto;
+
+      const creator = await this.userRepository.findOne({where : { id : creatorId }})
+      if(!creator) throw new NotFoundException('creator id not found')
 
       const amphoe = await this.amphoeRepository.findOneBy({ id: amphoeId });
       if (!amphoe) throw new NotFoundException('Amphoe not found');
@@ -81,6 +84,7 @@ export class WorkHistoryService {
       workHistory.user = user;
       workHistory.workStatus = workStatus;
       workHistory.role = role;
+      workHistory.createdBy = creator;
 
       if (governmentAgenciesId) {
         const govAgency = await this.governmentAgencyRepository.findOneBy({ id: governmentAgenciesId });
@@ -94,17 +98,21 @@ export class WorkHistoryService {
     }
   }
 
-  async findAll(status?: string, role?: string): Promise<WorkHistory[]> {
+  async findAll(workStatusId?: string, roleId?: string): Promise<WorkHistory[]> {
     try {
       const query = this.workHistoryRepository.createQueryBuilder('work_history')
         .leftJoinAndSelect('work_history.user', 'user')
         .leftJoinAndSelect('work_history.amphoe', 'amphoe')
         .leftJoinAndSelect('work_history.localAdministrativeOrganization', 'lao')
         .leftJoinAndSelect('work_history.workHistoryResponsibleAdmins', 'responsibilities')
-        .leftJoinAndSelect('responsibilities.amphoe', 'respAmphoe');
-
-      if (status) query.andWhere('work_history.status = :status', { status });
-      if (role) query.andWhere('work_history.role = :role', { role });
+        .leftJoinAndSelect('work_history.role', 'role') 
+        .leftJoinAndSelect('work_history.createdBy', 'createdBy') 
+        .leftJoinAndSelect('work_history.updatedBy', 'updatedBy') 
+        .leftJoinAndSelect('work_history.workStatus', 'workStatus') 
+        .leftJoinAndSelect('work_history.governmentAgencies', 'governmentAgencies') 
+        .leftJoinAndSelect('responsibilities.amphoe', 'respAmphoe')
+      if (workStatusId) query.andWhere('workStatus.id = :workStatusId', { workStatusId });
+      if (roleId) query.andWhere('role.id = :roleId', { roleId });
 
       return query.getMany();
     } catch (error) {
@@ -116,7 +124,7 @@ export class WorkHistoryService {
     try {
       const workHistory = await this.workHistoryRepository.findOne({
         where: { id },
-        relations: ['user', 'amphoe', 'localAdministrativeOrganization'],
+        relations: ['user', 'amphoe', 'localAdministrativeOrganization' ,'workStatus', 'role' ,'position' , 'createdBy' , 'updatedBy', 'governmentAgencies'],
       });
       if (!workHistory) {
         throw new NotFoundException(`Work history with ID ${id} not found`);
@@ -127,7 +135,7 @@ export class WorkHistoryService {
     }
   }
 
-  async update(id: string, dto: UpdateWorkHistoryDto, userId: string) : Promise<WorkHistory> {
+  async update(id: string, dto: UpdateWorkHistoryDto, updateId: string) : Promise<WorkHistory> {
     try {
       const {
         amphoeId,
@@ -137,6 +145,9 @@ export class WorkHistoryService {
         roleId,
         governmentAgenciesId,
       } = dto;
+
+      const updator = await this.userRepository.findOne({where : { id : updateId }})
+      if(!updator) throw new NotFoundException('creator id not found')
 
       const workHistory =await this.workHistoryRepository.findOne({where : {id}})
       if (!workHistory) throw new NotFoundException('Work history not found');
@@ -156,12 +167,12 @@ export class WorkHistoryService {
       const role = await this.roleRepository.findOneBy({ id: roleId });
       if (!role) throw new NotFoundException('Role not found');
 
-
       workHistory.amphoe = amphoe;
       workHistory.localAdministrativeOrganization = lao;
       workHistory.user = user;
       workHistory.workStatus = workStatus;
       workHistory.role = role;
+      workHistory.updatedBy = updator
 
       if (governmentAgenciesId) {
         const govAgency = await this.governmentAgencyRepository.findOneBy({ id: governmentAgenciesId });
@@ -177,7 +188,6 @@ export class WorkHistoryService {
 
   async remove(id: string): Promise<{ message: string }> {
     try {
-      // ✨ REFACTOR: Use delete(id) for better performance
       const result = await this.workHistoryRepository.delete(id);
       if (result.affected === 0) {
         throw new NotFoundException(`Work history with ID ${id} not found`);

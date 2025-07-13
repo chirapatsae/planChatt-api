@@ -1,4 +1,5 @@
 import { Exclude } from 'class-transformer';
+import { Position } from 'src/positions/entities/position.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import {
   Column,
@@ -56,5 +57,19 @@ export class User {
     onUpdate: 'CASCADE',
   })
   createdWorkHistory: WorkHistory[];
+
+  @OneToMany(() => WorkHistory, (workHistory) => workHistory.updatedBy, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  updatedWorkHistory: WorkHistory[];
+
+  @OneToMany(() => Position, (position) => position.user, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  position: Position[];
+
+  
 
 }

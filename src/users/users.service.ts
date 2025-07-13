@@ -1,3 +1,4 @@
+import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import {
   BadRequestException,
   Injectable,
@@ -48,10 +49,17 @@ export class UsersService {
    */
   async findAll(): Promise<User[]> {
     try {
-      // For list views, we avoid slow decryption operations.
-      // The encrypted citizenId is returned by default.
       return await this.userRepository.find({
-        relations: { workHistory: true },
+        relations: {
+          workHistory: {
+            amphoe : true,
+            localAdministrativeOrganization: true, 
+            workHistoryResponsibleAdmins : {
+              amphoe : true
+            },
+            governmentAgencies : true
+          },
+        },
       });
     } catch (error) {
       handleException(this.logger, error);
@@ -67,7 +75,12 @@ export class UsersService {
         where: { id },
         relations: {
           workHistory: {
-            localAdministrativeOrganization: true, // Example of nested relation
+            amphoe : true,
+            localAdministrativeOrganization: true, 
+            workHistoryResponsibleAdmins : {
+              amphoe : true
+            },
+            governmentAgencies : true
           },
         },
       });
