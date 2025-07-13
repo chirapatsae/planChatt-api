@@ -23,7 +23,6 @@ export class LocalAdministrativeOrganization {
     @ManyToOne(() => Amphoe, (amphoe) => amphoe.localAdministrativeOrganization, {
         onDelete: 'CASCADE',
         onUpdate: 'CASCADE',
-        eager: true, // 👈 เพิ่มบรรทัดนี้
     })
     @JoinColumn({ name: 'amphoe_id'  })
     amphoe: Amphoe;

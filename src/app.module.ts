@@ -37,7 +37,6 @@ import { Comment } from './comments/entities/comment.entity';
 import { AiController } from './ai/ai.controller';
 import { AiService } from './ai/ai.service';
 import { AiModule } from './ai/ai.module';
-import { WorkHistoryAmphoeResponsibility } from './work-history/entities/work-history-amphoe-responsibility.entity';
 import { OnboardingModule } from './onboarding/onboarding.module';
 import { RolesModule } from './roles/roles.module';
 import { Role } from './roles/entities/role.entity';
@@ -47,6 +46,8 @@ import { PositionsModule } from './positions/positions.module';
 import { Position } from './positions/entities/position.entity';
 import { GovernmentAgenciesModule } from './government-agencies/government-agencies.module';
 import { GovernmentAgency } from './government-agencies/entities/government-agency.entity';
+import { WorkHistoryAmphoeResponsibilityModule } from './work-history-amphoe-responsibility/work-history-amphoe-responsibility.module';
+import { WorkHistoryAmphoeResponsibility } from './work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity';
 
 @Module({
   imports: [
@@ -83,6 +84,7 @@ import { GovernmentAgency } from './government-agencies/entities/government-agen
     WorkStatusModule,
     PositionsModule,
     GovernmentAgenciesModule,
+    WorkHistoryAmphoeResponsibilityModule,
     ],
   controllers: [AppController, AiController],
   providers: [AppService, AiService],

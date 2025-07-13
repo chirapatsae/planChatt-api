@@ -1,14 +1,32 @@
-import { IsNotEmpty, IsOptional, IsBoolean, IsUUID } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsBoolean, IsUUID, IsString } from 'class-validator';
 
 export class CreateWorkHistoryDto {
-  @IsNotEmpty()
-  @IsUUID()
-  userId: string; 
-
+  @IsString()
   @IsNotEmpty()
   amphoeId: string;
 
+  @IsString()
   @IsNotEmpty()
-  localAdmistrativeOrganizationId: string;
-  
+
+  localAdministrativeOrganizationId: string;
+
+  @IsUUID()
+  @IsNotEmpty()
+
+  userId: string;
+
+  @IsUUID()
+  @IsNotEmpty()
+
+  workStatusId: string;
+
+  @IsUUID()
+  @IsNotEmpty()
+
+  roleId: string;
+
+  @IsOptional()
+  @IsUUID()
+  governmentAgenciesId? : string;
+
 }

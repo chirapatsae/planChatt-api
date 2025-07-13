@@ -86,9 +86,6 @@ export class AmphoesService {
     }
   }
 
-  /**
-   * Permanently removes an Amphoe by its ID.
-   */
   async remove(id: string): Promise<{ message: string }> {
     try {
       const result = await this.amphoeRepository.delete(id);
@@ -101,9 +98,6 @@ export class AmphoesService {
     }
   }
 
-  /**
-   * Soft-deletes an Amphoe by its ID.
-   */
   async softRemove(id: string): Promise<{ message: string }> {
     try {
       const result = await this.amphoeRepository.softDelete(id);
@@ -116,9 +110,6 @@ export class AmphoesService {
     }
   }
 
-  /**
-   * Restores a soft-deleted Amphoe by its ID.
-   */
   async restore(id: string): Promise<{ message: string }> {
     try {
       const result = await this.amphoeRepository.restore(id);

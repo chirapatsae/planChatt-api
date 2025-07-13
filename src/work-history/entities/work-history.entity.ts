@@ -1,33 +1,19 @@
 import { ProjectGroup } from './../../project-groups/entities/project-group.entity';
 import { Amphoe } from "src/amphoes/entities/amphoe.entity";
-import { ProjectType } from 'src/project-types/entities/project-type.entity';
 import { User } from "src/users/entities/user.entity";
-import { Column, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn } from "typeorm";
+import {  CreateDateColumn, DeleteDateColumn, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn } from "typeorm";
 import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
-import { Comment } from 'src/comments/entities/comment.entity';
-import { WorkHistoryAmphoeResponsibility } from './work-history-amphoe-responsibility.entity';
+import { GovernmentAgency } from 'src/government-agencies/entities/government-agency.entity';
+import { WorkStatus } from 'src/work-status/entities/work-status.entity';
+import { Role } from 'src/roles/entities/role.entity';
+import { Position } from 'src/positions/entities/position.entity';
+import { WorkHistoryAmphoeResponsibility } from 'src/work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity';
 
 @Entity({ name: "work_history" })
 export class WorkHistory {
   @PrimaryGeneratedColumn('uuid')
   id: string;
-
-  @Column({ default: () => 'CURRENT_TIMESTAMP', name: 'create_at' })
-  createAt: Date;
-
-  @Column({ name: 'division_name', nullable: true })
-  divisionName?: string
-
-  @Column({ name: 'division_id', nullable: true })
-  divisionId?: string
-
-  @ManyToOne(() => User, (user) => user.workHistory, {
-    onDelete: 'CASCADE',
-    onUpdate: 'CASCADE',
-  })
-  @JoinColumn({ name: 'user' })
-  user: User;
 
   @ManyToOne(() => Amphoe, (amphoe) => amphoe.workHistory, {
     onDelete: 'CASCADE',
@@ -40,8 +26,56 @@ export class WorkHistory {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',
   })
-  @JoinColumn({ name: 'local_admistrative_organization_id' })
+  @JoinColumn({ name: 'local_admistrative_organization_org_id' })
   localAdministrativeOrganization: LocalAdministrativeOrganization;
+
+  @ManyToOne(() => User, (user) => user.workHistory, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  @JoinColumn({ name: 'user_id' })
+  user: User;
+
+  @ManyToOne(() => WorkStatus, (workStatus) => workStatus.workHistory, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  @JoinColumn({ name: 'work_status_id' })
+  workStatus: WorkStatus
+
+  @ManyToOne(() => Role, (role) => role.workHistory, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  @JoinColumn({ name: 'role_id' })
+  role: Role
+
+  @ManyToOne(() => GovernmentAgency, (govermentAgency) => govermentAgency.workHistory, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  @JoinColumn({ name: 'government_agencies_id' })
+  governmentAgencies? : GovernmentAgency
+
+
+
+  @CreateDateColumn({ name: 'created_at' })
+  createdAt: Date;
+
+  @ManyToOne(() => WorkHistory, (workHistory) => workHistory.creator, {
+    onUpdate : 'CASCADE',
+    onDelete : 'CASCADE'
+  })
+  @JoinColumn({ name: 'created_by' })
+  createdBy?: WorkHistory;
+  
+  @OneToMany(() => WorkHistory, (workHistory) => workHistory.createdBy)
+  creator: WorkHistory[];
+  
+
+  @DeleteDateColumn({ name: 'deleted_at', nullable: true })
+  deletedAt?: Date;
+
 
   @OneToMany(() => ProjectGroup, (projectGroup) => projectGroup.workHistory, {
     onDelete: 'CASCADE',
@@ -55,34 +89,23 @@ export class WorkHistory {
   })
   trackingStatus: TrackingStatus[];
 
-  // สำหรับ admin role - อำเภอที่รับผิดชอบ (ผ่าน junction entity)
-  @OneToMany(() => WorkHistoryAmphoeResponsibility, (responsibility) => responsibility.workHistory, {
+  @OneToMany(() => WorkHistoryAmphoeResponsibility, (workHistoryResponsibleAdmins) => workHistoryResponsibleAdmins.workHistory, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',
   })
-  responsibilities: WorkHistoryAmphoeResponsibility[];
+  workHistoryResponsibleAdmins : WorkHistoryAmphoeResponsibility[];
 
-  @Column({ default: 'user' })
-  role: 'user' | 'admin' | 'superadmin';
+  @OneToMany(() => Position, (position) => position.workHistory, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  position?: Position
 
-  @Column({ default: 'unverify' })
-  status: 'unverify' | 'approved' | 'suspended' | 'banned';
 
 
- // --- ส่วนที่แก้ไข ---
 
- @Column({ name: 'approve_at', type: 'timestamp', nullable: true }) // 1. ควรเป็น nullable เพราะตอนแรกยังไม่มีการ approve
- approveAt: Date;
-
- // 2. สร้างความสัมพันธ์ Many-to-One ไปยัง WorkHistory (ตัวเอง)
- @ManyToOne(() => WorkHistory, (approver) => approver.approvedHistories, {
-   nullable: true, // ผู้อนุมัติอาจเป็นค่าว่างได้ (ตอนยังไม่ approve)
-   onDelete: 'SET NULL' // ถ้าผู้อนุมัติถูกลบ ให้เซ็ต field นี้เป็น NULL
- })
- @JoinColumn({ name: 'approved_by_id' }) // 3. สร้าง Foreign Key ในตาราง
- approvedBy: WorkHistory;
-
- // 4. (Optional but recommended) สร้างความสัมพันธ์ด้านกลับ
- @OneToMany(() => WorkHistory, (approvedRecord) => approvedRecord.approvedBy)
- approvedHistories: WorkHistory[]; // รายการทั้งหมดที่ user คนนี้เคย approve
 }
+
+
+
+

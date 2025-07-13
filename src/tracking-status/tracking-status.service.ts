@@ -38,7 +38,7 @@ export class TrackingStatusService {
       const status = await this.getStatusOrThrow(dto.statusId);
   
       const workHistory = await this.workHistoryRepo.findOne({
-        where: { user: { id: user.id }, status : 'approved'},
+        where: { user: { id: user.id }},
         relations: ['projectGroup'],
       });
   

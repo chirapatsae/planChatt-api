@@ -1,7 +1,7 @@
 import { Exclude } from "class-transformer";
 import { LocalAdministrativeOrganization } from "src/local-administrative-organizations/entities/local-administrative-organization.entity";
 import { WorkHistory } from "src/work-history/entities/work-history.entity";
-import { WorkHistoryAmphoeResponsibility } from "src/work-history/entities/work-history-amphoe-responsibility.entity";
+import { WorkHistoryAmphoeResponsibility } from "src/work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity";
 import { Column, DeleteDateColumn, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryColumn } from "typeorm";
 
 @Entity('amphoes')

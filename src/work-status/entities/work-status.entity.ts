@@ -1,4 +1,5 @@
-import { Column, CreateDateColumn, DeleteDateColumn, Entity, PrimaryGeneratedColumn } from "typeorm";
+import { WorkHistory } from "src/work-history/entities/work-history.entity";
+import { Column, CreateDateColumn, DeleteDateColumn, Entity, OneToMany, PrimaryGeneratedColumn } from "typeorm";
 
 @Entity('work_status')
 export class WorkStatus {
@@ -13,4 +14,10 @@ export class WorkStatus {
 
     @DeleteDateColumn({nullable : true , name : 'delete_at'})
     deletedAt? : Date;
+
+    @OneToMany(() => WorkHistory , (workHistory) => workHistory.workStatus , {
+        onDelete : 'CASCADE',
+        onUpdate : 'CASCADE'
+    })
+    workHistory : WorkHistory[]
 }

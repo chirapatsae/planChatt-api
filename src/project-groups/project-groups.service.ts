@@ -55,7 +55,7 @@ export class ProjectGroupsService {
 
     try {
       const workHistory = await queryRunner.manager.findOne(this.workHistoryRepo.target, {
-        where: { user: { id: userId }, status: 'approved' },
+        where: { user: { id: userId } },
         relations: ['localAdministrativeOrganization'],
       });
 
@@ -145,7 +145,6 @@ export class ProjectGroupsService {
       const workHistory = await this.workHistoryRepo.findOne({
         where: {
           user: { id: userId },
-          status: 'approved',
         },
         relations: ['user', 'localAdministrativeOrganization'], // <-- เพิ่มตรงนี้
       });
@@ -190,7 +189,6 @@ export class ProjectGroupsService {
       const workHistory = await this.workHistoryRepo.findOne({
         where: {
           user: { id: userId },
-          status: 'approved',
         },
         relations: ['user', 'localAdministrativeOrganization'], // <-- เพิ่มตรงนี้
       });
@@ -235,7 +233,6 @@ export class ProjectGroupsService {
       const workHistory = await this.workHistoryRepo.findOne({
         where: {
           user: { id: userId },
-          status: 'approved',
         },
       });
 
@@ -282,7 +279,6 @@ export class ProjectGroupsService {
       const workHistory = await this.workHistoryRepo.findOne({
         where: {
           user: { id: userId },
-          status: 'approved',
         },
         relations: ['user'],
       });
@@ -319,7 +315,7 @@ export class ProjectGroupsService {
   async findAVerify(role: string, userId: string) {
     try {
       const workHistory = await this.workHistoryRepo.findOne({
-        where: { user: { id: userId }, status: 'approved' },
+        where: { user: { id: userId } },
         relations: [
           'user',
           'localAdministrativeOrganization',
@@ -371,16 +367,16 @@ export class ProjectGroupsService {
           { orgId: workHistory.localAdministrativeOrganization.id },
         );
       } else if (role === 'admin') {
-        const responsibleAmphoeIds = workHistory.responsibilities
-          ?.map((r) => r.amphoe?.id)
-          .filter((id) => !!id);
+        // const responsibleAmphoeIds = workHistory.responsibilities
+        //   ?.map((r) => r.amphoe?.id)
+        //   .filter((id) => !!id);
 
-        if (!responsibleAmphoeIds || responsibleAmphoeIds.length === 0) {
-          return [];
-        }
-        qb.andWhere(`"workHistory"."amphoe_id" IN (:...amphoeIds)`, {
-          amphoeIds: responsibleAmphoeIds,
-        });
+        // if (!responsibleAmphoeIds || responsibleAmphoeIds.length === 0) {
+        //   return [];
+        // }
+        // qb.andWhere(`"workHistory"."amphoe_id" IN (:...amphoeIds)`, {
+        //   amphoeIds: responsibleAmphoeIds,
+        // });
       } else {
         return []; // No role matched, return empty
       }
@@ -415,7 +411,7 @@ export class ProjectGroupsService {
   async findVerifyLength(role: string, userId: string): Promise<number> {
     try {
       const workHistory = await this.workHistoryRepo.findOne({
-        where: { user: { id: userId }, status: 'approved' },
+        where: { user: { id: userId } },
         relations: ['user', 'responsibilities', 'responsibilities.amphoe'],
       });
       console.log(workHistory);
@@ -459,13 +455,13 @@ export class ProjectGroupsService {
         const result = await qb.getCount();
         return result;
       } else if (role === 'admin') {
-        const responsibleAmphoeIds = workHistory.responsibilities
-          ?.map((r) => r.amphoe?.id)
-          .filter((id) => !!id);
+        // const responsibleAmphoeIds = workHistory.responsibilities
+        //   ?.map((r) => r.amphoe?.id)
+        //   .filter((id) => !!id);
 
-        if (!responsibleAmphoeIds || responsibleAmphoeIds.length === 0) {
-          return 0;
-        }
+        // if (!responsibleAmphoeIds || responsibleAmphoeIds.length === 0) {
+        //   return 0;
+        // }
 
         const subQuery = this.projectGroupRepo
           .createQueryBuilder()
@@ -481,9 +477,9 @@ export class ProjectGroupsService {
           .innerJoin('group.workHistory', 'projectWorkHistory')
           .where(`"trackingStatus"."create_at" = (${subQuery})`)
           .andWhere(`"trackingStatus"."status_id" = :statusId`, { statusId })
-          .andWhere(`"projectWorkHistory"."amphoe_id" IN (:...amphoeIds)`, {
-            amphoeIds: responsibleAmphoeIds,
-          });
+          // .andWhere(`"projectWorkHistory"."amphoe_id" IN (:...amphoeIds)`, {
+          //   amphoeIds: responsibleAmphoeIds,
+          // });
 
         return await qb.getCount();
       } else {
@@ -531,7 +527,6 @@ export class ProjectGroupsService {
       const workHistory = await this.workHistoryRepo.findOne({
         where: {
           user: { id: userId },
-          status: 'approved',
         },
         relations: ['user'],
       });

@@ -50,5 +50,11 @@ export class User {
     onUpdate: 'CASCADE',
   })
   workHistory: WorkHistory[];
+  
+  @OneToMany(() => WorkHistory, (workHistory) => workHistory.createdBy, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  createdWorkHistory: WorkHistory[];
 
 }

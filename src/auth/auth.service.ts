@@ -66,45 +66,45 @@ export class AuthService {
       const isFirstLogin = user.isFirstLogin;
 
       // หา workHistory ล่าสุด
-      const latestWH = user.workHistory
-        ?.filter(wh => wh.status === 'approved')
-        .sort((a, b) => new Date(b.createAt).getTime() - new Date(a.createAt).getTime())[0] ?? {};
+      // const latestWH = user.workHistory
+      //   ?.filter(wh => wh.status === 'approved')
+      //   .sort((a, b) => new Date(b.createAt).getTime() - new Date(a.createAt).getTime())[0] ?? {};
 
-      // เลือก source division_id / division_name ตาม isFirstLogin
-      const divisionId = !isFirstLogin
-        ? divisionIdFromDto
-        : latestWH.divisionId;
-      const divisionName = !isFirstLogin
-        ? divisionNameFromDto
-        : latestWH.divisionName;
+      // // เลือก source division_id / division_name ตาม isFirstLogin
+      // const divisionId = !isFirstLogin
+      //   ? divisionIdFromDto
+      //   : latestWH.divisionId;
+      // const divisionName = !isFirstLogin
+      //   ? divisionNameFromDto
+      //   : latestWH.divisionName;
 
-      // สร้าง JWT
-      const payload = { sub: user.id, role: latestWH.role , status : latestWH.status };
-      const accessToken = this.jwtService.sign(payload, {
-        secret: process.env.JWT_SECRET,
-        expiresIn: '7d',
-      });
+      // // สร้าง JWT
+      // const payload = { sub: user.id, role: latestWH.role , status : latestWH.status };
+      // const accessToken = this.jwtService.sign(payload, {
+      //   secret: process.env.JWT_SECRET,
+      //   expiresIn: '7d',
+      // });
 
-      return {
-        isFirstLogin,
-        accessToken,
-        user: {
-          id: user.id,
-          workId : latestWH.id,
-          prefix: user.prefix,
-          firstname: user.firstname,
-          lastname: user.lastname,
-          email: user.email ?? '',
-          phone: user.phone ?? '',
-          amphoeId: latestWH.amphoe?.id ?? '',
-          amphoeName: latestWH.amphoe?.name ?? '',
-          localAdministrativeOrganizationId: latestWH.localAdministrativeOrganization?.id ?? '',
-          localAdministrativeOrganizationName: latestWH.localAdministrativeOrganization?.name ?? '',
-          divisionId,
-          divisionName,
-          role: latestWH.role,
-        },
-      };
+      // return {
+      //   isFirstLogin,
+      //   accessToken,
+      //   user: {
+      //     id: user.id,
+      //     workId : latestWH.id,
+      //     prefix: user.prefix,
+      //     firstname: user.firstname,
+      //     lastname: user.lastname,
+      //     email: user.email ?? '',
+      //     phone: user.phone ?? '',
+      //     amphoeId: latestWH.amphoe?.id ?? '',
+      //     amphoeName: latestWH.amphoe?.name ?? '',
+      //     localAdministrativeOrganizationId: latestWH.localAdministrativeOrganization?.id ?? '',
+      //     localAdministrativeOrganizationName: latestWH.localAdministrativeOrganization?.name ?? '',
+      //     divisionId,
+      //     divisionName,
+      //     role: latestWH.role,
+      //   },
+      // };
     } catch (error) {
       if (error instanceof UnauthorizedException || error instanceof BadRequestException) {
         throw error;
@@ -114,28 +114,4 @@ export class AuthService {
     }
   }
 
-
-
-
-
-
-  create(createAuthDto: CreateAuthDto) {
-    return 'This action adds a new auth';
-  }
-
-  findAll() {
-    return `This action returns all auth`;
-  }
-
-  findOne(id: number) {
-    return `This action returns a #${id} auth`;
-  }
-
-  update(id: number, updateAuthDto: UpdateAuthDto) {
-    return `This action updates a #${id} auth`;
-  }
-
-  remove(id: number) {
-    return `This action removes a #${id} auth`;
-  }
 }
