@@ -7,81 +7,58 @@ import {
   Param,
   Delete,
   ParseIntPipe,
-  Logger,
-  InternalServerErrorException,
-  BadRequestException,
+  Query,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { CreateBudgetDto } from './dto/create-budget.dto';
 import { UpdateBudgetDto } from './dto/update-budget.dto';
 import { BudgetService } from './budget.service';
+import { IsUUID } from 'class-validator';
 
 @Controller({
   path: 'budgets',
   version: '1',
 })
 export class BudgetController {
-  private readonly logger = new Logger(BudgetController.name);
-
   constructor(private readonly budgetService: BudgetService) {}
 
   @Post()
-  async create(@Body() dto: CreateBudgetDto) {
-    this.logger.log('Creating budget');
-    try {
-      return await this.budgetService.create(dto);
-    } catch (error) {
-      this.logger.error('Error creating budget', error.stack);
-      throw this.handleError(error);
-    }
+  create(@Body() dto: CreateBudgetDto) {
+    return this.budgetService.create(dto);
   }
 
   @Get()
-  async findAll() {
-    try {
-      return await this.budgetService.findAll();
-    } catch (error) {
-      this.logger.error('Error fetching all budgets', error.stack);
-      throw this.handleError(error);
-    }
+  findAll(
+    @Query('groupId', new ParseUUIDPipe({ optional: true })) groupId?: string,
+  ) {
+    // Now you pass the groupId to the service method
+    return this.budgetService.findAll(groupId);
   }
 
+
   @Get(':id')
-  async findOne(@Param('id', ParseIntPipe) id: string) {
-    try {
-      return await this.budgetService.findOne(id);
-    } catch (error) {
-      this.logger.error(`Error fetching budget id=${id}`, error.stack);
-      throw this.handleError(error);
-    }
+  findOne(@Param('id', ParseUUIDPipe) id: string) {
+    return this.budgetService.findOne(id);
   }
 
   @Patch(':id')
-  async update(
-    @Param('id', ParseIntPipe) id: string,
-    @Body() dto: UpdateBudgetDto,
-  ) {
-    this.logger.log(`Updating budget id=${id}`);
-    try {
-      return await this.budgetService.update(id, dto);
-    } catch (error) {
-      this.logger.error(`Error updating budget id=${id}`, error.stack);
-      throw this.handleError(error);
-    }
+  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateBudgetDto) {
+    return this.budgetService.update(id, dto);
   }
+
 
   @Delete(':id')
-  async remove(@Param('id', ParseIntPipe) id: string) {
-    this.logger.warn(`Removing budget id=${id}`);
-    try {
-      return await this.budgetService.remove(id);
-    } catch (error) {
-      this.logger.error(`Error removing budget id=${id}`, error.stack);
-      throw this.handleError(error);
-    }
+  remove(
+    @Param('id' , ParseUUIDPipe) id: string,
+    @Query('mode') mode: 'soft' | 'hard' = 'soft',
+  ) {
+    return mode === 'soft'
+      ? this.budgetService.softRemove(id)
+      : this.budgetService.remove(id);
   }
 
-  private handleError(error: any) {
-    if (error instanceof BadRequestException) return error;
-    return new InternalServerErrorException('Unexpected error occurred');
+  @Patch(':id/restore')
+  restore(@Param('id' , ParseUUIDPipe) id: string) {
+    return this.budgetService.restore(id);
   }
 }

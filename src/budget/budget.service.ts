@@ -6,11 +6,12 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { FindManyOptions, FindOptionsWhere, Repository } from 'typeorm';
 import { Budget } from './entities/budget.entity';
 import { CreateBudgetDto } from './dto/create-budget.dto';
 import { UpdateBudgetDto } from './dto/update-budget.dto';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
+import { handleException } from 'src/util/handleException';
 
 @Injectable()
 export class BudgetService {
@@ -21,95 +22,122 @@ export class BudgetService {
     private readonly budgetRepo: Repository<Budget>,
 
     @InjectRepository(ProjectGroup)
-    private readonly projectGroupRepo : Repository<ProjectGroup>,
-  ) {}
+    private readonly projectGroupRepo: Repository<ProjectGroup>,
+  ) { }
 
-  async create(dto: CreateBudgetDto) {
-    this.logger.log(`Creating budget for group ${dto.projectGroupId}`);
-
+  async create(dto: CreateBudgetDto): Promise<Budget> {
     try {
+      this.logger.log(`Creating budget for group ${dto.projectGroupId}`);
+      // Find the associated project group and its budget plan
       const projectGroup = await this.projectGroupRepo.findOne({
         where: { id: dto.projectGroupId },
         relations: ['budgetPlanId'],
       });
 
-
-      if (!projectGroup) {
-        throw new NotFoundException(`Project group ${dto.projectGroupId} not found`);
-      }
-
+      if (!projectGroup) throw new NotFoundException(`Project group with ID ${dto.projectGroupId} not found`);
       const plan = projectGroup.budgetPlanId;
-      if (!plan) {
-        throw new BadRequestException(`Project group has no budget plan`);
-      }
+      if (!plan) throw new BadRequestException(`Project group ${dto.projectGroupId} does not have an associated budget plan.`);
 
+      // Validate that the budget year is within the plan's valid range
       if (dto.year < plan.startYear || dto.year > plan.endYear) {
         throw new BadRequestException(
-          `Budget year ${dto.year} is outside the range of budget plan (${plan.startYear} - ${plan.endYear})`,
+          `Budget year ${dto.year} is outside the budget plan's range (${plan.startYear} - ${plan.endYear}).`,
         );
       }
-
       const budget = this.budgetRepo.create({
         ...dto,
-        projectGroup: { id: dto.projectGroupId },
+        projectGroupId: { id: dto.projectGroupId },
       });
 
       return await this.budgetRepo.save(budget);
     } catch (error) {
-      this.logger.error('Error creating budget', error.stack);
-
-      if (
-        error instanceof NotFoundException ||
-        error instanceof BadRequestException
-      ) {
-        throw error;
-      }
-
-      throw new InternalServerErrorException('Unexpected error occurred while creating budget');
+      handleException(this.logger, error);
     }
   }
 
-  async findAll(): Promise<Budget[]> {
+  async findAll(groupId?: string): Promise<Budget[]> {
     try {
-      return await this.budgetRepo.find();
+      const where: FindOptionsWhere<Budget> = {};
+      if (groupId) {
+        where.projectGroupId = { id: groupId };
+      }
+      return await this.budgetRepo.find({
+        where,
+        relations: ['projectGroupId' , 'projectVersionId' , 'budgetPlanId'],
+      });
     } catch (error) {
-      this.logger.error('Failed to fetch budgets', error.stack);
-      throw new InternalServerErrorException('Unable to fetch budgets');
+      handleException(this.logger, error);
     }
   }
 
   async findOne(id: string): Promise<Budget> {
     try {
-      const budget = await this.budgetRepo.findOne({ where: { id } });
-      if (!budget) throw new NotFoundException(`Budget ${id} not found`);
+      const budget = await this.budgetRepo.findOne({
+        where: { id },
+        relations: ['projectGroupId' , 'projectVersionId' , 'budgetPlanId'],
+      });
+
+      if (!budget) {
+        throw new NotFoundException(`Budget with ID ${id} not found`);
+      }
       return budget;
     } catch (error) {
-      this.logger.error(`Failed to fetch budget ${id}`, error.stack);
-      throw error instanceof NotFoundException
-        ? error
-        : new InternalServerErrorException('Error fetching budget');
+      handleException(this.logger, error);
     }
   }
 
   async update(id: string, dto: UpdateBudgetDto): Promise<Budget> {
     try {
-      const budget = await this.findOne(id);
-      Object.assign(budget, dto);
+      const { quantity } = dto
+
+      const updateObj: any = { id, quantity };
+      const budget = await this.budgetRepo.preload(updateObj);
+
+      if (!budget) {
+        throw new NotFoundException(`Budget with ID ${id} not found for update.`);
+      }
       return await this.budgetRepo.save(budget);
     } catch (error) {
-      this.logger.error(`Failed to update budget ${id}`, error.stack);
-      throw new InternalServerErrorException('Unable to update budget');
+      handleException(this.logger, error);
     }
   }
 
+
   async remove(id: string): Promise<{ message: string }> {
     try {
-      const budget = await this.findOne(id);
-      await this.budgetRepo.remove(budget);
-      return { message: `Budget ${id} removed successfully` };
+      const result = await this.budgetRepo.delete(id);
+
+      if (result.affected === 0) {
+        throw new NotFoundException(`Budget with ID ${id} not found for removal.`);
+      }
+
+      return { message: `Budget with ID ${id} has been removed successfully.` };
     } catch (error) {
-      this.logger.error(`Failed to remove budget ${id}`, error.stack);
-      throw new InternalServerErrorException('Unable to remove budget');
+      handleException(this.logger, error);
+    }
+  }
+
+  async softRemove(id: string): Promise<{ message: string }> {
+    try {
+      const result = await this.budgetRepo.softDelete(id);
+      if (result.affected === 0) {
+        throw new NotFoundException(`budet with ID ${id} not found`);
+      }
+      return { message: `budet with ID ${id} has been soft-removed.` };
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  async restore(id: string): Promise<{ message: string }> {
+    try {
+      const result = await this.budgetRepo.restore(id);
+      if (result.affected === 0) {
+        throw new NotFoundException(`budet with ID ${id} not found or was not deleted.`);
+      }
+      return { message: `budet with ID ${id} has been restored.` };
+    } catch (error) {
+      handleException(this.logger, error);
     }
   }
 }

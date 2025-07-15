@@ -81,7 +81,7 @@ export class ProjectGroup {
     @CreateDateColumn({ name: 'created_at' })
     createdAt: Date;
 
-    @OneToMany(() => Budget, (budget) => budget.projectGroup, {
+    @OneToMany(() => Budget, (budget) => budget.projectGroupId, {
         onUpdate: 'CASCADE',
         onDelete: 'CASCADE'
     })

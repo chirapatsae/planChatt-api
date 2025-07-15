@@ -1,3 +1,4 @@
+import { Budget } from "src/budget/entities/budget.entity";
 import { ProjectGroup } from "src/project-groups/entities/project-group.entity";
 import { WorkHistory } from "src/work-history/entities/work-history.entity";
 import { Column, CreateDateColumn, DeleteDateColumn, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn } from "typeorm";
@@ -38,6 +39,12 @@ export class BudgetPlan {
         onDelete : 'CASCADE'
     })
     projectGroup : ProjectGroup[]
+
+    @OneToMany(() => Budget , (budget) => budget.budgetPlanId , {
+        onUpdate : 'CASCADE',
+        onDelete : 'CASCADE'
+    })
+    budget : Budget[]
 
     
 }

@@ -12,10 +12,6 @@ export class CreateBudgetDto {
   @IsInt()
   year: number;
 
-  @IsInt()
-  @IsOptional()
-  quarter?: number;
-
   @IsNumber()
   @IsOptional()
   quantity: number;
