@@ -59,25 +59,27 @@ export class WorkHistoryService {
         roleId,
         governmentAgenciesId,
       } = dto;
-
-      const creator = await this.userRepository.findOne({where : { id : creatorId }})
-      if(!creator) throw new NotFoundException('creator id not found')
-
+  
+      const creator = await this.userRepository.findOne({ where: { id: creatorId } });
+      if (!creator) throw new NotFoundException('Creator not found');
+  
       const amphoe = await this.amphoeRepository.findOneBy({ id: amphoeId });
       if (!amphoe) throw new NotFoundException('Amphoe not found');
-
+  
       const lao = await this.laoRepository.findOneBy({ id: localAdministrativeOrganizationId });
       if (!lao) throw new NotFoundException('Local Administrative Organization not found');
-
+  
       const user = await this.userRepository.findOneBy({ id: userId });
       if (!user) throw new NotFoundException('User not found');
-
-      const workStatus = await this.workStatusRepository.findOneBy({ id: workStatusId });
+  
+      const resolvedWorkStatusId = workStatusId ?? '64db0afc-c6e0-43ae-aa96-92bc289dc1b7'; 
+      const workStatus = await this.workStatusRepository.findOneBy({ id: resolvedWorkStatusId });
       if (!workStatus) throw new NotFoundException('Work status not found');
-
-      const role = await this.roleRepository.findOneBy({ id: roleId });
+  
+      const resolvedRoleId = roleId ?? '74585119-b006-452c-ae3e-154b193aa83e';
+      const role = await this.roleRepository.findOneBy({ id: resolvedRoleId });
       if (!role) throw new NotFoundException('Role not found');
-
+  
       const workHistory = new WorkHistory();
       workHistory.amphoe = amphoe;
       workHistory.localAdministrativeOrganization = lao;
@@ -85,18 +87,19 @@ export class WorkHistoryService {
       workHistory.workStatus = workStatus;
       workHistory.role = role;
       workHistory.createdBy = creator;
-
+  
       if (governmentAgenciesId) {
         const govAgency = await this.governmentAgencyRepository.findOneBy({ id: governmentAgenciesId });
         if (!govAgency) throw new NotFoundException('Government agency not found');
         workHistory.governmentAgencies = govAgency;
       }
-
+  
       return this.workHistoryRepository.save(workHistory);
     } catch (error) {
       handleException(this.logger, error);
     }
   }
+  
 
   async findAll(workStatusId?: string, roleId?: string): Promise<WorkHistory[]> {
     try {

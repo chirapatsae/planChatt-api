@@ -35,7 +35,7 @@ export class TrackingStatus {
         onDelete: 'CASCADE',
         onUpdate: 'CASCADE',
     })
-    @JoinColumn({name : 'status_id'})
+    @JoinColumn({name : 'status_id' } )
     status : Status
 
     @ManyToOne(() => WorkHistory , (workHistory) => workHistory.trackingStatus , {

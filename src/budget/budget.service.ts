@@ -35,7 +35,7 @@ export class BudgetService {
       });
 
       if (!projectGroup) throw new NotFoundException(`Project group with ID ${dto.projectGroupId} not found`);
-      const plan = projectGroup.budgetPlanId;
+      const plan = projectGroup.budgetPlan;
       if (!plan) throw new BadRequestException(`Project group ${dto.projectGroupId} does not have an associated budget plan.`);
 
       // Validate that the budget year is within the plan's valid range

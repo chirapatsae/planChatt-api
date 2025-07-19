@@ -9,6 +9,7 @@ import { WorkStatus } from 'src/work-status/entities/work-status.entity';
 import { Role } from 'src/roles/entities/role.entity';
 import { WorkHistoryAmphoeResponsibility } from 'src/work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity';
 import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
+import { Strategy } from 'src/strategy/entities/strategy.entity';
 
 @Entity({ name: "work_history" })
 export class WorkHistory {
@@ -80,11 +81,6 @@ export class WorkHistory {
   @JoinColumn({ name: 'updated_by' })
   updatedBy?: User;
 
-  @OneToMany(() => ProjectGroup, (projectGroup) => projectGroup.workHistory, {
-    onDelete: 'CASCADE',
-    onUpdate: 'CASCADE',
-  })
-  projectGroup: ProjectGroup[];
 
   @OneToMany(() => TrackingStatus, (trackingStatus) => trackingStatus.workHistory, {
     onDelete: 'CASCADE',
@@ -103,6 +99,30 @@ export class WorkHistory {
     onUpdate: 'CASCADE',
   })
   budgetPlan : BudgetPlan[];
+
+  @OneToMany(() => Strategy, (strategy) => strategy.createdBy, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  creatorStrategy : Strategy[];
+
+  @OneToMany(() => Strategy, (strategy) => strategy.deletedBy, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  deletorStrategy : Strategy[];
+
+  @OneToMany(() => ProjectGroup, (projectGroup) => projectGroup.createdBy, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  creatorProjectGroup : ProjectGroup[];
+
+  @OneToMany(() => ProjectGroup, (projectGroup) => projectGroup.responsibleBy, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  responsibleProjectGroup : ProjectGroup[];
 
 }
 

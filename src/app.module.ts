@@ -37,7 +37,6 @@ import { Comment } from './comments/entities/comment.entity';
 import { AiController } from './ai/ai.controller';
 import { AiService } from './ai/ai.service';
 import { AiModule } from './ai/ai.module';
-import { OnboardingModule } from './onboarding/onboarding.module';
 import { RolesModule } from './roles/roles.module';
 import { Role } from './roles/entities/role.entity';
 import { WorkStatusModule } from './work-status/work-status.module';
@@ -79,7 +78,6 @@ import { WorkHistoryAmphoeResponsibility } from './work-history-amphoe-responsib
     PdfModule,
     CommentsModule,
     AiModule,
-    OnboardingModule,
     RolesModule,
     WorkStatusModule,
     PositionsModule,

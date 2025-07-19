@@ -1,7 +1,5 @@
 import { Budget } from 'src/budget/entities/budget.entity';
 import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
-import { ProjectType } from 'src/project-types/entities/project-type.entity';
-import { User } from 'src/users/entities/user.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import {
     Column,
@@ -17,7 +15,8 @@ import { Strategy } from 'src/strategy/entities/strategy.entity';
 import { Tactic } from 'src/tactic/entities/tactic.entity';
 import { Plan } from 'src/plan/entities/plan.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
-import { Comment } from 'src/comments/entities/comment.entity';
+import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
+import { GovernmentAgency } from 'src/government-agencies/entities/government-agency.entity';
 
 @Entity('project_groups')
 export class ProjectGroup {
@@ -54,45 +53,6 @@ export class ProjectGroup {
     @Column()
     projectYear: number;
 
-    @DeleteDateColumn({ name: 'deleted_at', nullable: true })
-    deletedAt?: Date;
-
-    // แผนงบประมาณกี่ปี
-    @ManyToOne(() => BudgetPlan, (budgetPlan) => budgetPlan.projectGroup, {
-        onDelete : 'CASCADE',
-        onUpdate : 'CASCADE',
-    })
-    @JoinColumn({ name: 'budget_plan_id' })
-    budgetPlanId: BudgetPlan
-
-    ประเภทโครงการ
-    @ManyToOne(() => ProjectType, (projectType) => projectType.projectGroup)
-    @JoinColumn({ name: 'project_type_id' })
-    projectType: ProjectType;
-
-    // 👤 ผู้เพิ่มโครงการ
-    @ManyToOne(() => WorkHistory, (workHistory) => workHistory.projectGroup)
-    @JoinColumn({ name: 'create_by' })
-    workHistory?: WorkHistory;
-
-    @Column({ nullable: true })
-    responsibleOrgId?: number;
-
-    @CreateDateColumn({ name: 'created_at' })
-    createdAt: Date;
-
-    @OneToMany(() => Budget, (budget) => budget.projectGroupId, {
-        onUpdate: 'CASCADE',
-        onDelete: 'CASCADE'
-    })
-    budgets: Budget[]
-
-    @OneToMany(() => TrackingStatus, (budget) => budget.projectGroup, {
-        onUpdate: 'CASCADE',
-        onDelete: 'CASCADE'
-    })
-    trackingStatus: TrackingStatus[]
-
     @ManyToOne(() => Strategy, (strategy) => strategy.projectGroup, {
         onDelete: 'CASCADE',
         onUpdate: 'CASCADE',
@@ -113,6 +73,57 @@ export class ProjectGroup {
     })
     @JoinColumn({ name: 'plan_id' })
     plan: Plan;
+
+    @ManyToOne(() => BudgetPlan, (budgetPlan) => budgetPlan.projectGroup, {
+        onDelete: 'CASCADE',
+        onUpdate: 'CASCADE',
+    })
+    @JoinColumn({ name: 'budget_plan_id' })
+    budgetPlan: BudgetPlan;
+
+    @ManyToOne(() => WorkHistory, (workHistory) => workHistory.creatorProjectGroup)
+    @JoinColumn({ name: 'create_by' })
+    createdBy?: WorkHistory;
+
+    @ManyToOne(() => WorkHistory, (workHistory) => workHistory.responsibleProjectGroup)
+    @JoinColumn({ name: 'responsible_by' })
+    responsibleBy?: WorkHistory;
+
+    @CreateDateColumn({ name: 'created_at' })
+    createdAt: Date;
+
+    @DeleteDateColumn({ name: 'deleted_at', nullable: true })
+    deletedAt?: Date;
+
+    @ManyToOne(() => LocalAdministrativeOrganization , (lao)=> lao.originAgencyProjectGroup, {
+        onUpdate : 'CASCADE',
+        onDelete : 'CASCADE'
+    })
+    @JoinColumn({name : 'origin_agency_id'})
+    originAgencyId : LocalAdministrativeOrganization
+
+    @ManyToOne(() => GovernmentAgency , (governmentAgency)=> governmentAgency.responsibleAgencyProjectGroup, {
+        onUpdate : 'CASCADE',
+        onDelete : 'CASCADE'
+    })
+    @JoinColumn({name : 'responsible_agency_id'})
+    responsibleAgency : LocalAdministrativeOrganization
+
+    @OneToMany(() => Budget, (budget) => budget.projectGroupId, {
+        onUpdate: 'CASCADE',
+        onDelete: 'CASCADE'
+    })
+    budgets: Budget[]
+
+    @OneToMany(() => TrackingStatus, (budget) => budget.projectGroup, {
+        onUpdate: 'CASCADE',
+        onDelete: 'CASCADE'
+    })
+    trackingStatus: TrackingStatus[]
+
+
+
+
 }
 
 

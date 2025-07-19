@@ -34,7 +34,7 @@ export class BudgetPlan {
     @JoinColumn({name : 'created_by'})
     createdBy : WorkHistory
 
-    @OneToMany(() => ProjectGroup , (projectGroup) => projectGroup.budgetPlanId ,{
+    @OneToMany(() => ProjectGroup , (projectGroup) => projectGroup.budgetPlan ,{
         onUpdate : 'CASCADE',
         onDelete : 'CASCADE'
     })

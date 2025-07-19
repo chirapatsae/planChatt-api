@@ -16,17 +16,14 @@ export class CreateWorkHistoryDto {
   userId: string;
 
   @IsUUID()
-  @IsNotEmpty()
-
-  workStatusId: string;
+  @IsOptional()
+  workStatusId?: string;
 
   @IsUUID()
-  @IsNotEmpty()
-
-  roleId: string;
+  @IsOptional()
+  roleId?: string;
 
   @IsOptional()
-  @IsUUID()
   governmentAgenciesId? : string;
 
 }

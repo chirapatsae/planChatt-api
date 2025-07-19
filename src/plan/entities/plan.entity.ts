@@ -1,4 +1,4 @@
-import { Entity, PrimaryColumn, Column, OneToMany, JoinColumn } from 'typeorm';
+import { Entity, PrimaryColumn, Column, OneToMany } from 'typeorm';
 import { PlanTactic } from './plan-tactic.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 
@@ -10,7 +10,10 @@ export class Plan {
   @Column()
   name: string;
 
-  @OneToMany(() => PlanTactic, planTactic => planTactic.plan)
+  @OneToMany(() => PlanTactic, planTactic => planTactic.plan, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
   planTactics: PlanTactic[];
 
   @OneToMany(() => ProjectGroup , (projectGroup) => projectGroup.plan , {

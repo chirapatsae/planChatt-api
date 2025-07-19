@@ -11,6 +11,7 @@ import {
   NotFoundException,
   BadRequestException,
   UseGuards,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { CreateStrategyDto } from './dto/create-strategy.dto';
 import { UpdateStrategyDto } from './dto/update-strategy.dto';
@@ -25,70 +26,38 @@ import { JwtAuthGuard } from 'src/auth/auth.guard';
 export class StrategyController {
   private readonly logger = new Logger(StrategyController.name);
 
-  constructor(private readonly strategyService: StrategyService) {}
+  constructor(private readonly strategyService: StrategyService) { }
 
   @Post()
-  async create(@Body() dto: CreateStrategyDto) {
-    this.logger.log(`Creating strategy: ${dto.stratId}`);
-    try {
-      return await this.strategyService.create(dto);
-    } catch (error) {
-      this.logger.error('Error creating strategy', error.stack);
-      throw this.handleException(error);
-    }
+  create(@Body() dto: CreateStrategyDto) {
+    this.logger.log(`Request to create strategy with ID: ${dto.stratId}`);
+    return this.strategyService.create(dto);
   }
 
   @Get()
-  async findAll() {
-    this.logger.log('Fetching all strategies');
-    try {
-      return await this.strategyService.findAll();
-    } catch (error) {
-      this.logger.error('Error fetching strategies', error.stack);
-      throw this.handleException(error);
-    }
+  findAll() {
+    this.logger.log('Request to fetch all strategies');
+    return this.strategyService.findAll();
   }
 
   @Get(':id')
-  async findOne(@Param('id') id: string) {
-    this.logger.log(`Fetching strategy with ID: ${id}`);
-    try {
-      return await this.strategyService.findOne(id);
-    } catch (error) {
-      this.logger.error(`Error fetching strategy ${id}`, error.stack);
-      throw this.handleException(error);
-    }
+  findOne(@Param('id', ParseUUIDPipe) id: string) {
+    this.logger.log(`Request to fetch strategy with ID: ${id}`);
+    return this.strategyService.findOne(id);
   }
 
   @Patch(':id')
-  async update(@Param('id') id: string, @Body() dto: UpdateStrategyDto) {
-    this.logger.log(`Updating strategy with ID: ${id}`);
-    try {
-      return await this.strategyService.update(id, dto);
-    } catch (error) {
-      this.logger.error(`Error updating strategy ${id}`, error.stack);
-      throw this.handleException(error);
-    }
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateStrategyDto,
+  ) {
+    this.logger.log(`Request to update strategy with ID: ${id}`);
+    return this.strategyService.update(id, dto);
   }
 
   @Delete(':id')
-  async remove(@Param('id') id: string) {
-    this.logger.warn(`Removing strategy with ID: ${id}`);
-    try {
-      return await this.strategyService.remove(id);
-    } catch (error) {
-      this.logger.error(`Error removing strategy ${id}`, error.stack);
-      throw this.handleException(error);
-    }
-  }
-
-  private handleException(error: any) {
-    if (
-      error instanceof NotFoundException ||
-      error instanceof BadRequestException
-    ) {
-      return error;
-    }
-    return new InternalServerErrorException('Unexpected error occurred');
+  remove(@Param('id', ParseUUIDPipe) id: string) {
+    this.logger.warn(`Request to remove strategy with ID: ${id}`);
+    return this.strategyService.remove(id);
   }
 }

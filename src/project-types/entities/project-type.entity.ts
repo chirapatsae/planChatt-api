@@ -17,13 +17,7 @@ export class ProjectType {
 
     @DeleteDateColumn({ name: 'deleted_at', nullable: true })
     deletedAt?: Date;
-    
 
-    @OneToMany(() => ProjectGroup , (projectGroup) => projectGroup.projectType , {
-        onUpdate : 'CASCADE',
-        onDelete : 'CASCADE'
-    })
-    projectGroup : ProjectGroup[]
 
     @OneToMany(() => TrackingStatus , (trackingStatus) => trackingStatus.projectType , {
         onUpdate : 'CASCADE',

@@ -1,6 +1,8 @@
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { Tactic } from 'src/tactic/entities/tactic.entity';
-import { Entity, Column, PrimaryColumn, OneToMany } from 'typeorm';
+import { User } from 'src/users/entities/user.entity';
+import { WorkHistory } from 'src/work-history/entities/work-history.entity';
+import { Entity, Column, PrimaryColumn, OneToMany, CreateDateColumn, DeleteDateColumn, ManyToOne, JoinColumn } from 'typeorm';
 
 @Entity('strategies')
 export class Strategy {
@@ -21,4 +23,24 @@ export class Strategy {
     onUpdate : 'CASCADE'
   })
   projectGroup : ProjectGroup[]
+
+  @CreateDateColumn({name : 'created_at'})
+  createdAt : Date
+
+  @ManyToOne(() => WorkHistory , (workHistory) => workHistory.creatorStrategy , {
+    onUpdate : 'CASCADE',
+    onDelete : 'CASCADE'
+  })
+  @JoinColumn({name : 'created_by'})
+  createdBy : WorkHistory
+
+  @DeleteDateColumn({name : 'deleted_at' , nullable : true})
+  deletedAt : Date
+
+  @ManyToOne(() => WorkHistory , (workHistory) => workHistory.deletorStrategy , {
+    onUpdate : 'CASCADE',
+    onDelete : 'CASCADE'
+  })
+  @JoinColumn({name : 'deleted_by'})
+  deletedBy : WorkHistory
 }

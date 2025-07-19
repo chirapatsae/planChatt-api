@@ -5,9 +5,6 @@ import {
   IsOptional,
   IsInt,
   IsUUID,
-  isInt,
-  isNotEmpty,
-  isArray,
   IsArray,
   ValidateNested,
 } from 'class-validator';
@@ -51,22 +48,6 @@ export class CreateProjectGroupDto {
   projectYear: number;
 
   @IsNotEmpty()
-  projectTypeId: string;
-
-  @IsNotEmpty()
-  @IsUUID()
-  budgetPlanId: string;
-
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => BudgetItemDto) // ✅ use DTO, not entity
-  budget: BudgetItemDto[];
-
-  @IsOptional()
-  @IsInt()
-  responsibleOrgId?: number;
-
-  @IsNotEmpty()
   strategyId : string;
 
   @IsNotEmpty()
@@ -74,13 +55,18 @@ export class CreateProjectGroupDto {
 
   @IsNotEmpty()
   planId : string;
-}
-export class BudgetItemDto {
-  @IsNumber()
-  @IsNotEmpty()
-  year: number;
 
-  @IsNumber()
   @IsNotEmpty()
-  quantity: number;
+  @IsUUID()
+  budgetPlanId: string;
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateBudgetDto)
+  budget: CreateBudgetDto[];
+
+
+
 }
+
+

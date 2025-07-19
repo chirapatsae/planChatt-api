@@ -1,9 +1,10 @@
+import { ProjectGroup } from "src/project-groups/entities/project-group.entity";
 import { WorkHistory } from "src/work-history/entities/work-history.entity";
 import { Column, CreateDateColumn, DeleteDateColumn, Entity, OneToMany, PrimaryGeneratedColumn } from "typeorm";
 
 @Entity('government_agencies')
 export class GovernmentAgency {
-    @PrimaryGeneratedColumn('uuid')
+    @PrimaryGeneratedColumn()
     id: string;
 
     @Column()
@@ -20,4 +21,10 @@ export class GovernmentAgency {
         onUpdate: 'CASCADE',
     })
     workHistory: WorkHistory[]
+
+    @OneToMany(() => ProjectGroup, (projectGroup) => projectGroup.responsibleAgency, {
+        onDelete: 'CASCADE',
+        onUpdate: 'CASCADE',
+    })
+    responsibleAgencyProjectGroup: WorkHistory[]
 } 

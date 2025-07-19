@@ -21,6 +21,7 @@ import { Plan } from 'src/plan/entities/plan.entity';
 import { Strategy } from 'src/strategy/entities/strategy.entity';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { sendEmail } from 'src/util/emailService';
+import { handleException } from 'src/util/handleException';
 
 @Injectable()
 export class ProjectGroupsService {
@@ -33,14 +34,20 @@ export class ProjectGroupsService {
     @InjectRepository(WorkHistory)
     private readonly workHistoryRepo: Repository<WorkHistory>,
 
-    @InjectRepository(ProjectType)
-    private readonly projectTypeRepo: Repository<ProjectType>,
-
     @InjectRepository(BudgetPlan)
     private readonly budgetPlanRepo: Repository<BudgetPlan>,
 
     @InjectRepository(TrackingStatus)
     private readonly trackingStatusRepo: Repository<TrackingStatus>,
+
+    @InjectRepository(Strategy)
+    private readonly strategyRepo: Repository<Strategy>,
+
+    @InjectRepository(Tactic)
+    private readonly tacticRepo: Repository<Tactic>,
+
+    @InjectRepository(Plan)
+    private readonly planRepo: Repository<Plan>,
 
     @InjectRepository(Budget)
     private readonly budgetRepo: Repository<Budget>,
@@ -49,95 +56,96 @@ export class ProjectGroupsService {
   ) { }
 
   async create(dto: CreateProjectGroupDto, userId: string) {
-    const queryRunner = this.dataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
-
     try {
-      const workHistory = await queryRunner.manager.findOne(this.workHistoryRepo.target, {
-        where: { user: { id: userId } },
-        relations: ['localAdministrativeOrganization'],
-      });
+      // 1. ใช้ dataSource.transaction ครอบ Logic ทั้งหมดเพื่อความปลอดภัย
+      const savedGroup = await this.dataSource.transaction(async (manager) => {
 
-      if (!workHistory) {
-        throw new NotFoundException('Work history ID not found');
-      }
-
-      const budgetPlan = await queryRunner.manager.findOne(this.budgetPlanRepo.target, {
-        where: { id: dto.budgetPlanId },
-      });
-
-      if (!budgetPlan) {
-        throw new NotFoundException('Budget plan ID not found');
-      }
-
-      const existing = await queryRunner.manager.findOne(this.projectGroupRepo.target, {
-        where: { title: dto.title, workHistory: { id: workHistory.id } },
-      });
-
-      if (existing) {
-        throw new ConflictException('Project group with this title already exists');
-      }
-
-      //internal project
-      const projectTypeId = parseInt(dto.projectTypeId) === 1
-        ? "ac47726d-d97b-4a86-89af-e673a660543e"
-        : "28eb6771-0fb8-4de9-bdaa-87f9bd0dc3fe";
-
-      const group = queryRunner.manager.create(this.projectGroupRepo.target, {
-        title: dto.title,
-        objective: dto.objective,
-        goal: dto.goal,
-        startLat: dto.startLat,
-        startLng: dto.startLng,
-        endLat: dto.endLat,
-        endLng: dto.endLng,
-        indicator: dto.indicator,
-        expected: dto.expected,
-        projectYear: dto.projectYear,
-        workHistory,
-        projectType: { id: projectTypeId },
-        strategy: { id: dto.strategyId },
-        tactic: { id: dto.tacticId },
-        plan: { id: dto.planId },
-        budgetPlanId: { id: dto.budgetPlanId },
-        responsibleOrgId: dto.responsibleOrgId === 0 ? undefined : dto.responsibleOrgId
-      });
-
-      const savedGroup = await queryRunner.manager.save(group);
-
-      const trackingStatus = queryRunner.manager.create(this.trackingStatusRepo.target, {
-        projectGroup: { id: savedGroup.id },
-        status: { id: '62997bd6-b1d2-4484-a8fc-f597802d95c2' },
-        projectType: { id: projectTypeId },
-        workHistory: { id: workHistory.id }
-      });
-      await queryRunner.manager.save(trackingStatus);
-
-      // ✅ Insert budget items
-      if (!Array.isArray(dto.budget) || dto.budget.length === 0) {
-        throw new BadRequestException('งบประมาณไม่ถูกต้องหรือไม่มีข้อมูล');
-      }
-
-      for (const item of dto.budget) {
-        const budget = queryRunner.manager.create(this.budgetRepo.target, {
-          projectGroup: { id: savedGroup.id },
-          year: item.year,
-          quantity: item.quantity,
+        // --- ส่วนของการตรวจสอบข้อมูล (Validation) ---
+        const workHistory = await manager.findOne(this.workHistoryRepo.target, {
+          where: { user: { id: userId } },
+          relations: ['localAdministrativeOrganization'],
         });
-        await queryRunner.manager.save(budget);
-      }
+        if (!workHistory) {
+          throw new NotFoundException('Work history ID not found');
+        }
 
-      await queryRunner.commitTransaction();
+        const duplicateTitle = await manager.findOne(this.projectGroupRepo.target, {
+          where: { title: dto.title, createdBy: { id: workHistory.id } },
+        });
+        if (duplicateTitle) {
+          throw new ConflictException('Project group with this title already exists');
+        }
+
+        // 2. ใช้ Promise.all เพื่อตรวจสอบ Foreign Keys ทั้งหมดพร้อมกัน เพิ่มประสิทธิภาพ
+        const [budgetPlan, strategy, tactic, plan] = await Promise.all([
+          manager.findOne(this.budgetPlanRepo.target, { where: { id: dto.budgetPlanId } }),
+          manager.findOne(this.strategyRepo.target, { where: { id: dto.strategyId } }),
+          manager.findOne(this.tacticRepo.target, { where: { id: dto.tacticId } }),
+          manager.findOne(this.planRepo.target, { where: { id: dto.planId } }),
+        ]);
+
+        // 3. ให้ Error Message ที่ชัดเจนเมื่อไม่พบ ID
+        if (!budgetPlan) { throw new NotFoundException(`Budget Plan ID not found: ${dto.budgetPlanId}`); }
+        if (!strategy) { throw new NotFoundException(`Strategy ID not found: ${dto.strategyId}`); }
+        if (!tactic) { throw new NotFoundException(`Tactic ID not found: ${dto.tacticId}`); }
+        if (!plan) { throw new NotFoundException(`Plan ID not found: ${dto.planId}`); }
+
+        // --- ส่วนของการสร้างข้อมูล (Creation) ---
+
+        const group = manager.create(this.projectGroupRepo.target, {
+          title: dto.title,
+          objective: dto.objective,
+          goal: dto.goal,
+          startLat: dto.startLat,
+          startLng: dto.startLng,
+          endLat: dto.endLat,
+          endLng: dto.endLng,
+          indicator: dto.indicator,
+          expected: dto.expected,
+          projectYear: dto.projectYear,
+
+          strategy,
+          tactic,
+          plan,
+          budgetPlan,
+
+          createdBy: workHistory,
+          originAgencyId: { id: workHistory.localAdministrativeOrganization.id },
+        });
+
+        const savedGroupResult = await manager.save(group);
+
+        const trackingStatus = manager.create(this.trackingStatusRepo.target, {
+          projectGroup: { id: savedGroupResult.id },
+          status: { id: '62997bd6-b1d2-4484-a8fc-f597802d95c2' },
+          workHistory: { id: workHistory.id },
+        });
+        await manager.save(trackingStatus);
+
+        if (!Array.isArray(dto.budget) || dto.budget.length === 0) throw new BadRequestException('งบประมาณไม่ถูกต้องหรือไม่มีข้อมูล');
+
+        const budgetPromises = dto.budget.map((item) => {
+          const budget = manager.create(this.budgetRepo.target, {
+            projectGroup: { id: savedGroupResult.id },
+            year: item.year,
+            quantity: item.quantity,
+          });
+          return manager.save(budget);
+        });
+        await Promise.all(budgetPromises); // Save all budget items concurrently
+
+        // คืนค่าผลลัพธ์หลักออกจาก transaction
+        return savedGroupResult;
+      });
+
+      // คืนค่าที่ได้จาก transaction เมื่อสำเร็จ
       return savedGroup;
+
     } catch (error) {
-      await queryRunner.rollbackTransaction();
-      this.logger.error('❌ Failed to create project group with tracking', error.stack);
-      throw error;
-    } finally {
-      await queryRunner.release();
+      handleException(this.logger, error)
     }
   }
+
 
   async findDraft(role: string, userId: string) {
     try {
@@ -477,9 +485,9 @@ export class ProjectGroupsService {
           .innerJoin('group.workHistory', 'projectWorkHistory')
           .where(`"trackingStatus"."create_at" = (${subQuery})`)
           .andWhere(`"trackingStatus"."status_id" = :statusId`, { statusId })
-          // .andWhere(`"projectWorkHistory"."amphoe_id" IN (:...amphoeIds)`, {
-          //   amphoeIds: responsibleAmphoeIds,
-          // });
+        // .andWhere(`"projectWorkHistory"."amphoe_id" IN (:...amphoeIds)`, {
+        //   amphoeIds: responsibleAmphoeIds,
+        // });
 
         return await qb.getCount();
       } else {
@@ -536,7 +544,7 @@ export class ProjectGroupsService {
       }
       const result = await this.projectGroupRepo.find({
         where: {
-          workHistory: { id: workHistory.id },
+          createdBy: { id: workHistory.id },
           deletedAt: Not(IsNull()),
         },
         withDeleted: true,
@@ -747,7 +755,6 @@ export class ProjectGroupsService {
         endLng: dto.endLng ?? null,
         indicator: dto.indicator,
         expected: dto.expected,
-        responsibleOrgId: dto.responsibleOrgId === 0 ? undefined : dto.responsibleOrgId,
         strategy: { id: dto.strategyId } as Strategy,
         tactic: { id: dto.tacticId } as Tactic,
         plan: { id: dto.planId } as Plan,
@@ -775,8 +782,7 @@ export class ProjectGroupsService {
     } catch (error) {
       console.error('❌ Error in update:', error);
       await queryRunner.rollbackTransaction();
-      this.logger.error(`Failed to update project group ${id}`, error.stack);
-      throw error;
+      handleException(this.logger, error)
     } finally {
       await queryRunner.release();
     }
