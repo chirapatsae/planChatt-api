@@ -30,11 +30,6 @@ export class ProjectGroupsController {
     return this.projectGroupsService.create(dto, req.user.userId);
   }
 
-  @Get()
-  async findAll(@Req() req: Request & { user: JwtPayloadUser }) {
-    return this.projectGroupsService.findAll();
-  }
-
   @Get('/by-status')
   async findByStatus(
     @Req() req: Request & { user: JwtPayloadUser },
@@ -58,7 +53,6 @@ export class ProjectGroupsController {
     return this.projectGroupsService.findOne(id);
   }
 
-
   @Delete('deleted/purge')
   async purgeDeletedProjects() {
     return this.projectGroupsService.handleProjectCleanUp();
@@ -68,18 +62,19 @@ export class ProjectGroupsController {
   async update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateProjectGroupDto,
+    @Req() req : Request & {user : JwtPayloadUser}
   ) {
-    return this.projectGroupsService.update(id, dto);
+    return this.projectGroupsService.update(id, dto , req.user.userId);
   }
 
   @Delete(':id')
-  async remove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.projectGroupsService.remove(id);
-  }
-
-  @Delete(':id/soft-remove')
-  async softRemove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.projectGroupsService.softRemove(id);
+  remove(
+    @Param('id') id: string,
+    @Query('mode') mode: 'soft' | 'hard' = 'soft',
+  ) {
+    return mode === 'soft'
+      ? this.projectGroupsService.softRemove(id)
+      : this.projectGroupsService.remove(id);
   }
 
   @Patch(':id/restore')
