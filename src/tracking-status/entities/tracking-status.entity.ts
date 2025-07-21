@@ -57,4 +57,7 @@ export class TrackingStatus {
         onUpdate: 'CASCADE',
     })
     comments : Comment[]
+
+    @Column( {name : 'is_latest' , default : true})
+    isLatest : boolean
 }

@@ -31,8 +31,7 @@ export class AuthService {
       }
 
       const hashedCid = hashCitizenId(decoded.pid);
-      console.log(decoded.pid)
-      console.log(hashedCid)
+
       let user = await this.userRepository.findOne({
         where: { citizenIdHash: hashedCid },
         relations: [
@@ -40,10 +39,9 @@ export class AuthService {
           'workHistory.amphoe',
           'workHistory.localAdministrativeOrganization',
           'workHistory.workStatus',
-          'workHistory.role', // เพิ่ม relation ของ role ด้วย เพื่อให้ดึงข้อมูลได้ครบ
+          'workHistory.role', 
         ],
       });
-      console.log(user)
       // ถ้า user ไม่พบ สร้างใหม่
       if (!user) {
         const newUserDto: CreateUserDto = {
@@ -73,15 +71,14 @@ export class AuthService {
       const divisionName = isFirstLogin
         ? divisionNameFromDto
         : latestWH.governmentAgencies?.name;
-      console.log(divisionId, divisionName)
+
 
       const payload = {
         sub: user.id,
-        roleId: latestWH.role.id ?? null,
+        role: latestWH.role?.name ?? null,
         workStatus: latestWH.workStatus?.name ?? null
       };
 
-      console.log(payload)
 
       const accessToken = this.jwtService.sign(payload, {
         secret: process.env.JWT_SECRET,
@@ -105,12 +102,11 @@ export class AuthService {
           localAdministrativeOrganizationName: latestWH.localAdministrativeOrganization?.name ?? '', // 👈 ใช้ ?. และ ??
           divisionId,
           divisionName,
-          roleId: latestWH.role?.id ?? '',
-          workStatusId: latestWH.workStatus?.id ?? ''
+          role: latestWH.role?.name ?? 'user',
+          workStatus: latestWH.workStatus?.name ?? 'pending'
         },
       };
 
-      // ======================================================
 
     } catch (error) {
       if (error instanceof UnauthorizedException || error instanceof BadRequestException) {

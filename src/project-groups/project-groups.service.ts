@@ -1,3 +1,4 @@
+import { WorkHistory } from './../work-history/entities/work-history.entity';
 import {
   Injectable,
   Logger,
@@ -5,14 +6,13 @@ import {
   BadRequestException,
   InternalServerErrorException,
   ConflictException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, IsNull, Not, Repository, SelectQueryBuilder } from 'typeorm';
+import { And, DataSource, IsNull, Not, Repository } from 'typeorm';
 import { ProjectGroup } from './entities/project-group.entity';
 import { CreateProjectGroupDto } from './dto/create-project-group.dto';
 import { UpdateProjectGroupDto } from './dto/update-project-group.dto';
-import { WorkHistory } from 'src/work-history/entities/work-history.entity';
-import { ProjectType } from 'src/project-types/entities/project-type.entity';
 import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
 import { Budget } from 'src/budget/entities/budget.entity';
@@ -63,7 +63,7 @@ export class ProjectGroupsService {
         // --- ส่วนของการตรวจสอบข้อมูล (Validation) ---
         const workHistory = await manager.findOne(this.workHistoryRepo.target, {
           where: { user: { id: userId } },
-          relations: ['localAdministrativeOrganization'],
+          relations: ['localAdministrativeOrganization', 'governmentAgencies'],
         });
         if (!workHistory) {
           throw new NotFoundException('Work history ID not found');
@@ -92,7 +92,15 @@ export class ProjectGroupsService {
 
         // --- ส่วนของการสร้างข้อมูล (Creation) ---
 
-        const group = manager.create(this.projectGroupRepo.target, {
+        // ตรวจสอบและกำหนด agency ตามบริบทของโครงการ
+        const { isInternal, agencyData } = this.determineProjectAgency(workHistory);
+
+        this.logger.log(`Creating project for user ${userId}: ${isInternal ? 'Internal' : 'External'} project`);
+        this.logger.log(`WorkHistory governmentAgencies: ${workHistory.governmentAgencies?.id || 'null'}`);
+        this.logger.log(`WorkHistory localAdministrativeOrganization: ${workHistory.localAdministrativeOrganization?.id || 'null'}`);
+
+        // สร้าง object สำหรับ project group
+        const projectGroupData: any = {
           title: dto.title,
           objective: dto.objective,
           goal: dto.goal,
@@ -103,16 +111,15 @@ export class ProjectGroupsService {
           indicator: dto.indicator,
           expected: dto.expected,
           projectYear: dto.projectYear,
-
           strategy,
           tactic,
           plan,
           budgetPlan,
-
           createdBy: workHistory,
-          originAgencyId: { id: workHistory.localAdministrativeOrganization.id },
-        });
+          ...agencyData, // รวม agency data ที่เหมาะสม
+        };
 
+        const group = manager.create(this.projectGroupRepo.target, projectGroupData);
         const savedGroupResult = await manager.save(group);
 
         const trackingStatus = manager.create(this.trackingStatusRepo.target, {
@@ -132,19 +139,80 @@ export class ProjectGroupsService {
           });
           return manager.save(budget);
         });
-        await Promise.all(budgetPromises); // Save all budget items concurrently
-
-        // คืนค่าผลลัพธ์หลักออกจาก transaction
+        await Promise.all(budgetPromises);
         return savedGroupResult;
       });
 
-      // คืนค่าที่ได้จาก transaction เมื่อสำเร็จ
       return savedGroup;
 
     } catch (error) {
       handleException(this.logger, error)
     }
   }
+
+  async findProjectsByStatus(options: {
+    userId: string;
+    countOnly?: boolean;
+    type?: 'draft' | 'pending' | 'edit' | 'approved'; // type is now optional
+  }) {
+    const { userId, countOnly, type } = options;
+
+    const workHistory = await this.workHistoryRepo.findOne({
+      where: { user: { id: userId } },
+      relations: ['user', 'localAdministrativeOrganization', 'governmentAgencies', 'workStatus'],
+    });
+    this.logger.log(workHistory);
+    if (!workHistory) return countOnly ? 0 : [];
+    if (workHistory.workStatus.id !== "c844d2a7-cf8b-4db1-958c-d7209dd30ff5") throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+
+    // Initialize where as an empty object
+    let where: any = {};
+
+    if (type) {
+      switch (type) {
+        case 'draft':
+          where.trackingStatus = {
+            isLatest: true,
+            status: { id: '62997bd6-b1d2-4484-a8fc-f597802d95c2' },
+          };
+          break;
+        case 'pending':
+          where.trackingStatus = {
+            isLatest: true,
+            status: { id: '30da8501-4487-49b7-8acf-ede14ca4ac09' },
+          };
+          break;
+        case 'edit':
+          where.trackingStatus = {
+            isLatest: true,
+            status: { id: 'e4173695-f605-4f80-b8ab-7f4569fc8f60' },
+          };
+          break;
+        case 'approved':
+          where.trackingStatus = {
+            isLatest: true,
+            status: { id: 'ef3bffe9-cf5b-41bf-bee2-3390197c8bc5' },
+          };
+          break;
+        // no default
+      }
+    }
+
+    // Internal agency (ภาครัฐ)
+    if (workHistory.governmentAgencies) {
+      where.responsibleAgency = workHistory.governmentAgencies.id;
+    }
+    // External (องค์กรปกครองท้องถิ่น)
+    if (!workHistory.governmentAgencies) {
+      where.originAgencyId = workHistory.localAdministrativeOrganization.id;
+    }
+    // Default query
+    return countOnly
+      ? this.projectGroupRepo.count({ where, relations: ['trackingStatus'] })
+      : this.projectGroupRepo.find({ where, relations: ['trackingStatus'] });
+  }
+
+
 
 
   async findDraft(role: string, userId: string) {
@@ -852,6 +920,38 @@ export class ProjectGroupsService {
     const existing = await this.projectGroupRepo.findOne({ where: { title } });
     if (existing && existing.id !== excludeId) {
       throw new ConflictException('Project group with this title already exists');
+    }
+  }
+
+  /**
+   * ตรวจสอบและกำหนด agency สำหรับโครงการตามบริบท
+   * @param workHistory - ข้อมูล work history ของ user
+   * @returns object ที่มี agency ที่เหมาะสม
+   */
+  private determineProjectAgency(workHistory: WorkHistory): {
+    isInternal: boolean;
+    agencyData: any;
+  } {
+    const isInternalProject = workHistory.governmentAgencies !== null;
+
+    if (isInternalProject) {
+      // โครงการภายใน: ใช้ responsibleAgency (GovernmentAgency)
+      if (!workHistory.governmentAgencies) {
+        throw new BadRequestException('User ภายในต้องมี governmentAgencies');
+      }
+      return {
+        isInternal: true,
+        agencyData: { responsibleAgency: { id: workHistory.governmentAgencies.id } }
+      };
+    } else {
+      // โครงการภายนอก: ใช้ originAgencyId (LocalAdministrativeOrganization)
+      if (!workHistory.localAdministrativeOrganization) {
+        throw new BadRequestException('User ภายนอกต้องมี localAdministrativeOrganization');
+      }
+      return {
+        isInternal: false,
+        agencyData: { originAgencyId: { id: workHistory.localAdministrativeOrganization.id } }
+      };
     }
   }
 

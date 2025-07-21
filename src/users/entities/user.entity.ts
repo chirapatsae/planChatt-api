@@ -30,10 +30,10 @@ export class User {
   @Column()
   lastname: string
 
-  @Column({ nullable: true })
+  @Column({ nullable: true  , unique : true})
   email?: string;
 
-  @Column({ nullable: true })
+  @Column({ nullable: true , unique : true})
   phone?: string;
 
   @Column({ name: 'is_first_login', default: true })

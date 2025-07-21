@@ -107,7 +107,7 @@ export class ProjectGroup {
         onDelete : 'CASCADE'
     })
     @JoinColumn({name : 'responsible_agency_id'})
-    responsibleAgency : LocalAdministrativeOrganization
+    responsibleAgency : GovernmentAgency
 
     @OneToMany(() => Budget, (budget) => budget.projectGroupId, {
         onUpdate: 'CASCADE',

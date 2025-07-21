@@ -9,6 +9,7 @@ import {
   ParseUUIDPipe,
   Req,
   UseGuards,
+  Query,
 } from '@nestjs/common';
 import { ProjectGroupsService } from './project-groups.service';
 import { CreateProjectGroupDto } from './dto/create-project-group.dto';
@@ -22,7 +23,7 @@ import { JwtAuthGuard } from 'src/auth/auth.guard';
 })
 @UseGuards(JwtAuthGuard)
 export class ProjectGroupsController {
-  constructor(private readonly projectGroupsService: ProjectGroupsService) {}
+  constructor(private readonly projectGroupsService: ProjectGroupsService) { }
 
   @Post()
   async create(@Body() dto: CreateProjectGroupDto, @Req() req: Request & { user: JwtPayloadUser }) {
@@ -34,39 +35,17 @@ export class ProjectGroupsController {
     return this.projectGroupsService.findAll();
   }
 
-  @Get('/draft-project')
-  async findDraft(@Req() req: Request & { user: JwtPayloadUser }) {
-    return this.projectGroupsService.findDraft(req.user.role, req.user.userId);
-  }
-
-  @Get('/draft-project/count')
-  async findDraftLength(@Req() req: Request & { user: JwtPayloadUser }) {
-    return this.projectGroupsService.findDraftdLength(req.user.role, req.user.userId);
-  }
-
-  @Get('/edit-project')
-  async findEdit(@Req() req: Request & { user: JwtPayloadUser }) {
-    return this.projectGroupsService.findEdit(req.user.role, req.user.userId);
-  }
-
-  @Get('/edit-project/count')
-  async findEditLength(@Req() req: Request & { user: JwtPayloadUser }) {
-    return this.projectGroupsService.findEditLength(req.user.role, req.user.userId);
-  }
-
-  @Get('/verify-project/')
-  async findAVerify(@Req() req: Request & { user: JwtPayloadUser }) {
-    return this.projectGroupsService.findAVerify(req.user.role, req.user.userId);
-  }
-
-  @Get('/verify-project/count')
-  async findVerifyLength(@Req() req: Request & { user: JwtPayloadUser }) {
-    return this.projectGroupsService.findVerifyLength(req.user.role, req.user.userId);
-  }
-
-  @Get('/approve-project/count')
-  async findApproveLength() {
-    return this.projectGroupsService.findApproveLength();
+  @Get('/by-status')
+  async findByStatus(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('type') type: 'draft' | 'pending' | 'edit' | 'approved',
+    @Query('countOnly') countOnly?: string,
+  ) {
+    return this.projectGroupsService.findProjectsByStatus({
+      userId: req.user.userId,
+      type,
+      countOnly: countOnly === 'true' || countOnly === '1',
+    });
   }
 
   @Get('delete')
@@ -74,15 +53,11 @@ export class ProjectGroupsController {
     return this.projectGroupsService.findDelete(req.user.userId);
   }
 
-  @Get('delete-project/count')
-  async findDeleteLength() {
-    return this.projectGroupsService.findDeleteLength();
-  }
-
   @Get(':id')
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.projectGroupsService.findOne(id);
   }
+
 
   @Delete('deleted/purge')
   async purgeDeletedProjects() {
