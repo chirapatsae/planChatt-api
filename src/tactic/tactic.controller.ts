@@ -6,9 +6,16 @@ import {
   InternalServerErrorException,
   NotFoundException,
   UseGuards,
+  Post,
+  Body,
+  Patch,
+  Delete,
+  Query,
 } from '@nestjs/common';
 import { TacticService } from './tactic.service';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
+import { CreateTacticDto } from './dto/create-tactic.dto';
+import { UpdateTacticDto } from './dto/update-tactic.dto';
 
 @Controller({
   path: 'tactic',
@@ -18,37 +25,44 @@ import { JwtAuthGuard } from 'src/auth/auth.guard';
 export class TacticController {
   private readonly logger = new Logger(TacticController.name);
 
-  constructor(private readonly tacticService: TacticService) {}
+  constructor(private readonly tacticService: TacticService) { }
 
   @Get()
   async findAll() {
-    this.logger.log('GET /tactic');
-    try {
-      return await this.tacticService.findAll();
-    } catch (error) {
-      this.logger.error('Error in GET /tactic', error.stack);
-      throw this.handleException(error);
-    }
+    return await this.tacticService.findAll();
   }
 
   @Get(':id')
   async findOne(@Param('id') id: string) {
-    this.logger.log(`GET /tactic/${id}`);
-    try {
-      return await this.tacticService.findOne(id);
-    } catch (error) {
-      this.logger.error(`Error in GET /tactic/${id}`, error.stack);
-      throw this.handleException(error);
-    }
+    return await this.tacticService.findOne(id);
   }
 
-  private handleException(error: any) {
-    if (
-      error instanceof NotFoundException ||
-      error instanceof InternalServerErrorException
-    ) {
-      return error;
-    }
-    return new InternalServerErrorException('Unexpected error occurred');
+  @Post()
+  create(@Body() createTacticDto: CreateTacticDto) {
+    return this.tacticService.create(createTacticDto);
   }
+
+  @Patch(':id')
+  update(
+    @Param('id') id: string,
+    @Body() updateTacticDto: UpdateTacticDto,
+  ) {
+    return this.tacticService.update(id, updateTacticDto);
+  }
+
+  @Delete(':id')
+  remove(
+    @Param('id') id: string,
+    @Query('mode') mode: 'soft' | 'hard' = 'soft',
+  ) {
+    return mode === 'soft'
+      ? this.tacticService.softRemove(id)
+      : this.tacticService.remove(id);
+  }
+
+  @Patch(':id/restore')
+  restore(@Param('id') id: string) {
+    return this.tacticService.restore(id);
+  }
+  
 }
