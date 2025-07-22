@@ -2,7 +2,6 @@ import {
   BadRequestException,
   InternalServerErrorException,
   Logger,
-  NotFoundException,
   HttpException,
 } from '@nestjs/common';
 import { QueryFailedError } from 'typeorm';

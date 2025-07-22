@@ -10,6 +10,7 @@ import { Role } from 'src/roles/entities/role.entity';
 import { WorkHistoryAmphoeResponsibility } from 'src/work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity';
 import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
 import { Strategy } from 'src/strategy/entities/strategy.entity';
+import { Tactic } from 'src/tactic/entities/tactic.entity';
 
 @Entity({ name: "work_history" })
 export class WorkHistory {
@@ -123,6 +124,18 @@ export class WorkHistory {
     onUpdate: 'CASCADE',
   })
   responsibleProjectGroup : ProjectGroup[];
+
+  @OneToMany(() => Tactic, (strategy) => strategy.createdBy, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  creatorTactic : Tactic[];
+
+  @OneToMany(() => Tactic, (strategy) => strategy.deletedBy, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  deletorTactic : Tactic[];
 
 }
 

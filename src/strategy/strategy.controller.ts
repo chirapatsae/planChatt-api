@@ -7,11 +7,9 @@ import {
   Param,
   Delete,
   Logger,
-  InternalServerErrorException,
-  NotFoundException,
-  BadRequestException,
   UseGuards,
   ParseUUIDPipe,
+  Query,
 } from '@nestjs/common';
 import { CreateStrategyDto } from './dto/create-strategy.dto';
 import { UpdateStrategyDto } from './dto/update-strategy.dto';
@@ -41,14 +39,14 @@ export class StrategyController {
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
+  findOne(@Param('id') id: string) {
     this.logger.log(`Request to fetch strategy with ID: ${id}`);
     return this.strategyService.findOne(id);
   }
 
   @Patch(':id')
   update(
-    @Param('id', ParseUUIDPipe) id: string,
+    @Param('id') id: string,
     @Body() dto: UpdateStrategyDto,
   ) {
     this.logger.log(`Request to update strategy with ID: ${id}`);
@@ -56,8 +54,17 @@ export class StrategyController {
   }
 
   @Delete(':id')
-  remove(@Param('id', ParseUUIDPipe) id: string) {
-    this.logger.warn(`Request to remove strategy with ID: ${id}`);
-    return this.strategyService.remove(id);
+  remove(
+    @Param('id') id: string,
+    @Query('mode') mode: 'soft' | 'hard' = 'soft',
+  ) {
+    return mode === 'soft'
+      ? this.strategyService.softRemove(id)
+      : this.strategyService.remove(id);
+  }
+
+  @Patch(':id/restore')
+  restore(@Param('id') id: string) {
+    return this.strategyService.restore(id);
   }
 }
