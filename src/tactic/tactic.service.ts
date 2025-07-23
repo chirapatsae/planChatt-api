@@ -10,6 +10,7 @@ import { Tactic } from './entities/tactic.entity';
 import { handleException } from 'src/util/handleException';
 import { CreateTacticDto } from './dto/create-tactic.dto';
 import { UpdateTacticDto } from './dto/update-tactic.dto';
+import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 
 @Injectable()
 export class TacticService {
@@ -18,12 +19,23 @@ export class TacticService {
   constructor(
     @InjectRepository(Tactic)
     private readonly tacticRepo: Repository<Tactic>,
+    @InjectRepository(WorkHistory)
+    private readonly workHistoryRepository: Repository<WorkHistory>
   ) {}
 
-  async create(dto: CreateTacticDto): Promise<Tactic> {
+  async create(dto: CreateTacticDto, userId: string): Promise<Tactic> {
     try {
+      const workHistory = await this.workHistoryRepository.findOne({ where: { id: userId } });
+      if (!workHistory) {
+        throw new NotFoundException('Invalid user. Work history not found.');
+      }
       const { id, name, strategyId } = dto;
-      const tactic = this.tacticRepo.create({ id, name, strategy: { id: strategyId } });
+      const tactic = this.tacticRepo.create({
+        id,
+        name,
+        strategy: { id: strategyId },
+        createdBy: workHistory,
+      });
       return await this.tacticRepo.save(tactic);
     } catch (error) {
       handleException(this.logger, error);
@@ -84,12 +96,19 @@ export class TacticService {
     }
   }
 
-  async softRemove(id: string): Promise<{ message: string }> {
+  async softRemove(id: string, userId: string): Promise<{ message: string }> {
     try {
-      const result = await this.tacticRepo.softDelete(id);
-      if (result.affected === 0) {
+      const workHistory = await this.workHistoryRepository.findOne({ where: { id: userId } });
+      if (!workHistory) {
+        throw new NotFoundException('Invalid user. Work history not found.');
+      }
+      const tactic = await this.tacticRepo.findOne({ where: { id } });
+      if (!tactic) {
         throw new NotFoundException(`Tactic with ID ${id} not found`);
       }
+      tactic.deletedBy = workHistory;
+      await this.tacticRepo.save(tactic);
+      await this.tacticRepo.softRemove(tactic);
       return { message: `Tactic with ID ${id} has been soft-removed.` };
     } catch (error) {
       handleException(this.logger, error);

@@ -17,13 +17,14 @@ import * as handleExceptionModule from 'src/util/handleException';
 const mockBudgetPlan = (overrides: Partial<BudgetPlan> = {}): BudgetPlan => ({
   id: 'plan-uuid',
   name: 'Test Plan',
-  startYear: 2565,
-  endYear: 2566,
+  startYear: 2020,
+  endYear: 2021,
   isLatest: true,
   createAt: new Date(),
-  deletedAt: undefined,
-  createdBy: { id: 'work-uuid' } as WorkHistory,
+  deletedAt: new Date(),
+  createdBy: {} as WorkHistory,
   projectGroup: [],
+  budget: overrides.budget ?? [],
   ...overrides,
 });
 
@@ -97,6 +98,7 @@ describe('BudgetPlanService', () => {
       expect(result).toMatchObject({
         ...mockBudgetPlan(),
         createAt: expect.any(Date),
+        deletedAt: expect.any(Date),
       });
       expect(result.createAt).toBeInstanceOf(Date);
       expect(manager.save).toHaveBeenCalled();
@@ -169,6 +171,7 @@ describe('BudgetPlanService', () => {
       expect(result).toMatchObject({
         ...mockBudgetPlan(),
         createAt: expect.any(Date),
+        deletedAt: expect.any(Date),
       });
       expect(result.createAt).toBeInstanceOf(Date);
     });
@@ -197,7 +200,11 @@ describe('BudgetPlanService', () => {
       budgetPlanRepository.merge.mockReturnValue(mockBudgetPlan({ ...updateDto }));
       budgetPlanRepository.save.mockResolvedValue(mockBudgetPlan({ ...updateDto }));
       const result = await service.update('plan-uuid', updateDto);
-      expect(result).toEqual(mockBudgetPlan({ ...updateDto }));
+      expect(result).toEqual({
+        ...mockBudgetPlan({ ...updateDto }),
+        createAt: expect.any(Date),
+        deletedAt: expect.any(Date),
+      });
     });
     it('should throw NotFoundException if not found', async () => {
       budgetPlanRepository.findOneBy.mockResolvedValue(undefined);

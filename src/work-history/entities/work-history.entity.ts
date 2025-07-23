@@ -11,6 +11,7 @@ import { WorkHistoryAmphoeResponsibility } from 'src/work-history-amphoe-respons
 import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
 import { Strategy } from 'src/strategy/entities/strategy.entity';
 import { Tactic } from 'src/tactic/entities/tactic.entity';
+import { Plan } from 'src/plan/entities/plan.entity';
 
 @Entity({ name: "work_history" })
 export class WorkHistory {
@@ -125,17 +126,29 @@ export class WorkHistory {
   })
   responsibleProjectGroup : ProjectGroup[];
 
-  @OneToMany(() => Tactic, (strategy) => strategy.createdBy, {
+  @OneToMany(() => Tactic, (tactic) => tactic.createdBy, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',
   })
   creatorTactic : Tactic[];
 
-  @OneToMany(() => Tactic, (strategy) => strategy.deletedBy, {
+  @OneToMany(() => Tactic, (tactic) => tactic.deletedBy, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',
   })
   deletorTactic : Tactic[];
+
+  @OneToMany(() => Plan, (plan) => plan.createdBy, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  creatorPlan : Plan[];
+
+  @OneToMany(() => Plan, (plan) => plan.deletedBy, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  deletorPlan : Plan[];
 
 }
 

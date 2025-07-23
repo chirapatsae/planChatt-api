@@ -54,7 +54,7 @@ describe('BudgetService', () => {
       quantity: 1000,
     };
     const plan = { id: 'plan-uuid', startYear: 2020, endYear: 2025 };
-    const projectGroup = { id: 'group-uuid', budgetPlanId: plan };
+    const projectGroup = { id: 'group-uuid', budgetPlan: plan };
     const createdBudget = { id: 'budget-uuid', ...dto, projectGroupId: { id: dto.projectGroupId } };
 
     it('should create and return a budget (success)', async () => {
@@ -75,7 +75,7 @@ describe('BudgetService', () => {
     });
 
     it('should throw BadRequestException if project group has no budget plan', async () => {
-      projectGroupRepo.findOne.mockResolvedValue({ ...projectGroup, budgetPlanId: null } as any);
+      projectGroupRepo.findOne.mockResolvedValue({ ...projectGroup, budgetPlan: null } as any);
       handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new BadRequestException(); });
       await expect(service.create(dto)).rejects.toThrow(BadRequestException);
     });

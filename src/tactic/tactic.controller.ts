@@ -11,11 +11,13 @@ import {
   Patch,
   Delete,
   Query,
+  Req,
 } from '@nestjs/common';
 import { TacticService } from './tactic.service';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { CreateTacticDto } from './dto/create-tactic.dto';
 import { UpdateTacticDto } from './dto/update-tactic.dto';
+import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 
 @Controller({
   path: 'tactic',
@@ -38,8 +40,8 @@ export class TacticController {
   }
 
   @Post()
-  create(@Body() createTacticDto: CreateTacticDto) {
-    return this.tacticService.create(createTacticDto);
+  create(@Body() createTacticDto: CreateTacticDto, @Req() req: Request & { user: JwtPayloadUser }) {
+    return this.tacticService.create(createTacticDto, req.user.userId);
   }
 
   @Patch(':id')
@@ -54,9 +56,10 @@ export class TacticController {
   remove(
     @Param('id') id: string,
     @Query('mode') mode: 'soft' | 'hard' = 'soft',
+    @Req() req: Request & { user: JwtPayloadUser }
   ) {
     return mode === 'soft'
-      ? this.tacticService.softRemove(id)
+      ? this.tacticService.softRemove(id, req.user.userId)
       : this.tacticService.remove(id);
   }
 

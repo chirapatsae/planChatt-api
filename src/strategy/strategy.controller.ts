@@ -10,11 +10,13 @@ import {
   UseGuards,
   ParseUUIDPipe,
   Query,
+  Req,
 } from '@nestjs/common';
 import { CreateStrategyDto } from './dto/create-strategy.dto';
 import { UpdateStrategyDto } from './dto/update-strategy.dto';
 import { StrategyService } from './strategy.service';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
+import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 
 @Controller({
   path: 'strategy',
@@ -27,9 +29,9 @@ export class StrategyController {
   constructor(private readonly strategyService: StrategyService) { }
 
   @Post()
-  create(@Body() dto: CreateStrategyDto) {
+  create(@Body() dto: CreateStrategyDto , @Req() req: Request & { user: JwtPayloadUser }) {
     this.logger.log(`Request to create strategy with ID: ${dto.stratId}`);
-    return this.strategyService.create(dto);
+    return this.strategyService.create(dto , req.user.userId);
   }
 
   @Get()
@@ -57,10 +59,11 @@ export class StrategyController {
   remove(
     @Param('id') id: string,
     @Query('mode') mode: 'soft' | 'hard' = 'soft',
+    @Req() req: Request & { user: JwtPayloadUser }
   ) {
     return mode === 'soft'
-      ? this.strategyService.softRemove(id)
-      : this.strategyService.remove(id);
+      ? this.strategyService.softRemove(id , req.user.userId)
+      : this.strategyService.remove(id );
   }
 
   @Patch(':id/restore')

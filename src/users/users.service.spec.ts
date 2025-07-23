@@ -24,17 +24,20 @@ import * as handleExceptionModule from '../util/handleException';
 
 const mockUser = (overrides: Partial<User> = {}): User => ({
   id: 'uuid-1',
-  citizenId: 'encrypted-1234567890123',
-  citizenIdHash: 'hash-1234567890123',
+  citizenId: '1234567890123',
+  citizenIdHash: 'hash',
   prefix: 'Mr.',
   firstname: 'John',
   lastname: 'Doe',
   email: 'john@example.com',
-  phone: '0812345678',
-  isFirstLogin: true,
+  phone: '0123456789',
+  isFirstLogin: false,
+  deletedAt: new Date(),
   createAt: new Date(),
-  deletedAt: undefined,
   workHistory: [],
+  createdWorkHistory: [],
+  updatedWorkHistory: [],
+  position: [],
   ...overrides,
 });
 
@@ -123,7 +126,16 @@ describe('UsersService', () => {
     it('should return all users (success)', async () => {
       userRepository.find.mockResolvedValue([mockUser(), mockUser({ id: 'uuid-2' })]);
       const result = await service.findAll();
-      expect(userRepository.find).toHaveBeenCalledWith({ relations: { workHistory: true } });
+      expect(userRepository.find).toHaveBeenCalledWith({
+        relations: {
+          workHistory: {
+            amphoe: true,
+            localAdministrativeOrganization: true,
+            workHistoryResponsibleAdmins: { amphoe: true },
+            governmentAgencies: true,
+          },
+        },
+      });
       expect(result).toHaveLength(2);
     });
     it('should throw InternalServerErrorException', async () => {
@@ -140,7 +152,14 @@ describe('UsersService', () => {
       const result = await service.findOne('uuid-1');
       expect(userRepository.findOne).toHaveBeenCalledWith({
         where: { id: 'uuid-1' },
-        relations: { workHistory: { localAdministrativeOrganization: true } },
+        relations: {
+          workHistory: {
+            amphoe: true,
+            localAdministrativeOrganization: true,
+            workHistoryResponsibleAdmins: { amphoe: true },
+            governmentAgencies: true,
+          },
+        },
       });
       expect(result.citizenId).toBe('1234567890123');
     });

@@ -95,13 +95,13 @@ describe('ProjectGroupsService', () => {
       budget: [{ year: 2024, quantity: 100 } as any],
     };
     const workHistory: WorkHistory = {
-      id: 'wh-1',
-      amphoe: { id: 'amphoe-1' } as any,
-      localAdministrativeOrganization: { id: 'lao-1', name: 'LAO', type: 'type', createdAt: new Date(), deleteAt: null, amphoe: { id: 'amphoe-1' } as any, workHistory: [], originAgencyProjectGroup: [] } as any,
-      user: { id: userId } as any,
-      workStatus: { id: 'c844d2a7-cf8b-4db1-958c-d7209dd30ff5', name: 'approved', createdAt: new Date(), workHistory: [] } as any,
-      role: { id: 'role-1' } as any,
-      governmentAgencies: { id: 'gov-1', name: 'Gov', createdAt: new Date(), workHistory: [], responsibleAgencyProjectGroup: [] } as any,
+      id: 'wh-uuid',
+      amphoe: {},
+      localAdministrativeOrganization: {},
+      user: {},
+      workStatus: {},
+      role: {},
+      governmentAgencies: {},
       createdAt: new Date(),
       updatedAt: new Date(),
       trackingStatus: [],
@@ -111,7 +111,11 @@ describe('ProjectGroupsService', () => {
       deletorStrategy: [],
       creatorProjectGroup: [],
       responsibleProjectGroup: [],
-    };
+      creatorTactic: [],
+      deletorTactic: [],
+      creatorPlan: [],
+      deletorPlan: [],
+    } as any;
     const budgetPlan = { id: 'budget-plan-1' };
     const strategy = { id: 'strategy-1' };
     const tactic = { id: 'tactic-1' };
@@ -231,13 +235,13 @@ describe('ProjectGroupsService', () => {
   describe('findProjectsByStatus', () => {
     const userId = 'user-1';
     const workHistory: WorkHistory = {
-      id: 'wh-1',
-      amphoe: { id: 'amphoe-1' } as any,
-      localAdministrativeOrganization: { id: 'lao-1', name: 'LAO', type: 'type', createdAt: new Date(), deleteAt: null, amphoe: { id: 'amphoe-1' } as any, workHistory: [], originAgencyProjectGroup: [] } as any,
-      user: { id: userId } as any,
-      workStatus: { id: 'c844d2a7-cf8b-4db1-958c-d7209dd30ff5', name: 'approved', createdAt: new Date(), workHistory: [] } as any,
-      role: { id: 'role-1' } as any,
-      governmentAgencies: { id: 'gov-1', name: 'Gov', createdAt: new Date(), workHistory: [], responsibleAgencyProjectGroup: [] } as any,
+      id: 'wh-uuid',
+      amphoe: {},
+      localAdministrativeOrganization: {},
+      user: {},
+      workStatus: { id: 'c844d2a7-cf8b-4db1-958c-d7209dd30ff5' },
+      role: {},
+      governmentAgencies: {},
       createdAt: new Date(),
       updatedAt: new Date(),
       trackingStatus: [],
@@ -247,7 +251,11 @@ describe('ProjectGroupsService', () => {
       deletorStrategy: [],
       creatorProjectGroup: [],
       responsibleProjectGroup: [],
-    };
+      creatorTactic: [],
+      deletorTactic: [],
+      creatorPlan: [],
+      deletorPlan: [],
+    } as any;
     const projects: ProjectGroup[] = [
       {
         id: 'pg-1',
@@ -347,13 +355,13 @@ describe('ProjectGroupsService', () => {
   describe('findDelete', () => {
     const userId = 'user-1';
     const workHistoryDelete: WorkHistory = {
-      id: 'wh-1',
-      amphoe: { id: 'amphoe-1' } as any,
-      localAdministrativeOrganization: { id: 'lao-1', name: 'LAO', type: 'type', createdAt: new Date(), deleteAt: null, amphoe: { id: 'amphoe-1' } as any, workHistory: [], originAgencyProjectGroup: [] } as any,
-      user: { id: userId } as any,
-      workStatus: { id: 'c844d2a7-cf8b-4db1-958c-d7209dd30ff5', name: 'approved', createdAt: new Date(), workHistory: [] } as any,
-      role: { id: 'role-1' } as any,
-      governmentAgencies: { id: 'gov-1', name: 'Gov', createdAt: new Date(), workHistory: [], responsibleAgencyProjectGroup: [] } as any,
+      id: 'wh-uuid',
+      amphoe: {},
+      localAdministrativeOrganization: {},
+      user: {},
+      workStatus: {},
+      role: {},
+      governmentAgencies: {},
       createdAt: new Date(),
       updatedAt: new Date(),
       trackingStatus: [],
@@ -363,7 +371,11 @@ describe('ProjectGroupsService', () => {
       deletorStrategy: [],
       creatorProjectGroup: [],
       responsibleProjectGroup: [],
-    };
+      creatorTactic: [],
+      deletorTactic: [],
+      creatorPlan: [],
+      deletorPlan: [],
+    } as any;
     const deletedProjects: ProjectGroup[] = [
       {
         id: 'pg-1',

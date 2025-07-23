@@ -34,6 +34,7 @@ const mockLAO = (overrides: Partial<LocalAdministrativeOrganization> = {}): Loca
   deleteAt: null,
   amphoe: mockAmphoe(),
   workHistory: [],
+  originAgencyProjectGroup: [],
   ...overrides,
 });
 
