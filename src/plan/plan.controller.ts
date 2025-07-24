@@ -27,8 +27,7 @@ import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 export class PlanController {
   private readonly logger = new Logger(PlanController.name);
 
-  constructor(private readonly planService: PlanService) { }
-
+  constructor(private readonly planService: PlanService) {}
 
   @Get()
   async findAll() {
@@ -52,15 +51,15 @@ export class PlanController {
   }
 
   @Post()
-  create(@Body() createPlanDto: CreatePlanDto, @Req() req: Request & { user: JwtPayloadUser }) {
+  create(
+    @Body() createPlanDto: CreatePlanDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
     return this.planService.create(createPlanDto, req.user.userId);
   }
 
   @Patch(':id')
-  update(
-    @Param('id') id: string,
-    @Body() updatePlanDto: UpdatePlanDto,
-  ) {
+  update(@Param('id') id: string, @Body() updatePlanDto: UpdatePlanDto) {
     return this.planService.update(id, updatePlanDto);
   }
 
@@ -68,7 +67,7 @@ export class PlanController {
   remove(
     @Param('id') id: string,
     @Query('mode') mode: 'soft' | 'hard' = 'soft',
-    @Req() req: Request & { user: JwtPayloadUser }
+    @Req() req: Request & { user: JwtPayloadUser },
   ) {
     return mode === 'soft'
       ? this.planService.softRemove(id, req.user.userId)

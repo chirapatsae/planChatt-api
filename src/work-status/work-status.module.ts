@@ -5,7 +5,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { WorkStatus } from './entities/work-status.entity';
 
 @Module({
-  imports : [TypeOrmModule.forFeature([WorkStatus])],
+  imports: [TypeOrmModule.forFeature([WorkStatus])],
   controllers: [WorkStatusController],
   providers: [WorkStatusService],
 })

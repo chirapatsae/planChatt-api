@@ -8,21 +8,20 @@ import { handleException } from 'src/util/handleException';
 
 @Injectable()
 export class WorkStatusService {
-  private readonly logger = new Logger(WorkStatusService.name)
+  private readonly logger = new Logger(WorkStatusService.name);
 
   constructor(
     @InjectRepository(WorkStatus)
-    private readonly workStatusRepository: Repository<WorkStatus>
-  ) { }
-
+    private readonly workStatusRepository: Repository<WorkStatus>,
+  ) {}
 
   async create(createWorkStatusDto: CreateWorkStatusDto) {
     try {
       const { name } = createWorkStatusDto;
-      const workStatus = this.workStatusRepository.create({ name })
-      return await this.workStatusRepository.save(workStatus)
+      const workStatus = this.workStatusRepository.create({ name });
+      return await this.workStatusRepository.save(workStatus);
     } catch (error) {
-      handleException(this.logger, error)
+      handleException(this.logger, error);
     }
   }
 
@@ -30,10 +29,10 @@ export class WorkStatusService {
     try {
       return await this.workStatusRepository.find({
         where: { deletedAt: undefined },
-        relations: []
-      })
+        relations: [],
+      });
     } catch (error) {
-      handleException(this.logger, error)
+      handleException(this.logger, error);
     }
   }
 
@@ -41,18 +40,17 @@ export class WorkStatusService {
     try {
       const workStatus = await this.workStatusRepository.findOne({
         where: { id },
-        relations: []
-      })
+        relations: [],
+      });
 
       if (!workStatus) {
-        throw new NotFoundException(`Work Status with ID ${id} not found`)
+        throw new NotFoundException(`Work Status with ID ${id} not found`);
       }
-      return workStatus
-    } catch(error) {
-      handleException(this.logger, error)
+      return workStatus;
+    } catch (error) {
+      handleException(this.logger, error);
     }
   }
-
 
   async update(id: string, updateWorkStatusDto: UpdateWorkStatusDto) {
     try {
@@ -77,7 +75,9 @@ export class WorkStatusService {
       if (result.affected === 0) {
         throw new NotFoundException(`Work Status with ID ${id} not found`);
       }
-      return { message: `Work Status with ID ${id} has been permanently removed.` };
+      return {
+        message: `Work Status with ID ${id} has been permanently removed.`,
+      };
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -99,7 +99,9 @@ export class WorkStatusService {
     try {
       const result = await this.workStatusRepository.restore(id);
       if (result.affected === 0) {
-        throw new NotFoundException(`Work Status with ID ${id} not found or was not deleted.`);
+        throw new NotFoundException(
+          `Work Status with ID ${id} not found or was not deleted.`,
+        );
       }
       return { message: `Work Status with ID ${id} has been restored.` };
     } catch (error) {

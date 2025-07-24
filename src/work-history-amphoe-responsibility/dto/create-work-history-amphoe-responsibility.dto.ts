@@ -6,5 +6,4 @@ export class CreateWorkHistoryAmphoeResponsibilityDto {
 
   @IsString()
   amphoeId: string;
-
 }

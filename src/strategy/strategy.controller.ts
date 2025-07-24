@@ -26,12 +26,15 @@ import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 export class StrategyController {
   private readonly logger = new Logger(StrategyController.name);
 
-  constructor(private readonly strategyService: StrategyService) { }
+  constructor(private readonly strategyService: StrategyService) {}
 
   @Post()
-  create(@Body() dto: CreateStrategyDto , @Req() req: Request & { user: JwtPayloadUser }) {
+  create(
+    @Body() dto: CreateStrategyDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
     this.logger.log(`Request to create strategy with ID: ${dto.stratId}`);
-    return this.strategyService.create(dto , req.user.userId);
+    return this.strategyService.create(dto, req.user.userId);
   }
 
   @Get()
@@ -47,10 +50,7 @@ export class StrategyController {
   }
 
   @Patch(':id')
-  update(
-    @Param('id') id: string,
-    @Body() dto: UpdateStrategyDto,
-  ) {
+  update(@Param('id') id: string, @Body() dto: UpdateStrategyDto) {
     this.logger.log(`Request to update strategy with ID: ${id}`);
     return this.strategyService.update(id, dto);
   }
@@ -59,11 +59,11 @@ export class StrategyController {
   remove(
     @Param('id') id: string,
     @Query('mode') mode: 'soft' | 'hard' = 'soft',
-    @Req() req: Request & { user: JwtPayloadUser }
+    @Req() req: Request & { user: JwtPayloadUser },
   ) {
     return mode === 'soft'
-      ? this.strategyService.softRemove(id , req.user.userId)
-      : this.strategyService.remove(id );
+      ? this.strategyService.softRemove(id, req.user.userId)
+      : this.strategyService.remove(id);
   }
 
   @Patch(':id/restore')

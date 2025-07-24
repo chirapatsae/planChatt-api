@@ -20,12 +20,14 @@ export class TacticService {
     @InjectRepository(Tactic)
     private readonly tacticRepo: Repository<Tactic>,
     @InjectRepository(WorkHistory)
-    private readonly workHistoryRepository: Repository<WorkHistory>
+    private readonly workHistoryRepository: Repository<WorkHistory>,
   ) {}
 
   async create(dto: CreateTacticDto, userId: string): Promise<Tactic> {
     try {
-      const workHistory = await this.workHistoryRepository.findOne({ where: { id: userId } });
+      const workHistory = await this.workHistoryRepository.findOne({
+        where: { id: userId },
+      });
       if (!workHistory) {
         throw new NotFoundException('Invalid user. Work history not found.');
       }
@@ -46,7 +48,7 @@ export class TacticService {
     try {
       return await this.tacticRepo.find({
         where: { deletedAt: undefined },
-        relations: ['strategy', 'createdBy', 'deletedBy',  'planTactics'],
+        relations: ['strategy', 'createdBy', 'deletedBy', 'planTactics'],
       });
     } catch (error) {
       handleException(this.logger, error);
@@ -98,7 +100,9 @@ export class TacticService {
 
   async softRemove(id: string, userId: string): Promise<{ message: string }> {
     try {
-      const workHistory = await this.workHistoryRepository.findOne({ where: { id: userId } });
+      const workHistory = await this.workHistoryRepository.findOne({
+        where: { id: userId },
+      });
       if (!workHistory) {
         throw new NotFoundException('Invalid user. Work history not found.');
       }
@@ -119,7 +123,9 @@ export class TacticService {
     try {
       const result = await this.tacticRepo.restore(id);
       if (result.affected === 0) {
-        throw new NotFoundException(`Tactic with ID ${id} not found or was not deleted.`);
+        throw new NotFoundException(
+          `Tactic with ID ${id} not found or was not deleted.`,
+        );
       }
       return { message: `Tactic with ID ${id} has been restored.` };
     } catch (error) {

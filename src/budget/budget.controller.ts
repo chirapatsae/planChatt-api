@@ -35,7 +35,6 @@ export class BudgetController {
     return this.budgetService.findAll(groupId);
   }
 
-
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.budgetService.findOne(id);
@@ -46,10 +45,9 @@ export class BudgetController {
     return this.budgetService.update(id, dto);
   }
 
-
   @Delete(':id')
   remove(
-    @Param('id' , ParseUUIDPipe) id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Query('mode') mode: 'soft' | 'hard' = 'soft',
   ) {
     return mode === 'soft'
@@ -58,7 +56,7 @@ export class BudgetController {
   }
 
   @Patch(':id/restore')
-  restore(@Param('id' , ParseUUIDPipe) id: string) {
+  restore(@Param('id', ParseUUIDPipe) id: string) {
     return this.budgetService.restore(id);
   }
 }

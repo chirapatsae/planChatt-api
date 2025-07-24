@@ -8,19 +8,19 @@ import { handleException } from 'src/util/handleException';
 
 @Injectable()
 export class RolesService {
-  private readonly logger = new Logger(RolesService.name)
+  private readonly logger = new Logger(RolesService.name);
   constructor(
     @InjectRepository(Role)
     private readonly roleRepository: Repository<Role>,
-  ) { }
+  ) {}
 
   async create(createRoleDto: CreateRoleDto) {
     try {
       const { name } = createRoleDto;
-      const role = this.roleRepository.create({ name })
-      return await this.roleRepository.save(role)
+      const role = this.roleRepository.create({ name });
+      return await this.roleRepository.save(role);
     } catch (error) {
-      handleException(this.logger, error)
+      handleException(this.logger, error);
     }
   }
 
@@ -28,10 +28,10 @@ export class RolesService {
     try {
       return await this.roleRepository.find({
         where: { deletedAt: undefined },
-        relations: []
-      })
+        relations: [],
+      });
     } catch (error) {
-      handleException(this.logger, error)
+      handleException(this.logger, error);
     }
   }
 
@@ -39,15 +39,15 @@ export class RolesService {
     try {
       const role = await this.roleRepository.findOne({
         where: { id },
-        relations: []
-      })
+        relations: [],
+      });
 
       if (!role) {
-        throw new NotFoundException(`Role with ID ${id} not found`)
+        throw new NotFoundException(`Role with ID ${id} not found`);
       }
-      return role
+      return role;
     } catch (error) {
-      handleException(this.logger, error)
+      handleException(this.logger, error);
     }
   }
 
@@ -96,7 +96,9 @@ export class RolesService {
     try {
       const result = await this.roleRepository.restore(id);
       if (result.affected === 0) {
-        throw new NotFoundException(`Role with ID ${id} not found or was not deleted.`);
+        throw new NotFoundException(
+          `Role with ID ${id} not found or was not deleted.`,
+        );
       }
       return { message: `Role with ID ${id} has been restored.` };
     } catch (error) {

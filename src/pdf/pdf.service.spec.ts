@@ -24,15 +24,63 @@ const mockPdfDoc = {
   end: jest.fn(),
 };
 
-const minimalAmphoe = { id: 'amphoe-uuid', name: 'Amphoe', createAt: new Date(), workHistory: [], localAdministrativeOrganization: [], workHistoryResponsibleAdmins: [] };
+const minimalAmphoe = {
+  id: 'amphoe-uuid',
+  name: 'Amphoe',
+  createAt: new Date(),
+  workHistory: [],
+  localAdministrativeOrganization: [],
+  workHistoryResponsibleAdmins: [],
+};
 const minimalWorkHistory = {
   id: 'work-history-uuid',
   amphoe: minimalAmphoe,
-  localAdministrativeOrganization: { id: 'lao-uuid', name: 'LAO', type: 'type', createdAt: new Date(), deleteAt: null, amphoe: minimalAmphoe, workHistory: [], originAgencyProjectGroup: [] },
-  user: { id: 'user-uuid', citizenId: 'cid', citizenIdHash: 'hash', prefix: '', firstname: '', lastname: '', isFirstLogin: true, createAt: new Date(), workHistory: [], createdWorkHistory: [], updatedWorkHistory: [], position: [] },
-  workStatus: { id: 'workstatus-uuid', name: 'WorkStatus', createdAt: new Date(), deletedAt: undefined, workHistory: [] },
-  role: { id: 'role-uuid', name: 'Role', createdAt: new Date(), deletedAt: undefined, workHistory: [] },
-  governmentAgencies: { id: 'gov-uuid', name: 'Gov', createdAt: new Date(), deletedAt: undefined, workHistory: [], responsibleAgencyProjectGroup: [] },
+  localAdministrativeOrganization: {
+    id: 'lao-uuid',
+    name: 'LAO',
+    type: 'type',
+    createdAt: new Date(),
+    deleteAt: null,
+    amphoe: minimalAmphoe,
+    workHistory: [],
+    originAgencyProjectGroup: [],
+  },
+  user: {
+    id: 'user-uuid',
+    citizenId: 'cid',
+    citizenIdHash: 'hash',
+    prefix: '',
+    firstname: '',
+    lastname: '',
+    isFirstLogin: true,
+    createAt: new Date(),
+    workHistory: [],
+    createdWorkHistory: [],
+    updatedWorkHistory: [],
+    position: [],
+  },
+  workStatus: {
+    id: 'workstatus-uuid',
+    name: 'WorkStatus',
+    createdAt: new Date(),
+    deletedAt: undefined,
+    workHistory: [],
+  },
+  role: {
+    id: 'role-uuid',
+    name: 'Role',
+    createdAt: new Date(),
+    deletedAt: undefined,
+    workHistory: [],
+  },
+  governmentAgencies: {
+    id: 'gov-uuid',
+    name: 'Gov',
+    createdAt: new Date(),
+    deletedAt: undefined,
+    workHistory: [],
+    responsibleAgencyProjectGroup: [],
+  },
   createdAt: new Date(),
   createdBy: undefined,
   deletedAt: undefined,
@@ -119,12 +167,12 @@ describe('PdfService', () => {
       const dataListeners: any[] = [];
       const endListeners: any[] = [];
       const errorListeners: any[] = [];
-      (mockPdfDoc.on as jest.Mock).mockImplementation((event, cb) => {
+      mockPdfDoc.on.mockImplementation((event, cb) => {
         if (event === 'data') dataListeners.push(cb);
         if (event === 'end') endListeners.push(cb);
         if (event === 'error') errorListeners.push(cb);
       });
-      (mockPdfDoc.end as jest.Mock).mockImplementation(() => {
+      mockPdfDoc.end.mockImplementation(() => {
         dataListeners.forEach((cb) => cb(Buffer.from('PDFDATA')));
         endListeners.forEach((cb) => cb());
       });
@@ -137,23 +185,29 @@ describe('PdfService', () => {
 
     it('should throw if no latest BudgetPlan is found', async () => {
       budgetPlanRepo.findOneBy.mockResolvedValue(null);
-      await expect(service.generateProjectReport(mockProjects)).rejects.toThrow('BudgetPlan not found');
+      await expect(service.generateProjectReport(mockProjects)).rejects.toThrow(
+        'BudgetPlan not found',
+      );
     });
 
     it('should throw on repository error (InternalServerErrorException)', async () => {
       budgetPlanRepo.findOneBy.mockRejectedValue(new Error('DB error'));
-      await expect(service.generateProjectReport(mockProjects)).rejects.toThrow('DB error');
+      await expect(service.generateProjectReport(mockProjects)).rejects.toThrow(
+        'DB error',
+      );
     });
 
     it('should throw if PDF generation fails (InternalServerErrorException)', async () => {
       budgetPlanRepo.findOneBy.mockResolvedValue({ ...mockBudgetPlan });
-      (mockPdfDoc.on as jest.Mock).mockImplementation((event, cb) => {
+      mockPdfDoc.on.mockImplementation((event, cb) => {
         if (event === 'error') setTimeout(() => cb(new Error('PDF error')), 0);
       });
-      (mockPdfDoc.end as jest.Mock).mockImplementation(() => {
+      mockPdfDoc.end.mockImplementation(() => {
         // Only error event
       });
-      await expect(service.generateProjectReport(mockProjects)).rejects.toThrow('PDF error');
+      await expect(service.generateProjectReport(mockProjects)).rejects.toThrow(
+        'PDF error',
+      );
     });
 
     describe('edge cases', () => {
@@ -164,11 +218,11 @@ describe('PdfService', () => {
       it('should handle empty projects array', async () => {
         const dataListeners: any[] = [];
         const endListeners: any[] = [];
-        (mockPdfDoc.on as jest.Mock).mockImplementation((event, cb) => {
+        mockPdfDoc.on.mockImplementation((event, cb) => {
           if (event === 'data') dataListeners.push(cb);
           if (event === 'end') endListeners.push(cb);
         });
-        (mockPdfDoc.end as jest.Mock).mockImplementation(() => {
+        mockPdfDoc.end.mockImplementation(() => {
           dataListeners.forEach((cb) => cb(Buffer.from('EMPTY')));
           endListeners.forEach((cb) => cb());
         });
@@ -180,15 +234,17 @@ describe('PdfService', () => {
       it('should handle projects with missing/empty fields', async () => {
         const dataListeners: any[] = [];
         const endListeners: any[] = [];
-        (mockPdfDoc.on as jest.Mock).mockImplementation((event, cb) => {
+        mockPdfDoc.on.mockImplementation((event, cb) => {
           if (event === 'data') dataListeners.push(cb);
           if (event === 'end') endListeners.push(cb);
         });
-        (mockPdfDoc.end as jest.Mock).mockImplementation(() => {
+        mockPdfDoc.end.mockImplementation(() => {
           dataListeners.forEach((cb) => cb(Buffer.from('MISSING')));
           endListeners.forEach((cb) => cb());
         });
-        const projects = [{ title: '', budgets: [], strategy: null, tactic: null, plan: null }];
+        const projects = [
+          { title: '', budgets: [], strategy: null, tactic: null, plan: null },
+        ];
         const result = await service.generateProjectReport(projects);
         expect(result).toBeInstanceOf(Buffer);
         expect(result.toString()).toBe('MISSING');
@@ -197,11 +253,11 @@ describe('PdfService', () => {
       it('should handle negative, zero, or non-numeric years in budgets', async () => {
         const dataListeners: any[] = [];
         const endListeners: any[] = [];
-        (mockPdfDoc.on as jest.Mock).mockImplementation((event, cb) => {
+        mockPdfDoc.on.mockImplementation((event, cb) => {
           if (event === 'data') dataListeners.push(cb);
           if (event === 'end') endListeners.push(cb);
         });
-        (mockPdfDoc.end as jest.Mock).mockImplementation(() => {
+        mockPdfDoc.end.mockImplementation(() => {
           dataListeners.forEach((cb) => cb(Buffer.from('EDGE')));
           endListeners.forEach((cb) => cb());
         });

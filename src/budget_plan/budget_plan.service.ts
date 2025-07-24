@@ -24,8 +24,8 @@ export class BudgetPlanService {
 
     @InjectRepository(WorkHistory)
     private readonly workHistoryRepository: Repository<WorkHistory>,
-    private readonly dataSource: DataSource
-  ) { }
+    private readonly dataSource: DataSource,
+  ) {}
 
   async create(dto: CreateBudgetPlanDto, userId: string): Promise<BudgetPlan> {
     try {
@@ -34,7 +34,8 @@ export class BudgetPlanService {
       const workHistory = await this.workHistoryRepository.findOne({
         where: { user: { id: userId }, workStatus: { name: 'approved' } },
       });
-      if (!workHistory) throw new NotFoundException('Work history not found for this user');
+      if (!workHistory)
+        throw new NotFoundException('Work history not found for this user');
 
       if (startYear >= endYear) {
         throw new BadRequestException('Start year must be less than end year');
@@ -58,10 +59,16 @@ export class BudgetPlanService {
           );
         });
         if (isOverlapping) {
-          throw new BadRequestException('ช่วงปีนี้ซ้อนกับแผนงบประมาณที่มีอยู่แล้ว');
+          throw new BadRequestException(
+            'ช่วงปีนี้ซ้อนกับแผนงบประมาณที่มีอยู่แล้ว',
+          );
         }
 
-        await manager.update(BudgetPlan, { isLatest: true }, { isLatest: false });
+        await manager.update(
+          BudgetPlan,
+          { isLatest: true },
+          { isLatest: false },
+        );
 
         const newBudgetPlan = manager.create(BudgetPlan, {
           name,
@@ -77,7 +84,6 @@ export class BudgetPlanService {
       handleException(this.logger, error);
     }
   }
-
 
   async findAll(): Promise<BudgetPlan[]> {
     try {
@@ -111,34 +117,36 @@ export class BudgetPlanService {
   async update(id: string, dto: UpdateBudgetPlanDto): Promise<BudgetPlan> {
     try {
       const budgetPlan = await this.budgetPlanRepository.findOneBy({ id });
-  
+
       if (!budgetPlan) {
         throw new NotFoundException(`Budget Plan with ID ${id} not found`);
       }
-  
+
       if (!budgetPlan.isLatest) {
-        throw new BadRequestException(`Only the latest budget plan can be updated`);
+        throw new BadRequestException(
+          `Only the latest budget plan can be updated`,
+        );
       }
-  
+
       const startYear = dto.startYear ?? budgetPlan.startYear;
       const endYear = dto.endYear ?? budgetPlan.endYear;
-  
+
       if (startYear >= endYear) {
         throw new BadRequestException('startYear ต้องน้อยกว่า endYear');
       }
-  
+
       const otherPlans = await this.budgetPlanRepository.find({
         where: { id: Not(id) },
       });
-  
+
       const isExactDuplicate = otherPlans.some(
         (plan) => plan.startYear === startYear && plan.endYear === endYear,
       );
-  
+
       if (isExactDuplicate) {
         throw new BadRequestException('ช่วงปีซ้ำกับแผนงบประมาณอื่น');
       }
-  
+
       const isOverlapping = otherPlans.some((plan) => {
         return (
           (startYear >= plan.startYear && startYear <= plan.endYear) ||
@@ -146,21 +154,21 @@ export class BudgetPlanService {
           (startYear <= plan.startYear && endYear >= plan.endYear)
         );
       });
-  
+
       if (isOverlapping) {
         throw new BadRequestException('ช่วงปีซ้อนกับแผนงบประมาณอื่น');
       }
-  
+
       const updated = this.budgetPlanRepository.merge(budgetPlan, {
         ...dto,
       });
-  
+
       return await this.budgetPlanRepository.save(updated);
     } catch (error) {
       handleException(this.logger, error);
     }
   }
-  
+
   async remove(id: string): Promise<{ message: string }> {
     try {
       const result = await this.budgetPlanRepository.delete(id);
@@ -189,12 +197,13 @@ export class BudgetPlanService {
     try {
       const result = await this.budgetPlanRepository.restore(id);
       if (result.affected === 0) {
-        throw new NotFoundException(`Amphoe with ID ${id} not found or was not deleted.`);
+        throw new NotFoundException(
+          `Amphoe with ID ${id} not found or was not deleted.`,
+        );
       }
       return { message: `Amphoe with ID ${id} has been restored.` };
     } catch (error) {
       handleException(this.logger, error);
     }
   }
-
 }

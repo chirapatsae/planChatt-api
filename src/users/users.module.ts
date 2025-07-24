@@ -8,7 +8,9 @@ import { Status } from 'src/status/entities/status.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User , WorkHistory , Status , TrackingStatus])],
+  imports: [
+    TypeOrmModule.forFeature([User, WorkHistory, Status, TrackingStatus]),
+  ],
   controllers: [UsersController],
   providers: [UsersService],
 })

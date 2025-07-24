@@ -4,7 +4,6 @@ import { PdfService } from './pdf.service';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
 
-
 describe('PdfController', () => {
   let controller: PdfController;
 

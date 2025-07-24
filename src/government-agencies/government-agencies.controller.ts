@@ -1,4 +1,14 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  UseGuards,
+  Query,
+} from '@nestjs/common';
 import { GovernmentAgenciesService } from './government-agencies.service';
 import { CreateGovernmentAgencyDto } from './dto/create-government-agency.dto';
 import { UpdateGovernmentAgencyDto } from './dto/update-government-agency.dto';
@@ -6,11 +16,13 @@ import { JwtAuthGuard } from 'src/auth/auth.guard';
 
 @Controller({
   path: 'government-agencies',
-  version: '1'
+  version: '1',
 })
 // @UseGuards(JwtAuthGuard)
 export class GovernmentAgenciesController {
-  constructor(private readonly governmentAgenciesService: GovernmentAgenciesService) { }
+  constructor(
+    private readonly governmentAgenciesService: GovernmentAgenciesService,
+  ) {}
 
   @Post()
   create(@Body() createGovernmentAgencyDto: CreateGovernmentAgencyDto) {
@@ -30,7 +42,8 @@ export class GovernmentAgenciesController {
   @Patch(':id')
   update(
     @Param('id') id: string,
-    @Body() updateGovernmentAgencyDto: UpdateGovernmentAgencyDto) {
+    @Body() updateGovernmentAgencyDto: UpdateGovernmentAgencyDto,
+  ) {
     return this.governmentAgenciesService.update(id, updateGovernmentAgencyDto);
   }
 
@@ -48,4 +61,4 @@ export class GovernmentAgenciesController {
   restore(@Param('id') id: string) {
     return this.governmentAgenciesService.restore(id);
   }
-} 
+}

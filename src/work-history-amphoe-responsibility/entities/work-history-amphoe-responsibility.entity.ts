@@ -1,4 +1,10 @@
-import { Entity, PrimaryGeneratedColumn, ManyToOne, JoinColumn, CreateDateColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  ManyToOne,
+  JoinColumn,
+  CreateDateColumn,
+} from 'typeorm';
 import { WorkHistory } from '../../work-history/entities/work-history.entity';
 import { Amphoe } from '../../amphoes/entities/amphoe.entity';
 
@@ -7,14 +13,18 @@ export class WorkHistoryAmphoeResponsibility {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @ManyToOne(() => WorkHistory, workHistory => workHistory.workHistoryResponsibleAdmins, {
-    onDelete: 'CASCADE',
-    onUpdate: 'CASCADE',
-  })
+  @ManyToOne(
+    () => WorkHistory,
+    (workHistory) => workHistory.workHistoryResponsibleAdmins,
+    {
+      onDelete: 'CASCADE',
+      onUpdate: 'CASCADE',
+    },
+  )
   @JoinColumn({ name: 'work_history_id' })
   workHistory: WorkHistory;
 
-  @ManyToOne(() => Amphoe, amphoe => amphoe.workHistoryResponsibleAdmins, {
+  @ManyToOne(() => Amphoe, (amphoe) => amphoe.workHistoryResponsibleAdmins, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',
   })

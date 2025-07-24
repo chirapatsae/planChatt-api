@@ -1,10 +1,9 @@
-import { IsNotEmpty, IsUUID } from "class-validator";
+import { IsNotEmpty, IsUUID } from 'class-validator';
 
 export class CreateAmphoeDto {
-    @IsNotEmpty()
-    code: string;
+  @IsNotEmpty()
+  code: string;
 
-    @IsNotEmpty()
-    name: string;
-
+  @IsNotEmpty()
+  name: string;
 }

@@ -27,7 +27,7 @@ import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 export class TacticController {
   private readonly logger = new Logger(TacticController.name);
 
-  constructor(private readonly tacticService: TacticService) { }
+  constructor(private readonly tacticService: TacticService) {}
 
   @Get()
   async findAll() {
@@ -40,15 +40,15 @@ export class TacticController {
   }
 
   @Post()
-  create(@Body() createTacticDto: CreateTacticDto, @Req() req: Request & { user: JwtPayloadUser }) {
+  create(
+    @Body() createTacticDto: CreateTacticDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
     return this.tacticService.create(createTacticDto, req.user.userId);
   }
 
   @Patch(':id')
-  update(
-    @Param('id') id: string,
-    @Body() updateTacticDto: UpdateTacticDto,
-  ) {
+  update(@Param('id') id: string, @Body() updateTacticDto: UpdateTacticDto) {
     return this.tacticService.update(id, updateTacticDto);
   }
 
@@ -56,7 +56,7 @@ export class TacticController {
   remove(
     @Param('id') id: string,
     @Query('mode') mode: 'soft' | 'hard' = 'soft',
-    @Req() req: Request & { user: JwtPayloadUser }
+    @Req() req: Request & { user: JwtPayloadUser },
   ) {
     return mode === 'soft'
       ? this.tacticService.softRemove(id, req.user.userId)
@@ -67,5 +67,4 @@ export class TacticController {
   restore(@Param('id') id: string) {
     return this.tacticService.restore(id);
   }
-  
 }

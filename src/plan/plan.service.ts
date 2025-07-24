@@ -1,8 +1,4 @@
-import {
-  Injectable,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Plan } from './entities/plan.entity';
@@ -26,14 +22,17 @@ export class PlanService {
     @InjectRepository(PlanTactic)
     private readonly planTacticRepo: Repository<PlanTactic>,
     @InjectRepository(WorkHistory)
-    private readonly workHistoryRepository: Repository<WorkHistory>
-  ) { }
-
+    private readonly workHistoryRepository: Repository<WorkHistory>,
+  ) {}
 
   async findAll(): Promise<Plan[]> {
     try {
       return await this.planRepo.find({
-        relations: ['planTactics', 'planTactics.tactic', 'planTactics.tactic.strategy'],
+        relations: [
+          'planTactics',
+          'planTactics.tactic',
+          'planTactics.tactic.strategy',
+        ],
       });
     } catch (error) {
       handleException(this.logger, error);
@@ -44,20 +43,25 @@ export class PlanService {
     try {
       const plan = await this.planRepo.findOne({
         where: { id },
-        relations: ['planTactics', 'planTactics.tactic', 'planTactics.tactic.strategy'],
+        relations: [
+          'planTactics',
+          'planTactics.tactic',
+          'planTactics.tactic.strategy',
+        ],
       });
-  
+
       if (!plan) throw new NotFoundException(`Plan with ID ${id} not found`);
       return plan;
     } catch (error) {
       handleException(this.logger, error);
     }
- 
   }
 
   async create(dto: CreatePlanDto, userId: string): Promise<Plan> {
     try {
-      const workHistory = await this.workHistoryRepository.findOne({ where: { id: userId } });
+      const workHistory = await this.workHistoryRepository.findOne({
+        where: { id: userId },
+      });
       if (!workHistory) {
         throw new NotFoundException('Invalid user. Work history not found.');
       }
@@ -98,7 +102,9 @@ export class PlanService {
 
   async softRemove(id: string, userId: string): Promise<{ message: string }> {
     try {
-      const workHistory = await this.workHistoryRepository.findOne({ where: { id: userId } });
+      const workHistory = await this.workHistoryRepository.findOne({
+        where: { id: userId },
+      });
       if (!workHistory) {
         throw new NotFoundException('Invalid user. Work history not found.');
       }
@@ -119,12 +125,13 @@ export class PlanService {
     try {
       const result = await this.planRepo.restore(id);
       if (result.affected === 0) {
-        throw new NotFoundException(`Plan with ID ${id} not found or was not deleted.`);
+        throw new NotFoundException(
+          `Plan with ID ${id} not found or was not deleted.`,
+        );
       }
       return { message: `Plan with ID ${id} has been restored.` };
     } catch (error) {
       handleException(this.logger, error);
     }
   }
-
 }

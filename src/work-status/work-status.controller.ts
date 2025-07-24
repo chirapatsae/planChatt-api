@@ -1,12 +1,22 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  UseGuards,
+  Query,
+} from '@nestjs/common';
 import { WorkStatusService } from './work-status.service';
 import { CreateWorkStatusDto } from './dto/create-work-status.dto';
 import { UpdateWorkStatusDto } from './dto/update-work-status.dto';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 
 @Controller({
-  path : 'work-status',
-  version : '1'
+  path: 'work-status',
+  version: '1',
 })
 @UseGuards(JwtAuthGuard)
 export class WorkStatusController {
@@ -28,10 +38,12 @@ export class WorkStatusController {
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateWorkStatusDto: UpdateWorkStatusDto) {
+  update(
+    @Param('id') id: string,
+    @Body() updateWorkStatusDto: UpdateWorkStatusDto,
+  ) {
     return this.workStatusService.update(id, updateWorkStatusDto);
   }
-
 
   @Delete(':id')
   remove(

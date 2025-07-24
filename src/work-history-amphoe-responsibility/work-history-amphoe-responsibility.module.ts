@@ -8,7 +8,14 @@ import { Amphoe } from '../amphoes/entities/amphoe.entity';
 import { User } from '../users/entities/user.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([WorkHistoryAmphoeResponsibility, WorkHistory, Amphoe, User])],
+  imports: [
+    TypeOrmModule.forFeature([
+      WorkHistoryAmphoeResponsibility,
+      WorkHistory,
+      Amphoe,
+      User,
+    ]),
+  ],
   controllers: [WorkHistoryAmphoeResponsibilityController],
   providers: [WorkHistoryAmphoeResponsibilityService],
   exports: [WorkHistoryAmphoeResponsibilityService],

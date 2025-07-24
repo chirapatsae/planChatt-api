@@ -9,4 +9,4 @@ import { GovernmentAgency } from './entities/government-agency.entity';
   controllers: [GovernmentAgenciesController],
   providers: [GovernmentAgenciesService],
 })
-export class GovernmentAgenciesModule {} 
+export class GovernmentAgenciesModule {}

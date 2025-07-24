@@ -25,14 +25,14 @@ export class Budget {
 
   @IsOptional()
   @Column({ name: 'project_version_id', nullable: true })
-  projectVersionId?: number
+  projectVersionId?: number;
 
   @ManyToOne(() => BudgetPlan, (budgetPlan) => budgetPlan.budget, {
     onUpdate: 'CASCADE',
-    onDelete: 'CASCADE'
+    onDelete: 'CASCADE',
   })
   @JoinColumn({ name: 'budget_plan_id' })
-  budgetPlanId
+  budgetPlanId;
 
   @Column()
   year: number;

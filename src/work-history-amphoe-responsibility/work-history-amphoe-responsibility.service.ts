@@ -7,7 +7,10 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, Repository } from 'typeorm';
 import { CreateWorkHistoryAmphoeResponsibilityDto } from './dto/create-work-history-amphoe-responsibility.dto';
-import { UpdateWorkHistoryAmphoeResponsibilityDto, TransferResponsibilityDto } from './dto/update-work-history-amphoe-responsibility.dto';
+import {
+  UpdateWorkHistoryAmphoeResponsibilityDto,
+  TransferResponsibilityDto,
+} from './dto/update-work-history-amphoe-responsibility.dto';
 import { WorkHistoryAmphoeResponsibility } from './entities/work-history-amphoe-responsibility.entity';
 import { WorkHistory } from '../work-history/entities/work-history.entity';
 import { Amphoe } from '../amphoes/entities/amphoe.entity';
@@ -16,7 +19,9 @@ import { handleException } from '../util/handleException';
 
 @Injectable()
 export class WorkHistoryAmphoeResponsibilityService {
-  private readonly logger = new Logger(WorkHistoryAmphoeResponsibilityService.name);
+  private readonly logger = new Logger(
+    WorkHistoryAmphoeResponsibilityService.name,
+  );
 
   constructor(
     @InjectRepository(WorkHistoryAmphoeResponsibility)
@@ -27,60 +32,92 @@ export class WorkHistoryAmphoeResponsibilityService {
     private readonly amphoeRepository: Repository<Amphoe>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-  ) { }
+  ) {}
 
-  async create(dto: CreateWorkHistoryAmphoeResponsibilityDto, assignedByUserId?: string): Promise<WorkHistoryAmphoeResponsibility> {
+  async create(
+    dto: CreateWorkHistoryAmphoeResponsibilityDto,
+    assignedByUserId?: string,
+  ): Promise<WorkHistoryAmphoeResponsibility> {
     try {
-
       const workHistory = await this.workHistoryRepository.findOne({
         where: { id: dto.workHistoryId },
         relations: ['role', 'workStatus'],
       });
-      if (!workHistory) throw new NotFoundException(`Work history with ID ${dto.workHistoryId} not found`);
+      if (!workHistory)
+        throw new NotFoundException(
+          `Work history with ID ${dto.workHistoryId} not found`,
+        );
 
-      if (workHistory.workStatus?.name !== 'approved' || workHistory.role?.name !== 'admin') {
-        throw new BadRequestException('Responsibilities can only be added to an approved admin work history.');
+      if (
+        workHistory.workStatus?.name !== 'approved' ||
+        workHistory.role?.name !== 'admin'
+      ) {
+        throw new BadRequestException(
+          'Responsibilities can only be added to an approved admin work history.',
+        );
       }
 
-      const amphoe = await this.amphoeRepository.findOneBy({ id: dto.amphoeId });
-      if (!amphoe) throw new NotFoundException(`Amphoe with ID ${dto.amphoeId} not found`);
+      const amphoe = await this.amphoeRepository.findOneBy({
+        id: dto.amphoeId,
+      });
+      if (!amphoe)
+        throw new NotFoundException(`Amphoe with ID ${dto.amphoeId} not found`);
 
       const existing = await this.responsibilityRepository.findOneBy({
         workHistory: { id: dto.workHistoryId },
         amphoe: { id: dto.amphoeId },
       });
-      if (existing) throw new BadRequestException('This responsibility already exists.');
+      if (existing)
+        throw new BadRequestException('This responsibility already exists.');
 
       const assignedByWorkHistory = await this.workHistoryRepository.findOne({
         where: { user: { id: assignedByUserId } },
-        relations: ['workStatus' , 'role'],
+        relations: ['workStatus', 'role'],
       });
-      if (!assignedByWorkHistory || assignedByWorkHistory.workStatus?.name !== 'approved' || assignedByWorkHistory.role?.name !== 'admin') {
-        throw new NotFoundException(`Approved work history not pass the conditions for user ${assignedByUserId}`);
+      if (
+        !assignedByWorkHistory ||
+        assignedByWorkHistory.workStatus?.name !== 'approved' ||
+        assignedByWorkHistory.role?.name !== 'admin'
+      ) {
+        throw new NotFoundException(
+          `Approved work history not pass the conditions for user ${assignedByUserId}`,
+        );
       }
 
-      const responsibility = this.responsibilityRepository.create({ workHistory, amphoe, assignedByWorkHistory });
+      const responsibility = this.responsibilityRepository.create({
+        workHistory,
+        amphoe,
+        assignedByWorkHistory,
+      });
       return await this.responsibilityRepository.save(responsibility);
     } catch (error) {
       handleException(this.logger, error);
     }
   }
 
-  async findAll(amphoeId?: string, workHistoryId?: string): Promise<WorkHistoryAmphoeResponsibility[]> {
+  async findAll(
+    amphoeId?: string,
+    workHistoryId?: string,
+  ): Promise<WorkHistoryAmphoeResponsibility[]> {
     try {
       const where: FindOptionsWhere<WorkHistoryAmphoeResponsibility> = {};
-      
+
       if (amphoeId) {
         where.amphoe = { id: amphoeId };
       }
-  
+
       if (workHistoryId) {
         where.workHistory = { id: workHistoryId };
       }
-  
+
       return this.responsibilityRepository.find({
         where,
-        relations: ['workHistory', 'workHistory.user', 'amphoe', 'assignedByWorkHistory'],
+        relations: [
+          'workHistory',
+          'workHistory.user',
+          'amphoe',
+          'assignedByWorkHistory',
+        ],
       });
     } catch (error) {
       handleException(this.logger, error);
@@ -91,7 +128,13 @@ export class WorkHistoryAmphoeResponsibilityService {
     try {
       const responsibility = await this.responsibilityRepository.findOne({
         where: { id },
-        relations: ['workHistory', 'workHistory.user', 'amphoe', 'assignedByWorkHistory', 'assignedByWorkHistory.user'],
+        relations: [
+          'workHistory',
+          'workHistory.user',
+          'amphoe',
+          'assignedByWorkHistory',
+          'assignedByWorkHistory.user',
+        ],
       });
       if (!responsibility) {
         throw new NotFoundException(`Responsibility with ID ${id} not found`);
@@ -102,53 +145,76 @@ export class WorkHistoryAmphoeResponsibilityService {
     }
   }
 
-  async update(id: string, dto: UpdateWorkHistoryAmphoeResponsibilityDto, assignedByUserId?: string): Promise<WorkHistoryAmphoeResponsibility> {
+  async update(
+    id: string,
+    dto: UpdateWorkHistoryAmphoeResponsibilityDto,
+    assignedByUserId?: string,
+  ): Promise<WorkHistoryAmphoeResponsibility> {
     try {
       const assignedByWorkHistory = await this.workHistoryRepository.findOne({
         where: { user: { id: assignedByUserId } },
         relations: ['workStatus', 'role'],
       });
-  
-      if (!assignedByWorkHistory || assignedByWorkHistory.workStatus?.name !== 'approved' || assignedByWorkHistory.role?.name !== 'admin') {
-        throw new NotFoundException(`Approved work history not pass the conditions for user ${assignedByUserId}`);
+
+      if (
+        !assignedByWorkHistory ||
+        assignedByWorkHistory.workStatus?.name !== 'approved' ||
+        assignedByWorkHistory.role?.name !== 'admin'
+      ) {
+        throw new NotFoundException(
+          `Approved work history not pass the conditions for user ${assignedByUserId}`,
+        );
       }
-  
+
       // เตรียม object update
       const updatePayload: Partial<WorkHistoryAmphoeResponsibility> = {
         id,
         assignedByWorkHistory,
-        amphoe: dto.amphoeId ? { id: dto.amphoeId } as any : undefined,
+        amphoe: dto.amphoeId ? ({ id: dto.amphoeId } as any) : undefined,
       };
-  
+
       // ถ้ามีการเปลี่ยน workHistory
       if (dto.workHistoryId) {
-        const newWorkHistory = await this.workHistoryRepository.findOne({ where: { id: dto.workHistoryId } });
-        if (!newWorkHistory) throw new NotFoundException('Work history you want to transfer to not found');
+        const newWorkHistory = await this.workHistoryRepository.findOne({
+          where: { id: dto.workHistoryId },
+        });
+        if (!newWorkHistory)
+          throw new NotFoundException(
+            'Work history you want to transfer to not found',
+          );
         updatePayload.workHistory = newWorkHistory;
       }
-  
-      const responsibility = await this.responsibilityRepository.preload(updatePayload);
+
+      const responsibility =
+        await this.responsibilityRepository.preload(updatePayload);
       if (!responsibility) {
         throw new NotFoundException(`Responsibility with ID ${id} not found`);
       }
-  
+
       await this.responsibilityRepository.save(responsibility);
-  
+
       const updated = await this.responsibilityRepository.findOne({
         where: { id },
-        relations: ['amphoe', 'workHistory', 'workHistory.user', 'assignedByWorkHistory', 'assignedByWorkHistory.user'],
+        relations: [
+          'amphoe',
+          'workHistory',
+          'workHistory.user',
+          'assignedByWorkHistory',
+          'assignedByWorkHistory.user',
+        ],
       });
-  
+
       if (!updated) {
-        throw new NotFoundException(`Responsibility with ID ${id} not found after update`);
+        throw new NotFoundException(
+          `Responsibility with ID ${id} not found after update`,
+        );
       }
-  
+
       return updated;
     } catch (error) {
       handleException(this.logger, error);
     }
   }
-  
 
   async remove(id: string): Promise<{ message: string }> {
     try {
@@ -161,5 +227,4 @@ export class WorkHistoryAmphoeResponsibilityService {
       handleException(this.logger, error);
     }
   }
-
 }

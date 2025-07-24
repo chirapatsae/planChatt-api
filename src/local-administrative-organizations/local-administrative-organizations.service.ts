@@ -14,7 +14,9 @@ import { handleException } from 'src/util/handleException';
 
 @Injectable()
 export class LocalAdministrativeOrganizationsService {
-  private readonly logger = new Logger(LocalAdministrativeOrganizationsService.name);
+  private readonly logger = new Logger(
+    LocalAdministrativeOrganizationsService.name,
+  );
 
   constructor(
     @InjectRepository(LocalAdministrativeOrganization)
@@ -27,7 +29,9 @@ export class LocalAdministrativeOrganizationsService {
   /**
    * Creates a new Local Administrative Organization.
    */
-  async create(dto: CreateLocalAdministrativeOrganizationDto): Promise<LocalAdministrativeOrganization> {
+  async create(
+    dto: CreateLocalAdministrativeOrganizationDto,
+  ): Promise<LocalAdministrativeOrganization> {
     try {
       const { code, name, type, amphoeId } = dto;
 
@@ -74,7 +78,9 @@ export class LocalAdministrativeOrganizationsService {
       });
 
       if (!lao) {
-        throw new NotFoundException(`Local Administrative Organization with ID ${id} not found`);
+        throw new NotFoundException(
+          `Local Administrative Organization with ID ${id} not found`,
+        );
       }
       return lao;
     } catch (error) {
@@ -85,15 +91,24 @@ export class LocalAdministrativeOrganizationsService {
   /**
    * Updates a Local Administrative Organization.
    */
-  async update(id: string, dto: UpdateLocalAdministrativeOrganizationDto): Promise<LocalAdministrativeOrganization> {
+  async update(
+    id: string,
+    dto: UpdateLocalAdministrativeOrganizationDto,
+  ): Promise<LocalAdministrativeOrganization> {
     try {
       // Use a partial type for the payload for better type safety
-      const updatePayload: Partial<UpdateLocalAdministrativeOrganizationDto> & { amphoe?: Amphoe } = { ...dto };
+      const updatePayload: Partial<UpdateLocalAdministrativeOrganizationDto> & {
+        amphoe?: Amphoe;
+      } = { ...dto };
 
       if (dto.amphoeId) {
-        const amphoe = await this.amphoeRepository.findOneBy({ id: dto.amphoeId });
+        const amphoe = await this.amphoeRepository.findOneBy({
+          id: dto.amphoeId,
+        });
         if (!amphoe) {
-          throw new NotFoundException(`Amphoe with ID ${dto.amphoeId} not found`);
+          throw new NotFoundException(
+            `Amphoe with ID ${dto.amphoeId} not found`,
+          );
         }
         updatePayload.amphoe = amphoe;
       }
@@ -104,12 +119,13 @@ export class LocalAdministrativeOrganizationsService {
       });
 
       if (!laoToUpdate) {
-        throw new NotFoundException(`Local Administrative Organization with ID ${id} not found`);
+        throw new NotFoundException(
+          `Local Administrative Organization with ID ${id} not found`,
+        );
       }
 
       return await this.laoRepository.save(laoToUpdate);
-    } catch (error)
-    {
+    } catch (error) {
       handleException(this.logger, error);
     }
   }
@@ -151,7 +167,9 @@ export class LocalAdministrativeOrganizationsService {
     try {
       const result = await this.laoRepository.restore(id);
       if (result.affected === 0) {
-        throw new NotFoundException(`LAO with ID ${id} not found or was not deleted.`);
+        throw new NotFoundException(
+          `LAO with ID ${id} not found or was not deleted.`,
+        );
       }
       return { message: `LAO with ID ${id} has been restored.` };
     } catch (error) {

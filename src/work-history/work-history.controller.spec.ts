@@ -21,7 +21,10 @@ describe('WorkHistoryController', () => {
         WorkHistoryService,
         { provide: getRepositoryToken(WorkHistory), useValue: {} },
         { provide: getRepositoryToken(Amphoe), useValue: {} },
-        { provide: getRepositoryToken(LocalAdministrativeOrganization), useValue: {} },
+        {
+          provide: getRepositoryToken(LocalAdministrativeOrganization),
+          useValue: {},
+        },
         { provide: getRepositoryToken(User), useValue: {} },
         { provide: getRepositoryToken(WorkStatus), useValue: {} },
         { provide: getRepositoryToken(Role), useValue: {} },

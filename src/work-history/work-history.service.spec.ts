@@ -133,14 +133,26 @@ describe('WorkHistoryService', () => {
     }).compile();
 
     service = module.get<WorkHistoryService>(WorkHistoryService);
-    workHistoryRepository = module.get<Repository<WorkHistory>>(getRepositoryToken(WorkHistory));
-    amphoeRepository = module.get<Repository<Amphoe>>(getRepositoryToken(Amphoe));
-    laoRepository = module.get<Repository<LocalAdministrativeOrganization>>(getRepositoryToken(LocalAdministrativeOrganization));
+    workHistoryRepository = module.get<Repository<WorkHistory>>(
+      getRepositoryToken(WorkHistory),
+    );
+    amphoeRepository = module.get<Repository<Amphoe>>(
+      getRepositoryToken(Amphoe),
+    );
+    laoRepository = module.get<Repository<LocalAdministrativeOrganization>>(
+      getRepositoryToken(LocalAdministrativeOrganization),
+    );
     userRepository = module.get<Repository<User>>(getRepositoryToken(User));
-    workStatusRepository = module.get<Repository<WorkStatus>>(getRepositoryToken(WorkStatus));
+    workStatusRepository = module.get<Repository<WorkStatus>>(
+      getRepositoryToken(WorkStatus),
+    );
     roleRepository = module.get<Repository<Role>>(getRepositoryToken(Role));
-    governmentAgencyRepository = module.get<Repository<GovernmentAgency>>(getRepositoryToken(GovernmentAgency));
-    positionRepository = module.get<Repository<Position>>(getRepositoryToken(Position));
+    governmentAgencyRepository = module.get<Repository<GovernmentAgency>>(
+      getRepositoryToken(GovernmentAgency),
+    );
+    positionRepository = module.get<Repository<Position>>(
+      getRepositoryToken(Position),
+    );
 
     // Clear all mocks before each test
     jest.clearAllMocks();
@@ -163,27 +175,57 @@ describe('WorkHistoryService', () => {
     describe('✅ Success Cases', () => {
       it('should create a work history with all required fields', async () => {
         // Arrange
-        jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockCreator as User);
-        jest.spyOn(amphoeRepository, 'findOneBy').mockResolvedValue(mockAmphoe as Amphoe);
-        jest.spyOn(laoRepository, 'findOneBy').mockResolvedValue(mockLao as LocalAdministrativeOrganization);
-        jest.spyOn(userRepository, 'findOneBy').mockResolvedValue(mockUser as User);
-        jest.spyOn(workStatusRepository, 'findOneBy').mockResolvedValue(mockWorkStatus as WorkStatus);
-        jest.spyOn(roleRepository, 'findOneBy').mockResolvedValue(mockRole as Role);
-        jest.spyOn(governmentAgencyRepository, 'findOneBy').mockResolvedValue(mockGovernmentAgency as GovernmentAgency);
-        jest.spyOn(workHistoryRepository, 'save').mockResolvedValue(mockWorkHistory as WorkHistory);
+        jest
+          .spyOn(userRepository, 'findOne')
+          .mockResolvedValue(mockCreator as User);
+        jest
+          .spyOn(amphoeRepository, 'findOneBy')
+          .mockResolvedValue(mockAmphoe as Amphoe);
+        jest
+          .spyOn(laoRepository, 'findOneBy')
+          .mockResolvedValue(mockLao as LocalAdministrativeOrganization);
+        jest
+          .spyOn(userRepository, 'findOneBy')
+          .mockResolvedValue(mockUser as User);
+        jest
+          .spyOn(workStatusRepository, 'findOneBy')
+          .mockResolvedValue(mockWorkStatus as WorkStatus);
+        jest
+          .spyOn(roleRepository, 'findOneBy')
+          .mockResolvedValue(mockRole as Role);
+        jest
+          .spyOn(governmentAgencyRepository, 'findOneBy')
+          .mockResolvedValue(mockGovernmentAgency as GovernmentAgency);
+        jest
+          .spyOn(workHistoryRepository, 'save')
+          .mockResolvedValue(mockWorkHistory as WorkHistory);
 
         // Act
         const result = await service.create(createDto, 'creator-1');
 
         // Assert
         expect(result).toEqual(mockWorkHistory);
-        expect(userRepository.findOne).toHaveBeenCalledWith({ where: { id: 'creator-1' } });
-        expect(amphoeRepository.findOneBy).toHaveBeenCalledWith({ id: createDto.amphoeId });
-        expect(laoRepository.findOneBy).toHaveBeenCalledWith({ id: createDto.localAdministrativeOrganizationId });
-        expect(userRepository.findOneBy).toHaveBeenCalledWith({ id: createDto.userId });
-        expect(workStatusRepository.findOneBy).toHaveBeenCalledWith({ id: createDto.workStatusId });
-        expect(roleRepository.findOneBy).toHaveBeenCalledWith({ id: createDto.roleId });
-        expect(governmentAgencyRepository.findOneBy).toHaveBeenCalledWith({ id: createDto.governmentAgenciesId });
+        expect(userRepository.findOne).toHaveBeenCalledWith({
+          where: { id: 'creator-1' },
+        });
+        expect(amphoeRepository.findOneBy).toHaveBeenCalledWith({
+          id: createDto.amphoeId,
+        });
+        expect(laoRepository.findOneBy).toHaveBeenCalledWith({
+          id: createDto.localAdministrativeOrganizationId,
+        });
+        expect(userRepository.findOneBy).toHaveBeenCalledWith({
+          id: createDto.userId,
+        });
+        expect(workStatusRepository.findOneBy).toHaveBeenCalledWith({
+          id: createDto.workStatusId,
+        });
+        expect(roleRepository.findOneBy).toHaveBeenCalledWith({
+          id: createDto.roleId,
+        });
+        expect(governmentAgencyRepository.findOneBy).toHaveBeenCalledWith({
+          id: createDto.governmentAgenciesId,
+        });
         expect(workHistoryRepository.save).toHaveBeenCalled();
       });
 
@@ -192,13 +234,27 @@ describe('WorkHistoryService', () => {
         const createDtoWithoutGov = { ...createDto };
         delete createDtoWithoutGov.governmentAgenciesId;
 
-        jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockCreator as User);
-        jest.spyOn(amphoeRepository, 'findOneBy').mockResolvedValue(mockAmphoe as Amphoe);
-        jest.spyOn(laoRepository, 'findOneBy').mockResolvedValue(mockLao as LocalAdministrativeOrganization);
-        jest.spyOn(userRepository, 'findOneBy').mockResolvedValue(mockUser as User);
-        jest.spyOn(workStatusRepository, 'findOneBy').mockResolvedValue(mockWorkStatus as WorkStatus);
-        jest.spyOn(roleRepository, 'findOneBy').mockResolvedValue(mockRole as Role);
-        jest.spyOn(workHistoryRepository, 'save').mockResolvedValue(mockWorkHistory as WorkHistory);
+        jest
+          .spyOn(userRepository, 'findOne')
+          .mockResolvedValue(mockCreator as User);
+        jest
+          .spyOn(amphoeRepository, 'findOneBy')
+          .mockResolvedValue(mockAmphoe as Amphoe);
+        jest
+          .spyOn(laoRepository, 'findOneBy')
+          .mockResolvedValue(mockLao as LocalAdministrativeOrganization);
+        jest
+          .spyOn(userRepository, 'findOneBy')
+          .mockResolvedValue(mockUser as User);
+        jest
+          .spyOn(workStatusRepository, 'findOneBy')
+          .mockResolvedValue(mockWorkStatus as WorkStatus);
+        jest
+          .spyOn(roleRepository, 'findOneBy')
+          .mockResolvedValue(mockRole as Role);
+        jest
+          .spyOn(workHistoryRepository, 'save')
+          .mockResolvedValue(mockWorkHistory as WorkHistory);
 
         // Act
         const result = await service.create(createDtoWithoutGov, 'creator-1');
@@ -216,91 +272,167 @@ describe('WorkHistoryService', () => {
         jest.spyOn(userRepository, 'findOne').mockResolvedValue(null);
 
         // Act & Assert
-        await expect(service.create(createDto, 'non-existent-creator')).rejects.toThrow(NotFoundException);
-        expect(userRepository.findOne).toHaveBeenCalledWith({ where: { id: 'non-existent-creator' } });
+        await expect(
+          service.create(createDto, 'non-existent-creator'),
+        ).rejects.toThrow(NotFoundException);
+        expect(userRepository.findOne).toHaveBeenCalledWith({
+          where: { id: 'non-existent-creator' },
+        });
       });
 
       it('should throw NotFoundException when amphoe not found', async () => {
         // Arrange
-        jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockCreator as User);
+        jest
+          .spyOn(userRepository, 'findOne')
+          .mockResolvedValue(mockCreator as User);
         jest.spyOn(amphoeRepository, 'findOneBy').mockResolvedValue(null);
 
         // Act & Assert
-        await expect(service.create(createDto, 'creator-1')).rejects.toThrow(NotFoundException);
+        await expect(service.create(createDto, 'creator-1')).rejects.toThrow(
+          NotFoundException,
+        );
       });
 
       it('should throw NotFoundException when LAO not found', async () => {
         // Arrange
-        jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockCreator as User);
-        jest.spyOn(amphoeRepository, 'findOneBy').mockResolvedValue(mockAmphoe as Amphoe);
+        jest
+          .spyOn(userRepository, 'findOne')
+          .mockResolvedValue(mockCreator as User);
+        jest
+          .spyOn(amphoeRepository, 'findOneBy')
+          .mockResolvedValue(mockAmphoe as Amphoe);
         jest.spyOn(laoRepository, 'findOneBy').mockResolvedValue(null);
 
         // Act & Assert
-        await expect(service.create(createDto, 'creator-1')).rejects.toThrow(NotFoundException);
+        await expect(service.create(createDto, 'creator-1')).rejects.toThrow(
+          NotFoundException,
+        );
       });
 
       it('should throw NotFoundException when user not found', async () => {
         // Arrange
-        jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockCreator as User);
-        jest.spyOn(amphoeRepository, 'findOneBy').mockResolvedValue(mockAmphoe as Amphoe);
-        jest.spyOn(laoRepository, 'findOneBy').mockResolvedValue(mockLao as LocalAdministrativeOrganization);
+        jest
+          .spyOn(userRepository, 'findOne')
+          .mockResolvedValue(mockCreator as User);
+        jest
+          .spyOn(amphoeRepository, 'findOneBy')
+          .mockResolvedValue(mockAmphoe as Amphoe);
+        jest
+          .spyOn(laoRepository, 'findOneBy')
+          .mockResolvedValue(mockLao as LocalAdministrativeOrganization);
         jest.spyOn(userRepository, 'findOneBy').mockResolvedValue(null);
 
         // Act & Assert
-        await expect(service.create(createDto, 'creator-1')).rejects.toThrow(NotFoundException);
+        await expect(service.create(createDto, 'creator-1')).rejects.toThrow(
+          NotFoundException,
+        );
       });
 
       it('should throw NotFoundException when work status not found', async () => {
         // Arrange
-        jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockCreator as User);
-        jest.spyOn(amphoeRepository, 'findOneBy').mockResolvedValue(mockAmphoe as Amphoe);
-        jest.spyOn(laoRepository, 'findOneBy').mockResolvedValue(mockLao as LocalAdministrativeOrganization);
-        jest.spyOn(userRepository, 'findOneBy').mockResolvedValue(mockUser as User);
+        jest
+          .spyOn(userRepository, 'findOne')
+          .mockResolvedValue(mockCreator as User);
+        jest
+          .spyOn(amphoeRepository, 'findOneBy')
+          .mockResolvedValue(mockAmphoe as Amphoe);
+        jest
+          .spyOn(laoRepository, 'findOneBy')
+          .mockResolvedValue(mockLao as LocalAdministrativeOrganization);
+        jest
+          .spyOn(userRepository, 'findOneBy')
+          .mockResolvedValue(mockUser as User);
         jest.spyOn(workStatusRepository, 'findOneBy').mockResolvedValue(null);
 
         // Act & Assert
-        await expect(service.create(createDto, 'creator-1')).rejects.toThrow(NotFoundException);
+        await expect(service.create(createDto, 'creator-1')).rejects.toThrow(
+          NotFoundException,
+        );
       });
 
       it('should throw NotFoundException when role not found', async () => {
         // Arrange
-        jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockCreator as User);
-        jest.spyOn(amphoeRepository, 'findOneBy').mockResolvedValue(mockAmphoe as Amphoe);
-        jest.spyOn(laoRepository, 'findOneBy').mockResolvedValue(mockLao as LocalAdministrativeOrganization);
-        jest.spyOn(userRepository, 'findOneBy').mockResolvedValue(mockUser as User);
-        jest.spyOn(workStatusRepository, 'findOneBy').mockResolvedValue(mockWorkStatus as WorkStatus);
+        jest
+          .spyOn(userRepository, 'findOne')
+          .mockResolvedValue(mockCreator as User);
+        jest
+          .spyOn(amphoeRepository, 'findOneBy')
+          .mockResolvedValue(mockAmphoe as Amphoe);
+        jest
+          .spyOn(laoRepository, 'findOneBy')
+          .mockResolvedValue(mockLao as LocalAdministrativeOrganization);
+        jest
+          .spyOn(userRepository, 'findOneBy')
+          .mockResolvedValue(mockUser as User);
+        jest
+          .spyOn(workStatusRepository, 'findOneBy')
+          .mockResolvedValue(mockWorkStatus as WorkStatus);
         jest.spyOn(roleRepository, 'findOneBy').mockResolvedValue(null);
 
         // Act & Assert
-        await expect(service.create(createDto, 'creator-1')).rejects.toThrow(NotFoundException);
+        await expect(service.create(createDto, 'creator-1')).rejects.toThrow(
+          NotFoundException,
+        );
       });
 
       it('should throw NotFoundException when government agency not found', async () => {
         // Arrange
-        jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockCreator as User);
-        jest.spyOn(amphoeRepository, 'findOneBy').mockResolvedValue(mockAmphoe as Amphoe);
-        jest.spyOn(laoRepository, 'findOneBy').mockResolvedValue(mockLao as LocalAdministrativeOrganization);
-        jest.spyOn(userRepository, 'findOneBy').mockResolvedValue(mockUser as User);
-        jest.spyOn(workStatusRepository, 'findOneBy').mockResolvedValue(mockWorkStatus as WorkStatus);
-        jest.spyOn(roleRepository, 'findOneBy').mockResolvedValue(mockRole as Role);
-        jest.spyOn(governmentAgencyRepository, 'findOneBy').mockResolvedValue(null);
+        jest
+          .spyOn(userRepository, 'findOne')
+          .mockResolvedValue(mockCreator as User);
+        jest
+          .spyOn(amphoeRepository, 'findOneBy')
+          .mockResolvedValue(mockAmphoe as Amphoe);
+        jest
+          .spyOn(laoRepository, 'findOneBy')
+          .mockResolvedValue(mockLao as LocalAdministrativeOrganization);
+        jest
+          .spyOn(userRepository, 'findOneBy')
+          .mockResolvedValue(mockUser as User);
+        jest
+          .spyOn(workStatusRepository, 'findOneBy')
+          .mockResolvedValue(mockWorkStatus as WorkStatus);
+        jest
+          .spyOn(roleRepository, 'findOneBy')
+          .mockResolvedValue(mockRole as Role);
+        jest
+          .spyOn(governmentAgencyRepository, 'findOneBy')
+          .mockResolvedValue(null);
 
         // Act & Assert
-        await expect(service.create(createDto, 'creator-1')).rejects.toThrow(NotFoundException);
+        await expect(service.create(createDto, 'creator-1')).rejects.toThrow(
+          NotFoundException,
+        );
       });
     });
 
     describe('❌ InternalServerErrorException Cases', () => {
       it('should handle database save error', async () => {
         // Arrange
-        jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockCreator as User);
-        jest.spyOn(amphoeRepository, 'findOneBy').mockResolvedValue(mockAmphoe as Amphoe);
-        jest.spyOn(laoRepository, 'findOneBy').mockResolvedValue(mockLao as LocalAdministrativeOrganization);
-        jest.spyOn(userRepository, 'findOneBy').mockResolvedValue(mockUser as User);
-        jest.spyOn(workStatusRepository, 'findOneBy').mockResolvedValue(mockWorkStatus as WorkStatus);
-        jest.spyOn(roleRepository, 'findOneBy').mockResolvedValue(mockRole as Role);
-        jest.spyOn(governmentAgencyRepository, 'findOneBy').mockResolvedValue(mockGovernmentAgency as GovernmentAgency);
-        jest.spyOn(workHistoryRepository, 'save').mockRejectedValue(new Error('Database error'));
+        jest
+          .spyOn(userRepository, 'findOne')
+          .mockResolvedValue(mockCreator as User);
+        jest
+          .spyOn(amphoeRepository, 'findOneBy')
+          .mockResolvedValue(mockAmphoe as Amphoe);
+        jest
+          .spyOn(laoRepository, 'findOneBy')
+          .mockResolvedValue(mockLao as LocalAdministrativeOrganization);
+        jest
+          .spyOn(userRepository, 'findOneBy')
+          .mockResolvedValue(mockUser as User);
+        jest
+          .spyOn(workStatusRepository, 'findOneBy')
+          .mockResolvedValue(mockWorkStatus as WorkStatus);
+        jest
+          .spyOn(roleRepository, 'findOneBy')
+          .mockResolvedValue(mockRole as Role);
+        jest
+          .spyOn(governmentAgencyRepository, 'findOneBy')
+          .mockResolvedValue(mockGovernmentAgency as GovernmentAgency);
+        jest
+          .spyOn(workHistoryRepository, 'save')
+          .mockRejectedValue(new Error('Database error'));
 
         // Act & Assert
         await expect(service.create(createDto, 'creator-1')).rejects.toThrow();
@@ -319,7 +451,9 @@ describe('WorkHistoryService', () => {
         };
 
         // Act & Assert
-        await expect(service.create(createDtoWithEmptyIds, '')).rejects.toThrow();
+        await expect(
+          service.create(createDtoWithEmptyIds, ''),
+        ).rejects.toThrow();
       });
 
       it('should handle null/undefined values', async () => {
@@ -333,7 +467,9 @@ describe('WorkHistoryService', () => {
         };
 
         // Act & Assert
-        await expect(service.create(createDtoWithNulls, null as any)).rejects.toThrow();
+        await expect(
+          service.create(createDtoWithNulls, null as any),
+        ).rejects.toThrow();
       });
     });
   });
@@ -348,8 +484,13 @@ describe('WorkHistoryService', () => {
     describe('✅ Success Cases', () => {
       it('should return all work histories without filters', async () => {
         // Arrange
-        const mockWorkHistories = [mockWorkHistory, { ...mockWorkHistory, id: 'work-history-2' }];
-        jest.spyOn(workHistoryRepository, 'createQueryBuilder').mockReturnValue(mockQueryBuilder as any);
+        const mockWorkHistories = [
+          mockWorkHistory,
+          { ...mockWorkHistory, id: 'work-history-2' },
+        ];
+        jest
+          .spyOn(workHistoryRepository, 'createQueryBuilder')
+          .mockReturnValue(mockQueryBuilder as any);
         mockQueryBuilder.getMany.mockResolvedValue(mockWorkHistories);
 
         // Act
@@ -357,7 +498,9 @@ describe('WorkHistoryService', () => {
 
         // Assert
         expect(result).toEqual(mockWorkHistories);
-        expect(workHistoryRepository.createQueryBuilder).toHaveBeenCalledWith('work_history');
+        expect(workHistoryRepository.createQueryBuilder).toHaveBeenCalledWith(
+          'work_history',
+        );
         expect(mockQueryBuilder.leftJoinAndSelect).toHaveBeenCalledTimes(10); // Updated count based on actual service
         expect(mockQueryBuilder.getMany).toHaveBeenCalled();
       });
@@ -365,7 +508,9 @@ describe('WorkHistoryService', () => {
       it('should return filtered work histories with workStatusId', async () => {
         // Arrange
         const mockWorkHistories = [mockWorkHistory];
-        jest.spyOn(workHistoryRepository, 'createQueryBuilder').mockReturnValue(mockQueryBuilder as any);
+        jest
+          .spyOn(workHistoryRepository, 'createQueryBuilder')
+          .mockReturnValue(mockQueryBuilder as any);
         mockQueryBuilder.getMany.mockResolvedValue(mockWorkHistories);
 
         // Act
@@ -373,13 +518,18 @@ describe('WorkHistoryService', () => {
 
         // Assert
         expect(result).toEqual(mockWorkHistories);
-        expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith('workStatus.id = :workStatusId', { workStatusId: 'status-1' });
+        expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith(
+          'workStatus.id = :workStatusId',
+          { workStatusId: 'status-1' },
+        );
       });
 
       it('should return filtered work histories with roleId', async () => {
         // Arrange
         const mockWorkHistories = [mockWorkHistory];
-        jest.spyOn(workHistoryRepository, 'createQueryBuilder').mockReturnValue(mockQueryBuilder as any);
+        jest
+          .spyOn(workHistoryRepository, 'createQueryBuilder')
+          .mockReturnValue(mockQueryBuilder as any);
         mockQueryBuilder.getMany.mockResolvedValue(mockWorkHistories);
 
         // Act
@@ -387,13 +537,18 @@ describe('WorkHistoryService', () => {
 
         // Assert
         expect(result).toEqual(mockWorkHistories);
-        expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith('role.id = :roleId', { roleId: 'role-1' });
+        expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith(
+          'role.id = :roleId',
+          { roleId: 'role-1' },
+        );
       });
 
       it('should return filtered work histories with both workStatusId and roleId', async () => {
         // Arrange
         const mockWorkHistories = [mockWorkHistory];
-        jest.spyOn(workHistoryRepository, 'createQueryBuilder').mockReturnValue(mockQueryBuilder as any);
+        jest
+          .spyOn(workHistoryRepository, 'createQueryBuilder')
+          .mockReturnValue(mockQueryBuilder as any);
         mockQueryBuilder.getMany.mockResolvedValue(mockWorkHistories);
 
         // Act
@@ -408,7 +563,9 @@ describe('WorkHistoryService', () => {
     describe('❌ InternalServerErrorException Cases', () => {
       it('should handle database query error', async () => {
         // Arrange
-        jest.spyOn(workHistoryRepository, 'createQueryBuilder').mockReturnValue(mockQueryBuilder as any);
+        jest
+          .spyOn(workHistoryRepository, 'createQueryBuilder')
+          .mockReturnValue(mockQueryBuilder as any);
         mockQueryBuilder.getMany.mockRejectedValue(new Error('Database error'));
 
         // Act & Assert
@@ -420,7 +577,9 @@ describe('WorkHistoryService', () => {
       it('should handle empty string filters', async () => {
         // Arrange
         const mockWorkHistories = [mockWorkHistory];
-        jest.spyOn(workHistoryRepository, 'createQueryBuilder').mockReturnValue(mockQueryBuilder as any);
+        jest
+          .spyOn(workHistoryRepository, 'createQueryBuilder')
+          .mockReturnValue(mockQueryBuilder as any);
         mockQueryBuilder.getMany.mockResolvedValue(mockWorkHistories);
 
         // Act
@@ -438,7 +597,9 @@ describe('WorkHistoryService', () => {
     describe('✅ Success Cases', () => {
       it('should return a work history by ID', async () => {
         // Arrange
-        jest.spyOn(workHistoryRepository, 'findOne').mockResolvedValue(mockWorkHistory as WorkHistory);
+        jest
+          .spyOn(workHistoryRepository, 'findOne')
+          .mockResolvedValue(mockWorkHistory as WorkHistory);
 
         // Act
         const result = await service.findOne('work-history-1');
@@ -447,7 +608,17 @@ describe('WorkHistoryService', () => {
         expect(result).toEqual(mockWorkHistory);
         expect(workHistoryRepository.findOne).toHaveBeenCalledWith({
           where: { id: 'work-history-1' },
-          relations: ['user', 'amphoe', 'localAdministrativeOrganization', 'workStatus', 'role', 'position', 'createdBy', 'updatedBy', 'governmentAgencies'],
+          relations: [
+            'user',
+            'amphoe',
+            'localAdministrativeOrganization',
+            'workStatus',
+            'role',
+            'position',
+            'createdBy',
+            'updatedBy',
+            'governmentAgencies',
+          ],
         });
       });
     });
@@ -458,10 +629,22 @@ describe('WorkHistoryService', () => {
         jest.spyOn(workHistoryRepository, 'findOne').mockResolvedValue(null);
 
         // Act & Assert
-        await expect(service.findOne('non-existent-id')).rejects.toThrow(NotFoundException);
+        await expect(service.findOne('non-existent-id')).rejects.toThrow(
+          NotFoundException,
+        );
         expect(workHistoryRepository.findOne).toHaveBeenCalledWith({
           where: { id: 'non-existent-id' },
-          relations: ['user', 'amphoe', 'localAdministrativeOrganization', 'workStatus', 'role', 'position', 'createdBy', 'updatedBy', 'governmentAgencies'],
+          relations: [
+            'user',
+            'amphoe',
+            'localAdministrativeOrganization',
+            'workStatus',
+            'role',
+            'position',
+            'createdBy',
+            'updatedBy',
+            'governmentAgencies',
+          ],
         });
       });
     });
@@ -469,7 +652,9 @@ describe('WorkHistoryService', () => {
     describe('❌ InternalServerErrorException Cases', () => {
       it('should handle database query error', async () => {
         // Arrange
-        jest.spyOn(workHistoryRepository, 'findOne').mockRejectedValue(new Error('Database error'));
+        jest
+          .spyOn(workHistoryRepository, 'findOne')
+          .mockRejectedValue(new Error('Database error'));
 
         // Act & Assert
         await expect(service.findOne('work-history-1')).rejects.toThrow();
@@ -490,7 +675,9 @@ describe('WorkHistoryService', () => {
         jest.spyOn(workHistoryRepository, 'findOne').mockResolvedValue(null);
 
         // Act & Assert
-        await expect(service.findOne(null as any)).rejects.toThrow(NotFoundException);
+        await expect(service.findOne(null as any)).rejects.toThrow(
+          NotFoundException,
+        );
       });
     });
   });
@@ -509,23 +696,49 @@ describe('WorkHistoryService', () => {
       it('should update a work history with all fields', async () => {
         // Arrange
         const updatedWorkHistory = { ...mockWorkHistory, ...updateDto };
-        jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockUpdater as User);
-        jest.spyOn(workHistoryRepository, 'findOne').mockResolvedValue(mockWorkHistory as WorkHistory);
-        jest.spyOn(amphoeRepository, 'findOneBy').mockResolvedValue(mockAmphoe as Amphoe);
-        jest.spyOn(laoRepository, 'findOneBy').mockResolvedValue(mockLao as LocalAdministrativeOrganization);
-        jest.spyOn(userRepository, 'findOneBy').mockResolvedValue(mockUser as User);
-        jest.spyOn(workStatusRepository, 'findOneBy').mockResolvedValue(mockWorkStatus as WorkStatus);
-        jest.spyOn(roleRepository, 'findOneBy').mockResolvedValue(mockRole as Role);
-        jest.spyOn(governmentAgencyRepository, 'findOneBy').mockResolvedValue(mockGovernmentAgency as GovernmentAgency);
-        jest.spyOn(workHistoryRepository, 'save').mockResolvedValue(updatedWorkHistory as WorkHistory);
+        jest
+          .spyOn(userRepository, 'findOne')
+          .mockResolvedValue(mockUpdater as User);
+        jest
+          .spyOn(workHistoryRepository, 'findOne')
+          .mockResolvedValue(mockWorkHistory as WorkHistory);
+        jest
+          .spyOn(amphoeRepository, 'findOneBy')
+          .mockResolvedValue(mockAmphoe as Amphoe);
+        jest
+          .spyOn(laoRepository, 'findOneBy')
+          .mockResolvedValue(mockLao as LocalAdministrativeOrganization);
+        jest
+          .spyOn(userRepository, 'findOneBy')
+          .mockResolvedValue(mockUser as User);
+        jest
+          .spyOn(workStatusRepository, 'findOneBy')
+          .mockResolvedValue(mockWorkStatus as WorkStatus);
+        jest
+          .spyOn(roleRepository, 'findOneBy')
+          .mockResolvedValue(mockRole as Role);
+        jest
+          .spyOn(governmentAgencyRepository, 'findOneBy')
+          .mockResolvedValue(mockGovernmentAgency as GovernmentAgency);
+        jest
+          .spyOn(workHistoryRepository, 'save')
+          .mockResolvedValue(updatedWorkHistory as WorkHistory);
 
         // Act
-        const result = await service.update('work-history-1', updateDto, 'updater-1');
+        const result = await service.update(
+          'work-history-1',
+          updateDto,
+          'updater-1',
+        );
 
         // Assert
         expect(result).toEqual(updatedWorkHistory);
-        expect(userRepository.findOne).toHaveBeenCalledWith({ where: { id: 'updater-1' } });
-        expect(workHistoryRepository.findOne).toHaveBeenCalledWith({ where: { id: 'work-history-1' } });
+        expect(userRepository.findOne).toHaveBeenCalledWith({
+          where: { id: 'updater-1' },
+        });
+        expect(workHistoryRepository.findOne).toHaveBeenCalledWith({
+          where: { id: 'work-history-1' },
+        });
         expect(workHistoryRepository.save).toHaveBeenCalled();
       });
 
@@ -534,17 +747,37 @@ describe('WorkHistoryService', () => {
         const updateDtoWithoutGov = { ...updateDto };
         delete updateDtoWithoutGov.governmentAgenciesId;
 
-        jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockUpdater as User);
-        jest.spyOn(workHistoryRepository, 'findOne').mockResolvedValue(mockWorkHistory as WorkHistory);
-        jest.spyOn(amphoeRepository, 'findOneBy').mockResolvedValue(mockAmphoe as Amphoe);
-        jest.spyOn(laoRepository, 'findOneBy').mockResolvedValue(mockLao as LocalAdministrativeOrganization);
-        jest.spyOn(userRepository, 'findOneBy').mockResolvedValue(mockUser as User);
-        jest.spyOn(workStatusRepository, 'findOneBy').mockResolvedValue(mockWorkStatus as WorkStatus);
-        jest.spyOn(roleRepository, 'findOneBy').mockResolvedValue(mockRole as Role);
-        jest.spyOn(workHistoryRepository, 'save').mockResolvedValue(mockWorkHistory as WorkHistory);
+        jest
+          .spyOn(userRepository, 'findOne')
+          .mockResolvedValue(mockUpdater as User);
+        jest
+          .spyOn(workHistoryRepository, 'findOne')
+          .mockResolvedValue(mockWorkHistory as WorkHistory);
+        jest
+          .spyOn(amphoeRepository, 'findOneBy')
+          .mockResolvedValue(mockAmphoe as Amphoe);
+        jest
+          .spyOn(laoRepository, 'findOneBy')
+          .mockResolvedValue(mockLao as LocalAdministrativeOrganization);
+        jest
+          .spyOn(userRepository, 'findOneBy')
+          .mockResolvedValue(mockUser as User);
+        jest
+          .spyOn(workStatusRepository, 'findOneBy')
+          .mockResolvedValue(mockWorkStatus as WorkStatus);
+        jest
+          .spyOn(roleRepository, 'findOneBy')
+          .mockResolvedValue(mockRole as Role);
+        jest
+          .spyOn(workHistoryRepository, 'save')
+          .mockResolvedValue(mockWorkHistory as WorkHistory);
 
         // Act
-        const result = await service.update('work-history-1', updateDtoWithoutGov, 'updater-1');
+        const result = await service.update(
+          'work-history-1',
+          updateDtoWithoutGov,
+          'updater-1',
+        );
 
         // Assert
         expect(result).toEqual(mockWorkHistory);
@@ -559,110 +792,206 @@ describe('WorkHistoryService', () => {
         jest.spyOn(userRepository, 'findOne').mockResolvedValue(null);
 
         // Act & Assert
-        await expect(service.update('work-history-1', updateDto, 'non-existent-updater')).rejects.toThrow(NotFoundException);
-        expect(userRepository.findOne).toHaveBeenCalledWith({ where: { id: 'non-existent-updater' } });
+        await expect(
+          service.update('work-history-1', updateDto, 'non-existent-updater'),
+        ).rejects.toThrow(NotFoundException);
+        expect(userRepository.findOne).toHaveBeenCalledWith({
+          where: { id: 'non-existent-updater' },
+        });
       });
 
       it('should throw NotFoundException when work history not found', async () => {
         // Arrange
-        jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockUpdater as User);
+        jest
+          .spyOn(userRepository, 'findOne')
+          .mockResolvedValue(mockUpdater as User);
         jest.spyOn(workHistoryRepository, 'findOne').mockResolvedValue(null);
 
         // Act & Assert
-        await expect(service.update('non-existent-id', updateDto, 'updater-1')).rejects.toThrow(NotFoundException);
+        await expect(
+          service.update('non-existent-id', updateDto, 'updater-1'),
+        ).rejects.toThrow(NotFoundException);
       });
 
       it('should throw NotFoundException when amphoe not found', async () => {
         // Arrange
-        jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockUpdater as User);
-        jest.spyOn(workHistoryRepository, 'findOne').mockResolvedValue(mockWorkHistory as WorkHistory);
+        jest
+          .spyOn(userRepository, 'findOne')
+          .mockResolvedValue(mockUpdater as User);
+        jest
+          .spyOn(workHistoryRepository, 'findOne')
+          .mockResolvedValue(mockWorkHistory as WorkHistory);
         jest.spyOn(amphoeRepository, 'findOneBy').mockResolvedValue(null);
 
         // Act & Assert
-        await expect(service.update('work-history-1', updateDto, 'updater-1')).rejects.toThrow(NotFoundException);
+        await expect(
+          service.update('work-history-1', updateDto, 'updater-1'),
+        ).rejects.toThrow(NotFoundException);
       });
 
       it('should throw NotFoundException when LAO not found', async () => {
         // Arrange
-        jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockUpdater as User);
-        jest.spyOn(workHistoryRepository, 'findOne').mockResolvedValue(mockWorkHistory as WorkHistory);
-        jest.spyOn(amphoeRepository, 'findOneBy').mockResolvedValue(mockAmphoe as Amphoe);
+        jest
+          .spyOn(userRepository, 'findOne')
+          .mockResolvedValue(mockUpdater as User);
+        jest
+          .spyOn(workHistoryRepository, 'findOne')
+          .mockResolvedValue(mockWorkHistory as WorkHistory);
+        jest
+          .spyOn(amphoeRepository, 'findOneBy')
+          .mockResolvedValue(mockAmphoe as Amphoe);
         jest.spyOn(laoRepository, 'findOneBy').mockResolvedValue(null);
 
         // Act & Assert
-        await expect(service.update('work-history-1', updateDto, 'updater-1')).rejects.toThrow(NotFoundException);
+        await expect(
+          service.update('work-history-1', updateDto, 'updater-1'),
+        ).rejects.toThrow(NotFoundException);
       });
 
       it('should throw NotFoundException when user not found', async () => {
         // Arrange
-        jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockUpdater as User);
-        jest.spyOn(workHistoryRepository, 'findOne').mockResolvedValue(mockWorkHistory as WorkHistory);
-        jest.spyOn(amphoeRepository, 'findOneBy').mockResolvedValue(mockAmphoe as Amphoe);
-        jest.spyOn(laoRepository, 'findOneBy').mockResolvedValue(mockLao as LocalAdministrativeOrganization);
+        jest
+          .spyOn(userRepository, 'findOne')
+          .mockResolvedValue(mockUpdater as User);
+        jest
+          .spyOn(workHistoryRepository, 'findOne')
+          .mockResolvedValue(mockWorkHistory as WorkHistory);
+        jest
+          .spyOn(amphoeRepository, 'findOneBy')
+          .mockResolvedValue(mockAmphoe as Amphoe);
+        jest
+          .spyOn(laoRepository, 'findOneBy')
+          .mockResolvedValue(mockLao as LocalAdministrativeOrganization);
         jest.spyOn(userRepository, 'findOneBy').mockResolvedValue(null);
 
         // Act & Assert
-        await expect(service.update('work-history-1', updateDto, 'updater-1')).rejects.toThrow(NotFoundException);
+        await expect(
+          service.update('work-history-1', updateDto, 'updater-1'),
+        ).rejects.toThrow(NotFoundException);
       });
 
       it('should throw NotFoundException when work status not found', async () => {
         // Arrange
-        jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockUpdater as User);
-        jest.spyOn(workHistoryRepository, 'findOne').mockResolvedValue(mockWorkHistory as WorkHistory);
-        jest.spyOn(amphoeRepository, 'findOneBy').mockResolvedValue(mockAmphoe as Amphoe);
-        jest.spyOn(laoRepository, 'findOneBy').mockResolvedValue(mockLao as LocalAdministrativeOrganization);
-        jest.spyOn(userRepository, 'findOneBy').mockResolvedValue(mockUser as User);
+        jest
+          .spyOn(userRepository, 'findOne')
+          .mockResolvedValue(mockUpdater as User);
+        jest
+          .spyOn(workHistoryRepository, 'findOne')
+          .mockResolvedValue(mockWorkHistory as WorkHistory);
+        jest
+          .spyOn(amphoeRepository, 'findOneBy')
+          .mockResolvedValue(mockAmphoe as Amphoe);
+        jest
+          .spyOn(laoRepository, 'findOneBy')
+          .mockResolvedValue(mockLao as LocalAdministrativeOrganization);
+        jest
+          .spyOn(userRepository, 'findOneBy')
+          .mockResolvedValue(mockUser as User);
         jest.spyOn(workStatusRepository, 'findOneBy').mockResolvedValue(null);
 
         // Act & Assert
-        await expect(service.update('work-history-1', updateDto, 'updater-1')).rejects.toThrow(NotFoundException);
+        await expect(
+          service.update('work-history-1', updateDto, 'updater-1'),
+        ).rejects.toThrow(NotFoundException);
       });
 
       it('should throw NotFoundException when role not found', async () => {
         // Arrange
-        jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockUpdater as User);
-        jest.spyOn(workHistoryRepository, 'findOne').mockResolvedValue(mockWorkHistory as WorkHistory);
-        jest.spyOn(amphoeRepository, 'findOneBy').mockResolvedValue(mockAmphoe as Amphoe);
-        jest.spyOn(laoRepository, 'findOneBy').mockResolvedValue(mockLao as LocalAdministrativeOrganization);
-        jest.spyOn(userRepository, 'findOneBy').mockResolvedValue(mockUser as User);
-        jest.spyOn(workStatusRepository, 'findOneBy').mockResolvedValue(mockWorkStatus as WorkStatus);
+        jest
+          .spyOn(userRepository, 'findOne')
+          .mockResolvedValue(mockUpdater as User);
+        jest
+          .spyOn(workHistoryRepository, 'findOne')
+          .mockResolvedValue(mockWorkHistory as WorkHistory);
+        jest
+          .spyOn(amphoeRepository, 'findOneBy')
+          .mockResolvedValue(mockAmphoe as Amphoe);
+        jest
+          .spyOn(laoRepository, 'findOneBy')
+          .mockResolvedValue(mockLao as LocalAdministrativeOrganization);
+        jest
+          .spyOn(userRepository, 'findOneBy')
+          .mockResolvedValue(mockUser as User);
+        jest
+          .spyOn(workStatusRepository, 'findOneBy')
+          .mockResolvedValue(mockWorkStatus as WorkStatus);
         jest.spyOn(roleRepository, 'findOneBy').mockResolvedValue(null);
 
         // Act & Assert
-        await expect(service.update('work-history-1', updateDto, 'updater-1')).rejects.toThrow(NotFoundException);
+        await expect(
+          service.update('work-history-1', updateDto, 'updater-1'),
+        ).rejects.toThrow(NotFoundException);
       });
 
       it('should throw NotFoundException when government agency not found', async () => {
         // Arrange
-        jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockUpdater as User);
-        jest.spyOn(workHistoryRepository, 'findOne').mockResolvedValue(mockWorkHistory as WorkHistory);
-        jest.spyOn(amphoeRepository, 'findOneBy').mockResolvedValue(mockAmphoe as Amphoe);
-        jest.spyOn(laoRepository, 'findOneBy').mockResolvedValue(mockLao as LocalAdministrativeOrganization);
-        jest.spyOn(userRepository, 'findOneBy').mockResolvedValue(mockUser as User);
-        jest.spyOn(workStatusRepository, 'findOneBy').mockResolvedValue(mockWorkStatus as WorkStatus);
-        jest.spyOn(roleRepository, 'findOneBy').mockResolvedValue(mockRole as Role);
-        jest.spyOn(governmentAgencyRepository, 'findOneBy').mockResolvedValue(null);
+        jest
+          .spyOn(userRepository, 'findOne')
+          .mockResolvedValue(mockUpdater as User);
+        jest
+          .spyOn(workHistoryRepository, 'findOne')
+          .mockResolvedValue(mockWorkHistory as WorkHistory);
+        jest
+          .spyOn(amphoeRepository, 'findOneBy')
+          .mockResolvedValue(mockAmphoe as Amphoe);
+        jest
+          .spyOn(laoRepository, 'findOneBy')
+          .mockResolvedValue(mockLao as LocalAdministrativeOrganization);
+        jest
+          .spyOn(userRepository, 'findOneBy')
+          .mockResolvedValue(mockUser as User);
+        jest
+          .spyOn(workStatusRepository, 'findOneBy')
+          .mockResolvedValue(mockWorkStatus as WorkStatus);
+        jest
+          .spyOn(roleRepository, 'findOneBy')
+          .mockResolvedValue(mockRole as Role);
+        jest
+          .spyOn(governmentAgencyRepository, 'findOneBy')
+          .mockResolvedValue(null);
 
         // Act & Assert
-        await expect(service.update('work-history-1', updateDto, 'updater-1')).rejects.toThrow(NotFoundException);
+        await expect(
+          service.update('work-history-1', updateDto, 'updater-1'),
+        ).rejects.toThrow(NotFoundException);
       });
     });
 
     describe('❌ InternalServerErrorException Cases', () => {
       it('should handle database save error', async () => {
         // Arrange
-        jest.spyOn(userRepository, 'findOne').mockResolvedValue(mockUpdater as User);
-        jest.spyOn(workHistoryRepository, 'findOne').mockResolvedValue(mockWorkHistory as WorkHistory);
-        jest.spyOn(amphoeRepository, 'findOneBy').mockResolvedValue(mockAmphoe as Amphoe);
-        jest.spyOn(laoRepository, 'findOneBy').mockResolvedValue(mockLao as LocalAdministrativeOrganization);
-        jest.spyOn(userRepository, 'findOneBy').mockResolvedValue(mockUser as User);
-        jest.spyOn(workStatusRepository, 'findOneBy').mockResolvedValue(mockWorkStatus as WorkStatus);
-        jest.spyOn(roleRepository, 'findOneBy').mockResolvedValue(mockRole as Role);
-        jest.spyOn(governmentAgencyRepository, 'findOneBy').mockResolvedValue(mockGovernmentAgency as GovernmentAgency);
-        jest.spyOn(workHistoryRepository, 'save').mockRejectedValue(new Error('Database error'));
+        jest
+          .spyOn(userRepository, 'findOne')
+          .mockResolvedValue(mockUpdater as User);
+        jest
+          .spyOn(workHistoryRepository, 'findOne')
+          .mockResolvedValue(mockWorkHistory as WorkHistory);
+        jest
+          .spyOn(amphoeRepository, 'findOneBy')
+          .mockResolvedValue(mockAmphoe as Amphoe);
+        jest
+          .spyOn(laoRepository, 'findOneBy')
+          .mockResolvedValue(mockLao as LocalAdministrativeOrganization);
+        jest
+          .spyOn(userRepository, 'findOneBy')
+          .mockResolvedValue(mockUser as User);
+        jest
+          .spyOn(workStatusRepository, 'findOneBy')
+          .mockResolvedValue(mockWorkStatus as WorkStatus);
+        jest
+          .spyOn(roleRepository, 'findOneBy')
+          .mockResolvedValue(mockRole as Role);
+        jest
+          .spyOn(governmentAgencyRepository, 'findOneBy')
+          .mockResolvedValue(mockGovernmentAgency as GovernmentAgency);
+        jest
+          .spyOn(workHistoryRepository, 'save')
+          .mockRejectedValue(new Error('Database error'));
 
         // Act & Assert
-        await expect(service.update('work-history-1', updateDto, 'updater-1')).rejects.toThrow();
+        await expect(
+          service.update('work-history-1', updateDto, 'updater-1'),
+        ).rejects.toThrow();
       });
     });
 
@@ -672,7 +1001,9 @@ describe('WorkHistoryService', () => {
         jest.spyOn(userRepository, 'findOne').mockResolvedValue(null);
 
         // Act & Assert
-        await expect(service.update('', updateDto, 'updater-1')).rejects.toThrow(NotFoundException);
+        await expect(
+          service.update('', updateDto, 'updater-1'),
+        ).rejects.toThrow(NotFoundException);
       });
 
       it('should handle null/undefined ID', async () => {
@@ -680,7 +1011,9 @@ describe('WorkHistoryService', () => {
         jest.spyOn(userRepository, 'findOne').mockResolvedValue(null);
 
         // Act & Assert
-        await expect(service.update(null as any, updateDto, 'updater-1')).rejects.toThrow(NotFoundException);
+        await expect(
+          service.update(null as any, updateDto, 'updater-1'),
+        ).rejects.toThrow(NotFoundException);
       });
     });
   });
@@ -689,32 +1022,47 @@ describe('WorkHistoryService', () => {
     describe('✅ Success Cases', () => {
       it('should permanently delete a work history', async () => {
         // Arrange
-        jest.spyOn(workHistoryRepository, 'delete').mockResolvedValue({ affected: 1 } as any);
+        jest
+          .spyOn(workHistoryRepository, 'delete')
+          .mockResolvedValue({ affected: 1 } as any);
 
         // Act
         const result = await service.remove('work-history-1');
 
         // Assert
-        expect(result).toEqual({ message: 'Work history with ID work-history-1 has been permanently deleted' });
-        expect(workHistoryRepository.delete).toHaveBeenCalledWith('work-history-1');
+        expect(result).toEqual({
+          message:
+            'Work history with ID work-history-1 has been permanently deleted',
+        });
+        expect(workHistoryRepository.delete).toHaveBeenCalledWith(
+          'work-history-1',
+        );
       });
     });
 
     describe('❌ NotFoundException Cases', () => {
       it('should throw NotFoundException when work history not found', async () => {
         // Arrange
-        jest.spyOn(workHistoryRepository, 'delete').mockResolvedValue({ affected: 0 } as any);
+        jest
+          .spyOn(workHistoryRepository, 'delete')
+          .mockResolvedValue({ affected: 0 } as any);
 
         // Act & Assert
-        await expect(service.remove('non-existent-id')).rejects.toThrow(NotFoundException);
-        expect(workHistoryRepository.delete).toHaveBeenCalledWith('non-existent-id');
+        await expect(service.remove('non-existent-id')).rejects.toThrow(
+          NotFoundException,
+        );
+        expect(workHistoryRepository.delete).toHaveBeenCalledWith(
+          'non-existent-id',
+        );
       });
     });
 
     describe('❌ InternalServerErrorException Cases', () => {
       it('should handle database delete error', async () => {
         // Arrange
-        jest.spyOn(workHistoryRepository, 'delete').mockRejectedValue(new Error('Database error'));
+        jest
+          .spyOn(workHistoryRepository, 'delete')
+          .mockRejectedValue(new Error('Database error'));
 
         // Act & Assert
         await expect(service.remove('work-history-1')).rejects.toThrow();
@@ -724,7 +1072,9 @@ describe('WorkHistoryService', () => {
     describe('⚠️ Edge Cases', () => {
       it('should handle empty string ID', async () => {
         // Arrange
-        jest.spyOn(workHistoryRepository, 'delete').mockResolvedValue({ affected: 0 } as any);
+        jest
+          .spyOn(workHistoryRepository, 'delete')
+          .mockResolvedValue({ affected: 0 } as any);
 
         // Act & Assert
         await expect(service.remove('')).rejects.toThrow(NotFoundException);
@@ -732,10 +1082,14 @@ describe('WorkHistoryService', () => {
 
       it('should handle null/undefined ID', async () => {
         // Arrange
-        jest.spyOn(workHistoryRepository, 'delete').mockResolvedValue({ affected: 0 } as any);
+        jest
+          .spyOn(workHistoryRepository, 'delete')
+          .mockResolvedValue({ affected: 0 } as any);
 
         // Act & Assert
-        await expect(service.remove(null as any)).rejects.toThrow(NotFoundException);
+        await expect(service.remove(null as any)).rejects.toThrow(
+          NotFoundException,
+        );
       });
     });
   });
@@ -744,32 +1098,46 @@ describe('WorkHistoryService', () => {
     describe('✅ Success Cases', () => {
       it('should soft delete a work history', async () => {
         // Arrange
-        jest.spyOn(workHistoryRepository, 'softDelete').mockResolvedValue({ affected: 1 } as any);
+        jest
+          .spyOn(workHistoryRepository, 'softDelete')
+          .mockResolvedValue({ affected: 1 } as any);
 
         // Act
         const result = await service.softRemove('work-history-1');
 
         // Assert
-        expect(result).toEqual({ message: 'Work history with ID work-history-1 has been soft-removed.' });
-        expect(workHistoryRepository.softDelete).toHaveBeenCalledWith('work-history-1');
+        expect(result).toEqual({
+          message: 'Work history with ID work-history-1 has been soft-removed.',
+        });
+        expect(workHistoryRepository.softDelete).toHaveBeenCalledWith(
+          'work-history-1',
+        );
       });
     });
 
     describe('❌ NotFoundException Cases', () => {
       it('should throw NotFoundException when work history not found', async () => {
         // Arrange
-        jest.spyOn(workHistoryRepository, 'softDelete').mockResolvedValue({ affected: 0 } as any);
+        jest
+          .spyOn(workHistoryRepository, 'softDelete')
+          .mockResolvedValue({ affected: 0 } as any);
 
         // Act & Assert
-        await expect(service.softRemove('non-existent-id')).rejects.toThrow(NotFoundException);
-        expect(workHistoryRepository.softDelete).toHaveBeenCalledWith('non-existent-id');
+        await expect(service.softRemove('non-existent-id')).rejects.toThrow(
+          NotFoundException,
+        );
+        expect(workHistoryRepository.softDelete).toHaveBeenCalledWith(
+          'non-existent-id',
+        );
       });
     });
 
     describe('❌ InternalServerErrorException Cases', () => {
       it('should handle database soft delete error', async () => {
         // Arrange
-        jest.spyOn(workHistoryRepository, 'softDelete').mockRejectedValue(new Error('Database error'));
+        jest
+          .spyOn(workHistoryRepository, 'softDelete')
+          .mockRejectedValue(new Error('Database error'));
 
         // Act & Assert
         await expect(service.softRemove('work-history-1')).rejects.toThrow();
@@ -779,7 +1147,9 @@ describe('WorkHistoryService', () => {
     describe('⚠️ Edge Cases', () => {
       it('should handle empty string ID', async () => {
         // Arrange
-        jest.spyOn(workHistoryRepository, 'softDelete').mockResolvedValue({ affected: 0 } as any);
+        jest
+          .spyOn(workHistoryRepository, 'softDelete')
+          .mockResolvedValue({ affected: 0 } as any);
 
         // Act & Assert
         await expect(service.softRemove('')).rejects.toThrow(NotFoundException);
@@ -787,10 +1157,14 @@ describe('WorkHistoryService', () => {
 
       it('should handle null/undefined ID', async () => {
         // Arrange
-        jest.spyOn(workHistoryRepository, 'softDelete').mockResolvedValue({ affected: 0 } as any);
+        jest
+          .spyOn(workHistoryRepository, 'softDelete')
+          .mockResolvedValue({ affected: 0 } as any);
 
         // Act & Assert
-        await expect(service.softRemove(null as any)).rejects.toThrow(NotFoundException);
+        await expect(service.softRemove(null as any)).rejects.toThrow(
+          NotFoundException,
+        );
       });
     });
   });
@@ -799,32 +1173,46 @@ describe('WorkHistoryService', () => {
     describe('✅ Success Cases', () => {
       it('should restore a soft-deleted work history', async () => {
         // Arrange
-        jest.spyOn(workHistoryRepository, 'restore').mockResolvedValue({ affected: 1 } as any);
+        jest
+          .spyOn(workHistoryRepository, 'restore')
+          .mockResolvedValue({ affected: 1 } as any);
 
         // Act
         const result = await service.restore('work-history-1');
 
         // Assert
-        expect(result).toEqual({ message: 'Work history with ID work-history-1 has been restored.' });
-        expect(workHistoryRepository.restore).toHaveBeenCalledWith('work-history-1');
+        expect(result).toEqual({
+          message: 'Work history with ID work-history-1 has been restored.',
+        });
+        expect(workHistoryRepository.restore).toHaveBeenCalledWith(
+          'work-history-1',
+        );
       });
     });
 
     describe('❌ NotFoundException Cases', () => {
       it('should throw NotFoundException when work history not found or not deleted', async () => {
         // Arrange
-        jest.spyOn(workHistoryRepository, 'restore').mockResolvedValue({ affected: 0 } as any);
+        jest
+          .spyOn(workHistoryRepository, 'restore')
+          .mockResolvedValue({ affected: 0 } as any);
 
         // Act & Assert
-        await expect(service.restore('non-existent-id')).rejects.toThrow(NotFoundException);
-        expect(workHistoryRepository.restore).toHaveBeenCalledWith('non-existent-id');
+        await expect(service.restore('non-existent-id')).rejects.toThrow(
+          NotFoundException,
+        );
+        expect(workHistoryRepository.restore).toHaveBeenCalledWith(
+          'non-existent-id',
+        );
       });
     });
 
     describe('❌ InternalServerErrorException Cases', () => {
       it('should handle database restore error', async () => {
         // Arrange
-        jest.spyOn(workHistoryRepository, 'restore').mockRejectedValue(new Error('Database error'));
+        jest
+          .spyOn(workHistoryRepository, 'restore')
+          .mockRejectedValue(new Error('Database error'));
 
         // Act & Assert
         await expect(service.restore('work-history-1')).rejects.toThrow();
@@ -834,7 +1222,9 @@ describe('WorkHistoryService', () => {
     describe('⚠️ Edge Cases', () => {
       it('should handle empty string ID', async () => {
         // Arrange
-        jest.spyOn(workHistoryRepository, 'restore').mockResolvedValue({ affected: 0 } as any);
+        jest
+          .spyOn(workHistoryRepository, 'restore')
+          .mockResolvedValue({ affected: 0 } as any);
 
         // Act & Assert
         await expect(service.restore('')).rejects.toThrow(NotFoundException);
@@ -842,10 +1232,14 @@ describe('WorkHistoryService', () => {
 
       it('should handle null/undefined ID', async () => {
         // Arrange
-        jest.spyOn(workHistoryRepository, 'restore').mockResolvedValue({ affected: 0 } as any);
+        jest
+          .spyOn(workHistoryRepository, 'restore')
+          .mockResolvedValue({ affected: 0 } as any);
 
         // Act & Assert
-        await expect(service.restore(null as any)).rejects.toThrow(NotFoundException);
+        await expect(service.restore(null as any)).rejects.toThrow(
+          NotFoundException,
+        );
       });
     });
   });

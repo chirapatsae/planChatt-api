@@ -13,7 +13,10 @@ import {
 } from '@nestjs/common';
 import { WorkHistoryAmphoeResponsibilityService } from './work-history-amphoe-responsibility.service';
 import { CreateWorkHistoryAmphoeResponsibilityDto } from './dto/create-work-history-amphoe-responsibility.dto';
-import { UpdateWorkHistoryAmphoeResponsibilityDto, TransferResponsibilityDto } from './dto/update-work-history-amphoe-responsibility.dto';
+import {
+  UpdateWorkHistoryAmphoeResponsibilityDto,
+  TransferResponsibilityDto,
+} from './dto/update-work-history-amphoe-responsibility.dto';
 import { JwtAuthGuard } from '../auth/auth.guard';
 import { JwtPayloadUser } from '../auth/jwt.strategy';
 
@@ -23,14 +26,19 @@ import { JwtPayloadUser } from '../auth/jwt.strategy';
 })
 @UseGuards(JwtAuthGuard)
 export class WorkHistoryAmphoeResponsibilityController {
-  constructor(private readonly workHistoryAmphoeResponsibilityService: WorkHistoryAmphoeResponsibilityService) {}
+  constructor(
+    private readonly workHistoryAmphoeResponsibilityService: WorkHistoryAmphoeResponsibilityService,
+  ) {}
 
   @Post()
   create(
     @Body() dto: CreateWorkHistoryAmphoeResponsibilityDto,
     @Request() req: Request & { user: JwtPayloadUser },
   ) {
-    return this.workHistoryAmphoeResponsibilityService.create(dto, req.user.userId);
+    return this.workHistoryAmphoeResponsibilityService.create(
+      dto,
+      req.user.userId,
+    );
   }
 
   @Get()
@@ -38,7 +46,10 @@ export class WorkHistoryAmphoeResponsibilityController {
     @Query('amphoe') amphoe?: string,
     @Query('workHistory') workHistory?: string,
   ) {
-    return this.workHistoryAmphoeResponsibilityService.findAll(amphoe , workHistory);
+    return this.workHistoryAmphoeResponsibilityService.findAll(
+      amphoe,
+      workHistory,
+    );
   }
 
   @Get(':id')
@@ -52,15 +63,15 @@ export class WorkHistoryAmphoeResponsibilityController {
     @Body() dto: UpdateWorkHistoryAmphoeResponsibilityDto,
     @Request() req: Request & { user: JwtPayloadUser },
   ) {
-    return this.workHistoryAmphoeResponsibilityService.update(id, dto , req.user.userId);
+    return this.workHistoryAmphoeResponsibilityService.update(
+      id,
+      dto,
+      req.user.userId,
+    );
   }
 
   @Delete(':id')
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.workHistoryAmphoeResponsibilityService.remove(id);
   }
-
-
-
-
 }

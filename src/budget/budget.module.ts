@@ -6,7 +6,7 @@ import { Budget } from './entities/budget.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 
 @Module({
-  imports : [TypeOrmModule.forFeature([Budget ,ProjectGroup ])],
+  imports: [TypeOrmModule.forFeature([Budget, ProjectGroup])],
   controllers: [BudgetController],
   providers: [BudgetService],
 })

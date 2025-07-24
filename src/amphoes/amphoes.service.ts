@@ -102,7 +102,9 @@ export class AmphoesService {
     try {
       const result = await this.amphoeRepository.restore(id);
       if (result.affected === 0) {
-        throw new NotFoundException(`Amphoe with ID ${id} not found or was not deleted.`);
+        throw new NotFoundException(
+          `Amphoe with ID ${id} not found or was not deleted.`,
+        );
       }
       return { message: `Amphoe with ID ${id} has been restored.` };
     } catch (error) {

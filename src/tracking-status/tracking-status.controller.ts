@@ -26,10 +26,13 @@ import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 export class TrackingStatusController {
   private readonly logger = new Logger(TrackingStatusController.name);
 
-  constructor(private readonly trackingStatusService: TrackingStatusService) { }
+  constructor(private readonly trackingStatusService: TrackingStatusService) {}
 
   @Post()
-  create(@Body() dto: CreateTrackingStatusDto, @Req() req: Request & { user: JwtPayloadUser }) {
+  create(
+    @Body() dto: CreateTrackingStatusDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
     this.logger.log('Request to create tracking status');
     return this.trackingStatusService.create(dto, req.user.userId);
   }
@@ -41,14 +44,14 @@ export class TrackingStatusController {
   }
 
   @Get(':id')
-  findOne(@Param('id' , ParseUUIDPipe) id: string) {
+  findOne(@Param('id', ParseUUIDPipe) id: string) {
     this.logger.log(`Request to fetch tracking status with ID: ${id}`);
     return this.trackingStatusService.findOne(id);
   }
 
   @Patch(':id')
   update(
-    @Param('id' , ParseUUIDPipe) id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateTrackingStatusDto,
   ) {
     this.logger.log(`Request to update tracking status with ID: ${id}`);
@@ -57,15 +60,15 @@ export class TrackingStatusController {
 
   @Delete(':id')
   remove(
-    @Param('id' , ParseUUIDPipe) id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Query('mode') mode: 'soft' | 'hard' = 'soft',
-    @Req() req: Request & { user: JwtPayloadUser }
+    @Req() req: Request & { user: JwtPayloadUser },
   ) {
     return this.trackingStatusService.softRemove(id);
   }
 
   @Patch(':id/restore')
-  restore(@Param('id' , ParseUUIDPipe) id: string) {
+  restore(@Param('id', ParseUUIDPipe) id: string) {
     return this.trackingStatusService.restore(id);
   }
 }

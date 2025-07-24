@@ -6,7 +6,7 @@ import { BudgetPlan } from './entities/budget_plan.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 
 @Module({
-  imports : [TypeOrmModule.forFeature([BudgetPlan , WorkHistory])], 
+  imports: [TypeOrmModule.forFeature([BudgetPlan, WorkHistory])],
   controllers: [BudgetPlanController],
   providers: [BudgetPlanService],
 })

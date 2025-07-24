@@ -26,7 +26,9 @@ const mockAmphoe = (overrides: Partial<Amphoe> = {}): Amphoe => ({
   ...overrides,
 });
 
-const mockLAO = (overrides: Partial<LocalAdministrativeOrganization> = {}): LocalAdministrativeOrganization => ({
+const mockLAO = (
+  overrides: Partial<LocalAdministrativeOrganization> = {},
+): LocalAdministrativeOrganization => ({
   id: 'L001',
   name: 'LAO Test',
   type: 'Type1',
@@ -66,11 +68,16 @@ describe('LocalAdministrativeOrganizationsService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         LocalAdministrativeOrganizationsService,
-        { provide: getRepositoryToken(LocalAdministrativeOrganization), useValue: laoRepository },
+        {
+          provide: getRepositoryToken(LocalAdministrativeOrganization),
+          useValue: laoRepository,
+        },
         { provide: getRepositoryToken(Amphoe), useValue: amphoeRepository },
       ],
     }).compile();
-    service = module.get<LocalAdministrativeOrganizationsService>(LocalAdministrativeOrganizationsService);
+    service = module.get<LocalAdministrativeOrganizationsService>(
+      LocalAdministrativeOrganizationsService,
+    );
   });
 
   afterEach(() => {
@@ -89,55 +96,107 @@ describe('LocalAdministrativeOrganizationsService', () => {
       laoRepository.create.mockReturnValue(mockLAO());
       laoRepository.save.mockResolvedValue(mockLAO());
       const result = await service.create(dto);
-      expect(amphoeRepository.findOneBy).toHaveBeenCalledWith({ id: dto.amphoeId });
-      expect(laoRepository.create).toHaveBeenCalledWith({ id: dto.code, name: dto.name, type: dto.type, amphoe: mockAmphoe() });
+      expect(amphoeRepository.findOneBy).toHaveBeenCalledWith({
+        id: dto.amphoeId,
+      });
+      expect(laoRepository.create).toHaveBeenCalledWith({
+        id: dto.code,
+        name: dto.name,
+        type: dto.type,
+        amphoe: mockAmphoe(),
+      });
       expect(laoRepository.save).toHaveBeenCalled();
       expect(result).toEqual(mockLAO());
     });
     it('should throw NotFoundException if amphoe not found', async () => {
       amphoeRepository.findOneBy.mockResolvedValue(undefined);
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new NotFoundException(); });
-      await expect(service.create(dto)).rejects.toBeInstanceOf(NotFoundException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      await expect(service.create(dto)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
     it('should throw ConflictException (DB unique violation)', async () => {
       amphoeRepository.findOneBy.mockResolvedValue(mockAmphoe());
       laoRepository.create.mockReturnValue(mockLAO());
       laoRepository.save.mockRejectedValue({ code: '23505' });
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new ConflictException(); });
-      await expect(service.create(dto)).rejects.toBeInstanceOf(ConflictException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new ConflictException();
+        });
+      await expect(service.create(dto)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
     });
     it('should throw BadRequestException (invalid input)', async () => {
       amphoeRepository.findOneBy.mockResolvedValue(mockAmphoe());
-      laoRepository.create.mockImplementation(() => { throw new BadRequestException(); });
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new BadRequestException(); });
-      await expect(service.create({ ...dto, code: '' })).rejects.toBeInstanceOf(BadRequestException);
+      laoRepository.create.mockImplementation(() => {
+        throw new BadRequestException();
+      });
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new BadRequestException();
+        });
+      await expect(service.create({ ...dto, code: '' })).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
     });
     it('should throw InternalServerErrorException (other DB error)', async () => {
       amphoeRepository.findOneBy.mockResolvedValue(mockAmphoe());
       laoRepository.create.mockReturnValue(mockLAO());
       laoRepository.save.mockRejectedValue(new Error('DB error'));
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new InternalServerErrorException(); });
-      await expect(service.create(dto)).rejects.toBeInstanceOf(InternalServerErrorException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new InternalServerErrorException();
+        });
+      await expect(service.create(dto)).rejects.toBeInstanceOf(
+        InternalServerErrorException,
+      );
     });
     it('should handle edge case: empty code', async () => {
       amphoeRepository.findOneBy.mockResolvedValue(mockAmphoe());
-      laoRepository.create.mockImplementation(() => { throw new BadRequestException(); });
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new BadRequestException(); });
-      await expect(service.create({ ...dto, code: '' })).rejects.toBeInstanceOf(BadRequestException);
+      laoRepository.create.mockImplementation(() => {
+        throw new BadRequestException();
+      });
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new BadRequestException();
+        });
+      await expect(service.create({ ...dto, code: '' })).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
     });
   });
 
   describe('findAll', () => {
     it('should return all LAOs (success)', async () => {
-      laoRepository.find.mockResolvedValue([mockLAO(), mockLAO({ id: 'L002' })]);
+      laoRepository.find.mockResolvedValue([
+        mockLAO(),
+        mockLAO({ id: 'L002' }),
+      ]);
       const result = await service.findAll();
-      expect(laoRepository.find).toHaveBeenCalledWith({ relations: ['amphoe'] });
+      expect(laoRepository.find).toHaveBeenCalledWith({
+        relations: ['amphoe'],
+      });
       expect(result).toHaveLength(2);
     });
     it('should throw InternalServerErrorException', async () => {
       laoRepository.find.mockRejectedValue(new Error('DB error'));
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new InternalServerErrorException(); });
-      await expect(service.findAll()).rejects.toBeInstanceOf(InternalServerErrorException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new InternalServerErrorException();
+        });
+      await expect(service.findAll()).rejects.toBeInstanceOf(
+        InternalServerErrorException,
+      );
     });
   });
 
@@ -145,32 +204,69 @@ describe('LocalAdministrativeOrganizationsService', () => {
     it('should return a LAO by id (success)', async () => {
       laoRepository.findOne.mockResolvedValue(mockLAO());
       const result = await service.findOne('L001');
-      expect(laoRepository.findOne).toHaveBeenCalledWith({ where: { id: 'L001' }, relations: ['amphoe'] });
+      expect(laoRepository.findOne).toHaveBeenCalledWith({
+        where: { id: 'L001' },
+        relations: ['amphoe'],
+      });
       expect(result).toEqual(mockLAO());
     });
     it('should throw NotFoundException if LAO not found', async () => {
       laoRepository.findOne.mockResolvedValue(undefined);
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new NotFoundException(); });
-      await expect(service.findOne('not-exist')).rejects.toBeInstanceOf(NotFoundException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      await expect(service.findOne('not-exist')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
     it('should throw InternalServerErrorException', async () => {
       laoRepository.findOne.mockRejectedValue(new Error('DB error'));
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new InternalServerErrorException(); });
-      await expect(service.findOne('L001')).rejects.toBeInstanceOf(InternalServerErrorException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new InternalServerErrorException();
+        });
+      await expect(service.findOne('L001')).rejects.toBeInstanceOf(
+        InternalServerErrorException,
+      );
     });
     it('should handle edge case: empty id', async () => {
       laoRepository.findOne.mockResolvedValue(undefined);
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new NotFoundException(); });
-      await expect(service.findOne('')).rejects.toBeInstanceOf(NotFoundException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      await expect(service.findOne('')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 
   describe('update', () => {
-    const updateDto: UpdateLocalAdministrativeOrganizationDto = { name: 'Updated LAO', type: 'Type2', amphoeId: 'A002' };
+    const updateDto: UpdateLocalAdministrativeOrganizationDto = {
+      name: 'Updated LAO',
+      type: 'Type2',
+      amphoeId: 'A002',
+    };
     it('should update and return the LAO (success)', async () => {
       amphoeRepository.findOneBy.mockResolvedValue(mockAmphoe({ id: 'A002' }));
-      laoRepository.preload.mockResolvedValue(mockLAO({ name: 'Updated LAO', type: 'Type2', amphoe: mockAmphoe({ id: 'A002' }) }));
-      laoRepository.save.mockResolvedValue(mockLAO({ name: 'Updated LAO', type: 'Type2', amphoe: mockAmphoe({ id: 'A002' }) }));
+      laoRepository.preload.mockResolvedValue(
+        mockLAO({
+          name: 'Updated LAO',
+          type: 'Type2',
+          amphoe: mockAmphoe({ id: 'A002' }),
+        }),
+      );
+      laoRepository.save.mockResolvedValue(
+        mockLAO({
+          name: 'Updated LAO',
+          type: 'Type2',
+          amphoe: mockAmphoe({ id: 'A002' }),
+        }),
+      );
       const result = await service.update('L001', updateDto);
       expect(amphoeRepository.findOneBy).toHaveBeenCalledWith({ id: 'A002' });
       expect(laoRepository.preload).toHaveBeenCalledWith(
@@ -179,7 +275,7 @@ describe('LocalAdministrativeOrganizationsService', () => {
           name: 'Updated LAO',
           type: 'Type2',
           amphoe: mockAmphoe({ id: 'A002' }),
-        })
+        }),
       );
       expect(laoRepository.save).toHaveBeenCalled();
       expect(result.name).toBe('Updated LAO');
@@ -188,27 +284,57 @@ describe('LocalAdministrativeOrganizationsService', () => {
     });
     it('should throw NotFoundException if amphoe not found', async () => {
       amphoeRepository.findOneBy.mockResolvedValue(undefined);
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new NotFoundException(); });
-      await expect(service.update('L001', updateDto)).rejects.toBeInstanceOf(NotFoundException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      await expect(service.update('L001', updateDto)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
     it('should throw NotFoundException if LAO not found', async () => {
       amphoeRepository.findOneBy.mockResolvedValue(mockAmphoe({ id: 'A002' }));
       laoRepository.preload.mockResolvedValue(undefined);
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new NotFoundException(); });
-      await expect(service.update('not-exist', updateDto)).rejects.toBeInstanceOf(NotFoundException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      await expect(
+        service.update('not-exist', updateDto),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
     it('should throw InternalServerErrorException', async () => {
       amphoeRepository.findOneBy.mockResolvedValue(mockAmphoe({ id: 'A002' }));
-      laoRepository.preload.mockResolvedValue(mockLAO({ name: 'Updated LAO', type: 'Type2', amphoe: mockAmphoe({ id: 'A002' }) }));
+      laoRepository.preload.mockResolvedValue(
+        mockLAO({
+          name: 'Updated LAO',
+          type: 'Type2',
+          amphoe: mockAmphoe({ id: 'A002' }),
+        }),
+      );
       laoRepository.save.mockRejectedValue(new Error('DB error'));
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new InternalServerErrorException(); });
-      await expect(service.update('L001', updateDto)).rejects.toBeInstanceOf(InternalServerErrorException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new InternalServerErrorException();
+        });
+      await expect(service.update('L001', updateDto)).rejects.toBeInstanceOf(
+        InternalServerErrorException,
+      );
     });
     it('should handle edge case: empty id', async () => {
       amphoeRepository.findOneBy.mockResolvedValue(mockAmphoe({ id: 'A002' }));
       laoRepository.preload.mockResolvedValue(undefined);
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new NotFoundException(); });
-      await expect(service.update('', updateDto)).rejects.toBeInstanceOf(NotFoundException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      await expect(service.update('', updateDto)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 
@@ -217,22 +343,42 @@ describe('LocalAdministrativeOrganizationsService', () => {
       laoRepository.delete.mockResolvedValue({ affected: 1 });
       const result = await service.remove('L001');
       expect(laoRepository.delete).toHaveBeenCalledWith('L001');
-      expect(result).toEqual({ message: 'LAO with ID L001 has been permanently removed.' });
+      expect(result).toEqual({
+        message: 'LAO with ID L001 has been permanently removed.',
+      });
     });
     it('should throw NotFoundException if LAO not found', async () => {
       laoRepository.delete.mockResolvedValue({ affected: 0 });
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new NotFoundException(); });
-      await expect(service.remove('not-exist')).rejects.toBeInstanceOf(NotFoundException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      await expect(service.remove('not-exist')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
     it('should throw InternalServerErrorException', async () => {
       laoRepository.delete.mockRejectedValue(new Error('DB error'));
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new InternalServerErrorException(); });
-      await expect(service.remove('L001')).rejects.toBeInstanceOf(InternalServerErrorException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new InternalServerErrorException();
+        });
+      await expect(service.remove('L001')).rejects.toBeInstanceOf(
+        InternalServerErrorException,
+      );
     });
     it('should handle edge case: empty id', async () => {
       laoRepository.delete.mockResolvedValue({ affected: 0 });
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new NotFoundException(); });
-      await expect(service.remove('')).rejects.toBeInstanceOf(NotFoundException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      await expect(service.remove('')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 
@@ -241,22 +387,42 @@ describe('LocalAdministrativeOrganizationsService', () => {
       laoRepository.softDelete.mockResolvedValue({ affected: 1 });
       const result = await service.softRemove('L001');
       expect(laoRepository.softDelete).toHaveBeenCalledWith('L001');
-      expect(result).toEqual({ message: 'LAO with ID L001 has been soft-removed.' });
+      expect(result).toEqual({
+        message: 'LAO with ID L001 has been soft-removed.',
+      });
     });
     it('should throw NotFoundException if LAO not found', async () => {
       laoRepository.softDelete.mockResolvedValue({ affected: 0 });
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new NotFoundException(); });
-      await expect(service.softRemove('not-exist')).rejects.toBeInstanceOf(NotFoundException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      await expect(service.softRemove('not-exist')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
     it('should throw InternalServerErrorException', async () => {
       laoRepository.softDelete.mockRejectedValue(new Error('DB error'));
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new InternalServerErrorException(); });
-      await expect(service.softRemove('L001')).rejects.toBeInstanceOf(InternalServerErrorException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new InternalServerErrorException();
+        });
+      await expect(service.softRemove('L001')).rejects.toBeInstanceOf(
+        InternalServerErrorException,
+      );
     });
     it('should handle edge case: empty id', async () => {
       laoRepository.softDelete.mockResolvedValue({ affected: 0 });
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new NotFoundException(); });
-      await expect(service.softRemove('')).rejects.toBeInstanceOf(NotFoundException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      await expect(service.softRemove('')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 
@@ -265,22 +431,42 @@ describe('LocalAdministrativeOrganizationsService', () => {
       laoRepository.restore.mockResolvedValue({ affected: 1 });
       const result = await service.restore('L001');
       expect(laoRepository.restore).toHaveBeenCalledWith('L001');
-      expect(result).toEqual({ message: 'LAO with ID L001 has been restored.' });
+      expect(result).toEqual({
+        message: 'LAO with ID L001 has been restored.',
+      });
     });
     it('should throw NotFoundException if LAO not found', async () => {
       laoRepository.restore.mockResolvedValue({ affected: 0 });
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new NotFoundException(); });
-      await expect(service.restore('not-exist')).rejects.toBeInstanceOf(NotFoundException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      await expect(service.restore('not-exist')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
     it('should throw InternalServerErrorException', async () => {
       laoRepository.restore.mockRejectedValue(new Error('DB error'));
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new InternalServerErrorException(); });
-      await expect(service.restore('L001')).rejects.toBeInstanceOf(InternalServerErrorException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new InternalServerErrorException();
+        });
+      await expect(service.restore('L001')).rejects.toBeInstanceOf(
+        InternalServerErrorException,
+      );
     });
     it('should handle edge case: empty id', async () => {
       laoRepository.restore.mockResolvedValue({ affected: 0 });
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new NotFoundException(); });
-      await expect(service.restore('')).rejects.toBeInstanceOf(NotFoundException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      await expect(service.restore('')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 });

@@ -1,8 +1,6 @@
-import { IsNotEmpty, IsUUID } from "class-validator";
+import { IsNotEmpty, IsUUID } from 'class-validator';
 
 export class CreateStatusDto {
-    @IsNotEmpty()
-    name : string
-
-
+  @IsNotEmpty()
+  name: string;
 }

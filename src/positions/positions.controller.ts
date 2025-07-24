@@ -1,4 +1,14 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  UseGuards,
+  Query,
+} from '@nestjs/common';
 import { PositionsService } from './positions.service';
 import { CreatePositionDto } from './dto/create-position.dto';
 import { UpdatePositionDto } from './dto/update-position.dto';
@@ -6,11 +16,11 @@ import { JwtAuthGuard } from 'src/auth/auth.guard';
 
 @Controller({
   path: 'positions',
-  version: '1'
+  version: '1',
 })
 // @UseGuards(JwtAuthGuard)
 export class PositionsController {
-  constructor(private readonly positionsService: PositionsService) { }
+  constructor(private readonly positionsService: PositionsService) {}
 
   @Post()
   create(@Body() createPositionDto: CreatePositionDto) {
@@ -30,7 +40,8 @@ export class PositionsController {
   @Patch(':id')
   update(
     @Param('id') id: string,
-    @Body() updatePositionDto: UpdatePositionDto) {
+    @Body() updatePositionDto: UpdatePositionDto,
+  ) {
     return this.positionsService.update(id, updatePositionDto);
   }
 
@@ -48,4 +59,4 @@ export class PositionsController {
   restore(@Param('id') id: string) {
     return this.positionsService.restore(id);
   }
-} 
+}

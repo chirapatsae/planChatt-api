@@ -9,49 +9,47 @@ import { User } from 'src/users/entities/user.entity';
 
 @Injectable()
 export class PositionsService {
-  private readonly logger = new Logger(PositionsService.name)
+  private readonly logger = new Logger(PositionsService.name);
   constructor(
     @InjectRepository(Position)
     private readonly positionRepository: Repository<Position>,
 
     @InjectRepository(User)
-    private readonly userReposition: Repository<User>
-
-  ) { }
+    private readonly userReposition: Repository<User>,
+  ) {}
 
   async create(createPositionDto: CreatePositionDto) {
     try {
       const { name, userId } = createPositionDto;
-  
+
       const user = await this.userReposition.findOne({ where: { id: userId } });
       if (!user) throw new NotFoundException('User not found');
-  
+
       await this.positionRepository.update(
         { user: { id: userId }, isLatest: true },
-        { isLatest: false }
+        { isLatest: false },
       );
-  
+
       const position = this.positionRepository.create({
         name,
         isLatest: true,
         user,
       });
-  
+
       return await this.positionRepository.save(position);
     } catch (error) {
       handleException(this.logger, error);
     }
   }
-  
 
   async findAll() {
     try {
       return await this.positionRepository.find({
         where: { deletedAt: undefined },
-        relations: ['user']
-      })
+        relations: ['user'],
+      });
     } catch (error) {
-      handleException(this.logger, error)
+      handleException(this.logger, error);
     }
   }
 
@@ -59,15 +57,15 @@ export class PositionsService {
     try {
       const position = await this.positionRepository.findOne({
         where: { id },
-        relations: ['user']
-      })
+        relations: ['user'],
+      });
 
       if (!position) {
-        throw new NotFoundException(`Position with ID ${id} not found`)
+        throw new NotFoundException(`Position with ID ${id} not found`);
       }
-      return position
+      return position;
     } catch (error) {
-      handleException(this.logger, error)
+      handleException(this.logger, error);
     }
   }
 
@@ -94,7 +92,9 @@ export class PositionsService {
       if (result.affected === 0) {
         throw new NotFoundException(`Position with ID ${id} not found`);
       }
-      return { message: `Position with ID ${id} has been permanently removed.` };
+      return {
+        message: `Position with ID ${id} has been permanently removed.`,
+      };
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -116,11 +116,13 @@ export class PositionsService {
     try {
       const result = await this.positionRepository.restore(id);
       if (result.affected === 0) {
-        throw new NotFoundException(`Position with ID ${id} not found or was not deleted.`);
+        throw new NotFoundException(
+          `Position with ID ${id} not found or was not deleted.`,
+        );
       }
       return { message: `Position with ID ${id} has been restored.` };
     } catch (error) {
       handleException(this.logger, error);
     }
   }
-} 
+}

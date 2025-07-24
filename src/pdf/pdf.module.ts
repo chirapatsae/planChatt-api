@@ -6,7 +6,7 @@ import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 
 @Module({
-  imports : [TypeOrmModule.forFeature([BudgetPlan , ProjectGroup])],
+  imports: [TypeOrmModule.forFeature([BudgetPlan, ProjectGroup])],
   controllers: [PdfController],
   providers: [PdfService],
 })

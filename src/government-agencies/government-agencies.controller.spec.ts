@@ -19,10 +19,12 @@ describe('GovernmentAgenciesController', () => {
       ],
     }).compile();
 
-    controller = module.get<GovernmentAgenciesController>(GovernmentAgenciesController);
+    controller = module.get<GovernmentAgenciesController>(
+      GovernmentAgenciesController,
+    );
   });
 
   it('should be defined', () => {
     expect(controller).toBeDefined();
   });
-}); 
+});

@@ -10,7 +10,13 @@ import { Tactic } from 'src/tactic/entities/tactic.entity';
 import { Plan } from 'src/plan/entities/plan.entity';
 import { Budget } from 'src/budget/entities/budget.entity';
 import { DataSource, Repository } from 'typeorm';
-import { NotFoundException, ConflictException, BadRequestException, InternalServerErrorException, UnauthorizedException } from '@nestjs/common';
+import {
+  NotFoundException,
+  ConflictException,
+  BadRequestException,
+  InternalServerErrorException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { CreateProjectGroupDto } from './dto/create-project-group.dto';
 import { UpdateProjectGroupDto } from './dto/update-project-group.dto';
 
@@ -59,10 +65,16 @@ describe('ProjectGroupsService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ProjectGroupsService,
-        { provide: getRepositoryToken(ProjectGroup), useValue: projectGroupRepo },
+        {
+          provide: getRepositoryToken(ProjectGroup),
+          useValue: projectGroupRepo,
+        },
         { provide: getRepositoryToken(WorkHistory), useValue: workHistoryRepo },
         { provide: getRepositoryToken(BudgetPlan), useValue: budgetPlanRepo },
-        { provide: getRepositoryToken(TrackingStatus), useValue: trackingStatusRepo },
+        {
+          provide: getRepositoryToken(TrackingStatus),
+          useValue: trackingStatusRepo,
+        },
         { provide: getRepositoryToken(Strategy), useValue: strategyRepo },
         { provide: getRepositoryToken(Tactic), useValue: tacticRepo },
         { provide: getRepositoryToken(Plan), useValue: planRepo },
@@ -125,15 +137,22 @@ describe('ProjectGroupsService', () => {
     it('should create a project group (success)', async () => {
       (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
         return cb({
-          findOne: jest.fn()
+          findOne: jest
+            .fn()
             .mockResolvedValueOnce(workHistory) // workHistory
             .mockResolvedValueOnce(null) // duplicateTitle
             .mockResolvedValueOnce(budgetPlan) // budgetPlan
             .mockResolvedValueOnce(strategy) // strategy
             .mockResolvedValueOnce(tactic) // tactic
             .mockResolvedValueOnce(plan), // plan
-          create: jest.fn().mockReturnValueOnce(savedGroup).mockReturnValueOnce({}),
-          save: jest.fn().mockResolvedValueOnce(savedGroup).mockResolvedValueOnce({}),
+          create: jest
+            .fn()
+            .mockReturnValueOnce(savedGroup)
+            .mockReturnValueOnce({}),
+          save: jest
+            .fn()
+            .mockResolvedValueOnce(savedGroup)
+            .mockResolvedValueOnce({}),
         });
       });
       const result = await service.create(dto, userId);
@@ -146,37 +165,50 @@ describe('ProjectGroupsService', () => {
           findOne: jest.fn().mockResolvedValueOnce(null),
         });
       });
-      await expect(service.create(dto, userId)).rejects.toThrow(NotFoundException);
+      await expect(service.create(dto, userId)).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
     it('should throw ConflictException if duplicate title', async () => {
       (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
         return cb({
-          findOne: jest.fn()
+          findOne: jest
+            .fn()
             .mockResolvedValueOnce(workHistory) // workHistory
             .mockResolvedValueOnce({ id: 'dup' }), // duplicate title found
         });
       });
-      await expect(service.create(dto, userId)).rejects.toThrow(ConflictException);
+      await expect(service.create(dto, userId)).rejects.toThrow(
+        ConflictException,
+      );
     });
 
     it('should throw NotFoundException if foreign keys not found', async () => {
       (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
         return cb({
-          findOne: jest.fn()
+          findOne: jest
+            .fn()
             .mockResolvedValueOnce(workHistory)
             .mockResolvedValueOnce(null) // duplicateTitle
             .mockResolvedValueOnce(null), // budgetPlan missing
         });
       });
-      await expect(service.create(dto, userId)).rejects.toThrow(NotFoundException);
+      await expect(service.create(dto, userId)).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
     it('should throw BadRequestException for missing agency', async () => {
-      const wh = { ...workHistory, governmentAgencies: null, localAdministrativeOrganization: null };
+      const wh = {
+        ...workHistory,
+        governmentAgencies: null,
+        localAdministrativeOrganization: null,
+      };
       (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
         return cb({
-          findOne: jest.fn()
+          findOne: jest
+            .fn()
             .mockResolvedValueOnce(wh)
             .mockResolvedValueOnce(null)
             .mockResolvedValueOnce(budgetPlan)
@@ -185,37 +217,53 @@ describe('ProjectGroupsService', () => {
             .mockResolvedValueOnce(plan),
         });
       });
-      await expect(service.create(dto, userId)).rejects.toThrow(BadRequestException);
+      await expect(service.create(dto, userId)).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('should throw BadRequestException for empty budget', async () => {
       (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
         return cb({
-          findOne: jest.fn()
+          findOne: jest
+            .fn()
             .mockResolvedValueOnce(workHistory)
             .mockResolvedValueOnce(null)
             .mockResolvedValueOnce(budgetPlan)
             .mockResolvedValueOnce(strategy)
             .mockResolvedValueOnce(tactic)
             .mockResolvedValueOnce(plan),
-          create: jest.fn().mockReturnValueOnce(savedGroup).mockReturnValueOnce({}),
-          save: jest.fn().mockResolvedValueOnce(savedGroup).mockResolvedValueOnce({}),
+          create: jest
+            .fn()
+            .mockReturnValueOnce(savedGroup)
+            .mockReturnValueOnce({}),
+          save: jest
+            .fn()
+            .mockResolvedValueOnce(savedGroup)
+            .mockResolvedValueOnce({}),
         });
       });
       const badDto = { ...dto, budget: [] };
-      await expect(service.create(badDto, userId)).rejects.toThrow(BadRequestException);
+      await expect(service.create(badDto, userId)).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('should throw InternalServerErrorException on DB error', async () => {
-      (dataSource.transaction as jest.Mock).mockRejectedValue(new Error('DB error'));
-      await expect(service.create(dto, userId)).rejects.toThrow(InternalServerErrorException);
+      (dataSource.transaction as jest.Mock).mockRejectedValue(
+        new Error('DB error'),
+      );
+      await expect(service.create(dto, userId)).rejects.toThrow(
+        InternalServerErrorException,
+      );
     });
 
     it('should handle edge case: empty string title', async () => {
       const badDto = { ...dto, title: '' };
       (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
         return cb({
-          findOne: jest.fn()
+          findOne: jest
+            .fn()
             .mockResolvedValueOnce(workHistory) // workHistory
             .mockResolvedValueOnce(null) // no duplicate
             .mockResolvedValueOnce(budgetPlan) // budgetPlan
@@ -269,16 +317,62 @@ describe('ProjectGroupsService', () => {
         indicator: 'Indicator',
         expected: 'Expected',
         projectYear: 2024,
-        strategy: { id: 'strategy-1', name: 'Strategy', tactic: [], projectGroup: [], createdAt: new Date(), createdBy: workHistory, deletedAt: null, deletedBy: workHistory } as any,
-        tactic: { id: 'tactic-1', name: 'Tactic', strategy: {} as any, projectGroup: [], planTactics: [] } as any,
-        plan: { id: 'plan-1', name: 'Plan', planTactics: [], projectGroup: [] } as any,
-        budgetPlan: { id: 'budget-plan-1', name: 'BP', startYear: 2020, endYear: 2025, isLatest: true, createAt: new Date(), createdBy: workHistory, deletedAt: null, projectGroup: [], budget: [] } as any,
+        strategy: {
+          id: 'strategy-1',
+          name: 'Strategy',
+          tactic: [],
+          projectGroup: [],
+          createdAt: new Date(),
+          createdBy: workHistory,
+          deletedAt: null,
+          deletedBy: workHistory,
+        } as any,
+        tactic: {
+          id: 'tactic-1',
+          name: 'Tactic',
+          strategy: {} as any,
+          projectGroup: [],
+          planTactics: [],
+        } as any,
+        plan: {
+          id: 'plan-1',
+          name: 'Plan',
+          planTactics: [],
+          projectGroup: [],
+        } as any,
+        budgetPlan: {
+          id: 'budget-plan-1',
+          name: 'BP',
+          startYear: 2020,
+          endYear: 2025,
+          isLatest: true,
+          createAt: new Date(),
+          createdBy: workHistory,
+          deletedAt: null,
+          projectGroup: [],
+          budget: [],
+        } as any,
         createdBy: workHistory,
         responsibleBy: workHistory,
         createdAt: new Date(),
         deletedAt: undefined,
-        originAgencyId: { id: 'lao-1', name: 'LAO', type: 'type', createdAt: new Date(), deleteAt: null, amphoe: { id: 'amphoe-1' } as any, workHistory: [], originAgencyProjectGroup: [] } as any,
-        responsibleAgency: { id: 'gov-1', name: 'Gov', createdAt: new Date(), workHistory: [], responsibleAgencyProjectGroup: [] } as any,
+        originAgencyId: {
+          id: 'lao-1',
+          name: 'LAO',
+          type: 'type',
+          createdAt: new Date(),
+          deleteAt: null,
+          amphoe: { id: 'amphoe-1' } as any,
+          workHistory: [],
+          originAgencyProjectGroup: [],
+        } as any,
+        responsibleAgency: {
+          id: 'gov-1',
+          name: 'Gov',
+          createdAt: new Date(),
+          workHistory: [],
+          responsibleAgencyProjectGroup: [],
+        } as any,
         budgets: [],
         trackingStatus: [],
       } as unknown as ProjectGroup,
@@ -294,16 +388,62 @@ describe('ProjectGroupsService', () => {
         indicator: 'Indicator 2',
         expected: 'Expected 2',
         projectYear: 2024,
-        strategy: { id: 'strategy-2', name: 'Strategy2', tactic: [], projectGroup: [], createdAt: new Date(), createdBy: workHistory, deletedAt: null, deletedBy: workHistory } as any,
-        tactic: { id: 'tactic-2', name: 'Tactic2', strategy: {} as any, projectGroup: [], planTactics: [] } as any,
-        plan: { id: 'plan-2', name: 'Plan2', planTactics: [], projectGroup: [] } as any,
-        budgetPlan: { id: 'budget-plan-2', name: 'BP2', startYear: 2021, endYear: 2026, isLatest: false, createAt: new Date(), createdBy: workHistory, deletedAt: null, projectGroup: [], budget: [] } as any,
+        strategy: {
+          id: 'strategy-2',
+          name: 'Strategy2',
+          tactic: [],
+          projectGroup: [],
+          createdAt: new Date(),
+          createdBy: workHistory,
+          deletedAt: null,
+          deletedBy: workHistory,
+        } as any,
+        tactic: {
+          id: 'tactic-2',
+          name: 'Tactic2',
+          strategy: {} as any,
+          projectGroup: [],
+          planTactics: [],
+        } as any,
+        plan: {
+          id: 'plan-2',
+          name: 'Plan2',
+          planTactics: [],
+          projectGroup: [],
+        } as any,
+        budgetPlan: {
+          id: 'budget-plan-2',
+          name: 'BP2',
+          startYear: 2021,
+          endYear: 2026,
+          isLatest: false,
+          createAt: new Date(),
+          createdBy: workHistory,
+          deletedAt: null,
+          projectGroup: [],
+          budget: [],
+        } as any,
         createdBy: workHistory,
         responsibleBy: workHistory,
         createdAt: new Date(),
         deletedAt: undefined,
-        originAgencyId: { id: 'lao-1', name: 'LAO', type: 'type', createdAt: new Date(), deleteAt: null, amphoe: { id: 'amphoe-1' } as any, workHistory: [], originAgencyProjectGroup: [] } as any,
-        responsibleAgency: { id: 'gov-1', name: 'Gov', createdAt: new Date(), workHistory: [], responsibleAgencyProjectGroup: [] } as any,
+        originAgencyId: {
+          id: 'lao-1',
+          name: 'LAO',
+          type: 'type',
+          createdAt: new Date(),
+          deleteAt: null,
+          amphoe: { id: 'amphoe-1' } as any,
+          workHistory: [],
+          originAgencyProjectGroup: [],
+        } as any,
+        responsibleAgency: {
+          id: 'gov-1',
+          name: 'Gov',
+          createdAt: new Date(),
+          workHistory: [],
+          responsibleAgencyProjectGroup: [],
+        } as any,
         budgets: [],
         trackingStatus: [],
       } as unknown as ProjectGroup,
@@ -322,32 +462,52 @@ describe('ProjectGroupsService', () => {
     it('should return count if countOnly', async () => {
       workHistoryRepo.findOne.mockResolvedValue(workHistory);
       projectGroupRepo.count.mockResolvedValue(2);
-      const result = await service.findProjectsByStatus({ userId, countOnly: true });
+      const result = await service.findProjectsByStatus({
+        userId,
+        countOnly: true,
+      });
       expect(result).toBe(2);
     });
     it('should return 0 or [] if workHistory not found', async () => {
       workHistoryRepo.findOne.mockResolvedValue(null);
       const result = await service.findProjectsByStatus({ userId });
       expect(result).toEqual([]);
-      const count = await service.findProjectsByStatus({ userId, countOnly: true });
+      const count = await service.findProjectsByStatus({
+        userId,
+        countOnly: true,
+      });
       expect(count).toBe(0);
     });
     it('should throw UnauthorizedException if workStatus is not approved', async () => {
       workHistoryRepo.findOne.mockResolvedValue({
         ...workHistory,
-        workStatus: { id: 'not-approved', name: 'not-approved', createdAt: new Date(), workHistory: [] },
+        workStatus: {
+          id: 'not-approved',
+          name: 'not-approved',
+          createdAt: new Date(),
+          workHistory: [],
+        },
       } as unknown as WorkHistory);
-      await expect(service.findProjectsByStatus({ userId })).rejects.toThrow(UnauthorizedException);
+      await expect(service.findProjectsByStatus({ userId })).rejects.toThrow(
+        UnauthorizedException,
+      );
     });
     it('should handle edge case: type filter', async () => {
       workHistoryRepo.findOne.mockResolvedValue(workHistory);
       projectGroupRepo.find.mockResolvedValue(projects);
-      const result = await service.findProjectsByStatus({ userId, type: 'draft' });
+      const result = await service.findProjectsByStatus({
+        userId,
+        type: 'draft',
+      });
       expect(result).toEqual(projects);
     });
     it('should throw InternalServerErrorException on DB error', async () => {
-      workHistoryRepo.findOne.mockRejectedValue(new InternalServerErrorException('DB error'));
-      await expect(service.findProjectsByStatus({ userId })).rejects.toThrow(InternalServerErrorException);
+      workHistoryRepo.findOne.mockRejectedValue(
+        new InternalServerErrorException('DB error'),
+      );
+      await expect(service.findProjectsByStatus({ userId })).rejects.toThrow(
+        InternalServerErrorException,
+      );
     });
   });
 
@@ -389,16 +549,62 @@ describe('ProjectGroupsService', () => {
         indicator: 'Indicator',
         expected: 'Expected',
         projectYear: 2024,
-        strategy: { id: 'strategy-1', name: 'Strategy', tactic: [], projectGroup: [], createdAt: new Date(), createdBy: workHistoryDelete, deletedAt: null, deletedBy: workHistoryDelete } as any,
-        tactic: { id: 'tactic-1', name: 'Tactic', strategy: {} as any, projectGroup: [], planTactics: [] } as any,
-        plan: { id: 'plan-1', name: 'Plan', planTactics: [], projectGroup: [] } as any,
-        budgetPlan: { id: 'budget-plan-1', name: 'BP', startYear: 2020, endYear: 2025, isLatest: true, createAt: new Date(), createdBy: workHistoryDelete, deletedAt: null, projectGroup: [], budget: [] } as any,
+        strategy: {
+          id: 'strategy-1',
+          name: 'Strategy',
+          tactic: [],
+          projectGroup: [],
+          createdAt: new Date(),
+          createdBy: workHistoryDelete,
+          deletedAt: null,
+          deletedBy: workHistoryDelete,
+        } as any,
+        tactic: {
+          id: 'tactic-1',
+          name: 'Tactic',
+          strategy: {} as any,
+          projectGroup: [],
+          planTactics: [],
+        } as any,
+        plan: {
+          id: 'plan-1',
+          name: 'Plan',
+          planTactics: [],
+          projectGroup: [],
+        } as any,
+        budgetPlan: {
+          id: 'budget-plan-1',
+          name: 'BP',
+          startYear: 2020,
+          endYear: 2025,
+          isLatest: true,
+          createAt: new Date(),
+          createdBy: workHistoryDelete,
+          deletedAt: null,
+          projectGroup: [],
+          budget: [],
+        } as any,
         createdBy: workHistoryDelete,
         responsibleBy: workHistoryDelete,
         createdAt: new Date(),
         deletedAt: undefined,
-        originAgencyId: { id: 'lao-1', name: 'LAO', type: 'type', createdAt: new Date(), deleteAt: null, amphoe: { id: 'amphoe-1' } as any, workHistory: [], originAgencyProjectGroup: [] } as any,
-        responsibleAgency: { id: 'gov-1', name: 'Gov', createdAt: new Date(), workHistory: [], responsibleAgencyProjectGroup: [] } as any,
+        originAgencyId: {
+          id: 'lao-1',
+          name: 'LAO',
+          type: 'type',
+          createdAt: new Date(),
+          deleteAt: null,
+          amphoe: { id: 'amphoe-1' } as any,
+          workHistory: [],
+          originAgencyProjectGroup: [],
+        } as any,
+        responsibleAgency: {
+          id: 'gov-1',
+          name: 'Gov',
+          createdAt: new Date(),
+          workHistory: [],
+          responsibleAgencyProjectGroup: [],
+        } as any,
         budgets: [],
         trackingStatus: [],
       } as unknown as ProjectGroup,
@@ -416,7 +622,9 @@ describe('ProjectGroupsService', () => {
     });
     it('should throw InternalServerErrorException on DB error', async () => {
       workHistoryRepo.findOne.mockRejectedValue(new Error('DB error'));
-      await expect(service.findDelete(userId)).rejects.toThrow(InternalServerErrorException);
+      await expect(service.findDelete(userId)).rejects.toThrow(
+        InternalServerErrorException,
+      );
     });
   });
 
@@ -435,7 +643,9 @@ describe('ProjectGroupsService', () => {
     });
     it('should throw InternalServerErrorException on DB error', async () => {
       projectGroupRepo.findOne.mockRejectedValue(new Error('DB error'));
-      await expect(service.findOne(id)).rejects.toThrow(InternalServerErrorException);
+      await expect(service.findOne(id)).rejects.toThrow(
+        InternalServerErrorException,
+      );
     });
     it('should handle edge case: empty id', async () => {
       projectGroupRepo.findOne.mockResolvedValue(null);
@@ -461,12 +671,18 @@ describe('ProjectGroupsService', () => {
       tacticId: 'tactic-1',
       planId: 'plan-1',
     };
-    const workHistory = { id: 'wh-1', workStatus: { name: 'approved' }, governmentAgencies: { id: 'gov-1' }, localAdministrativeOrganization: { id: 'lao-1' } };
+    const workHistory = {
+      id: 'wh-1',
+      workStatus: { name: 'approved' },
+      governmentAgencies: { id: 'gov-1' },
+      localAdministrativeOrganization: { id: 'lao-1' },
+    };
     const group = { id, ...dto };
     it('should update project group (success)', async () => {
       (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
         return cb({
-          findOne: jest.fn()
+          findOne: jest
+            .fn()
             .mockResolvedValueOnce(workHistory) // workHistory
             .mockResolvedValueOnce(null) // duplicateTitle
             .mockResolvedValueOnce({ id: 'strategy-1' }) // strategy
@@ -485,33 +701,42 @@ describe('ProjectGroupsService', () => {
           findOne: jest.fn().mockResolvedValueOnce(null),
         });
       });
-      await expect(service.update(id, dto, userId)).rejects.toThrow(NotFoundException);
+      await expect(service.update(id, dto, userId)).rejects.toThrow(
+        NotFoundException,
+      );
     });
     it('should throw ConflictException if duplicate title', async () => {
       (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
         return cb({
-          findOne: jest.fn()
+          findOne: jest
+            .fn()
             .mockResolvedValueOnce(workHistory)
             .mockResolvedValueOnce({ id: 'dup' }),
         });
       });
-      await expect(service.update(id, dto, userId)).rejects.toThrow(ConflictException);
+      await expect(service.update(id, dto, userId)).rejects.toThrow(
+        ConflictException,
+      );
     });
     it('should throw NotFoundException if foreign keys not found', async () => {
       (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
         return cb({
-          findOne: jest.fn()
+          findOne: jest
+            .fn()
             .mockResolvedValueOnce(workHistory)
             .mockResolvedValueOnce(null)
             .mockResolvedValueOnce(null),
         });
       });
-      await expect(service.update(id, dto, userId)).rejects.toThrow(NotFoundException);
+      await expect(service.update(id, dto, userId)).rejects.toThrow(
+        NotFoundException,
+      );
     });
     it('should throw NotFoundException if group not found', async () => {
       (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
         return cb({
-          findOne: jest.fn()
+          findOne: jest
+            .fn()
             .mockResolvedValueOnce(workHistory)
             .mockResolvedValueOnce(null)
             .mockResolvedValueOnce({ id: 'strategy-1' })
@@ -520,16 +745,23 @@ describe('ProjectGroupsService', () => {
             .mockResolvedValueOnce(null),
         });
       });
-      await expect(service.update(id, dto, userId)).rejects.toThrow(NotFoundException);
+      await expect(service.update(id, dto, userId)).rejects.toThrow(
+        NotFoundException,
+      );
     });
     it('should throw InternalServerErrorException on DB error', async () => {
-      (dataSource.transaction as jest.Mock).mockRejectedValue(new InternalServerErrorException('DB error'));
-      await expect(service.update(id, dto, userId)).rejects.toThrow(InternalServerErrorException);
+      (dataSource.transaction as jest.Mock).mockRejectedValue(
+        new InternalServerErrorException('DB error'),
+      );
+      await expect(service.update(id, dto, userId)).rejects.toThrow(
+        InternalServerErrorException,
+      );
     });
     it('should handle edge case: empty id', async () => {
       (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
         return cb({
-          findOne: jest.fn()
+          findOne: jest
+            .fn()
             .mockResolvedValueOnce(workHistory) // workHistory
             .mockResolvedValueOnce(null) // no duplicate
             .mockResolvedValueOnce({ id: 'strategy-1' }) // strategy
@@ -550,7 +782,9 @@ describe('ProjectGroupsService', () => {
     it('should remove project group (success)', async () => {
       projectGroupRepo.delete.mockResolvedValue({ affected: 1 } as any);
       const result = await service.remove(id);
-      expect(result).toEqual({ message: `projectGroup with ID ${id} has been permanently removed.` });
+      expect(result).toEqual({
+        message: `projectGroup with ID ${id} has been permanently removed.`,
+      });
     });
     it('should throw NotFoundException if not found', async () => {
       projectGroupRepo.delete.mockResolvedValue({ affected: 0 } as any);
@@ -558,7 +792,9 @@ describe('ProjectGroupsService', () => {
     });
     it('should throw InternalServerErrorException on DB error', async () => {
       projectGroupRepo.delete.mockRejectedValue(new Error('DB error'));
-      await expect(service.remove(id)).rejects.toThrow(InternalServerErrorException);
+      await expect(service.remove(id)).rejects.toThrow(
+        InternalServerErrorException,
+      );
     });
     it('should handle edge case: empty id', async () => {
       projectGroupRepo.delete.mockResolvedValue({ affected: 0 } as any);
@@ -572,7 +808,9 @@ describe('ProjectGroupsService', () => {
     it('should soft remove project group (success)', async () => {
       projectGroupRepo.softDelete.mockResolvedValue({ affected: 1 } as any);
       const result = await service.softRemove(id);
-      expect(result).toEqual({ message: `projectGroup with ID ${id} has been soft-removed.` });
+      expect(result).toEqual({
+        message: `projectGroup with ID ${id} has been soft-removed.`,
+      });
     });
     it('should throw NotFoundException if not found', async () => {
       projectGroupRepo.softDelete.mockResolvedValue({ affected: 0 } as any);
@@ -580,7 +818,9 @@ describe('ProjectGroupsService', () => {
     });
     it('should throw InternalServerErrorException on DB error', async () => {
       projectGroupRepo.softDelete.mockRejectedValue(new Error('DB error'));
-      await expect(service.softRemove(id)).rejects.toThrow(InternalServerErrorException);
+      await expect(service.softRemove(id)).rejects.toThrow(
+        InternalServerErrorException,
+      );
     });
     it('should handle edge case: empty id', async () => {
       projectGroupRepo.softDelete.mockResolvedValue({ affected: 0 } as any);
@@ -594,7 +834,9 @@ describe('ProjectGroupsService', () => {
     it('should restore project group (success)', async () => {
       projectGroupRepo.restore.mockResolvedValue({ affected: 1 } as any);
       const result = await service.restore(id);
-      expect(result).toEqual({ message: `projectGroup with ID ${id} has been restored.` });
+      expect(result).toEqual({
+        message: `projectGroup with ID ${id} has been restored.`,
+      });
     });
     it('should throw NotFoundException if not found', async () => {
       projectGroupRepo.restore.mockResolvedValue({ affected: 0 } as any);
@@ -602,7 +844,9 @@ describe('ProjectGroupsService', () => {
     });
     it('should throw InternalServerErrorException on DB error', async () => {
       projectGroupRepo.restore.mockRejectedValue(new Error('DB error'));
-      await expect(service.restore(id)).rejects.toThrow(InternalServerErrorException);
+      await expect(service.restore(id)).rejects.toThrow(
+        InternalServerErrorException,
+      );
     });
     it('should handle edge case: empty id', async () => {
       projectGroupRepo.restore.mockResolvedValue({ affected: 0 } as any);

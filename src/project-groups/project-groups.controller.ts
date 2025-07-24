@@ -23,10 +23,13 @@ import { JwtAuthGuard } from 'src/auth/auth.guard';
 })
 @UseGuards(JwtAuthGuard)
 export class ProjectGroupsController {
-  constructor(private readonly projectGroupsService: ProjectGroupsService) { }
+  constructor(private readonly projectGroupsService: ProjectGroupsService) {}
 
   @Post()
-  async create(@Body() dto: CreateProjectGroupDto, @Req() req: Request & { user: JwtPayloadUser }) {
+  async create(
+    @Body() dto: CreateProjectGroupDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
     return this.projectGroupsService.create(dto, req.user.userId);
   }
 
@@ -62,9 +65,9 @@ export class ProjectGroupsController {
   async update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateProjectGroupDto,
-    @Req() req : Request & {user : JwtPayloadUser}
+    @Req() req: Request & { user: JwtPayloadUser },
   ) {
-    return this.projectGroupsService.update(id, dto , req.user.userId);
+    return this.projectGroupsService.update(id, dto, req.user.userId);
   }
 
   @Delete(':id')

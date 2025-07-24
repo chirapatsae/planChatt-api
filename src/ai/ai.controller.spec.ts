@@ -13,9 +13,7 @@ describe('AiController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AiController],
-      providers: [
-        { provide: AiService, useValue: mockAiService },
-      ],
+      providers: [{ provide: AiService, useValue: mockAiService }],
     }).compile();
 
     controller = module.get<AiController>(AiController);

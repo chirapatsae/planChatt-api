@@ -26,7 +26,10 @@ export class BudgetPlanController {
   constructor(private readonly budgetPlanService: BudgetPlanService) {}
 
   @Post()
-  async create(@Body() createBudgetPlanDto: CreateBudgetPlanDto, @Req() req: Request & { user: JwtPayloadUser }) {
+  async create(
+    @Body() createBudgetPlanDto: CreateBudgetPlanDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
     const userId = req.user?.userId;
     this.logger.log(`Creating budget plan by user ${userId}`);
     return this.budgetPlanService.create(createBudgetPlanDto, userId);

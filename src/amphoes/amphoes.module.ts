@@ -7,7 +7,9 @@ import { User } from 'src/users/entities/user.entity';
 import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Amphoe , User , LocalAdministrativeOrganization])],
+  imports: [
+    TypeOrmModule.forFeature([Amphoe, User, LocalAdministrativeOrganization]),
+  ],
   controllers: [AmphoesController],
   providers: [AmphoesService],
 })

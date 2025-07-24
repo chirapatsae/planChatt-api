@@ -5,7 +5,11 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from 'src/users/entities/user.entity';
 import { UsersService } from 'src/users/users.service';
-import { UnauthorizedException, BadRequestException, InternalServerErrorException } from '@nestjs/common';
+import {
+  UnauthorizedException,
+  BadRequestException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import * as jwt from 'jsonwebtoken';
 import { hashCitizenId } from 'src/util/encryption.util';
 
@@ -61,17 +65,69 @@ describe('AuthService', () => {
   const validDivisionName = 'Division Name';
   const hashedCid = 'hashed-cid';
   const userId = '1';
-  const mockAmphoe = { id: 'amp-1', name: 'Amphoe', createAt: new Date('2023-01-01'), deletedAt: undefined, workHistory: [], localAdministrativeOrganization: [], workHistoryResponsibleAdmins: [] };
-  const minimalUser = { id: userId, citizenId: '1234567890123', citizenIdHash: hashedCid, prefix: 'Mr.', firstname: 'John', lastname: 'Doe', email: 'john@example.com', phone: '0123456789', isFirstLogin: false, deletedAt: undefined, createAt: new Date('2023-01-01'), workHistory: [], createdWorkHistory: [], updatedWorkHistory: [], position: [] };
+  const mockAmphoe = {
+    id: 'amp-1',
+    name: 'Amphoe',
+    createAt: new Date('2023-01-01'),
+    deletedAt: undefined,
+    workHistory: [],
+    localAdministrativeOrganization: [],
+    workHistoryResponsibleAdmins: [],
+  };
+  const minimalUser = {
+    id: userId,
+    citizenId: '1234567890123',
+    citizenIdHash: hashedCid,
+    prefix: 'Mr.',
+    firstname: 'John',
+    lastname: 'Doe',
+    email: 'john@example.com',
+    phone: '0123456789',
+    isFirstLogin: false,
+    deletedAt: undefined,
+    createAt: new Date('2023-01-01'),
+    workHistory: [],
+    createdWorkHistory: [],
+    updatedWorkHistory: [],
+    position: [],
+  };
   const workHistory = [
     {
       id: '10',
       createdAt: new Date('2023-01-01'),
-      workStatus: { id: 'ws-1', name: 'approved', createdAt: new Date('2023-01-01'), deletedAt: undefined, workHistory: [] },
-      governmentAgencies: { id: 'gov-1', name: 'Gov Agency', deletedAt: undefined, createdAt: new Date('2023-01-01'), workHistory: [], responsibleAgencyProjectGroup: [] },
+      workStatus: {
+        id: 'ws-1',
+        name: 'approved',
+        createdAt: new Date('2023-01-01'),
+        deletedAt: undefined,
+        workHistory: [],
+      },
+      governmentAgencies: {
+        id: 'gov-1',
+        name: 'Gov Agency',
+        deletedAt: undefined,
+        createdAt: new Date('2023-01-01'),
+        workHistory: [],
+        responsibleAgencyProjectGroup: [],
+      },
       amphoe: mockAmphoe,
-      localAdministrativeOrganization: { id: 'lao-1', name: 'LAO', type: 'type', createdAt: new Date('2023-01-01'), deleteAt: null, amphoe: mockAmphoe, workHistory: [], originAgencyProjectGroup: [] },
-      role: { id: 'role-1', name: 'admin', deletedAt: undefined, createdAt: new Date('2023-01-01'), workHistory: [] },
+      localAdministrativeOrganization: {
+        id: 'lao-1',
+        name: 'LAO',
+        type: 'type',
+        createdAt: new Date('2023-01-01'),
+        deleteAt: null,
+        amphoe: mockAmphoe,
+        workHistory: [],
+        originAgencyProjectGroup: [],
+      },
+      role: {
+        id: 'role-1',
+        name: 'admin',
+        deletedAt: undefined,
+        createdAt: new Date('2023-01-01'),
+        workHistory: [],
+      },
       user: minimalUser,
       createdBy: undefined,
       deletedAt: undefined,
@@ -124,7 +180,11 @@ describe('AuthService', () => {
       userService.update.mockResolvedValue({ ...user });
       jwtService.sign.mockReturnValue('signed-token');
 
-      const result = await service.handleOAuthLogin(validIdToken, validDivisionId, validDivisionName);
+      const result = await service.handleOAuthLogin(
+        validIdToken,
+        validDivisionId,
+        validDivisionName,
+      );
       expect(result).toHaveProperty('accessToken', 'signed-token');
       expect(result.user).toMatchObject({
         id: userId,
@@ -144,7 +204,11 @@ describe('AuthService', () => {
       userService.create.mockResolvedValue({ ...user, isFirstLogin: true });
       jwtService.sign.mockReturnValue('signed-token');
 
-      const result = await service.handleOAuthLogin(validIdToken, validDivisionId, validDivisionName);
+      const result = await service.handleOAuthLogin(
+        validIdToken,
+        validDivisionId,
+        validDivisionName,
+      );
       expect(userService.create).toHaveBeenCalled();
       expect(result.isFirstLogin).toBe(true);
       expect(result.user.divisionId).toBe(validDivisionId);
@@ -153,24 +217,49 @@ describe('AuthService', () => {
 
     it('should throw UnauthorizedException if idToken is invalid', async () => {
       (jwt.decode as jest.Mock).mockReturnValue(null);
-      await expect(service.handleOAuthLogin('', validDivisionId, validDivisionName)).rejects.toBeInstanceOf(UnauthorizedException);
+      await expect(
+        service.handleOAuthLogin('', validDivisionId, validDivisionName),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
     });
 
     it('should throw UnauthorizedException if issuer is invalid', async () => {
-      (jwt.decode as jest.Mock).mockReturnValue({ ...validDecoded, iss: 'invalid-issuer' });
-      await expect(service.handleOAuthLogin(validIdToken, validDivisionId, validDivisionName)).rejects.toBeInstanceOf(UnauthorizedException);
+      (jwt.decode as jest.Mock).mockReturnValue({
+        ...validDecoded,
+        iss: 'invalid-issuer',
+      });
+      await expect(
+        service.handleOAuthLogin(
+          validIdToken,
+          validDivisionId,
+          validDivisionName,
+        ),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
     });
 
     it('should throw InternalServerErrorException on DB error', async () => {
       (jwt.decode as jest.Mock).mockReturnValue(validDecoded);
       (hashCitizenId as jest.Mock).mockReturnValue(hashedCid);
       userRepository.findOne.mockRejectedValue(new Error('DB error'));
-      await expect(service.handleOAuthLogin(validIdToken, validDivisionId, validDivisionName)).rejects.toBeInstanceOf(InternalServerErrorException);
+      await expect(
+        service.handleOAuthLogin(
+          validIdToken,
+          validDivisionId,
+          validDivisionName,
+        ),
+      ).rejects.toBeInstanceOf(InternalServerErrorException);
     });
 
     it('should throw InternalServerErrorException on unexpected error', async () => {
-      (jwt.decode as jest.Mock).mockImplementation(() => { throw new Error('decode error'); });
-      await expect(service.handleOAuthLogin(validIdToken, validDivisionId, validDivisionName)).rejects.toBeInstanceOf(InternalServerErrorException);
+      (jwt.decode as jest.Mock).mockImplementation(() => {
+        throw new Error('decode error');
+      });
+      await expect(
+        service.handleOAuthLogin(
+          validIdToken,
+          validDivisionId,
+          validDivisionName,
+        ),
+      ).rejects.toBeInstanceOf(InternalServerErrorException);
     });
 
     it('should handle user with no workHistory gracefully', async () => {
@@ -179,7 +268,11 @@ describe('AuthService', () => {
       userRepository.findOne.mockResolvedValue({ ...user, workHistory: [] });
       userService.update.mockResolvedValue({ ...user, workHistory: [] });
       jwtService.sign.mockReturnValue('signed-token');
-      const result = await service.handleOAuthLogin(validIdToken, validDivisionId, validDivisionName);
+      const result = await service.handleOAuthLogin(
+        validIdToken,
+        validDivisionId,
+        validDivisionName,
+      );
       expect(result.user.workHistoryId).toBeNull();
       expect(result.user.role).toBe('user');
       expect(result.user.workStatus).toBe('pending');
@@ -192,11 +285,21 @@ describe('AuthService', () => {
       userService.update.mockResolvedValue({ ...user });
       jwtService.sign.mockReturnValue('signed-token');
       // Empty divisionId
-      const result = await service.handleOAuthLogin(validIdToken, '', validDivisionName);
+      const result = await service.handleOAuthLogin(
+        validIdToken,
+        '',
+        validDivisionName,
+      );
       expect(result.user.divisionId).toBe(workHistory[0].governmentAgencies.id);
       // Empty divisionName
-      const result2 = await service.handleOAuthLogin(validIdToken, validDivisionId, '');
-      expect(result2.user.divisionName).toBe(workHistory[0].governmentAgencies.name);
+      const result2 = await service.handleOAuthLogin(
+        validIdToken,
+        validDivisionId,
+        '',
+      );
+      expect(result2.user.divisionName).toBe(
+        workHistory[0].governmentAgencies.name,
+      );
     });
 
     it('should handle negative/zero/invalid user id edge cases', async () => {
@@ -205,7 +308,11 @@ describe('AuthService', () => {
       userRepository.findOne.mockResolvedValue({ ...user, id: '0' });
       userService.update.mockResolvedValue({ ...user, id: '0' });
       jwtService.sign.mockReturnValue('signed-token');
-      const result = await service.handleOAuthLogin(validIdToken, validDivisionId, validDivisionName);
+      const result = await service.handleOAuthLogin(
+        validIdToken,
+        validDivisionId,
+        validDivisionName,
+      );
       expect(result.user.id).toBe('0');
     });
   });

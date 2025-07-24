@@ -34,24 +34,39 @@ export class TrackingStatusService {
     private readonly commentRepo: Repository<Comment>,
   ) {}
 
-  async create(dto: CreateTrackingStatusDto, userId: string): Promise<TrackingStatus> {
+  async create(
+    dto: CreateTrackingStatusDto,
+    userId: string,
+  ): Promise<TrackingStatus> {
     try {
       // หา workHistory ของ user
       const workHistory = await this.workHistoryRepo.findOne({
         where: { user: { id: userId } },
       });
-      if (!workHistory) throw new NotFoundException(`WorkHistory for user ${userId} not found`);
+      if (!workHistory)
+        throw new NotFoundException(`WorkHistory for user ${userId} not found`);
 
       // หา projectGroup
-      const projectGroup = await this.projectGroupRepo.findOne({ where: { id: dto.projectId } });
-      if (!projectGroup) throw new NotFoundException(`ProjectGroup with ID ${dto.projectId} not found`);
+      const projectGroup = await this.projectGroupRepo.findOne({
+        where: { id: dto.projectId },
+      });
+      if (!projectGroup)
+        throw new NotFoundException(
+          `ProjectGroup with ID ${dto.projectId} not found`,
+        );
 
       // หา status
-      const status = await this.statusRepo.findOne({ where: { id: dto.statusId } });
-      if (!status) throw new NotFoundException(`Status with ID ${dto.statusId} not found`);
+      const status = await this.statusRepo.findOne({
+        where: { id: dto.statusId },
+      });
+      if (!status)
+        throw new NotFoundException(`Status with ID ${dto.statusId} not found`);
 
       // set isLatest = true และอัปเดตตัวเก่าให้ isLatest = false
-      await this.trackingStatusRepo.update({ projectGroupId: projectGroup }, { isLatest: false });
+      await this.trackingStatusRepo.update(
+        { projectGroupId: projectGroup },
+        { isLatest: false },
+      );
 
       // สร้าง TrackingStatus
       const tracking = this.trackingStatusRepo.create({
@@ -63,12 +78,11 @@ export class TrackingStatusService {
       });
       const savedTracking = await this.trackingStatusRepo.save(tracking);
 
-      return savedTracking
+      return savedTracking;
     } catch (error) {
-      handleException(this.logger , error)
+      handleException(this.logger, error);
     }
   }
-  
 
   async findAll(): Promise<TrackingStatus[]> {
     try {
@@ -82,7 +96,7 @@ export class TrackingStatusService {
         ],
       });
     } catch (error) {
-      handleException(this.logger , error)
+      handleException(this.logger, error);
     }
   }
 
@@ -103,19 +117,27 @@ export class TrackingStatusService {
       }
       return tracking;
     } catch (error) {
-      handleException(this.logger , error)
+      handleException(this.logger, error);
     }
   }
 
-  async update(id: string, dto: UpdateTrackingStatusDto): Promise<{ message: string; data: TrackingStatus }> {
+  async update(
+    id: string,
+    dto: UpdateTrackingStatusDto,
+  ): Promise<{ message: string; data: TrackingStatus }> {
     try {
       const tracking = await this.trackingStatusRepo.findOne({ where: { id } });
       if (!tracking) {
         throw new NotFoundException(`Tracking status with ID ${id} not found`);
       }
       if (dto.statusId) {
-        const status = await this.statusRepo.findOne({ where: { id: dto.statusId } });
-        if (!status) throw new NotFoundException(`Status with ID ${dto.statusId} not found`);
+        const status = await this.statusRepo.findOne({
+          where: { id: dto.statusId },
+        });
+        if (!status)
+          throw new NotFoundException(
+            `Status with ID ${dto.statusId} not found`,
+          );
         tracking.statusId = status;
       }
       const updated = await this.trackingStatusRepo.save(tracking);
@@ -124,7 +146,7 @@ export class TrackingStatusService {
         data: updated,
       };
     } catch (error) {
-      handleException(this.logger , error)
+      handleException(this.logger, error);
     }
   }
 
@@ -135,7 +157,9 @@ export class TrackingStatusService {
         throw new NotFoundException(`Tracking status with ID ${id} not found`);
       }
       if (userId) {
-        const workHistory = await this.workHistoryRepo.findOne({ where: { user: { id: userId } } });
+        const workHistory = await this.workHistoryRepo.findOne({
+          where: { user: { id: userId } },
+        });
         if (workHistory) tracking.deletedBy = workHistory;
         await this.trackingStatusRepo.save(tracking);
       }
@@ -144,11 +168,13 @@ export class TrackingStatusService {
         message: `Tracking status ${id} removed successfully`,
       };
     } catch (error) {
-      handleException(this.logger , error)
+      handleException(this.logger, error);
     }
   }
 
-  async restore(id: string): Promise<{ message: string; data: TrackingStatus }> {
+  async restore(
+    id: string,
+  ): Promise<{ message: string; data: TrackingStatus }> {
     try {
       await this.trackingStatusRepo.restore(id);
       const restoredTracking = await this.trackingStatusRepo.findOne({
@@ -162,17 +188,16 @@ export class TrackingStatusService {
         ],
       });
       if (!restoredTracking) {
-        throw new NotFoundException(`Tracking status with ID ${id} not found after restore`);
+        throw new NotFoundException(
+          `Tracking status with ID ${id} not found after restore`,
+        );
       }
       return {
         message: `Tracking status ${id} restored successfully`,
         data: restoredTracking,
       };
     } catch (error) {
-      handleException(this.logger , error)
+      handleException(this.logger, error);
     }
   }
-  
-
-
 }

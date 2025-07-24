@@ -1,40 +1,56 @@
-import { Exclude } from "class-transformer";
-import { LocalAdministrativeOrganization } from "src/local-administrative-organizations/entities/local-administrative-organization.entity";
-import { WorkHistory } from "src/work-history/entities/work-history.entity";
-import { WorkHistoryAmphoeResponsibility } from "src/work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity";
-import { Column, DeleteDateColumn, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryColumn } from "typeorm";
+import { Exclude } from 'class-transformer';
+import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
+import { WorkHistory } from 'src/work-history/entities/work-history.entity';
+import { WorkHistoryAmphoeResponsibility } from 'src/work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity';
+import {
+  Column,
+  DeleteDateColumn,
+  Entity,
+  JoinColumn,
+  ManyToOne,
+  OneToMany,
+  PrimaryColumn,
+} from 'typeorm';
 
 @Entity('amphoes')
 export class Amphoe {
-    @PrimaryColumn()
-    id: string;
+  @PrimaryColumn()
+  id: string;
 
-    @Column({ unique: true })
-    name: string;
+  @Column({ unique: true })
+  name: string;
 
-    @Column({ default: () => 'CURRENT_TIMESTAMP', name: 'create_at' })
-    createAt: Date;
-    
-    @DeleteDateColumn({ nullable: true })
-    @Exclude() // 👈 ซ่อน
-    deletedAt?: Date;
+  @Column({ default: () => 'CURRENT_TIMESTAMP', name: 'create_at' })
+  createAt: Date;
 
-    @OneToMany(() => WorkHistory, (workHistory) => workHistory.amphoe, {
-        onDelete: 'CASCADE',
-        onUpdate: 'CASCADE',
-    })
-    workHistory: WorkHistory[];
+  @DeleteDateColumn({ nullable: true })
+  @Exclude() // 👈 ซ่อน
+  deletedAt?: Date;
 
-    @OneToMany(() => LocalAdministrativeOrganization, (localAdministrativeOrganization) => localAdministrativeOrganization.amphoe, {
-        onDelete: 'CASCADE',
-        onUpdate: 'CASCADE',
-    })
-    localAdministrativeOrganization: LocalAdministrativeOrganization[];
+  @OneToMany(() => WorkHistory, (workHistory) => workHistory.amphoe, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  workHistory: WorkHistory[];
 
-    // สำหรับ admin role - workHistory ที่รับผิดชอบอำเภอนี้
-    @OneToMany(() => WorkHistoryAmphoeResponsibility, (responsibility) => responsibility.amphoe, {
-        onDelete: 'CASCADE',
-        onUpdate: 'CASCADE',
-    })
-    workHistoryResponsibleAdmins: WorkHistoryAmphoeResponsibility[];
+  @OneToMany(
+    () => LocalAdministrativeOrganization,
+    (localAdministrativeOrganization) => localAdministrativeOrganization.amphoe,
+    {
+      onDelete: 'CASCADE',
+      onUpdate: 'CASCADE',
+    },
+  )
+  localAdministrativeOrganization: LocalAdministrativeOrganization[];
+
+  // สำหรับ admin role - workHistory ที่รับผิดชอบอำเภอนี้
+  @OneToMany(
+    () => WorkHistoryAmphoeResponsibility,
+    (responsibility) => responsibility.amphoe,
+    {
+      onDelete: 'CASCADE',
+      onUpdate: 'CASCADE',
+    },
+  )
+  workHistoryResponsibleAdmins: WorkHistoryAmphoeResponsibility[];
 }

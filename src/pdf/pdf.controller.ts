@@ -11,7 +11,9 @@ export class PdfController {
 
   @Post('generate')
   async generatePdf(@Body() body: any, @Res() res: Response) {
-    const pdfBuffer = await this.pdfService.generateProjectReport(body.projects  );
+    const pdfBuffer = await this.pdfService.generateProjectReport(
+      body.projects,
+    );
 
     res.set({
       'Content-Type': 'application/pdf',

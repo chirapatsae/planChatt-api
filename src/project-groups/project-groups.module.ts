@@ -13,7 +13,19 @@ import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.ent
 import { Strategy } from 'src/strategy/entities/strategy.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([ProjectGroup , WorkHistory , User , Budget , Strategy , Tactic , Plan , BudgetPlan , TrackingStatus])],
+  imports: [
+    TypeOrmModule.forFeature([
+      ProjectGroup,
+      WorkHistory,
+      User,
+      Budget,
+      Strategy,
+      Tactic,
+      Plan,
+      BudgetPlan,
+      TrackingStatus,
+    ]),
+  ],
   controllers: [ProjectGroupsController],
   providers: [ProjectGroupsService],
 })

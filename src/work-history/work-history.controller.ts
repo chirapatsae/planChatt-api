@@ -24,7 +24,7 @@ import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 })
 @UseGuards(JwtAuthGuard)
 export class WorkHistoryController {
-  constructor(private readonly workHistoryService: WorkHistoryService) { }
+  constructor(private readonly workHistoryService: WorkHistoryService) {}
 
   @Get()
   findAll(@Query('status') status: string, @Query('role') role: string) {
@@ -37,8 +37,11 @@ export class WorkHistoryController {
   }
 
   @Post()
-  create(@Body() dto: CreateWorkHistoryDto ,  @Req() req: Request & { user: JwtPayloadUser }) {
-    return this.workHistoryService.create(dto , req.user.userId);
+  create(
+    @Body() dto: CreateWorkHistoryDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    return this.workHistoryService.create(dto, req.user.userId);
   }
 
   @Patch(':id')
@@ -64,5 +67,4 @@ export class WorkHistoryController {
   restore(@Param('id') id: string) {
     return this.workHistoryService.restore(id);
   }
-
 }

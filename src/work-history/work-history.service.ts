@@ -1,12 +1,10 @@
 import {
-  BadRequestException,
-  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import {  Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { CreateWorkHistoryDto } from './dto/create-work-history.dto';
 import { UpdateWorkHistoryDto } from './dto/update-work-history.dto';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
@@ -47,9 +45,12 @@ export class WorkHistoryService {
 
     @InjectRepository(Position)
     private readonly positionRepository: Repository<Position>,
-  ) { }
+  ) {}
 
-  async create(dto: CreateWorkHistoryDto , creatorId : string): Promise<WorkHistory> {
+  async create(
+    dto: CreateWorkHistoryDto,
+    creatorId: string,
+  ): Promise<WorkHistory> {
     try {
       const {
         amphoeId,
@@ -59,27 +60,37 @@ export class WorkHistoryService {
         roleId,
         governmentAgenciesId,
       } = dto;
-  
-      const creator = await this.userRepository.findOne({ where: { id: creatorId } });
+
+      const creator = await this.userRepository.findOne({
+        where: { id: creatorId },
+      });
       if (!creator) throw new NotFoundException('Creator not found');
-  
+
       const amphoe = await this.amphoeRepository.findOneBy({ id: amphoeId });
       if (!amphoe) throw new NotFoundException('Amphoe not found');
-  
-      const lao = await this.laoRepository.findOneBy({ id: localAdministrativeOrganizationId });
-      if (!lao) throw new NotFoundException('Local Administrative Organization not found');
-  
+
+      const lao = await this.laoRepository.findOneBy({
+        id: localAdministrativeOrganizationId,
+      });
+      if (!lao)
+        throw new NotFoundException(
+          'Local Administrative Organization not found',
+        );
+
       const user = await this.userRepository.findOneBy({ id: userId });
       if (!user) throw new NotFoundException('User not found');
-  
-      const resolvedWorkStatusId = workStatusId ?? '64db0afc-c6e0-43ae-aa96-92bc289dc1b7'; 
-      const workStatus = await this.workStatusRepository.findOneBy({ id: resolvedWorkStatusId });
+
+      const resolvedWorkStatusId =
+        workStatusId ?? '64db0afc-c6e0-43ae-aa96-92bc289dc1b7';
+      const workStatus = await this.workStatusRepository.findOneBy({
+        id: resolvedWorkStatusId,
+      });
       if (!workStatus) throw new NotFoundException('Work status not found');
-  
+
       const resolvedRoleId = roleId ?? '74585119-b006-452c-ae3e-154b193aa83e';
       const role = await this.roleRepository.findOneBy({ id: resolvedRoleId });
       if (!role) throw new NotFoundException('Role not found');
-  
+
       const workHistory = new WorkHistory();
       workHistory.amphoe = amphoe;
       workHistory.localAdministrativeOrganization = lao;
@@ -87,34 +98,50 @@ export class WorkHistoryService {
       workHistory.workStatus = workStatus;
       workHistory.role = role;
       workHistory.createdBy = creator;
-  
+
       if (governmentAgenciesId) {
-        const govAgency = await this.governmentAgencyRepository.findOneBy({ id: governmentAgenciesId });
-        if (!govAgency) throw new NotFoundException('Government agency not found');
+        const govAgency = await this.governmentAgencyRepository.findOneBy({
+          id: governmentAgenciesId,
+        });
+        if (!govAgency)
+          throw new NotFoundException('Government agency not found');
         workHistory.governmentAgencies = govAgency;
       }
-  
+
       return this.workHistoryRepository.save(workHistory);
     } catch (error) {
       handleException(this.logger, error);
     }
   }
-  
 
-  async findAll(workStatusId?: string, roleId?: string): Promise<WorkHistory[]> {
+  async findAll(
+    workStatusId?: string,
+    roleId?: string,
+  ): Promise<WorkHistory[]> {
     try {
-      const query = this.workHistoryRepository.createQueryBuilder('work_history')
+      const query = this.workHistoryRepository
+        .createQueryBuilder('work_history')
         .leftJoinAndSelect('work_history.user', 'user')
         .leftJoinAndSelect('work_history.amphoe', 'amphoe')
-        .leftJoinAndSelect('work_history.localAdministrativeOrganization', 'lao')
-        .leftJoinAndSelect('work_history.workHistoryResponsibleAdmins', 'responsibilities')
-        .leftJoinAndSelect('work_history.role', 'role') 
-        .leftJoinAndSelect('work_history.createdBy', 'createdBy') 
-        .leftJoinAndSelect('work_history.updatedBy', 'updatedBy') 
-        .leftJoinAndSelect('work_history.workStatus', 'workStatus') 
-        .leftJoinAndSelect('work_history.governmentAgencies', 'governmentAgencies') 
-        .leftJoinAndSelect('responsibilities.amphoe', 'respAmphoe')
-      if (workStatusId) query.andWhere('workStatus.id = :workStatusId', { workStatusId });
+        .leftJoinAndSelect(
+          'work_history.localAdministrativeOrganization',
+          'lao',
+        )
+        .leftJoinAndSelect(
+          'work_history.workHistoryResponsibleAdmins',
+          'responsibilities',
+        )
+        .leftJoinAndSelect('work_history.role', 'role')
+        .leftJoinAndSelect('work_history.createdBy', 'createdBy')
+        .leftJoinAndSelect('work_history.updatedBy', 'updatedBy')
+        .leftJoinAndSelect('work_history.workStatus', 'workStatus')
+        .leftJoinAndSelect(
+          'work_history.governmentAgencies',
+          'governmentAgencies',
+        )
+        .leftJoinAndSelect('responsibilities.amphoe', 'respAmphoe');
+      if (workStatusId)
+        query.andWhere('workStatus.id = :workStatusId', { workStatusId });
       if (roleId) query.andWhere('role.id = :roleId', { roleId });
 
       return query.getMany();
@@ -127,7 +154,17 @@ export class WorkHistoryService {
     try {
       const workHistory = await this.workHistoryRepository.findOne({
         where: { id },
-        relations: ['user', 'amphoe', 'localAdministrativeOrganization' ,'workStatus', 'role' ,'position' , 'createdBy' , 'updatedBy', 'governmentAgencies'],
+        relations: [
+          'user',
+          'amphoe',
+          'localAdministrativeOrganization',
+          'workStatus',
+          'role',
+          'position',
+          'createdBy',
+          'updatedBy',
+          'governmentAgencies',
+        ],
       });
       if (!workHistory) {
         throw new NotFoundException(`Work history with ID ${id} not found`);
@@ -138,7 +175,11 @@ export class WorkHistoryService {
     }
   }
 
-  async update(id: string, dto: UpdateWorkHistoryDto, updateId: string) : Promise<WorkHistory> {
+  async update(
+    id: string,
+    dto: UpdateWorkHistoryDto,
+    updateId: string,
+  ): Promise<WorkHistory> {
     try {
       const {
         amphoeId,
@@ -149,22 +190,33 @@ export class WorkHistoryService {
         governmentAgenciesId,
       } = dto;
 
-      const updator = await this.userRepository.findOne({where : { id : updateId }})
-      if(!updator) throw new NotFoundException('creator id not found')
+      const updator = await this.userRepository.findOne({
+        where: { id: updateId },
+      });
+      if (!updator) throw new NotFoundException('creator id not found');
 
-      const workHistory =await this.workHistoryRepository.findOne({where : {id}})
+      const workHistory = await this.workHistoryRepository.findOne({
+        where: { id },
+      });
       if (!workHistory) throw new NotFoundException('Work history not found');
 
       const amphoe = await this.amphoeRepository.findOneBy({ id: amphoeId });
       if (!amphoe) throw new NotFoundException('Amphoe not found');
 
-      const lao = await this.laoRepository.findOneBy({ id: localAdministrativeOrganizationId });
-      if (!lao) throw new NotFoundException('Local Administrative Organization not found');
+      const lao = await this.laoRepository.findOneBy({
+        id: localAdministrativeOrganizationId,
+      });
+      if (!lao)
+        throw new NotFoundException(
+          'Local Administrative Organization not found',
+        );
 
       const user = await this.userRepository.findOneBy({ id: userId });
       if (!user) throw new NotFoundException('User not found');
 
-      const workStatus = await this.workStatusRepository.findOneBy({ id: workStatusId });
+      const workStatus = await this.workStatusRepository.findOneBy({
+        id: workStatusId,
+      });
       if (!workStatus) throw new NotFoundException('Work status not found');
 
       const role = await this.roleRepository.findOneBy({ id: roleId });
@@ -175,11 +227,14 @@ export class WorkHistoryService {
       workHistory.user = user;
       workHistory.workStatus = workStatus;
       workHistory.role = role;
-      workHistory.updatedBy = updator
+      workHistory.updatedBy = updator;
 
       if (governmentAgenciesId) {
-        const govAgency = await this.governmentAgencyRepository.findOneBy({ id: governmentAgenciesId });
-        if (!govAgency) throw new NotFoundException('Government agency not found');
+        const govAgency = await this.governmentAgencyRepository.findOneBy({
+          id: governmentAgenciesId,
+        });
+        if (!govAgency)
+          throw new NotFoundException('Government agency not found');
         workHistory.governmentAgencies = govAgency;
       }
 
@@ -195,7 +250,9 @@ export class WorkHistoryService {
       if (result.affected === 0) {
         throw new NotFoundException(`Work history with ID ${id} not found`);
       }
-      return { message: `Work history with ID ${id} has been permanently deleted` };
+      return {
+        message: `Work history with ID ${id} has been permanently deleted`,
+      };
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -217,7 +274,9 @@ export class WorkHistoryService {
     try {
       const result = await this.workHistoryRepository.restore(id);
       if (result.affected === 0) {
-        throw new NotFoundException(`Work history with ID ${id} not found or was not deleted.`);
+        throw new NotFoundException(
+          `Work history with ID ${id} not found or was not deleted.`,
+        );
       }
       return { message: `Work history with ID ${id} has been restored.` };
     } catch (error) {

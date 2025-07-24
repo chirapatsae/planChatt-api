@@ -48,13 +48,13 @@ export class CreateProjectGroupDto {
   projectYear: number;
 
   @IsNotEmpty()
-  strategyId : string;
+  strategyId: string;
 
   @IsNotEmpty()
-  tacticId : string;
+  tacticId: string;
 
   @IsNotEmpty()
-  planId : string;
+  planId: string;
 
   @IsNotEmpty()
   @IsUUID()
@@ -64,9 +64,4 @@ export class CreateProjectGroupDto {
   @ValidateNested({ each: true })
   @Type(() => CreateBudgetDto)
   budget: CreateBudgetDto[];
-
-
-
 }
-
-

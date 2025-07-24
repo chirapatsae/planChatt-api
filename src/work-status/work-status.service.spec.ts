@@ -1,7 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Logger, NotFoundException, InternalServerErrorException, BadRequestException } from '@nestjs/common';
+import {
+  Logger,
+  NotFoundException,
+  InternalServerErrorException,
+  BadRequestException,
+} from '@nestjs/common';
 import { WorkStatusService } from './work-status.service';
 import { WorkStatus } from './entities/work-status.entity';
 import { CreateWorkStatusDto } from './dto/create-work-status.dto';
@@ -17,7 +22,9 @@ jest.mock('src/util/handleException', () => ({
     ) {
       throw error;
     }
-    throw new InternalServerErrorException('An unexpected error occurred on the server.');
+    throw new InternalServerErrorException(
+      'An unexpected error occurred on the server.',
+    );
   }),
 }));
 
@@ -63,8 +70,10 @@ describe('WorkStatusService', () => {
     }).compile();
 
     service = module.get<WorkStatusService>(WorkStatusService);
-    workStatusRepository = module.get<Repository<WorkStatus>>(getRepositoryToken(WorkStatus));
-    
+    workStatusRepository = module.get<Repository<WorkStatus>>(
+      getRepositoryToken(WorkStatus),
+    );
+
     // Mock the logger
     mockLogger = {
       log: jest.fn(),
@@ -73,7 +82,7 @@ describe('WorkStatusService', () => {
       debug: jest.fn(),
       verbose: jest.fn(),
     } as any;
-    
+
     (service as any).logger = mockLogger;
   });
 
@@ -86,15 +95,26 @@ describe('WorkStatusService', () => {
 
     describe('✅ Success Case', () => {
       it('should create a new work status successfully', async () => {
-        const mockCreatedWorkStatus = { ...mockWorkStatus, name: createDto.name };
-        
-        jest.spyOn(workStatusRepository, 'create').mockReturnValue(mockCreatedWorkStatus);
-        jest.spyOn(workStatusRepository, 'save').mockResolvedValue(mockCreatedWorkStatus);
+        const mockCreatedWorkStatus = {
+          ...mockWorkStatus,
+          name: createDto.name,
+        };
+
+        jest
+          .spyOn(workStatusRepository, 'create')
+          .mockReturnValue(mockCreatedWorkStatus);
+        jest
+          .spyOn(workStatusRepository, 'save')
+          .mockResolvedValue(mockCreatedWorkStatus);
 
         const result = await service.create(createDto);
 
-        expect(workStatusRepository.create).toHaveBeenCalledWith({ name: createDto.name });
-        expect(workStatusRepository.save).toHaveBeenCalledWith(mockCreatedWorkStatus);
+        expect(workStatusRepository.create).toHaveBeenCalledWith({
+          name: createDto.name,
+        });
+        expect(workStatusRepository.save).toHaveBeenCalledWith(
+          mockCreatedWorkStatus,
+        );
         expect(result).toEqual(mockCreatedWorkStatus);
       });
     });
@@ -102,24 +122,40 @@ describe('WorkStatusService', () => {
     describe('❌ Error Cases', () => {
       it('should handle database errors during creation', async () => {
         const dbError = new Error('Database connection failed');
-        
-        jest.spyOn(workStatusRepository, 'create').mockReturnValue(mockWorkStatus);
+
+        jest
+          .spyOn(workStatusRepository, 'create')
+          .mockReturnValue(mockWorkStatus);
         jest.spyOn(workStatusRepository, 'save').mockRejectedValue(dbError);
 
-        await expect(service.create(createDto)).rejects.toThrow('An unexpected error occurred on the server.');
+        await expect(service.create(createDto)).rejects.toThrow(
+          'An unexpected error occurred on the server.',
+        );
 
-        expect(handleException.handleException).toHaveBeenCalledWith(mockLogger, dbError);
+        expect(handleException.handleException).toHaveBeenCalledWith(
+          mockLogger,
+          dbError,
+        );
       });
 
       it('should handle validation errors', async () => {
         const validationError = new Error('Validation failed');
-        
-        jest.spyOn(workStatusRepository, 'create').mockReturnValue(mockWorkStatus);
-        jest.spyOn(workStatusRepository, 'save').mockRejectedValue(validationError);
 
-        await expect(service.create(createDto)).rejects.toThrow('An unexpected error occurred on the server.');
+        jest
+          .spyOn(workStatusRepository, 'create')
+          .mockReturnValue(mockWorkStatus);
+        jest
+          .spyOn(workStatusRepository, 'save')
+          .mockRejectedValue(validationError);
 
-        expect(handleException.handleException).toHaveBeenCalledWith(mockLogger, validationError);
+        await expect(service.create(createDto)).rejects.toThrow(
+          'An unexpected error occurred on the server.',
+        );
+
+        expect(handleException.handleException).toHaveBeenCalledWith(
+          mockLogger,
+          validationError,
+        );
       });
     });
 
@@ -127,9 +163,13 @@ describe('WorkStatusService', () => {
       it('should handle empty name string', async () => {
         const emptyNameDto: CreateWorkStatusDto = { name: '' };
         const mockCreatedWorkStatus = { ...mockWorkStatus, name: '' };
-        
-        jest.spyOn(workStatusRepository, 'create').mockReturnValue(mockCreatedWorkStatus);
-        jest.spyOn(workStatusRepository, 'save').mockResolvedValue(mockCreatedWorkStatus);
+
+        jest
+          .spyOn(workStatusRepository, 'create')
+          .mockReturnValue(mockCreatedWorkStatus);
+        jest
+          .spyOn(workStatusRepository, 'save')
+          .mockResolvedValue(mockCreatedWorkStatus);
 
         const result = await service.create(emptyNameDto);
 
@@ -141,13 +181,19 @@ describe('WorkStatusService', () => {
         const longName = 'A'.repeat(1000);
         const longNameDto: CreateWorkStatusDto = { name: longName };
         const mockCreatedWorkStatus = { ...mockWorkStatus, name: longName };
-        
-        jest.spyOn(workStatusRepository, 'create').mockReturnValue(mockCreatedWorkStatus);
-        jest.spyOn(workStatusRepository, 'save').mockResolvedValue(mockCreatedWorkStatus);
+
+        jest
+          .spyOn(workStatusRepository, 'create')
+          .mockReturnValue(mockCreatedWorkStatus);
+        jest
+          .spyOn(workStatusRepository, 'save')
+          .mockResolvedValue(mockCreatedWorkStatus);
 
         const result = await service.create(longNameDto);
 
-        expect(workStatusRepository.create).toHaveBeenCalledWith({ name: longName });
+        expect(workStatusRepository.create).toHaveBeenCalledWith({
+          name: longName,
+        });
         expect(result).toEqual(mockCreatedWorkStatus);
       });
     });
@@ -157,8 +203,10 @@ describe('WorkStatusService', () => {
     describe('✅ Success Case', () => {
       it('should return all non-deleted work statuses', async () => {
         const mockWorkStatuses = [mockWorkStatus, mockWorkStatus2];
-        
-        jest.spyOn(workStatusRepository, 'find').mockResolvedValue(mockWorkStatuses);
+
+        jest
+          .spyOn(workStatusRepository, 'find')
+          .mockResolvedValue(mockWorkStatuses);
 
         const result = await service.findAll();
 
@@ -185,22 +233,32 @@ describe('WorkStatusService', () => {
     describe('❌ Error Cases', () => {
       it('should handle database connection errors', async () => {
         const dbError = new Error('Database connection failed');
-        
+
         jest.spyOn(workStatusRepository, 'find').mockRejectedValue(dbError);
 
-        await expect(service.findAll()).rejects.toThrow('An unexpected error occurred on the server.');
+        await expect(service.findAll()).rejects.toThrow(
+          'An unexpected error occurred on the server.',
+        );
 
-        expect(handleException.handleException).toHaveBeenCalledWith(mockLogger, dbError);
+        expect(handleException.handleException).toHaveBeenCalledWith(
+          mockLogger,
+          dbError,
+        );
       });
 
       it('should handle query execution errors', async () => {
         const queryError = new Error('Query execution failed');
-        
+
         jest.spyOn(workStatusRepository, 'find').mockRejectedValue(queryError);
 
-        await expect(service.findAll()).rejects.toThrow('An unexpected error occurred on the server.');
+        await expect(service.findAll()).rejects.toThrow(
+          'An unexpected error occurred on the server.',
+        );
 
-        expect(handleException.handleException).toHaveBeenCalledWith(mockLogger, queryError);
+        expect(handleException.handleException).toHaveBeenCalledWith(
+          mockLogger,
+          queryError,
+        );
       });
     });
   });
@@ -210,7 +268,9 @@ describe('WorkStatusService', () => {
 
     describe('✅ Success Case', () => {
       it('should return a work status by id', async () => {
-        jest.spyOn(workStatusRepository, 'findOne').mockResolvedValue(mockWorkStatus);
+        jest
+          .spyOn(workStatusRepository, 'findOne')
+          .mockResolvedValue(mockWorkStatus);
 
         const result = await service.findOne(validId);
 
@@ -227,7 +287,7 @@ describe('WorkStatusService', () => {
         jest.spyOn(workStatusRepository, 'findOne').mockResolvedValue(null);
 
         await expect(service.findOne(validId)).rejects.toThrow(
-          new NotFoundException(`Work Status with ID ${validId} not found`)
+          new NotFoundException(`Work Status with ID ${validId} not found`),
         );
 
         expect(workStatusRepository.findOne).toHaveBeenCalledWith({
@@ -240,12 +300,17 @@ describe('WorkStatusService', () => {
     describe('❌ Error Cases', () => {
       it('should handle database errors', async () => {
         const dbError = new Error('Database error');
-        
+
         jest.spyOn(workStatusRepository, 'findOne').mockRejectedValue(dbError);
 
-        await expect(service.findOne(validId)).rejects.toThrow('An unexpected error occurred on the server.');
+        await expect(service.findOne(validId)).rejects.toThrow(
+          'An unexpected error occurred on the server.',
+        );
 
-        expect(handleException.handleException).toHaveBeenCalledWith(mockLogger, dbError);
+        expect(handleException.handleException).toHaveBeenCalledWith(
+          mockLogger,
+          dbError,
+        );
       });
     });
 
@@ -254,7 +319,7 @@ describe('WorkStatusService', () => {
         jest.spyOn(workStatusRepository, 'findOne').mockResolvedValue(null);
 
         await expect(service.findOne('')).rejects.toThrow(
-          new NotFoundException('Work Status with ID  not found')
+          new NotFoundException('Work Status with ID  not found'),
         );
       });
 
@@ -262,7 +327,7 @@ describe('WorkStatusService', () => {
         jest.spyOn(workStatusRepository, 'findOne').mockResolvedValue(null);
 
         await expect(service.findOne(null as any)).rejects.toThrow(
-          new NotFoundException('Work Status with ID null not found')
+          new NotFoundException('Work Status with ID null not found'),
         );
       });
 
@@ -270,7 +335,7 @@ describe('WorkStatusService', () => {
         jest.spyOn(workStatusRepository, 'findOne').mockResolvedValue(null);
 
         await expect(service.findOne(undefined as any)).rejects.toThrow(
-          new NotFoundException('Work Status with ID undefined not found')
+          new NotFoundException('Work Status with ID undefined not found'),
         );
       });
     });
@@ -283,9 +348,13 @@ describe('WorkStatusService', () => {
     describe('✅ Success Case', () => {
       it('should update a work status successfully', async () => {
         const updatedWorkStatus = { ...mockWorkStatus, ...updateDto };
-        
-        jest.spyOn(workStatusRepository, 'preload').mockResolvedValue(updatedWorkStatus);
-        jest.spyOn(workStatusRepository, 'save').mockResolvedValue(updatedWorkStatus);
+
+        jest
+          .spyOn(workStatusRepository, 'preload')
+          .mockResolvedValue(updatedWorkStatus);
+        jest
+          .spyOn(workStatusRepository, 'save')
+          .mockResolvedValue(updatedWorkStatus);
 
         const result = await service.update(validId, updateDto);
 
@@ -293,17 +362,21 @@ describe('WorkStatusService', () => {
           id: validId,
           ...updateDto,
         });
-        expect(workStatusRepository.save).toHaveBeenCalledWith(updatedWorkStatus);
+        expect(workStatusRepository.save).toHaveBeenCalledWith(
+          updatedWorkStatus,
+        );
         expect(result).toEqual(updatedWorkStatus);
       });
     });
 
     describe('❌ NotFoundException', () => {
       it('should throw NotFoundException when work status not found', async () => {
-        jest.spyOn(workStatusRepository, 'preload').mockResolvedValue(undefined);
+        jest
+          .spyOn(workStatusRepository, 'preload')
+          .mockResolvedValue(undefined);
 
         await expect(service.update(validId, updateDto)).rejects.toThrow(
-          new NotFoundException(`Work Status with ID ${validId} not found`)
+          new NotFoundException(`Work Status with ID ${validId} not found`),
         );
 
         expect(workStatusRepository.preload).toHaveBeenCalledWith({
@@ -316,41 +389,61 @@ describe('WorkStatusService', () => {
     describe('❌ Error Cases', () => {
       it('should handle database errors during update', async () => {
         const dbError = new Error('Database error');
-        
-        jest.spyOn(workStatusRepository, 'preload').mockResolvedValue(mockWorkStatus);
+
+        jest
+          .spyOn(workStatusRepository, 'preload')
+          .mockResolvedValue(mockWorkStatus);
         jest.spyOn(workStatusRepository, 'save').mockRejectedValue(dbError);
 
-        await expect(service.update(validId, updateDto)).rejects.toThrow('An unexpected error occurred on the server.');
+        await expect(service.update(validId, updateDto)).rejects.toThrow(
+          'An unexpected error occurred on the server.',
+        );
 
-        expect(handleException.handleException).toHaveBeenCalledWith(mockLogger, dbError);
+        expect(handleException.handleException).toHaveBeenCalledWith(
+          mockLogger,
+          dbError,
+        );
       });
 
       it('should handle validation errors', async () => {
         const validationError = new Error('Validation failed');
-        
-        jest.spyOn(workStatusRepository, 'preload').mockRejectedValue(validationError);
 
-        await expect(service.update(validId, updateDto)).rejects.toThrow('An unexpected error occurred on the server.');
+        jest
+          .spyOn(workStatusRepository, 'preload')
+          .mockRejectedValue(validationError);
 
-        expect(handleException.handleException).toHaveBeenCalledWith(mockLogger, validationError);
+        await expect(service.update(validId, updateDto)).rejects.toThrow(
+          'An unexpected error occurred on the server.',
+        );
+
+        expect(handleException.handleException).toHaveBeenCalledWith(
+          mockLogger,
+          validationError,
+        );
       });
     });
 
     describe('⚠️ Edge Cases', () => {
       it('should handle empty string id', async () => {
-        jest.spyOn(workStatusRepository, 'preload').mockResolvedValue(undefined);
+        jest
+          .spyOn(workStatusRepository, 'preload')
+          .mockResolvedValue(undefined);
 
         await expect(service.update('', updateDto)).rejects.toThrow(
-          new NotFoundException('Work Status with ID  not found')
+          new NotFoundException('Work Status with ID  not found'),
         );
       });
 
       it('should handle empty update dto', async () => {
         const emptyUpdateDto: UpdateWorkStatusDto = {};
         const updatedWorkStatus = { ...mockWorkStatus };
-        
-        jest.spyOn(workStatusRepository, 'preload').mockResolvedValue(updatedWorkStatus);
-        jest.spyOn(workStatusRepository, 'save').mockResolvedValue(updatedWorkStatus);
+
+        jest
+          .spyOn(workStatusRepository, 'preload')
+          .mockResolvedValue(updatedWorkStatus);
+        jest
+          .spyOn(workStatusRepository, 'save')
+          .mockResolvedValue(updatedWorkStatus);
 
         const result = await service.update(validId, emptyUpdateDto);
 
@@ -369,24 +462,30 @@ describe('WorkStatusService', () => {
     describe('✅ Success Case', () => {
       it('should permanently remove a work status', async () => {
         const deleteResult = { affected: 1 };
-        
-        jest.spyOn(workStatusRepository, 'delete').mockResolvedValue(deleteResult as any);
+
+        jest
+          .spyOn(workStatusRepository, 'delete')
+          .mockResolvedValue(deleteResult as any);
 
         const result = await service.remove(validId);
 
         expect(workStatusRepository.delete).toHaveBeenCalledWith(validId);
-        expect(result).toEqual({ message: `Work Status with ID ${validId} has been permanently removed.` });
+        expect(result).toEqual({
+          message: `Work Status with ID ${validId} has been permanently removed.`,
+        });
       });
     });
 
     describe('❌ NotFoundException', () => {
       it('should throw NotFoundException when work status not found', async () => {
         const deleteResult = { affected: 0 };
-        
-        jest.spyOn(workStatusRepository, 'delete').mockResolvedValue(deleteResult as any);
+
+        jest
+          .spyOn(workStatusRepository, 'delete')
+          .mockResolvedValue(deleteResult as any);
 
         await expect(service.remove(validId)).rejects.toThrow(
-          new NotFoundException(`Work Status with ID ${validId} not found`)
+          new NotFoundException(`Work Status with ID ${validId} not found`),
         );
 
         expect(workStatusRepository.delete).toHaveBeenCalledWith(validId);
@@ -396,33 +495,42 @@ describe('WorkStatusService', () => {
     describe('❌ Error Cases', () => {
       it('should handle database errors during removal', async () => {
         const dbError = new Error('Database error');
-        
+
         jest.spyOn(workStatusRepository, 'delete').mockRejectedValue(dbError);
 
-        await expect(service.remove(validId)).rejects.toThrow('An unexpected error occurred on the server.');
+        await expect(service.remove(validId)).rejects.toThrow(
+          'An unexpected error occurred on the server.',
+        );
 
-        expect(handleException.handleException).toHaveBeenCalledWith(mockLogger, dbError);
+        expect(handleException.handleException).toHaveBeenCalledWith(
+          mockLogger,
+          dbError,
+        );
       });
     });
 
     describe('⚠️ Edge Cases', () => {
       it('should handle empty string id', async () => {
         const deleteResult = { affected: 0 };
-        
-        jest.spyOn(workStatusRepository, 'delete').mockResolvedValue(deleteResult as any);
+
+        jest
+          .spyOn(workStatusRepository, 'delete')
+          .mockResolvedValue(deleteResult as any);
 
         await expect(service.remove('')).rejects.toThrow(
-          new NotFoundException('Work Status with ID  not found')
+          new NotFoundException('Work Status with ID  not found'),
         );
       });
 
       it('should handle null id', async () => {
         const deleteResult = { affected: 0 };
-        
-        jest.spyOn(workStatusRepository, 'delete').mockResolvedValue(deleteResult as any);
+
+        jest
+          .spyOn(workStatusRepository, 'delete')
+          .mockResolvedValue(deleteResult as any);
 
         await expect(service.remove(null as any)).rejects.toThrow(
-          new NotFoundException('Work Status with ID null not found')
+          new NotFoundException('Work Status with ID null not found'),
         );
       });
     });
@@ -434,24 +542,30 @@ describe('WorkStatusService', () => {
     describe('✅ Success Case', () => {
       it('should soft remove a work status', async () => {
         const softDeleteResult = { affected: 1 };
-        
-        jest.spyOn(workStatusRepository, 'softDelete').mockResolvedValue(softDeleteResult as any);
+
+        jest
+          .spyOn(workStatusRepository, 'softDelete')
+          .mockResolvedValue(softDeleteResult as any);
 
         const result = await service.softRemove(validId);
 
         expect(workStatusRepository.softDelete).toHaveBeenCalledWith(validId);
-        expect(result).toEqual({ message: `Work Status with ID ${validId} has been soft-removed.` });
+        expect(result).toEqual({
+          message: `Work Status with ID ${validId} has been soft-removed.`,
+        });
       });
     });
 
     describe('❌ NotFoundException', () => {
       it('should throw NotFoundException when work status not found', async () => {
         const softDeleteResult = { affected: 0 };
-        
-        jest.spyOn(workStatusRepository, 'softDelete').mockResolvedValue(softDeleteResult as any);
+
+        jest
+          .spyOn(workStatusRepository, 'softDelete')
+          .mockResolvedValue(softDeleteResult as any);
 
         await expect(service.softRemove(validId)).rejects.toThrow(
-          new NotFoundException(`Work Status with ID ${validId} not found`)
+          new NotFoundException(`Work Status with ID ${validId} not found`),
         );
 
         expect(workStatusRepository.softDelete).toHaveBeenCalledWith(validId);
@@ -461,23 +575,32 @@ describe('WorkStatusService', () => {
     describe('❌ Error Cases', () => {
       it('should handle database errors during soft removal', async () => {
         const dbError = new Error('Database error');
-        
-        jest.spyOn(workStatusRepository, 'softDelete').mockRejectedValue(dbError);
 
-        await expect(service.softRemove(validId)).rejects.toThrow('An unexpected error occurred on the server.');
+        jest
+          .spyOn(workStatusRepository, 'softDelete')
+          .mockRejectedValue(dbError);
 
-        expect(handleException.handleException).toHaveBeenCalledWith(mockLogger, dbError);
+        await expect(service.softRemove(validId)).rejects.toThrow(
+          'An unexpected error occurred on the server.',
+        );
+
+        expect(handleException.handleException).toHaveBeenCalledWith(
+          mockLogger,
+          dbError,
+        );
       });
     });
 
     describe('⚠️ Edge Cases', () => {
       it('should handle empty string id', async () => {
         const softDeleteResult = { affected: 0 };
-        
-        jest.spyOn(workStatusRepository, 'softDelete').mockResolvedValue(softDeleteResult as any);
+
+        jest
+          .spyOn(workStatusRepository, 'softDelete')
+          .mockResolvedValue(softDeleteResult as any);
 
         await expect(service.softRemove('')).rejects.toThrow(
-          new NotFoundException('Work Status with ID  not found')
+          new NotFoundException('Work Status with ID  not found'),
         );
       });
     });
@@ -489,24 +612,32 @@ describe('WorkStatusService', () => {
     describe('✅ Success Case', () => {
       it('should restore a soft-deleted work status', async () => {
         const restoreResult = { affected: 1 };
-        
-        jest.spyOn(workStatusRepository, 'restore').mockResolvedValue(restoreResult as any);
+
+        jest
+          .spyOn(workStatusRepository, 'restore')
+          .mockResolvedValue(restoreResult as any);
 
         const result = await service.restore(validId);
 
         expect(workStatusRepository.restore).toHaveBeenCalledWith(validId);
-        expect(result).toEqual({ message: `Work Status with ID ${validId} has been restored.` });
+        expect(result).toEqual({
+          message: `Work Status with ID ${validId} has been restored.`,
+        });
       });
     });
 
     describe('❌ NotFoundException', () => {
       it('should throw NotFoundException when work status not found or not deleted', async () => {
         const restoreResult = { affected: 0 };
-        
-        jest.spyOn(workStatusRepository, 'restore').mockResolvedValue(restoreResult as any);
+
+        jest
+          .spyOn(workStatusRepository, 'restore')
+          .mockResolvedValue(restoreResult as any);
 
         await expect(service.restore(validId)).rejects.toThrow(
-          new NotFoundException(`Work Status with ID ${validId} not found or was not deleted.`)
+          new NotFoundException(
+            `Work Status with ID ${validId} not found or was not deleted.`,
+          ),
         );
 
         expect(workStatusRepository.restore).toHaveBeenCalledWith(validId);
@@ -516,33 +647,46 @@ describe('WorkStatusService', () => {
     describe('❌ Error Cases', () => {
       it('should handle database errors during restoration', async () => {
         const dbError = new Error('Database error');
-        
+
         jest.spyOn(workStatusRepository, 'restore').mockRejectedValue(dbError);
 
-        await expect(service.restore(validId)).rejects.toThrow('An unexpected error occurred on the server.');
+        await expect(service.restore(validId)).rejects.toThrow(
+          'An unexpected error occurred on the server.',
+        );
 
-        expect(handleException.handleException).toHaveBeenCalledWith(mockLogger, dbError);
+        expect(handleException.handleException).toHaveBeenCalledWith(
+          mockLogger,
+          dbError,
+        );
       });
     });
 
     describe('⚠️ Edge Cases', () => {
       it('should handle empty string id', async () => {
         const restoreResult = { affected: 0 };
-        
-        jest.spyOn(workStatusRepository, 'restore').mockResolvedValue(restoreResult as any);
+
+        jest
+          .spyOn(workStatusRepository, 'restore')
+          .mockResolvedValue(restoreResult as any);
 
         await expect(service.restore('')).rejects.toThrow(
-          new NotFoundException('Work Status with ID  not found or was not deleted.')
+          new NotFoundException(
+            'Work Status with ID  not found or was not deleted.',
+          ),
         );
       });
 
       it('should handle null id', async () => {
         const restoreResult = { affected: 0 };
-        
-        jest.spyOn(workStatusRepository, 'restore').mockResolvedValue(restoreResult as any);
+
+        jest
+          .spyOn(workStatusRepository, 'restore')
+          .mockResolvedValue(restoreResult as any);
 
         await expect(service.restore(null as any)).rejects.toThrow(
-          new NotFoundException('Work Status with ID null not found or was not deleted.')
+          new NotFoundException(
+            'Work Status with ID null not found or was not deleted.',
+          ),
         );
       });
     });

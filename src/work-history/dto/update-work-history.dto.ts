@@ -1,6 +1,13 @@
 import { PartialType } from '@nestjs/mapped-types';
 import { CreateWorkHistoryDto } from './create-work-history.dto';
-import { IsOptional, IsArray, IsString, IsUUID, IsNotEmpty, IsEnum } from 'class-validator';
+import {
+  IsOptional,
+  IsArray,
+  IsString,
+  IsUUID,
+  IsNotEmpty,
+  IsEnum,
+} from 'class-validator';
 
 export enum UserRole {
   USER = 'user',
@@ -20,17 +27,21 @@ export class UpdateWorkHistoryDto extends PartialType(CreateWorkHistoryDto) {
   @IsString({ each: true })
   responsibleAmphoeIds?: string[];
 
- // 2. เปลี่ยนจาก @IsString เป็น @IsEnum และแก้ Type
- @IsOptional()
- @IsEnum(UserRole, { message: 'Invalid role. Must be one of: user, admin, superadmin' })
- role?: UserRole;
+  // 2. เปลี่ยนจาก @IsString เป็น @IsEnum และแก้ Type
+  @IsOptional()
+  @IsEnum(UserRole, {
+    message: 'Invalid role. Must be one of: user, admin, superadmin',
+  })
+  role?: UserRole;
 
- // 3. เปลี่ยนจาก @IsString เป็น @IsEnum และแก้ Type
- @IsOptional()
- @IsEnum(WorkHistoryStatus, { message: 'Invalid status. Must be one of: unverify, approved, suspended, banned' })
- status?: WorkHistoryStatus;
+  // 3. เปลี่ยนจาก @IsString เป็น @IsEnum และแก้ Type
+  @IsOptional()
+  @IsEnum(WorkHistoryStatus, {
+    message:
+      'Invalid status. Must be one of: unverify, approved, suspended, banned',
+  })
+  status?: WorkHistoryStatus;
 }
-
 
 // DTO สำหรับการโอนย้าย responsibility
 export class TransferResponsibilityDto {

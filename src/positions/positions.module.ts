@@ -6,8 +6,8 @@ import { Position } from './entities/position.entity';
 import { User } from 'src/users/entities/user.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Position , User])],
+  imports: [TypeOrmModule.forFeature([Position, User])],
   controllers: [PositionsController],
   providers: [PositionsService],
 })
-export class PositionsModule {} 
+export class PositionsModule {}

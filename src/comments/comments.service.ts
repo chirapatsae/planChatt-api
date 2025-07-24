@@ -1,5 +1,10 @@
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
-import { BadRequestException, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
 import { CreateCommentDto } from './dto/create-comment.dto';
 import { UpdateCommentDto } from './dto/update-comment.dto';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -20,11 +25,9 @@ export class CommentsService {
     @InjectRepository(ProjectGroup)
     private readonly projectGroupRepo: Repository<ProjectGroup>,
 
-
     @InjectRepository(Comment)
     private readonly commentRepo: Repository<Comment>, // 💡 ADD THIS!
-
-  ) { }
+  ) {}
   async create(createCommentDto: CreateCommentDto) {
     try {
       const trackingStatus = await this.trackingStatusRepo.findOne({
@@ -37,7 +40,7 @@ export class CommentsService {
       const comment = this.commentRepo.create({
         detail: createCommentDto.detail,
         step: createCommentDto.step,
-        trackingStatusId: trackingStatus, 
+        trackingStatusId: trackingStatus,
       });
 
       await this.commentRepo.save(comment);
@@ -47,5 +50,4 @@ export class CommentsService {
       throw error;
     }
   }
-
 }

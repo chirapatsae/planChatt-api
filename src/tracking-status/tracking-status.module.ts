@@ -9,8 +9,16 @@ import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { Comment } from 'src/comments/entities/comment.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([TrackingStatus, User , Status  , WorkHistory , Comment])],
+  imports: [
+    TypeOrmModule.forFeature([
+      TrackingStatus,
+      User,
+      Status,
+      WorkHistory,
+      Comment,
+    ]),
+  ],
   controllers: [TrackingStatusController],
   providers: [TrackingStatusService],
 })
-export class TrackingStatusModule { }
+export class TrackingStatusModule {}

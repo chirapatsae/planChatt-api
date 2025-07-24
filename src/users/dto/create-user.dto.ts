@@ -28,9 +28,7 @@ export class CreateUserDto {
 
   @IsNotEmpty()
   lastname: string;
-  
+
   @IsOptional()
-  isFirstLogin? : boolean;
+  isFirstLogin?: boolean;
 }
-
-

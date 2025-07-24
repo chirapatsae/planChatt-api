@@ -1,11 +1,17 @@
-import { randomBytes, createCipheriv, createDecipheriv, scrypt, createHmac } from 'crypto';
+import {
+  randomBytes,
+  createCipheriv,
+  createDecipheriv,
+  scrypt,
+  createHmac,
+} from 'crypto';
 import { promisify } from 'util';
 import * as dotenv from 'dotenv';
 
 dotenv.config();
-const algorithm = process.env.ALGORITHM || ""; 
-const secretKey = process.env.SECRET_KEY || ""; 
-const salt = process.env.SALT || ""; 
+const algorithm = process.env.ALGORITHM || '';
+const secretKey = process.env.SECRET_KEY || '';
+const salt = process.env.SALT || '';
 
 async function generateKey(): Promise<Buffer> {
   return (await promisify(scrypt)(secretKey, salt, 32)) as Buffer;
@@ -34,4 +40,3 @@ export function hashCitizenId(citizenId: string): string {
     .update(citizenId)
     .digest('hex');
 }
-

@@ -1,5 +1,11 @@
 import { Type } from 'class-transformer';
-import { IsString, IsNotEmpty, IsOptional, IsObject, ValidateNested } from 'class-validator';
+import {
+  IsString,
+  IsNotEmpty,
+  IsOptional,
+  IsObject,
+  ValidateNested,
+} from 'class-validator';
 
 export class GenerateProjectDto {
   @IsString()
@@ -28,20 +34,19 @@ export class CurrentProjectDataDto {
   @IsString()
   @IsOptional()
   objective?: string;
-  
+
   @IsString()
   @IsOptional()
   goal?: string;
-  
+
   @IsString()
   @IsOptional()
   expected?: string;
-  
+
   @IsString()
   @IsOptional()
   indicator?: string;
 }
-
 
 // DTO หลักสำหรับ Endpoint Regenerate
 export class RegenerateFieldDto {

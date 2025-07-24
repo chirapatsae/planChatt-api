@@ -5,7 +5,10 @@ import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { Comment } from './entities/comment.entity';
-import { NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import {
+  NotFoundException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { CreateCommentDto } from './dto/create-comment.dto';
 
@@ -43,7 +46,11 @@ describe('CommentsService', () => {
       trackingStatusId: 'uuid-123',
     };
     const trackingStatus = { id: 'uuid-123' } as TrackingStatus;
-    const commentEntity = { id: 'c1', ...validDto, trackingStatusId: trackingStatus } as Comment;
+    const commentEntity = {
+      id: 'c1',
+      ...validDto,
+      trackingStatusId: trackingStatus,
+    } as Comment;
 
     it('should create and return a comment (success case)', async () => {
       trackingStatusRepo.findOne.mockResolvedValue(trackingStatus);
@@ -51,7 +58,9 @@ describe('CommentsService', () => {
       commentRepo.save.mockResolvedValue(commentEntity);
 
       const result = await service.create(validDto);
-      expect(trackingStatusRepo.findOne).toHaveBeenCalledWith({ where: { id: validDto.trackingStatusId } });
+      expect(trackingStatusRepo.findOne).toHaveBeenCalledWith({
+        where: { id: validDto.trackingStatusId },
+      });
       expect(commentRepo.create).toHaveBeenCalledWith({
         detail: validDto.detail,
         step: validDto.step,

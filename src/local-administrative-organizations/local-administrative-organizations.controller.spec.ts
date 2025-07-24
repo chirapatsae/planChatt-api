@@ -24,7 +24,9 @@ describe('LocalAdministrativeOrganizationsController', () => {
       ],
     }).compile();
 
-    controller = module.get<LocalAdministrativeOrganizationsController>(LocalAdministrativeOrganizationsController);
+    controller = module.get<LocalAdministrativeOrganizationsController>(
+      LocalAdministrativeOrganizationsController,
+    );
   });
 
   it('should be defined', () => {

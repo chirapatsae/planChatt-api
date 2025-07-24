@@ -18,8 +18,9 @@ dotenv.config();
       secret: process.env.JWT_SECRET || '',
       signOptions: { expiresIn: '1d' },
     }),
-    TypeOrmModule.forFeature([WorkHistory, User])],
+    TypeOrmModule.forFeature([WorkHistory, User]),
+  ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy , UsersService],
+  providers: [AuthService, JwtStrategy, UsersService],
 })
-export class AuthModule { }
+export class AuthModule {}

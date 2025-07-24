@@ -38,10 +38,7 @@ export class AmphoesController {
   }
 
   @Patch(':id')
-  update(
-    @Param('id') id: string,
-    @Body() updateAmphoeDto: UpdateAmphoeDto,
-  ) {
+  update(@Param('id') id: string, @Body() updateAmphoeDto: UpdateAmphoeDto) {
     return this.amphoesService.update(id, updateAmphoeDto);
   }
 

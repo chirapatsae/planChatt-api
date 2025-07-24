@@ -64,7 +64,9 @@ describe('AiService', () => {
     });
 
     it('should throw InternalServerErrorException on OpenAI error', async () => {
-      mockOpenAI.chat.completions.create.mockRejectedValue(new Error('OpenAI error'));
+      mockOpenAI.chat.completions.create.mockRejectedValue(
+        new Error('OpenAI error'),
+      );
       await expect(
         service.generateProjectDetail(
           validGenerateArgs.strategy,
@@ -120,15 +122,21 @@ describe('AiService', () => {
     });
 
     it('should throw InternalServerErrorException on OpenAI error', async () => {
-      mockOpenAI.chat.completions.create.mockRejectedValue(new Error('OpenAI error'));
-      await expect(service.regenerateField(validRegenerateDto)).rejects.toThrow(InternalServerErrorException);
+      mockOpenAI.chat.completions.create.mockRejectedValue(
+        new Error('OpenAI error'),
+      );
+      await expect(service.regenerateField(validRegenerateDto)).rejects.toThrow(
+        InternalServerErrorException,
+      );
     });
 
     it('should throw InternalServerErrorException if AI response is invalid', async () => {
       mockOpenAI.chat.completions.create.mockResolvedValue({
         choices: [{ message: {} }],
       });
-      await expect(service.regenerateField(validRegenerateDto)).rejects.toThrow(InternalServerErrorException);
+      await expect(service.regenerateField(validRegenerateDto)).rejects.toThrow(
+        InternalServerErrorException,
+      );
     });
 
     it('should handle edge case: empty fieldToRegenerate', async () => {
@@ -154,7 +162,9 @@ describe('AiService', () => {
 
     it('should handle edge case: empty modificationPrompt', async () => {
       mockOpenAI.chat.completions.create.mockResolvedValue({
-        choices: [{ message: { content: 'Edge case: empty modificationPrompt' } }],
+        choices: [
+          { message: { content: 'Edge case: empty modificationPrompt' } },
+        ],
       });
       const dto = { ...validRegenerateDto, modificationPrompt: '' };
       const result = await service.regenerateField(dto);

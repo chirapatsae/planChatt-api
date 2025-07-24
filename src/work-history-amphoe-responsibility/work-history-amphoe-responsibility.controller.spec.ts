@@ -15,14 +15,19 @@ describe('WorkHistoryAmphoeResponsibilityController', () => {
       controllers: [WorkHistoryAmphoeResponsibilityController],
       providers: [
         WorkHistoryAmphoeResponsibilityService,
-        { provide: getRepositoryToken(WorkHistoryAmphoeResponsibility), useValue: {} },
+        {
+          provide: getRepositoryToken(WorkHistoryAmphoeResponsibility),
+          useValue: {},
+        },
         { provide: getRepositoryToken(WorkHistory), useValue: {} },
         { provide: getRepositoryToken(Amphoe), useValue: {} },
         { provide: getRepositoryToken(User), useValue: {} },
       ],
     }).compile();
 
-    controller = module.get<WorkHistoryAmphoeResponsibilityController>(WorkHistoryAmphoeResponsibilityController);
+    controller = module.get<WorkHistoryAmphoeResponsibilityController>(
+      WorkHistoryAmphoeResponsibilityController,
+    );
   });
 
   it('should be defined', () => {

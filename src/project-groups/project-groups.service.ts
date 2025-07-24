@@ -52,8 +52,8 @@ export class ProjectGroupsService {
     @InjectRepository(Budget)
     private readonly budgetRepo: Repository<Budget>,
 
-    private readonly dataSource: DataSource // 👈 Inject ตรงนี้
-  ) { }
+    private readonly dataSource: DataSource, // 👈 Inject ตรงนี้
+  ) {}
 
   async create(dto: CreateProjectGroupDto, userId: string) {
     try {
@@ -66,26 +66,49 @@ export class ProjectGroupsService {
           throw new NotFoundException('Work history ID not found');
         }
 
-        const duplicateTitle = await manager.findOne(this.projectGroupRepo.target, {
-          where: { title: dto.title, createdBy: { id: workHistory.id } },
-        });
+        const duplicateTitle = await manager.findOne(
+          this.projectGroupRepo.target,
+          {
+            where: { title: dto.title, createdBy: { id: workHistory.id } },
+          },
+        );
         if (duplicateTitle) {
-          throw new ConflictException('Project group with this title already exists');
+          throw new ConflictException(
+            'Project group with this title already exists',
+          );
         }
 
         // 2. ใช้ Promise.all เพื่อตรวจสอบ Foreign Keys ทั้งหมดพร้อมกัน เพิ่มประสิทธิภาพ
         const [budgetPlan, strategy, tactic, plan] = await Promise.all([
-          manager.findOne(this.budgetPlanRepo.target, { where: { id: dto.budgetPlanId } }),
-          manager.findOne(this.strategyRepo.target, { where: { id: dto.strategyId } }),
-          manager.findOne(this.tacticRepo.target, { where: { id: dto.tacticId } }),
+          manager.findOne(this.budgetPlanRepo.target, {
+            where: { id: dto.budgetPlanId },
+          }),
+          manager.findOne(this.strategyRepo.target, {
+            where: { id: dto.strategyId },
+          }),
+          manager.findOne(this.tacticRepo.target, {
+            where: { id: dto.tacticId },
+          }),
           manager.findOne(this.planRepo.target, { where: { id: dto.planId } }),
         ]);
 
         // 3. ให้ Error Message ที่ชัดเจนเมื่อไม่พบ ID
-        if (!budgetPlan) { throw new NotFoundException(`Budget Plan ID not found: ${dto.budgetPlanId}`); }
-        if (!strategy) { throw new NotFoundException(`Strategy ID not found: ${dto.strategyId}`); }
-        if (!tactic) { throw new NotFoundException(`Tactic ID not found: ${dto.tacticId}`); }
-        if (!plan) { throw new NotFoundException(`Plan ID not found: ${dto.planId}`); }
+        if (!budgetPlan) {
+          throw new NotFoundException(
+            `Budget Plan ID not found: ${dto.budgetPlanId}`,
+          );
+        }
+        if (!strategy) {
+          throw new NotFoundException(
+            `Strategy ID not found: ${dto.strategyId}`,
+          );
+        }
+        if (!tactic) {
+          throw new NotFoundException(`Tactic ID not found: ${dto.tacticId}`);
+        }
+        if (!plan) {
+          throw new NotFoundException(`Plan ID not found: ${dto.planId}`);
+        }
 
         // --- ส่วนของการสร้างข้อมูล (Creation) ---
 
@@ -93,15 +116,25 @@ export class ProjectGroupsService {
         if (workHistory.governmentAgencies !== null) {
           // Internal project
           if (!workHistory.governmentAgencies) {
-            throw new BadRequestException('User ภายในต้องมี governmentAgencies');
+            throw new BadRequestException(
+              'User ภายในต้องมี governmentAgencies',
+            );
           }
-          agencyData = { responsibleAgency: { id: workHistory.governmentAgencies.id } };
+          agencyData = {
+            responsibleAgency: { id: workHistory.governmentAgencies.id },
+          };
         } else {
           // External project
           if (!workHistory.localAdministrativeOrganization) {
-            throw new BadRequestException('User ภายนอกต้องมี localAdministrativeOrganization');
+            throw new BadRequestException(
+              'User ภายนอกต้องมี localAdministrativeOrganization',
+            );
           }
-          agencyData = { originAgencyId: { id: workHistory.localAdministrativeOrganization.id } };
+          agencyData = {
+            originAgencyId: {
+              id: workHistory.localAdministrativeOrganization.id,
+            },
+          };
         }
         const projectGroupData: any = {
           title: dto.title,
@@ -122,7 +155,10 @@ export class ProjectGroupsService {
           ...agencyData, // รวม agency data ที่เหมาะสม
         };
 
-        const group = manager.create(this.projectGroupRepo.target, projectGroupData);
+        const group = manager.create(
+          this.projectGroupRepo.target,
+          projectGroupData,
+        );
         const savedGroupResult = await manager.save(group);
 
         const trackingStatus = manager.create(this.trackingStatusRepo.target, {
@@ -132,7 +168,8 @@ export class ProjectGroupsService {
         });
         await manager.save(trackingStatus);
 
-        if (!Array.isArray(dto.budget) || dto.budget.length === 0) throw new BadRequestException('งบประมาณไม่ถูกต้องหรือไม่มีข้อมูล');
+        if (!Array.isArray(dto.budget) || dto.budget.length === 0)
+          throw new BadRequestException('งบประมาณไม่ถูกต้องหรือไม่มีข้อมูล');
 
         const budgetPromises = dto.budget.map((item) => {
           const budget = manager.create(this.budgetRepo.target, {
@@ -147,28 +184,33 @@ export class ProjectGroupsService {
       });
 
       return savedGroup;
-
     } catch (error) {
-      handleException(this.logger, error)
+      handleException(this.logger, error);
     }
   }
 
   async findProjectsByStatus(options: {
     userId: string;
     countOnly?: boolean;
-    type?: 'draft' | 'pending' | 'edit' | 'approved'; 
+    type?: 'draft' | 'pending' | 'edit' | 'approved';
   }) {
     const { userId, countOnly, type } = options;
 
     const workHistory = await this.workHistoryRepo.findOne({
       where: { user: { id: userId } },
-      relations: ['user', 'localAdministrativeOrganization', 'governmentAgencies', 'workStatus'],
+      relations: [
+        'user',
+        'localAdministrativeOrganization',
+        'governmentAgencies',
+        'workStatus',
+      ],
     });
     this.logger.log(workHistory);
     if (!workHistory) return countOnly ? 0 : [];
-    if (workHistory.workStatus.id !== "c844d2a7-cf8b-4db1-958c-d7209dd30ff5") throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+    if (workHistory.workStatus.id !== 'c844d2a7-cf8b-4db1-958c-d7209dd30ff5')
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
 
-    let where: any = {};
+    const where: any = {};
 
     if (type) {
       switch (type) {
@@ -233,16 +275,18 @@ export class ProjectGroupsService {
           deletedAt: Not(IsNull()),
         },
         withDeleted: true,
-        relations: ['workHistory']
+        relations: ['workHistory'],
       });
       return result;
     } catch (error) {
       this.logger.error('Failed to count deleted projects', error.stack);
-      throw new InternalServerErrorException('Unable to count deleted projects');
+      throw new InternalServerErrorException(
+        'Unable to count deleted projects',
+      );
     }
   }
 
-  async findOne(id : string ) : Promise<ProjectGroup>{
+  async findOne(id: string): Promise<ProjectGroup> {
     try {
       const projectGroup = await this.projectGroupRepo.findOne({
         where: { id },
@@ -264,10 +308,10 @@ export class ProjectGroupsService {
         .createQueryBuilder('group')
         .withDeleted()
         .where('group.deletedAt IS NOT NULL')
-        .andWhere('group.deletedAt < NOW() - INTERVAL \'15 days\'')
+        .andWhere("group.deletedAt < NOW() - INTERVAL '15 days'")
         .getMany();
 
-      const idsToDelete = oldDeletedProjects.map(p => p.id);
+      const idsToDelete = oldDeletedProjects.map((p) => p.id);
 
       if (idsToDelete.length > 0) {
         await this.projectGroupRepo.delete(idsToDelete);
@@ -280,30 +324,59 @@ export class ProjectGroupsService {
     }
   }
 
-  async update(id: string, dto: UpdateProjectGroupDto, userId: string): Promise<ProjectGroup> {
+  async update(
+    id: string,
+    dto: UpdateProjectGroupDto,
+    userId: string,
+  ): Promise<ProjectGroup> {
     return await this.dataSource.transaction(async (manager) => {
       // 1. ตรวจสอบ workHistory
       const workHistory = await manager.findOne(this.workHistoryRepo.target, {
         where: { user: { id: userId } },
-        relations: ['localAdministrativeOrganization', 'governmentAgencies' , 'workStatus'],
+        relations: [
+          'localAdministrativeOrganization',
+          'governmentAgencies',
+          'workStatus',
+        ],
       });
-      if (!workHistory || workHistory.workStatus.name.toLocaleLowerCase() !== "approved") throw new NotFoundException('Work history ID not found');
+      if (
+        !workHistory ||
+        workHistory.workStatus.name.toLocaleLowerCase() !== 'approved'
+      )
+        throw new NotFoundException('Work history ID not found');
 
       // 2. ตรวจสอบ duplicate title (ยกเว้นตัวเอง)
-      const duplicateTitle = await manager.findOne(this.projectGroupRepo.target, {
-        where: { title: dto.title, createdBy: { id: workHistory.id }, id: Not(id) },
-      });
-      if (duplicateTitle) throw new ConflictException('Project group with this title already exists');
+      const duplicateTitle = await manager.findOne(
+        this.projectGroupRepo.target,
+        {
+          where: {
+            title: dto.title,
+            createdBy: { id: workHistory.id },
+            id: Not(id),
+          },
+        },
+      );
+      if (duplicateTitle)
+        throw new ConflictException(
+          'Project group with this title already exists',
+        );
 
       // 3. ตรวจสอบ foreign key
-      const [ strategy, tactic, plan] = await Promise.all([
-        manager.findOne(this.strategyRepo.target, { where: { id: dto.strategyId } }),
-        manager.findOne(this.tacticRepo.target, { where: { id: dto.tacticId } }),
+      const [strategy, tactic, plan] = await Promise.all([
+        manager.findOne(this.strategyRepo.target, {
+          where: { id: dto.strategyId },
+        }),
+        manager.findOne(this.tacticRepo.target, {
+          where: { id: dto.tacticId },
+        }),
         manager.findOne(this.planRepo.target, { where: { id: dto.planId } }),
       ]);
-      if (!strategy) throw new NotFoundException(`Strategy ID not found: ${dto.strategyId}`);
-      if (!tactic) throw new NotFoundException(`Tactic ID not found: ${dto.tacticId}`);
-      if (!plan) throw new NotFoundException(`Plan ID not found: ${dto.planId}`);
+      if (!strategy)
+        throw new NotFoundException(`Strategy ID not found: ${dto.strategyId}`);
+      if (!tactic)
+        throw new NotFoundException(`Tactic ID not found: ${dto.tacticId}`);
+      if (!plan)
+        throw new NotFoundException(`Plan ID not found: ${dto.planId}`);
 
       // 5. ดึง group เดิม
       const group = await manager.findOne(this.projectGroupRepo.target, {
@@ -339,7 +412,9 @@ export class ProjectGroupsService {
       if (result.affected === 0) {
         throw new NotFoundException(`projectGroup with ID ${id} not found`);
       }
-      return { message: `projectGroup with ID ${id} has been permanently removed.` };
+      return {
+        message: `projectGroup with ID ${id} has been permanently removed.`,
+      };
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -361,7 +436,9 @@ export class ProjectGroupsService {
     try {
       const result = await this.projectGroupRepo.restore(id);
       if (result.affected === 0) {
-        throw new NotFoundException(`projectGroup with ID ${id} not found or was not deleted.`);
+        throw new NotFoundException(
+          `projectGroup with ID ${id} not found or was not deleted.`,
+        );
       }
       return { message: `projectGroup with ID ${id} has been restored.` };
     } catch (error) {

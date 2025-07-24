@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, InternalServerErrorException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  InternalServerErrorException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as jwt from 'jsonwebtoken';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -15,9 +20,9 @@ export class AuthService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-    private readonly userService: UsersService, 
+    private readonly userService: UsersService,
     private jwtService: JwtService,
-  ) { }
+  ) {}
 
   async handleOAuthLogin(
     idToken: string,
@@ -39,7 +44,7 @@ export class AuthService {
           'workHistory.amphoe',
           'workHistory.localAdministrativeOrganization',
           'workHistory.workStatus',
-          'workHistory.role', 
+          'workHistory.role',
         ],
       });
       // ถ้า user ไม่พบ สร้างใหม่
@@ -59,11 +64,15 @@ export class AuthService {
       }
       const isFirstLogin = user.isFirstLogin;
 
-      const latestWH = user.workHistory
-        ?.filter(wh => wh.workStatus.name === 'approved')
-        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0] ?? {};
+      const latestWH =
+        user.workHistory
+          ?.filter((wh) => wh.workStatus.name === 'approved')
+          .sort(
+            (a, b) =>
+              new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+          )[0] ?? {};
 
-      console.log(latestWH)
+      console.log(latestWH);
 
       const divisionId = isFirstLogin
         ? divisionIdFromDto
@@ -72,13 +81,11 @@ export class AuthService {
         ? divisionNameFromDto
         : latestWH.governmentAgencies?.name;
 
-
       const payload = {
         sub: user.id,
         role: latestWH.role?.name ?? null,
-        workStatus: latestWH.workStatus?.name ?? null
+        workStatus: latestWH.workStatus?.name ?? null,
       };
-
 
       const accessToken = this.jwtService.sign(payload, {
         secret: process.env.JWT_SECRET,
@@ -98,23 +105,25 @@ export class AuthService {
           phone: user.phone ?? '',
           amphoeId: latestWH.amphoe?.id ?? '', // 👈 ใช้ ?. และ ??
           amphoeName: latestWH.amphoe?.name ?? '', // 👈 ใช้ ?. และ ??
-          localAdministrativeOrganizationId: latestWH.localAdministrativeOrganization?.id ?? '', // 👈 ใช้ ?. และ ??
-          localAdministrativeOrganizationName: latestWH.localAdministrativeOrganization?.name ?? '', // 👈 ใช้ ?. และ ??
+          localAdministrativeOrganizationId:
+            latestWH.localAdministrativeOrganization?.id ?? '', // 👈 ใช้ ?. และ ??
+          localAdministrativeOrganizationName:
+            latestWH.localAdministrativeOrganization?.name ?? '', // 👈 ใช้ ?. และ ??
           divisionId,
           divisionName,
           role: latestWH.role?.name ?? 'user',
-          workStatus: latestWH.workStatus?.name ?? 'pending'
+          workStatus: latestWH.workStatus?.name ?? 'pending',
         },
       };
-
-
     } catch (error) {
-      if (error instanceof UnauthorizedException || error instanceof BadRequestException) {
+      if (
+        error instanceof UnauthorizedException ||
+        error instanceof BadRequestException
+      ) {
         throw error;
       }
       console.error('❌ handleOAuthLogin Error:', error);
       throw new InternalServerErrorException('OAuth login failed');
     }
   }
-
 }

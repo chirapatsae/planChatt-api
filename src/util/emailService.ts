@@ -1,6 +1,3 @@
-
-
-
 import * as nodemailer from 'nodemailer';
 
 const transporter = nodemailer.createTransport({
@@ -15,7 +12,7 @@ export const sendEmail = async (
   to: string,
   subject: string,
   text: string,
-  html?: string
+  html?: string,
 ): Promise<boolean> => {
   try {
     const info = await transporter.sendMail({

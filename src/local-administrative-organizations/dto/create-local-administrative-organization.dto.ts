@@ -1,15 +1,15 @@
-import { IsNotEmpty, IsUUID } from "class-validator";
+import { IsNotEmpty, IsUUID } from 'class-validator';
 
 export class CreateLocalAdministrativeOrganizationDto {
-    @IsNotEmpty()
-    code: string;
+  @IsNotEmpty()
+  code: string;
 
-    @IsNotEmpty()
-    name: string;
+  @IsNotEmpty()
+  name: string;
 
-    @IsNotEmpty()
-    type: string;
+  @IsNotEmpty()
+  type: string;
 
-    @IsNotEmpty()
-    amphoeId: string;
+  @IsNotEmpty()
+  amphoeId: string;
 }

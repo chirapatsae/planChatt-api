@@ -20,9 +20,7 @@ describe('StatusController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [StatusController],
-      providers: [
-        { provide: StatusService, useValue: mockStatusService },
-      ],
+      providers: [{ provide: StatusService, useValue: mockStatusService }],
     }).compile();
 
     controller = module.get<StatusController>(StatusController);

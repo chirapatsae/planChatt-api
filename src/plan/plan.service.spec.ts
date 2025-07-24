@@ -15,20 +15,22 @@ import {
 } from '@nestjs/common';
 import * as handleExceptionModule from 'src/util/handleException';
 
-const mockPlan = (overrides: Partial<Plan> = {}): Plan => ({
-  id: 'P001',
-  name: 'Plan Test',
-  createdAt: new Date('2025-01-01T00:00:00.000Z'),
-  createdBy: { id: 'user-1' } as WorkHistory,
-  planTactics: [],
-  projectGroup: [],
-  ...overrides,
-} as Plan);
+const mockPlan = (overrides: Partial<Plan> = {}): Plan =>
+  ({
+    id: 'P001',
+    name: 'Plan Test',
+    createdAt: new Date('2025-01-01T00:00:00.000Z'),
+    createdBy: { id: 'user-1' } as WorkHistory,
+    planTactics: [],
+    projectGroup: [],
+    ...overrides,
+  }) as Plan;
 
-const mockWorkHistory = (overrides: Partial<WorkHistory> = {}): WorkHistory => ({
-  id: 'user-1',
-  ...overrides,
-} as WorkHistory);
+const mockWorkHistory = (overrides: Partial<WorkHistory> = {}): WorkHistory =>
+  ({
+    id: 'user-1',
+    ...overrides,
+  }) as WorkHistory;
 
 const mockPlanRepository = () => ({
   create: jest.fn(),
@@ -96,13 +98,25 @@ describe('PlanService', () => {
     it('should return all plans (success)', async () => {
       planRepo.find.mockResolvedValue([mockPlan(), mockPlan({ id: 'P002' })]);
       const result = await service.findAll();
-      expect(planRepo.find).toHaveBeenCalledWith({ relations: ['planTactics', 'planTactics.tactic', 'planTactics.tactic.strategy'] });
+      expect(planRepo.find).toHaveBeenCalledWith({
+        relations: [
+          'planTactics',
+          'planTactics.tactic',
+          'planTactics.tactic.strategy',
+        ],
+      });
       expect(result).toHaveLength(2);
     });
     it('should throw InternalServerErrorException', async () => {
       planRepo.find.mockRejectedValue(new Error('DB error'));
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new InternalServerErrorException(); });
-      await expect(service.findAll()).rejects.toBeInstanceOf(InternalServerErrorException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new InternalServerErrorException();
+        });
+      await expect(service.findAll()).rejects.toBeInstanceOf(
+        InternalServerErrorException,
+      );
     });
   });
 
@@ -110,16 +124,27 @@ describe('PlanService', () => {
     it('should return a plan by id (success)', async () => {
       planRepo.findOne.mockResolvedValue(mockPlan());
       const result = await service.findOne('P001');
-      expect(planRepo.findOne).toHaveBeenCalledWith({ where: { id: 'P001' }, relations: ['planTactics', 'planTactics.tactic', 'planTactics.tactic.strategy'] });
+      expect(planRepo.findOne).toHaveBeenCalledWith({
+        where: { id: 'P001' },
+        relations: [
+          'planTactics',
+          'planTactics.tactic',
+          'planTactics.tactic.strategy',
+        ],
+      });
       expect(result).toEqual(mockPlan());
     });
     it('should throw NotFoundException if plan not found', async () => {
       planRepo.findOne.mockResolvedValue(undefined);
-      await expect(service.findOne('not-exist')).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.findOne('not-exist')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
     it('should handle edge case: empty id', async () => {
       planRepo.findOne.mockResolvedValue(undefined);
-      await expect(service.findOne('')).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.findOne('')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 
@@ -131,34 +156,68 @@ describe('PlanService', () => {
       planRepo.create.mockReturnValue(mockPlan());
       planRepo.save.mockResolvedValue(mockPlan());
       const result = await service.create(dto, userId);
-      expect(workHistoryRepository.findOne).toHaveBeenCalledWith({ where: { id: userId } });
-      expect(planRepo.create).toHaveBeenCalledWith({ id: dto.id, name: dto.name, createdBy: expect.any(Object) });
+      expect(workHistoryRepository.findOne).toHaveBeenCalledWith({
+        where: { id: userId },
+      });
+      expect(planRepo.create).toHaveBeenCalledWith({
+        id: dto.id,
+        name: dto.name,
+        createdBy: expect.any(Object),
+      });
       expect(planRepo.save).toHaveBeenCalled();
       expect(result).toEqual(mockPlan());
     });
     it('should throw NotFoundException if work history not found', async () => {
       workHistoryRepository.findOne.mockResolvedValue(undefined);
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new NotFoundException(); });
-      await expect(service.create(dto, userId)).rejects.toBeInstanceOf(NotFoundException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      await expect(service.create(dto, userId)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
     it('should throw BadRequestException (invalid input)', async () => {
       workHistoryRepository.findOne.mockResolvedValue(mockWorkHistory());
-      planRepo.create.mockImplementation(() => { throw new BadRequestException(); });
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new BadRequestException(); });
-      await expect(service.create({ ...dto, id: '' }, userId)).rejects.toBeInstanceOf(BadRequestException);
+      planRepo.create.mockImplementation(() => {
+        throw new BadRequestException();
+      });
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new BadRequestException();
+        });
+      await expect(
+        service.create({ ...dto, id: '' }, userId),
+      ).rejects.toBeInstanceOf(BadRequestException);
     });
     it('should throw InternalServerErrorException (other DB error)', async () => {
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new InternalServerErrorException(); });
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new InternalServerErrorException();
+        });
       workHistoryRepository.findOne.mockResolvedValue(mockWorkHistory());
       planRepo.create.mockReturnValue(mockPlan());
       planRepo.save.mockRejectedValue(new Error('DB error'));
-      await expect(service.create(dto, userId)).rejects.toBeInstanceOf(InternalServerErrorException);
+      await expect(service.create(dto, userId)).rejects.toBeInstanceOf(
+        InternalServerErrorException,
+      );
     });
     it('should handle edge case: empty id', async () => {
       workHistoryRepository.findOne.mockResolvedValue(mockWorkHistory());
-      planRepo.create.mockImplementation(() => { throw new BadRequestException(); });
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new BadRequestException(); });
-      await expect(service.create({ ...dto, id: '' }, userId)).rejects.toBeInstanceOf(BadRequestException);
+      planRepo.create.mockImplementation(() => {
+        throw new BadRequestException();
+      });
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new BadRequestException();
+        });
+      await expect(
+        service.create({ ...dto, id: '' }, userId),
+      ).rejects.toBeInstanceOf(BadRequestException);
     });
   });
 
@@ -168,25 +227,46 @@ describe('PlanService', () => {
       planRepo.preload.mockResolvedValue(mockPlan({ name: 'Updated Plan' }));
       planRepo.save.mockResolvedValue(mockPlan({ name: 'Updated Plan' }));
       const result = await service.update('P001', updateDto);
-      expect(planRepo.preload).toHaveBeenCalledWith({ id: 'P001', ...updateDto });
+      expect(planRepo.preload).toHaveBeenCalledWith({
+        id: 'P001',
+        ...updateDto,
+      });
       expect(planRepo.save).toHaveBeenCalled();
       expect(result.name).toBe('Updated Plan');
     });
     it('should throw NotFoundException if plan not found', async () => {
       planRepo.preload.mockResolvedValue(undefined);
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new NotFoundException(); });
-      await expect(service.update('not-exist', updateDto)).rejects.toBeInstanceOf(NotFoundException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      await expect(
+        service.update('not-exist', updateDto),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
     it('should throw InternalServerErrorException', async () => {
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new InternalServerErrorException(); });
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new InternalServerErrorException();
+        });
       planRepo.preload.mockResolvedValue(mockPlan());
       planRepo.save.mockRejectedValue(new Error('DB error'));
-      await expect(service.update('P001', updateDto)).rejects.toBeInstanceOf(InternalServerErrorException);
+      await expect(service.update('P001', updateDto)).rejects.toBeInstanceOf(
+        InternalServerErrorException,
+      );
     });
     it('should handle edge case: empty id', async () => {
       planRepo.preload.mockResolvedValue(undefined);
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new NotFoundException(); });
-      await expect(service.update('', updateDto)).rejects.toBeInstanceOf(NotFoundException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      await expect(service.update('', updateDto)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 
@@ -195,22 +275,42 @@ describe('PlanService', () => {
       planRepo.delete.mockResolvedValue({ affected: 1 });
       const result = await service.remove('P001');
       expect(planRepo.delete).toHaveBeenCalledWith('P001');
-      expect(result).toEqual({ message: 'Plan with ID P001 has been permanently removed.' });
+      expect(result).toEqual({
+        message: 'Plan with ID P001 has been permanently removed.',
+      });
     });
     it('should throw NotFoundException if plan not found', async () => {
       planRepo.delete.mockResolvedValue({ affected: 0 });
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new NotFoundException(); });
-      await expect(service.remove('not-exist')).rejects.toBeInstanceOf(NotFoundException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      await expect(service.remove('not-exist')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
     it('should throw InternalServerErrorException', async () => {
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new InternalServerErrorException(); });
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new InternalServerErrorException();
+        });
       planRepo.delete.mockRejectedValue(new Error('DB error'));
-      await expect(service.remove('P001')).rejects.toBeInstanceOf(InternalServerErrorException);
+      await expect(service.remove('P001')).rejects.toBeInstanceOf(
+        InternalServerErrorException,
+      );
     });
     it('should handle edge case: empty id', async () => {
       planRepo.delete.mockResolvedValue({ affected: 0 });
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new NotFoundException(); });
-      await expect(service.remove('')).rejects.toBeInstanceOf(NotFoundException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      await expect(service.remove('')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 
@@ -222,36 +322,64 @@ describe('PlanService', () => {
       planRepo.save.mockResolvedValueOnce(mockPlan());
       planRepo.softRemove.mockResolvedValueOnce(mockPlan());
       const result = await service.softRemove('P001', userId);
-      expect(workHistoryRepository.findOne).toHaveBeenCalledWith({ where: { id: userId } });
+      expect(workHistoryRepository.findOne).toHaveBeenCalledWith({
+        where: { id: userId },
+      });
       expect(planRepo.findOne).toHaveBeenCalledWith({ where: { id: 'P001' } });
       expect(planRepo.save).toHaveBeenCalled();
       expect(planRepo.softRemove).toHaveBeenCalled();
-      expect(result).toEqual({ message: 'Plan with ID P001 has been soft-removed.' });
+      expect(result).toEqual({
+        message: 'Plan with ID P001 has been soft-removed.',
+      });
     });
     it('should throw NotFoundException if work history not found', async () => {
       workHistoryRepository.findOne.mockResolvedValueOnce(undefined);
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new NotFoundException(); });
-      await expect(service.softRemove('P001', userId)).rejects.toBeInstanceOf(NotFoundException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      await expect(service.softRemove('P001', userId)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
     it('should throw NotFoundException if plan not found', async () => {
       workHistoryRepository.findOne.mockResolvedValueOnce(mockWorkHistory());
       planRepo.findOne.mockResolvedValueOnce(undefined);
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new NotFoundException(); });
-      await expect(service.softRemove('not-exist', userId)).rejects.toBeInstanceOf(NotFoundException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      await expect(
+        service.softRemove('not-exist', userId),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
     it('should throw InternalServerErrorException', async () => {
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new InternalServerErrorException(); });
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new InternalServerErrorException();
+        });
       workHistoryRepository.findOne.mockResolvedValueOnce(mockWorkHistory());
       planRepo.findOne.mockResolvedValueOnce(mockPlan());
       planRepo.save.mockResolvedValueOnce(mockPlan());
       planRepo.softRemove.mockRejectedValueOnce(new Error('DB error'));
-      await expect(service.softRemove('P001', userId)).rejects.toBeInstanceOf(InternalServerErrorException);
+      await expect(service.softRemove('P001', userId)).rejects.toBeInstanceOf(
+        InternalServerErrorException,
+      );
     });
     it('should handle edge case: empty id', async () => {
       workHistoryRepository.findOne.mockResolvedValueOnce(mockWorkHistory());
       planRepo.findOne.mockResolvedValueOnce(undefined);
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new NotFoundException(); });
-      await expect(service.softRemove('', userId)).rejects.toBeInstanceOf(NotFoundException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      await expect(service.softRemove('', userId)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 
@@ -260,22 +388,42 @@ describe('PlanService', () => {
       planRepo.restore.mockResolvedValue({ affected: 1 });
       const result = await service.restore('P001');
       expect(planRepo.restore).toHaveBeenCalledWith('P001');
-      expect(result).toEqual({ message: 'Plan with ID P001 has been restored.' });
+      expect(result).toEqual({
+        message: 'Plan with ID P001 has been restored.',
+      });
     });
     it('should throw NotFoundException if plan not found', async () => {
       planRepo.restore.mockResolvedValue({ affected: 0 });
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new NotFoundException(); });
-      await expect(service.restore('not-exist')).rejects.toBeInstanceOf(NotFoundException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      await expect(service.restore('not-exist')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
     it('should throw InternalServerErrorException', async () => {
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new InternalServerErrorException(); });
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new InternalServerErrorException();
+        });
       planRepo.restore.mockRejectedValue(new Error('DB error'));
-      await expect(service.restore('P001')).rejects.toBeInstanceOf(InternalServerErrorException);
+      await expect(service.restore('P001')).rejects.toBeInstanceOf(
+        InternalServerErrorException,
+      );
     });
     it('should handle edge case: empty id', async () => {
       planRepo.restore.mockResolvedValue({ affected: 0 });
-      handleExceptionSpy = jest.spyOn(handleExceptionModule, 'handleException').mockImplementation(() => { throw new NotFoundException(); });
-      await expect(service.restore('')).rejects.toBeInstanceOf(NotFoundException);
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      await expect(service.restore('')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 });

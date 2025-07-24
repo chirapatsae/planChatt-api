@@ -64,5 +64,4 @@ export class LocalAdministrativeOrganizationsController {
   restore(@Param('id') id: string) {
     return this.localAdministrativeOrganizationsService.restore(id);
   }
-
 }

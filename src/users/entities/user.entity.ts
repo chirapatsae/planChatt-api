@@ -22,22 +22,22 @@ export class User {
   citizenIdHash: string;
 
   @Column()
-  prefix: string
+  prefix: string;
 
   @Column()
-  firstname: string
+  firstname: string;
 
   @Column()
-  lastname: string
+  lastname: string;
 
-  @Column({ nullable: true  , unique : true})
+  @Column({ nullable: true, unique: true })
   email?: string;
 
-  @Column({ nullable: true , unique : true})
+  @Column({ nullable: true, unique: true })
   phone?: string;
 
   @Column({ name: 'is_first_login', default: true })
-  isFirstLogin: boolean
+  isFirstLogin: boolean;
 
   @DeleteDateColumn({ nullable: true, name: 'delete_at' })
   @Exclude()
@@ -51,7 +51,7 @@ export class User {
     onUpdate: 'CASCADE',
   })
   workHistory: WorkHistory[];
-  
+
   @OneToMany(() => WorkHistory, (workHistory) => workHistory.createdBy, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',
@@ -69,7 +69,4 @@ export class User {
     onUpdate: 'CASCADE',
   })
   position: Position[];
-
-  
-
 }

@@ -7,10 +7,14 @@ import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Comment } from './entities/comment.entity';
 
-
 @Module({
   imports: [
-    TypeOrmModule.forFeature([WorkHistory, TrackingStatus, ProjectGroup, Comment]), // ✅ Add these
+    TypeOrmModule.forFeature([
+      WorkHistory,
+      TrackingStatus,
+      ProjectGroup,
+      Comment,
+    ]), // ✅ Add these
   ],
   controllers: [CommentsController],
   providers: [CommentsService],

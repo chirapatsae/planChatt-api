@@ -1,7 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import {
+  NotFoundException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { PositionsService } from './positions.service';
 import { Position } from './entities/position.entity';
 import { User } from '../users/entities/user.entity';
@@ -62,7 +65,9 @@ describe('PositionsService', () => {
     }).compile();
 
     service = module.get<PositionsService>(PositionsService);
-    positionRepository = module.get<Repository<Position>>(getRepositoryToken(Position));
+    positionRepository = module.get<Repository<Position>>(
+      getRepositoryToken(Position),
+    );
     userRepository = module.get<Repository<User>>(getRepositoryToken(User));
   });
 
@@ -96,7 +101,7 @@ describe('PositionsService', () => {
       });
       expect(mockPositionRepository.update).toHaveBeenCalledWith(
         { user: { id: 'user-1' }, isLatest: true },
-        { isLatest: false }
+        { isLatest: false },
       );
       expect(mockPositionRepository.create).toHaveBeenCalledWith({
         name: 'Manager',
@@ -113,7 +118,7 @@ describe('PositionsService', () => {
 
       // Act & Assert
       await expect(service.create(createPositionDto)).rejects.toThrow(
-        NotFoundException
+        NotFoundException,
       );
       expect(mockUserRepository.findOne).toHaveBeenCalledWith({
         where: { id: 'user-1' },
@@ -140,11 +145,13 @@ describe('PositionsService', () => {
 
     it('should handle errors and throw InternalServerErrorException', async () => {
       // Arrange
-      mockPositionRepository.find.mockRejectedValue(new Error('Database error'));
+      mockPositionRepository.find.mockRejectedValue(
+        new Error('Database error'),
+      );
 
       // Act & Assert
       await expect(service.findAll()).rejects.toThrow(
-        InternalServerErrorException
+        InternalServerErrorException,
       );
     });
   });
@@ -171,7 +178,7 @@ describe('PositionsService', () => {
 
       // Act & Assert
       await expect(service.findOne('non-existent')).rejects.toThrow(
-        NotFoundException
+        NotFoundException,
       );
       expect(mockPositionRepository.findOne).toHaveBeenCalledWith({
         where: { id: 'non-existent' },
@@ -181,11 +188,13 @@ describe('PositionsService', () => {
 
     it('should handle errors and throw InternalServerErrorException', async () => {
       // Arrange
-      mockPositionRepository.findOne.mockRejectedValue(new Error('Database error'));
+      mockPositionRepository.findOne.mockRejectedValue(
+        new Error('Database error'),
+      );
 
       // Act & Assert
       await expect(service.findOne('position-1')).rejects.toThrow(
-        InternalServerErrorException
+        InternalServerErrorException,
       );
     });
   });
@@ -219,7 +228,7 @@ describe('PositionsService', () => {
 
       // Act & Assert
       await expect(
-        service.update('non-existent', updatePositionDto)
+        service.update('non-existent', updatePositionDto),
       ).rejects.toThrow(NotFoundException);
       expect(mockPositionRepository.preload).toHaveBeenCalledWith({
         id: 'non-existent',
@@ -229,12 +238,14 @@ describe('PositionsService', () => {
 
     it('should handle errors and throw InternalServerErrorException', async () => {
       // Arrange
-      mockPositionRepository.preload.mockRejectedValue(new Error('Database error'));
+      mockPositionRepository.preload.mockRejectedValue(
+        new Error('Database error'),
+      );
 
       // Act & Assert
-      await expect(service.update('position-1', updatePositionDto)).rejects.toThrow(
-        InternalServerErrorException
-      );
+      await expect(
+        service.update('position-1', updatePositionDto),
+      ).rejects.toThrow(InternalServerErrorException);
     });
   });
 
@@ -259,18 +270,22 @@ describe('PositionsService', () => {
 
       // Act & Assert
       await expect(service.remove('non-existent')).rejects.toThrow(
-        NotFoundException
+        NotFoundException,
       );
-      expect(mockPositionRepository.delete).toHaveBeenCalledWith('non-existent');
+      expect(mockPositionRepository.delete).toHaveBeenCalledWith(
+        'non-existent',
+      );
     });
 
     it('should handle errors and throw InternalServerErrorException', async () => {
       // Arrange
-      mockPositionRepository.delete.mockRejectedValue(new Error('Database error'));
+      mockPositionRepository.delete.mockRejectedValue(
+        new Error('Database error'),
+      );
 
       // Act & Assert
       await expect(service.remove('position-1')).rejects.toThrow(
-        InternalServerErrorException
+        InternalServerErrorException,
       );
     });
   });
@@ -284,7 +299,9 @@ describe('PositionsService', () => {
       const result = await service.softRemove('position-1');
 
       // Assert
-      expect(mockPositionRepository.softDelete).toHaveBeenCalledWith('position-1');
+      expect(mockPositionRepository.softDelete).toHaveBeenCalledWith(
+        'position-1',
+      );
       expect(result).toEqual({
         message: 'Position with ID position-1 has been soft-removed.',
       });
@@ -296,18 +313,22 @@ describe('PositionsService', () => {
 
       // Act & Assert
       await expect(service.softRemove('non-existent')).rejects.toThrow(
-        NotFoundException
+        NotFoundException,
       );
-      expect(mockPositionRepository.softDelete).toHaveBeenCalledWith('non-existent');
+      expect(mockPositionRepository.softDelete).toHaveBeenCalledWith(
+        'non-existent',
+      );
     });
 
     it('should handle errors and throw InternalServerErrorException', async () => {
       // Arrange
-      mockPositionRepository.softDelete.mockRejectedValue(new Error('Database error'));
+      mockPositionRepository.softDelete.mockRejectedValue(
+        new Error('Database error'),
+      );
 
       // Act & Assert
       await expect(service.softRemove('position-1')).rejects.toThrow(
-        InternalServerErrorException
+        InternalServerErrorException,
       );
     });
   });
@@ -333,19 +354,23 @@ describe('PositionsService', () => {
 
       // Act & Assert
       await expect(service.restore('non-existent')).rejects.toThrow(
-        NotFoundException
+        NotFoundException,
       );
-      expect(mockPositionRepository.restore).toHaveBeenCalledWith('non-existent');
+      expect(mockPositionRepository.restore).toHaveBeenCalledWith(
+        'non-existent',
+      );
     });
 
     it('should handle errors and throw InternalServerErrorException', async () => {
       // Arrange
-      mockPositionRepository.restore.mockRejectedValue(new Error('Database error'));
+      mockPositionRepository.restore.mockRejectedValue(
+        new Error('Database error'),
+      );
 
       // Act & Assert
       await expect(service.restore('position-1')).rejects.toThrow(
-        InternalServerErrorException
+        InternalServerErrorException,
       );
     });
   });
-}); 
+});

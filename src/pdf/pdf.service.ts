@@ -16,14 +16,13 @@ export class PdfService {
   }
 
   private newWord(text: string) {
-    const parts = Wordcut.cut(text || '').split('|').map((data: any) => {
-      return {
-        text: [
-          data,
-          { text: '\u200b', font: 'Roboto' }
-        ],
-      };
-    });
+    const parts = Wordcut.cut(text || '')
+      .split('|')
+      .map((data: any) => {
+        return {
+          text: [data, { text: '\u200b', font: 'Roboto' }],
+        };
+      });
     return parts;
   }
 
@@ -37,14 +36,20 @@ export class PdfService {
         normal: path.resolve(__dirname, '../fonts/THSarabun.ttf'),
         bold: path.resolve(__dirname, '../fonts/THSarabun-Bold.ttf'),
         italics: path.resolve(__dirname, '../fonts/THSarabun-Italic.ttf'),
-        bolditalics: path.resolve(__dirname, '../fonts/THSarabun-BoldItalic.ttf'),
+        bolditalics: path.resolve(
+          __dirname,
+          '../fonts/THSarabun-BoldItalic.ttf',
+        ),
       },
       Roboto: {
         normal: path.resolve(__dirname, '../fonts/Roboto-Regular.ttf'),
         bold: path.resolve(__dirname, '../fonts/Roboto-Medium.ttf'),
         italics: path.resolve(__dirname, '../fonts/Roboto-Italic.ttf'),
-        bolditalics: path.resolve(__dirname, '../fonts/Roboto-MediumItalic.ttf'),
-      }
+        bolditalics: path.resolve(
+          __dirname,
+          '../fonts/Roboto-MediumItalic.ttf',
+        ),
+      },
     };
     const printer = new PdfPrinter(fonts);
 
@@ -57,19 +62,28 @@ export class PdfService {
 
     const content: any[] = [];
     // Dynamically generate years array from bp.startYear to bp.endYear
-    const years = Array.from({ length: bp.endYear - bp.startYear + 1 }, (_, i) => bp.startYear + i);
+    const years = Array.from(
+      { length: bp.endYear - bp.startYear + 1 },
+      (_, i) => bp.startYear + i,
+    );
 
     for (const [groupKey, groupProjects] of grouped.entries()) {
       const [strat, tac, pl] = groupKey.split('||');
 
       // Dynamically create sumByYear and countByYear objects
-      const sumByYear: Record<number, number> = Object.fromEntries(years.map(y => [y, 0]));
-      const countByYear: Record<number, number> = Object.fromEntries(years.map(y => [y, 0]));
+      const sumByYear: Record<number, number> = Object.fromEntries(
+        years.map((y) => [y, 0]),
+      );
+      const countByYear: Record<number, number> = Object.fromEntries(
+        years.map((y) => [y, 0]),
+      );
       for (const p of groupProjects) {
         for (const b of p.budgets || []) {
-          const y = b.year, q = parseFloat(b.quantity);
+          const y = b.year,
+            q = parseFloat(b.quantity);
           if (!isNaN(q) && sumByYear[y] !== undefined) {
-            sumByYear[y] += q; countByYear[y]++;
+            sumByYear[y] += q;
+            countByYear[y]++;
           }
         }
       }
@@ -83,7 +97,7 @@ export class PdfService {
         ],
         alignment: 'center',
         margin: [0, 10, 0, 10],
-        fontSize : 14,
+        fontSize: 14,
         pageBreak: content.length ? 'before' : undefined,
       });
 
@@ -117,22 +131,31 @@ export class PdfService {
         { text: 'หน่วยงานหลัก', rowSpan: 2, style: 'tableHeader' },
       ]);
       tableBody.push([
-        '', '', '', '',
-        ...years.map(y => ({ text: y.toString(), style: 'tableHeader' })),
-        '', '', '',
+        '',
+        '',
+        '',
+        '',
+        ...years.map((y) => ({ text: y.toString(), style: 'tableHeader' })),
+        '',
+        '',
+        '',
       ]);
 
       // data rows
       let idx = 1;
       for (const p of groupProjects) {
         // budget cells (no justify)
-        const budgetCells = years.map(y => {
+        const budgetCells = years.map((y) => {
           const m = p.budgets?.find((b: any) => b.year === y);
           const v = m ? parseFloat(m.quantity) : NaN;
-          return { text: isNaN(v) ? '' : v.toLocaleString('th-TH'), alignment: 'right' };
+          return {
+            text: isNaN(v) ? '' : v.toLocaleString('th-TH'),
+            alignment: 'right',
+          };
         });
 
-        const orgName = p.workHistory?.localAdministrativeOrganization?.name || '-';
+        const orgName =
+          p.workHistory?.localAdministrativeOrganization?.name || '-';
 
         tableBody.push([
           { text: String(idx++), alignment: 'center' },
@@ -169,31 +192,57 @@ export class PdfService {
         ]);
       }
       tableBody.push([
-        { text: 'รวมงบประมาณ', colSpan: 4, alignment: 'center', bold: true }, {}, {}, {},
-        ...years.map(y => ({
+        { text: 'รวมงบประมาณ', colSpan: 4, alignment: 'center', bold: true },
+        {},
+        {},
+        {},
+        ...years.map((y) => ({
           text: sumByYear[y] ? sumByYear[y].toLocaleString('th-TH') : '',
-          alignment: 'center', bold: true,
+          alignment: 'center',
+          bold: true,
         })),
-        { text: '', colSpan: 3 }, {}, {}
+        { text: '', colSpan: 3 },
+        {},
+        {},
       ]);
       tableBody.push([
-        { text: 'รวมจำนวนโครงการ', colSpan: 4, alignment: 'center', bold: true }, {}, {}, {},
-        ...years.map(y => ({
+        {
+          text: 'รวมจำนวนโครงการ',
+          colSpan: 4,
+          alignment: 'center',
+          bold: true,
+        },
+        {},
+        {},
+        {},
+        ...years.map((y) => ({
           text: countByYear[y] ? String(countByYear[y]) : '',
-          alignment: 'center', bold: true,
+          alignment: 'center',
+          bold: true,
         })),
-        { text: '', colSpan: 3 }, {}, {}
+        { text: '', colSpan: 3 },
+        {},
+        {},
       ]);
 
       // push table
       content.push({
         table: {
           headerRows: 3,
-          widths: ['3%', '9%', '12%', '14%', ...years.map(() => '7%'), '10%', '10%', '8%'],
+          widths: [
+            '3%',
+            '9%',
+            '12%',
+            '14%',
+            ...years.map(() => '7%'),
+            '10%',
+            '10%',
+            '8%',
+          ],
           body: tableBody,
         },
         layout: {
-          hLineWidth: (i, node) => node.table.body[i]?.[0]?.stack ? 0 : 0.3,
+          hLineWidth: (i, node) => (node.table.body[i]?.[0]?.stack ? 0 : 0.3),
           vLineWidth: () => 0.3,
           hLineColor: () => '#000',
           vLineColor: () => '#000',
@@ -208,18 +257,29 @@ export class PdfService {
       pageOrientation: 'landscape',
       pageMargins: [28, 28, 28, 56],
       defaultStyle: { font: 'THSarabun', fontSize: 12 },
-      styles: { tableHeader: { alignment: 'center', bold: true, fontSize: 12 } },
-      header: { text: 'แบบ ผ.02', alignment: 'right', margin: [0, 10, 10, 0], fontSize: 10 },
-      footer: (currentPage: number) => ({ text: String(currentPage), alignment: 'right', margin: [0, 0, 10, 0] }),
+      styles: {
+        tableHeader: { alignment: 'center', bold: true, fontSize: 12 },
+      },
+      header: {
+        text: 'แบบ ผ.02',
+        alignment: 'right',
+        margin: [0, 10, 10, 0],
+        fontSize: 10,
+      },
+      footer: (currentPage: number) => ({
+        text: String(currentPage),
+        alignment: 'right',
+        margin: [0, 0, 10, 0],
+      }),
     };
 
     // generate buffer
     const pdfDoc = printer.createPdfKitDocument(docDefinition);
     const chunks: Buffer[] = [];
     return new Promise<Buffer>((resolve, reject) => {
-      pdfDoc.on('data', chunk => chunks.push(chunk));
+      pdfDoc.on('data', (chunk) => chunks.push(chunk));
       pdfDoc.on('end', () => resolve(Buffer.concat(chunks)));
-      pdfDoc.on('error', err => reject(err));
+      pdfDoc.on('error', (err) => reject(err));
       pdfDoc.end();
     });
   }

@@ -2,7 +2,10 @@
 import { Controller, Post, Body, UseGuards } from '@nestjs/common';
 import { AiService } from './ai.service';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
-import { GenerateProjectDto, RegenerateFieldDto } from './dto/generate-project.dto';
+import {
+  GenerateProjectDto,
+  RegenerateFieldDto,
+} from './dto/generate-project.dto';
 
 @Controller({
   version: '1',
@@ -14,15 +17,21 @@ export class AiController {
 
   private parseSection(text: string, keyword: string): string | null {
     const keyText = keyword.replace(':', '');
-    const regex = new RegExp(`(?:\\*\\*)?${keyText}(?:\\*\\*)?\\s*:([^]*?)(?=\\n\\s*\\*\\*|$)`, 's');
+    const regex = new RegExp(
+      `(?:\\*\\*)?${keyText}(?:\\*\\*)?\\s*:([^]*?)(?=\\n\\s*\\*\\*|$)`,
+      's',
+    );
     const match = text.match(regex);
 
     if (match && match[1]) {
       const rawContent = match[1];
-      const cleanedContent = rawContent.trim().replace(/^\s*\*{1,2}\s*/, '').trim();
+      const cleanedContent = rawContent
+        .trim()
+        .replace(/^\s*\*{1,2}\s*/, '')
+        .trim();
       return cleanedContent;
     }
-    
+
     return null;
   }
 
@@ -58,6 +67,4 @@ export class AiController {
     const newContent = await this.aiService.regenerateField(body);
     return { newContent };
   }
-
-  
 }

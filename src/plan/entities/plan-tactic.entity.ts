@@ -7,11 +7,13 @@ export class PlanTactic {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @ManyToOne(() => Plan, plan => plan.planTactics, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Plan, (plan) => plan.planTactics, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'plan_id' })
   plan: Plan;
 
-  @ManyToOne(() => Tactic, tactic => tactic.planTactics, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Tactic, (tactic) => tactic.planTactics, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'tactic_id' })
   tactic: Tactic;
 }

@@ -12,9 +12,20 @@ import { Position } from 'src/positions/entities/position.entity';
 import { WorkStatus } from 'src/work-status/entities/work-status.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([WorkHistory, User, LocalAdministrativeOrganization, Amphoe ,Role , GovernmentAgency ,Position , WorkStatus])],
+  imports: [
+    TypeOrmModule.forFeature([
+      WorkHistory,
+      User,
+      LocalAdministrativeOrganization,
+      Amphoe,
+      Role,
+      GovernmentAgency,
+      Position,
+      WorkStatus,
+    ]),
+  ],
   controllers: [WorkHistoryController],
   providers: [WorkHistoryService],
   exports: [WorkHistoryService],
 })
-export class WorkHistoryModule { }
+export class WorkHistoryModule {}

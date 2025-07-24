@@ -10,7 +10,11 @@ import { Repository } from 'typeorm';
 import { User } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { decryption, encryption, hashCitizenId } from 'src/util/encryption.util';
+import {
+  decryption,
+  encryption,
+  hashCitizenId,
+} from 'src/util/encryption.util';
 import { handleException } from 'src/util/handleException';
 
 @Injectable()
@@ -52,12 +56,12 @@ export class UsersService {
       return await this.userRepository.find({
         relations: {
           workHistory: {
-            amphoe : true,
-            localAdministrativeOrganization: true, 
-            workHistoryResponsibleAdmins : {
-              amphoe : true
+            amphoe: true,
+            localAdministrativeOrganization: true,
+            workHistoryResponsibleAdmins: {
+              amphoe: true,
             },
-            governmentAgencies : true
+            governmentAgencies: true,
           },
         },
       });
@@ -75,12 +79,12 @@ export class UsersService {
         where: { id },
         relations: {
           workHistory: {
-            amphoe : true,
-            localAdministrativeOrganization: true, 
-            workHistoryResponsibleAdmins : {
-              amphoe : true
+            amphoe: true,
+            localAdministrativeOrganization: true,
+            workHistoryResponsibleAdmins: {
+              amphoe: true,
             },
-            governmentAgencies : true
+            governmentAgencies: true,
           },
         },
       });
@@ -108,7 +112,7 @@ export class UsersService {
         updatePayload['citizenId'] = await encryption(citizenId);
         updatePayload['citizenIdHash'] = hashCitizenId(citizenId);
       }
-      
+
       const userToUpdate = await this.userRepository.preload({
         id,
         ...updatePayload,
@@ -163,7 +167,9 @@ export class UsersService {
     try {
       const result = await this.userRepository.restore(id);
       if (result.affected === 0) {
-        throw new NotFoundException(`Soft-deleted user with ID ${id} not found`);
+        throw new NotFoundException(
+          `Soft-deleted user with ID ${id} not found`,
+        );
       }
       return { message: `User with ID ${id} has been restored.` };
     } catch (error) {

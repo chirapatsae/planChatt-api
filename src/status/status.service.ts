@@ -1,4 +1,10 @@
-import { BadRequestException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { CreateStatusDto } from './dto/create-status.dto';
 import { UpdateStatusDto } from './dto/update-status.dto';
 import { User } from 'src/users/entities/user.entity';
@@ -19,18 +25,26 @@ export class StatusService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(WorkHistory)
     private readonly workHistoryRepository: Repository<WorkHistory>,
-  ) { }
+  ) {}
 
-  async create(createStatusDto: CreateStatusDto, userId: string): Promise<Status> {
+  async create(
+    createStatusDto: CreateStatusDto,
+    userId: string,
+  ): Promise<Status> {
     try {
-
-      const exitName = await this.statusRepository.findOne({ where: { name: createStatusDto.name } });
+      const exitName = await this.statusRepository.findOne({
+        where: { name: createStatusDto.name },
+      });
       if (exitName) {
         throw new BadRequestException('Status with this name already exists');
       }
-      const workHistory = await this.workHistoryRepository.findOne({ where: { id: userId } });
+      const workHistory = await this.workHistoryRepository.findOne({
+        where: { id: userId },
+      });
       if (!workHistory) {
-        throw new UnauthorizedException('Invalid user. Work history not found.');
+        throw new UnauthorizedException(
+          'Invalid user. Work history not found.',
+        );
       }
       const status = this.statusRepository.create({
         ...createStatusDto,
@@ -38,34 +52,40 @@ export class StatusService {
       });
       return await this.statusRepository.save(status);
     } catch (error) {
-     handleException(this.logger , error)
+      handleException(this.logger, error);
     }
   }
 
   async findAll(): Promise<Status[]> {
     try {
-      return await this.statusRepository.find({relations: ['createdBy', 'deletedBy']});
+      return await this.statusRepository.find({
+        relations: ['createdBy', 'deletedBy'],
+      });
     } catch (error) {
-      handleException(this.logger , error)
+      handleException(this.logger, error);
     }
   }
 
   async findOne(id: string): Promise<Status> {
     try {
-      const status = await this.statusRepository.findOne({ where: { id }, relations: ['createdBy', 'deletedBy'] });
+      const status = await this.statusRepository.findOne({
+        where: { id },
+        relations: ['createdBy', 'deletedBy'],
+      });
       if (!status) {
         throw new BadRequestException('Status not found');
       }
       return status;
     } catch (error) {
-      handleException(this.logger , error)
+      handleException(this.logger, error);
     }
   }
 
   async update(id: string, updateStatusDto: UpdateStatusDto) {
     try {
-
-      const exitName = await this.statusRepository.findOne({ where: { name: updateStatusDto.name, id: Not(id) } });
+      const exitName = await this.statusRepository.findOne({
+        where: { name: updateStatusDto.name, id: Not(id) },
+      });
       if (exitName) {
         throw new BadRequestException('Status with this name already exists');
       }
@@ -76,7 +96,7 @@ export class StatusService {
       Object.assign(status, updateStatusDto);
       return await this.statusRepository.save(status);
     } catch (error) {
-      handleException(this.logger , error)
+      handleException(this.logger, error);
     }
   }
 
@@ -86,16 +106,20 @@ export class StatusService {
       if (!status) {
         throw new BadRequestException('Status not found');
       }
-      const workHistory = await this.workHistoryRepository.findOne({ where: { id: userId } });
+      const workHistory = await this.workHistoryRepository.findOne({
+        where: { id: userId },
+      });
       if (!workHistory) {
-        throw new UnauthorizedException('Invalid user. Work history not found.');
+        throw new UnauthorizedException(
+          'Invalid user. Work history not found.',
+        );
       }
       status.deletedBy = workHistory;
       await this.statusRepository.save(status);
       await this.statusRepository.softRemove(status);
       return { message: `Status ${status.name} soft removed successfully` };
     } catch (error) {
-      handleException(this.logger , error)
+      handleException(this.logger, error);
     }
   }
 
@@ -114,7 +138,10 @@ export class StatusService {
 
   async restore(id: string): Promise<{ message: string }> {
     try {
-      const status = await this.statusRepository.findOne({ where: { id }, withDeleted: true });
+      const status = await this.statusRepository.findOne({
+        where: { id },
+        withDeleted: true,
+      });
       if (!status) {
         throw new BadRequestException('Status Id not found');
       }
@@ -124,8 +151,7 @@ export class StatusService {
       }
       return { message: `Status with ID ${id} has been restored` };
     } catch (error) {
-      handleException(this.logger , error)
+      handleException(this.logger, error);
     }
   }
 }
-
