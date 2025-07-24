@@ -1,10 +1,12 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { CreateStatusDto } from './dto/create-status.dto';
 import { UpdateStatusDto } from './dto/update-status.dto';
 import { User } from 'src/users/entities/user.entity';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Status } from './entities/status.entity';
 import { IsNull, Not, Repository } from 'typeorm';
+import { WorkHistory } from 'src/work-history/entities/work-history.entity';
+import { handleException } from 'src/util/handleException';
 
 @Injectable()
 export class StatusService {
@@ -15,66 +17,55 @@ export class StatusService {
     private readonly statusRepository: Repository<Status>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(WorkHistory)
+    private readonly workHistoryRepository: Repository<WorkHistory>,
   ) { }
 
-  async create(createStatusDto: CreateStatusDto): Promise<Status> {
+  async create(createStatusDto: CreateStatusDto, userId: string): Promise<Status> {
     try {
-      this.logger.log(`Creating status: ${createStatusDto.name}`);
-      const { level, name } = createStatusDto
-      //check user 
 
-      const exitLevel = await this.statusRepository.findOne({ where: { level: level } });
-      if (exitLevel) {
-        throw new BadRequestException('Status with this level already exists');
-      }
-      const exitName = await this.statusRepository.findOne({ where: { name: name } });
+      const exitName = await this.statusRepository.findOne({ where: { name: createStatusDto.name } });
       if (exitName) {
         throw new BadRequestException('Status with this name already exists');
       }
-
+      const workHistory = await this.workHistoryRepository.findOne({ where: { id: userId } });
+      if (!workHistory) {
+        throw new UnauthorizedException('Invalid user. Work history not found.');
+      }
       const status = this.statusRepository.create({
         ...createStatusDto,
+        createdBy: workHistory,
       });
       return await this.statusRepository.save(status);
     } catch (error) {
-      this.logger.error('Create status failed', error.stack);
-      throw new BadRequestException('Failed to create status');
+     handleException(this.logger , error)
     }
   }
 
   async findAll(): Promise<Status[]> {
     try {
-      return await this.statusRepository.find({
-        where: { deleteAt: IsNull() },
-      });
+      return await this.statusRepository.find({relations: ['createdBy', 'deletedBy']});
     } catch (error) {
-      this.logger.error('Find all status failed', error.stack);
-      throw new BadRequestException('Failed to fetch status');
+      handleException(this.logger , error)
     }
   }
 
   async findOne(id: string): Promise<Status> {
     try {
-      const status = await this.statusRepository.findOne({ where: { id }, relations: ['user'] });
+      const status = await this.statusRepository.findOne({ where: { id }, relations: ['createdBy', 'deletedBy'] });
       if (!status) {
         throw new BadRequestException('Status not found');
       }
       return status;
     } catch (error) {
-      this.logger.error(`Find status ${id} failed`, error.stack);
-      throw new BadRequestException('Failed to fetch status');
+      handleException(this.logger , error)
     }
   }
 
   async update(id: string, updateStatusDto: UpdateStatusDto) {
     try {
-      const { level, name } = updateStatusDto;
 
-      const exitLevel = await this.statusRepository.findOne({ where: { level: level, id: Not(id) } });
-      if (exitLevel) {
-        throw new BadRequestException('Status with this level already exists');
-      }
-      const exitName = await this.statusRepository.findOne({ where: { name: name, id: Not(id) } });
+      const exitName = await this.statusRepository.findOne({ where: { name: updateStatusDto.name, id: Not(id) } });
       if (exitName) {
         throw new BadRequestException('Status with this name already exists');
       }
@@ -84,34 +75,48 @@ export class StatusService {
       }
       Object.assign(status, updateStatusDto);
       return await this.statusRepository.save(status);
-
     } catch (error) {
-      this.logger.error(`Update status ${id} failed`, error.stack);
-      throw new BadRequestException('Failed to update status');
+      handleException(this.logger , error)
     }
   }
 
-  async softRemove(id: string): Promise<{ message: string }> {
+  async softRemove(id: string, userId: string): Promise<{ message: string }> {
     try {
       const status = await this.statusRepository.findOne({ where: { id } });
       if (!status) {
         throw new BadRequestException('Status not found');
       }
-      if (status) {
-        await this.statusRepository.softRemove(status);
+      const workHistory = await this.workHistoryRepository.findOne({ where: { id: userId } });
+      if (!workHistory) {
+        throw new UnauthorizedException('Invalid user. Work history not found.');
       }
+      status.deletedBy = workHistory;
+      await this.statusRepository.save(status);
+      await this.statusRepository.softRemove(status);
       return { message: `Status ${status.name} soft removed successfully` };
     } catch (error) {
-      this.logger.error(`Delete status ${id} failed`, error.stack);
-      throw new BadRequestException('Failed to delete status');
+      handleException(this.logger , error)
+    }
+  }
+
+  async remove(id: string): Promise<{ message: string }> {
+    try {
+      const result = await this.statusRepository.delete(id);
+      if (result.affected === 0) {
+        throw new NotFoundException(`Status with ID ${id} not found`);
+      }
+      return { message: `Status with ID ${id} has been permanently removed.` };
+    } catch (error) {
+      this.logger.error(`Hard delete status ${id} failed`, error.stack);
+      throw error;
     }
   }
 
   async restore(id: string): Promise<{ message: string }> {
     try {
-      const status = await this.statusRepository.findOne({ where: { id } , withDeleted : true })
+      const status = await this.statusRepository.findOne({ where: { id }, withDeleted: true });
       if (!status) {
-        throw new BadRequestException('Status Id not found')
+        throw new BadRequestException('Status Id not found');
       }
       const result = await this.statusRepository.restore(id);
       if (result.affected === 0) {
@@ -119,17 +124,8 @@ export class StatusService {
       }
       return { message: `Status with ID ${id} has been restored` };
     } catch (error) {
-      this.logger.error(`Restore status ${id} failed`, error.stack);
-      throw new BadRequestException('Failed to restore status');
+      handleException(this.logger , error)
     }
-  }
-
-  private async getUserOrThrow(id: string): Promise<User> {
-    const user = await this.userRepository.findOne({ where: { id } });
-    if (!user) {
-      throw new BadRequestException('User not found');
-    }
-    return user;
   }
 }
 

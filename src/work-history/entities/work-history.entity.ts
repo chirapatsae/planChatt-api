@@ -12,6 +12,7 @@ import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
 import { Strategy } from 'src/strategy/entities/strategy.entity';
 import { Tactic } from 'src/tactic/entities/tactic.entity';
 import { Plan } from 'src/plan/entities/plan.entity';
+import { Status } from 'src/status/entities/status.entity';
 
 @Entity({ name: "work_history" })
 export class WorkHistory {
@@ -154,6 +155,18 @@ export class WorkHistory {
     onUpdate: 'CASCADE',
   })
   deletorTrackingStatus : TrackingStatus[];
+
+  @OneToMany(() => Status, (status) => status.createdBy, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  creatorStatus : Status[];
+
+  @OneToMany(() => Status, (status) => status.deletedBy, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  deletorStatus : Status[];
 
 }
 

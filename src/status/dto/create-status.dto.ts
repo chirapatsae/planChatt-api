@@ -4,7 +4,5 @@ export class CreateStatusDto {
     @IsNotEmpty()
     name : string
 
-    @IsNotEmpty()
-    level : number
 
 }
