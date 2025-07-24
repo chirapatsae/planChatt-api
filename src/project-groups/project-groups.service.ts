@@ -126,7 +126,7 @@ export class ProjectGroupsService {
         const savedGroupResult = await manager.save(group);
 
         const trackingStatus = manager.create(this.trackingStatusRepo.target, {
-          projectGroup: { id: savedGroupResult.id },
+          projectGroupId: savedGroupResult,
           status: { id: '62997bd6-b1d2-4484-a8fc-f597802d95c2' },
           workHistory: { id: workHistory.id },
         });

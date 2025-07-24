@@ -1,7 +1,6 @@
 import { Exclude } from "class-transformer";
 import { Comment } from "src/comments/entities/comment.entity";
 import { ProjectGroup } from "src/project-groups/entities/project-group.entity";
-import { ProjectType } from "src/project-types/entities/project-type.entity";
 import { Status } from "src/status/entities/status.entity";
 import { WorkHistory } from "src/work-history/entities/work-history.entity";
 import { Column, CreateDateColumn, DeleteDateColumn, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn } from "typeorm";

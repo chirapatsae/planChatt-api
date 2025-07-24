@@ -12,13 +12,9 @@ export class PdfService {
     @InjectRepository(BudgetPlan)
     private readonly budgetPlanRepo: Repository<BudgetPlan>,
   ) {
-    // Load the Thai wordcut dictionary once
     Wordcut.init();
   }
 
-  /**
-   * Breaks Thai text into wordcut segments for inline rendering.
-   */
   private newWord(text: string) {
     const parts = Wordcut.cut(text || '').split('|').map((data: any) => {
       return {
@@ -32,11 +28,10 @@ export class PdfService {
   }
 
   async generateProjectReport(projects: any[]): Promise<Buffer> {
-    // 1) load active budget plan
     const bp = await this.budgetPlanRepo.findOneBy({ isLatest: true });
+    if (!bp) throw new Error('BudgetPlan not found');
     const budgetPlanName = bp?.name ?? 'ไม่พบแผนงบประมาณ';
 
-    // 2) font definitions
     const fonts = {
       THSarabun: {
         normal: path.resolve(__dirname, '../fonts/THSarabun.ttf'),
@@ -53,7 +48,6 @@ export class PdfService {
     };
     const printer = new PdfPrinter(fonts);
 
-    // 3) group by strategy||tactic||plan
     const grouped = new Map<string, any[]>();
     for (const p of projects) {
       const key = `${p.strategy?.name}||${p.tactic?.name}||${p.plan?.name}`;
@@ -62,14 +56,15 @@ export class PdfService {
     }
 
     const content: any[] = [];
-    const years = [2568, 2569, 2570, 2571, 2572] as const;
+    // Dynamically generate years array from bp.startYear to bp.endYear
+    const years = Array.from({ length: bp.endYear - bp.startYear + 1 }, (_, i) => bp.startYear + i);
 
     for (const [groupKey, groupProjects] of grouped.entries()) {
       const [strat, tac, pl] = groupKey.split('||');
 
-      // compute sums & counts
-      const sumByYear: Record<number, number> = { 2568: 0, 2569: 0, 2570: 0, 2571: 0, 2572: 0 };
-      const countByYear: Record<number, number> = { 2568: 0, 2569: 0, 2570: 0, 2571: 0, 2572: 0 };
+      // Dynamically create sumByYear and countByYear objects
+      const sumByYear: Record<number, number> = Object.fromEntries(years.map(y => [y, 0]));
+      const countByYear: Record<number, number> = Object.fromEntries(years.map(y => [y, 0]));
       for (const p of groupProjects) {
         for (const b of p.budgets || []) {
           const y = b.year, q = parseFloat(b.quantity);
@@ -79,7 +74,6 @@ export class PdfService {
         }
       }
 
-      // section header
       content.push({
         text: [
           '\n',
@@ -141,10 +135,7 @@ export class PdfService {
         const orgName = p.workHistory?.localAdministrativeOrganization?.name || '-';
 
         tableBody.push([
-          // index – keep centered
           { text: String(idx++), alignment: 'center' },
-
-          // these text cells get justify alignment
           {
             text: this.newWord(p.title),
             font: 'THSarabun',
@@ -160,10 +151,7 @@ export class PdfService {
             font: 'THSarabun',
             alignment: 'justify',
           },
-
-          // budget columns (no justify)
           ...budgetCells,
-
           {
             text: this.newWord(p.indicator),
             font: 'THSarabun',
@@ -174,16 +162,12 @@ export class PdfService {
             font: 'THSarabun',
             alignment: 'justify',
           },
-
-          // organization – justify as well
           {
             text: this.newWord(orgName),
             font: 'THSarabun',
           },
         ]);
       }
-
-      // totals
       tableBody.push([
         { text: 'รวมงบประมาณ', colSpan: 4, alignment: 'center', bold: true }, {}, {}, {},
         ...years.map(y => ({

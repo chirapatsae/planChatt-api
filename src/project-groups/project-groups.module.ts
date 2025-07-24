@@ -5,7 +5,6 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ProjectGroup } from './entities/project-group.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { User } from 'src/users/entities/user.entity';
-import { ProjectType } from 'src/project-types/entities/project-type.entity';
 import { Budget } from 'src/budget/entities/budget.entity';
 import { Tactic } from 'src/tactic/entities/tactic.entity';
 import { Plan } from 'src/plan/entities/plan.entity';
@@ -14,7 +13,7 @@ import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.ent
 import { Strategy } from 'src/strategy/entities/strategy.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([ProjectGroup , WorkHistory , User , ProjectType , Budget , Strategy , Tactic , Plan , BudgetPlan , TrackingStatus])],
+  imports: [TypeOrmModule.forFeature([ProjectGroup , WorkHistory , User , Budget , Strategy , Tactic , Plan , BudgetPlan , TrackingStatus])],
   controllers: [ProjectGroupsController],
   providers: [ProjectGroupsService],
 })

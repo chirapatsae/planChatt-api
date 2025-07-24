@@ -1,5 +1,5 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
-import OpenAI from 'openai';
+import { OpenAI } from 'openai';
 import { RegenerateFieldDto } from './dto/generate-project.dto';
 
 @Injectable()
@@ -12,28 +12,16 @@ export class AiService {
         })
     }
 
-    /**
-     * สร้างรายละเอียดโครงการจากข้อมูลและเงื่อนไขเพิ่มเติมจากผู้ใช้
-     * @param strategy ยุทธศาสตร์
-     * @param tactic กลยุทธ์
-     * @param plan แผนงาน
-     * @param userPrompt (Optional) รายละเอียดหรือเงื่อนไขเพิ่มเติมจากผู้ใช้
-     */
     async generateProjectDetail(
         strategy: string,
         tactic: string,
         plan: string,
-        userPrompt?: string // ✨ 1. แก้ typo และทำให้เป็น Optional Parameter
+        userPrompt?: string 
     ) {
         const systemPrompt = `คุณเป็นเจ้าหน้าที่วางแผนพัฒนาท้องถิ่นผู้เชี่ยวชาญ มีหน้าที่ให้คำแนะนำและร่างรายละเอียดโครงการโดยใช้ภาษาราชการไทยที่ถูกต้องและสละสลวย`;
-
-        // 2. สร้าง prompt หลักขึ้นมาก่อน
         let mainPrompt = `จากแผนงาน "${plan}", ยุทธศาสตร์ "${strategy}", และกลยุทธ์ "${tactic}" โปรดช่วยเสนอ "ชื่อโครงการ", "วัตถุประสงค์", "เป้าหมาย", "ผลที่คาดว่าจะได้รับ", และ "ตัวชี้วัด"`;
 
-        // 3. ✨ ตรวจสอบว่ามี userPrompt และไม่ใช่ค่าว่าง
-        //    ใช้ `userPrompt?.trim()` เพื่อเช็คว่ามีค่าและไม่ใช่สตริงว่างๆ
         if (userPrompt?.trim()) {
-            // ถ้ามี ให้นำมาต่อท้าย prompt หลัก
             mainPrompt += `\n\nโดยมีรายละเอียดหรือเงื่อนไขเพิ่มเติมที่ต้องพิจารณาเป็นพิเศษ ดังนี้:\n"${userPrompt}"`;
         }
 
@@ -41,10 +29,10 @@ export class AiService {
             const completion = await this.openai.chat.completions.create({
                 model: 'gpt-4o',
                 temperature: 0.5,
-                max_tokens: 800, // อาจจะเพิ่ม token เผื่อ prompt และคำตอบที่ยาวขึ้น
+                max_tokens: 1000,
                 messages: [
                     { role: 'system', content: systemPrompt },
-                    { role: 'user', content: mainPrompt } // ✅ 4. ใช้ prompt ที่รวมแล้วส่งไป
+                    { role: 'user', content: mainPrompt } 
                 ],
             });
 
@@ -66,7 +54,6 @@ export class AiService {
             modificationPrompt
         } = dto;
 
-        // สร้าง Mapping เพื่อแปลง key เป็นชื่อภาษาไทยที่สวยงามสำหรับ Prompt
         const fieldNameMapping: { [key: string]: string } = {
             title: 'ชื่อโครงการ',
             objective: 'วัตถุประสงค์',
@@ -76,8 +63,6 @@ export class AiService {
         };
 
         const targetFieldName = fieldNameMapping[fieldToRegenerate] || fieldToRegenerate;
-
-        // --- Prompt Engineering: สร้าง Prompt ที่สมบูรณ์ที่สุด ---
         const prompt = `
                 คุณเป็นเจ้าหน้าที่วางแผนพัฒนาท้องถิ่นผู้เชี่ยวชาญ ที่กำลังช่วยแก้ไขร่างโครงการ
 
@@ -106,7 +91,7 @@ export class AiService {
         try {
             const completion = await this.openai.chat.completions.create({
                 model: 'gpt-4o',
-                temperature: 0.6, // อาจจะเพิ่มความสร้างสรรค์เล็กน้อย
+                temperature: 0.6, 
                 max_tokens: 500,
                 messages: [
                     {

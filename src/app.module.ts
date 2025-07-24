@@ -19,8 +19,6 @@ import { BudgetPlanModule } from './budget_plan/budget_plan.module';
 import { BudgetPlan } from './budget_plan/entities/budget_plan.entity';
 import { ProjectGroupsModule } from './project-groups/project-groups.module';
 import { ProjectGroup } from './project-groups/entities/project-group.entity';
-import { ProjectTypesModule } from './project-types/project-types.module';
-import { ProjectType } from './project-types/entities/project-type.entity';
 import { BudgetModule } from './budget/budget.module';
 import { Budget } from './budget/entities/budget.entity';
 import { AuthModule } from './auth/auth.module';
@@ -60,7 +58,7 @@ import { WorkHistoryAmphoeResponsibility } from './work-history-amphoe-responsib
       username: 'postgres',
       password: 'Pao@1234!',
       database: 'project_bank',
-      entities: [User,Strategy,Tactic, Plan,PlanTactic,WorkHistoryAmphoeResponsibility, WorkHistory , Amphoe , LocalAdministrativeOrganization , Status ,  TrackingStatus , BudgetPlan , ProjectGroup , ProjectType , Budget , Comment , Role , WorkStatus, Position, GovernmentAgency] ,
+      entities: [User,Strategy,Tactic, Plan,PlanTactic,WorkHistoryAmphoeResponsibility, WorkHistory , Amphoe , LocalAdministrativeOrganization , Status ,  TrackingStatus , BudgetPlan , ProjectGroup  , Budget , Comment , Role , WorkStatus, Position, GovernmentAgency] ,
       synchronize: true,
     }),
     AmphoesModule,
@@ -69,7 +67,6 @@ import { WorkHistoryAmphoeResponsibility } from './work-history-amphoe-responsib
     TrackingStatusModule,
     BudgetPlanModule,
     ProjectGroupsModule,
-    ProjectTypesModule,
     BudgetModule,
     AuthModule,
     StrategyModule,
