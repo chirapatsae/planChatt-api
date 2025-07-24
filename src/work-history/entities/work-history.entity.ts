@@ -83,13 +83,6 @@ export class WorkHistory {
   @JoinColumn({ name: 'updated_by' })
   updatedBy?: User;
 
-
-  @OneToMany(() => TrackingStatus, (trackingStatus) => trackingStatus.workHistory, {
-    onDelete: 'CASCADE',
-    onUpdate: 'CASCADE',
-  })
-  trackingStatus: TrackingStatus[];
-
   @OneToMany(() => WorkHistoryAmphoeResponsibility, (workHistoryResponsibleAdmins) => workHistoryResponsibleAdmins.workHistory, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',
@@ -149,6 +142,18 @@ export class WorkHistory {
     onUpdate: 'CASCADE',
   })
   deletorPlan : Plan[];
+
+  @OneToMany(() => TrackingStatus, (trackingStatus) => trackingStatus.createdBy, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  creatorTrackingStatus : TrackingStatus[];
+
+  @OneToMany(() => TrackingStatus, (trackingStatus) => trackingStatus.deletedBy, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  deletorTrackingStatus : TrackingStatus[];
 
 }
 

@@ -14,6 +14,8 @@ import { User } from 'src/users/entities/user.entity';
 import { Status } from 'src/status/entities/status.entity';
 import { TrackingStatus } from './entities/tracking-status.entity';
 import { Comment } from 'src/comments/entities/comment.entity';
+import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
+import { handleException } from 'src/util/handleException';
 
 @Injectable()
 export class TrackingStatusService {
@@ -22,8 +24,8 @@ export class TrackingStatusService {
   constructor(
     @InjectRepository(TrackingStatus)
     private readonly trackingStatusRepo: Repository<TrackingStatus>,
-    @InjectRepository(User)
-    private readonly userRepo: Repository<User>,
+    @InjectRepository(ProjectGroup)
+    private readonly projectGroupRepo: Repository<ProjectGroup>,
     @InjectRepository(Status)
     private readonly statusRepo: Repository<Status>,
     @InjectRepository(WorkHistory)
@@ -32,42 +34,38 @@ export class TrackingStatusService {
     private readonly commentRepo: Repository<Comment>,
   ) {}
 
-  async create(dto: CreateTrackingStatusDto, userId: string): Promise<{ message: string }> {
+  async create(dto: CreateTrackingStatusDto, userId: string): Promise<TrackingStatus> {
     try {
-      const user = await this.getUserOrThrow(userId);
-      const status = await this.getStatusOrThrow(dto.statusId);
-  
+      // หา workHistory ของ user
       const workHistory = await this.workHistoryRepo.findOne({
-        where: { user: { id: user.id }},
-        relations: ['projectGroup'],
+        where: { user: { id: userId } },
       });
-  
+      if (!workHistory) throw new NotFoundException(`WorkHistory for user ${userId} not found`);
+
+      // หา projectGroup
+      const projectGroup = await this.projectGroupRepo.findOne({ where: { id: dto.projectId } });
+      if (!projectGroup) throw new NotFoundException(`ProjectGroup with ID ${dto.projectId} not found`);
+
+      // หา status
+      const status = await this.statusRepo.findOne({ where: { id: dto.statusId } });
+      if (!status) throw new NotFoundException(`Status with ID ${dto.statusId} not found`);
+
+      // set isLatest = true และอัปเดตตัวเก่าให้ isLatest = false
+      await this.trackingStatusRepo.update({ projectGroupId: projectGroup }, { isLatest: false });
+
+      // สร้าง TrackingStatus
       const tracking = this.trackingStatusRepo.create({
-        status,
-        projectGroup: { id: dto.projectId },
-        workHistory: { id: workHistory?.id },
+        comment: undefined, // ไม่ใช้ comment ตรง entity
+        createdBy: workHistory,
+        projectGroupId: projectGroup,
+        statusId: status,
+        isLatest: true,
       });
-  
       const savedTracking = await this.trackingStatusRepo.save(tracking);
-  
-      // ✅ ถ้ามี comment หลายรายการ ให้ loop + save ทีละรายการ
-      if (dto.comment?.length) {
-        const comments = dto.comment.map((c) =>
-          this.commentRepo.create({
-            detail: c.detail,
-            step: c.step,
-            trackingStatus: savedTracking,
-          }),
-        );
-        await this.commentRepo.save(comments); // ✅ save array ได้เลย
-      }
-  
-      return {
-        message: 'Tracking status created successfully',
-      };
+
+      return savedTracking
     } catch (error) {
-      this.logger.error('Failed to create tracking status', error.stack);
-      throw this.handleError(error);
+      handleException(this.logger , error)
     }
   }
   
@@ -75,11 +73,16 @@ export class TrackingStatusService {
   async findAll(): Promise<TrackingStatus[]> {
     try {
       return await this.trackingStatusRepo.find({
-        relations: ['user', 'status'],
+        relations: [
+          'createdBy',
+          'deletedBy',
+          'projectGroupId',
+          'statusId',
+          'comments',
+        ],
       });
     } catch (error) {
-      this.logger.error('Failed to fetch tracking statuses', error.stack);
-      throw new InternalServerErrorException('Failed to fetch tracking statuses');
+      handleException(this.logger , error)
     }
   }
 
@@ -87,114 +90,89 @@ export class TrackingStatusService {
     try {
       const tracking = await this.trackingStatusRepo.findOne({
         where: { id },
-        relations: ['user', 'status'],
+        relations: [
+          'createdBy',
+          'deletedBy',
+          'projectGroupId',
+          'statusId',
+          'comments',
+        ],
       });
-
       if (!tracking) {
         throw new NotFoundException(`Tracking status with ID ${id} not found`);
       }
-
       return tracking;
     } catch (error) {
-      this.logger.error(`Failed to fetch tracking status ${id}`, error.stack);
-      throw this.handleError(error);
+      handleException(this.logger , error)
     }
   }
 
   async update(id: string, dto: UpdateTrackingStatusDto): Promise<{ message: string; data: TrackingStatus }> {
     try {
       const tracking = await this.trackingStatusRepo.findOne({ where: { id } });
-
       if (!tracking) {
         throw new NotFoundException(`Tracking status with ID ${id} not found`);
       }
-
-
       if (dto.statusId) {
-        tracking.status = await this.getStatusOrThrow(dto.statusId);
+        const status = await this.statusRepo.findOne({ where: { id: dto.statusId } });
+        if (!status) throw new NotFoundException(`Status with ID ${dto.statusId} not found`);
+        tracking.statusId = status;
       }
-
-      Object.assign(tracking, dto);
       const updated = await this.trackingStatusRepo.save(tracking);
-
       return {
         message: 'Tracking status updated successfully',
         data: updated,
       };
     } catch (error) {
-      this.logger.error(`Failed to update tracking status ${id}`, error.stack);
-      throw this.handleError(error);
+      handleException(this.logger , error)
     }
   }
 
-  async softRemove(id: string): Promise<{ message: string }> {
+  async softRemove(id: string, userId?: string): Promise<{ message: string }> {
     try {
       const tracking = await this.trackingStatusRepo.findOne({ where: { id } });
-
       if (!tracking) {
         throw new NotFoundException(`Tracking status with ID ${id} not found`);
       }
-
+      if (userId) {
+        const workHistory = await this.workHistoryRepo.findOne({ where: { user: { id: userId } } });
+        if (workHistory) tracking.deletedBy = workHistory;
+        await this.trackingStatusRepo.save(tracking);
+      }
       await this.trackingStatusRepo.softRemove(tracking);
       return {
         message: `Tracking status ${id} removed successfully`,
       };
     } catch (error) {
-      this.logger.error(`Failed to remove tracking status ${id}`, error.stack);
-      throw this.handleError(error);
+      handleException(this.logger , error)
     }
   }
 
   async restore(id: string): Promise<{ message: string; data: TrackingStatus }> {
     try {
-      const tracking = await this.trackingStatusRepo.findOne({
-        where: { id },
-        withDeleted: true,
-      });
-  
-      if (!tracking) {
-        throw new NotFoundException(`Tracking status with ID ${id} not found`);
-      }
-  
       await this.trackingStatusRepo.restore(id);
-  
       const restoredTracking = await this.trackingStatusRepo.findOne({
         where: { id },
-        relations: ['user', 'status'],
+        relations: [
+          'createdBy',
+          'deletedBy',
+          'projectGroupId',
+          'statusId',
+          'comments',
+        ],
       });
-  
       if (!restoredTracking) {
         throw new NotFoundException(`Tracking status with ID ${id} not found after restore`);
       }
-  
       return {
         message: `Tracking status ${id} restored successfully`,
-        data: restoredTracking, // ✅ now guaranteed not null
+        data: restoredTracking,
       };
     } catch (error) {
-      this.logger.error(`Failed to restore tracking status ${id}`, error.stack);
-      throw this.handleError(error);
+      handleException(this.logger , error)
     }
   }
   
-  // Helper methods
 
-  private async getUserOrThrow(id: string): Promise<User> {
-    const user = await this.userRepo.findOne({ where: { id } });
-    if (!user) throw new NotFoundException(`User with ID ${id} not found`);
-    return user;
-  }
 
-  private async getStatusOrThrow(id: string): Promise<Status> {
-    const status = await this.statusRepo.findOne({ where: { id } });
-    if (!status) throw new NotFoundException(`Status with ID ${id} not found`);
-    return status;
-  }
-
-  private handleError(error: any) {
-    if (error instanceof NotFoundException || error instanceof BadRequestException) {
-      return error;
-    }
-    return new InternalServerErrorException('Unexpected error occurred');
-  }
 }

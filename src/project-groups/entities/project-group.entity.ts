@@ -115,7 +115,7 @@ export class ProjectGroup {
     })
     budgets: Budget[]
 
-    @OneToMany(() => TrackingStatus, (budget) => budget.projectGroup, {
+    @OneToMany(() => TrackingStatus, (budget) => budget.projectGroupId, {
         onUpdate: 'CASCADE',
         onDelete: 'CASCADE'
     })

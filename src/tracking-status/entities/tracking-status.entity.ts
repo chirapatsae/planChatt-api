@@ -17,47 +17,48 @@ export class TrackingStatus {
     comment?: string
 
     @DeleteDateColumn({ nullable: true })
-    @Exclude() // 👈 ซ่อน
+    @Exclude() 
     deletedAt?: Date;
 
+    @ManyToOne(() => WorkHistory , (workHistory) => workHistory.deletorTrackingStatus , {
+        onDelete: 'CASCADE',
+        onUpdate: 'CASCADE',
+    })
+    @JoinColumn({name : 'deleted_by'})
+    deletedBy : WorkHistory
 
     @Column({ default: () => 'CURRENT_TIMESTAMP', name: 'create_at' })
     createAt: Date;
+
+    @ManyToOne(() => WorkHistory , (workHistory) => workHistory.creatorTrackingStatus , {
+        onDelete: 'CASCADE',
+        onUpdate: 'CASCADE',
+    })
+    @JoinColumn({name : 'created_by'})
+    createdBy : WorkHistory
+
 
     @ManyToOne(() => ProjectGroup , (projectGroup) => projectGroup.trackingStatus , {
         onDelete: 'CASCADE',
         onUpdate: 'CASCADE',
     })
     @JoinColumn({name : 'project_group_id'})
-    projectGroup : ProjectGroup
+    projectGroupId : ProjectGroup
 
     @ManyToOne(() => Status , (status) => status.trackingStatus , {
         onDelete: 'CASCADE',
         onUpdate: 'CASCADE',
     })
     @JoinColumn({name : 'status_id' } )
-    status : Status
+    statusId : Status
 
-    @ManyToOne(() => WorkHistory , (workHistory) => workHistory.trackingStatus , {
-        onDelete: 'CASCADE',
-        onUpdate: 'CASCADE',
-    })
-    @JoinColumn({name : 'create_by'})
-    workHistory : WorkHistory
 
-    @ManyToOne(() => ProjectType , (projectType) => projectType.trackingStatus , {
-        onDelete: 'CASCADE',
-        onUpdate: 'CASCADE',
-    })
-    @JoinColumn({name : 'project_type_id'})
-    projectType : ProjectType
+    @Column( {name : 'is_latest' , default : true})
+    isLatest : boolean
 
     @OneToMany(() => Comment , (comment) => comment.trackingStatus , {
         onDelete: 'CASCADE',
         onUpdate: 'CASCADE',
     })
     comments : Comment[]
-
-    @Column( {name : 'is_latest' , default : true})
-    isLatest : boolean
 }

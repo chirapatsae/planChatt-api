@@ -20,7 +20,7 @@ export class Status {
     deleteAt: Date | null;
 
 
-    @OneToMany(() => TrackingStatus , (trackingStatus) => trackingStatus.status , {
+    @OneToMany(() => TrackingStatus , (trackingStatus) => trackingStatus.statusId , {
         onDelete: 'CASCADE',
         onUpdate: 'CASCADE',
     })

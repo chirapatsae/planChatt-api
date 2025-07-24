@@ -6,12 +6,10 @@ import {
   Patch,
   Param,
   Delete,
-  ParseUUIDPipe,
   Logger,
-  InternalServerErrorException,
-  NotFoundException,
-  BadRequestException,
   UseGuards,
+  ParseUUIDPipe,
+  Query,
   Req,
 } from '@nestjs/common';
 import { TrackingStatusService } from './tracking-status.service';
@@ -31,80 +29,43 @@ export class TrackingStatusController {
   constructor(private readonly trackingStatusService: TrackingStatusService) { }
 
   @Post()
-  async create(@Body() dto: CreateTrackingStatusDto , @Req() req: Request & { user: JwtPayloadUser } ) {
-    this.logger.log('Creating tracking status...');
-    try {
-      return await this.trackingStatusService.create(dto ,req.user.userId);
-    } catch (error) {
-      this.logger.error('Error creating tracking status', error.stack);
-      throw this.handleException(error);
-    }
+  create(@Body() dto: CreateTrackingStatusDto, @Req() req: Request & { user: JwtPayloadUser }) {
+    this.logger.log('Request to create tracking status');
+    return this.trackingStatusService.create(dto, req.user.userId);
   }
 
   @Get()
-  async findAll() {
-    this.logger.log('Fetching all tracking statuses...');
-    try {
-      return await this.trackingStatusService.findAll();
-    } catch (error) {
-      this.logger.error('Error fetching tracking statuses', error.stack);
-      throw this.handleException(error);
-    }
+  findAll() {
+    this.logger.log('Request to fetch all tracking statuses');
+    return this.trackingStatusService.findAll();
   }
 
   @Get(':id')
-  async findOne(@Param('id', ParseUUIDPipe) id: string) {
-    this.logger.log(`Fetching tracking status ${id}`);
-    try {
-      return await this.trackingStatusService.findOne(id);
-    } catch (error) {
-      this.logger.error(`Error fetching tracking status ${id}`, error.stack);
-      throw this.handleException(error);
-    }
+  findOne(@Param('id' , ParseUUIDPipe) id: string) {
+    this.logger.log(`Request to fetch tracking status with ID: ${id}`);
+    return this.trackingStatusService.findOne(id);
   }
 
   @Patch(':id')
-  async update(
-    @Param('id', ParseUUIDPipe) id: string,
+  update(
+    @Param('id' , ParseUUIDPipe) id: string,
     @Body() dto: UpdateTrackingStatusDto,
   ) {
-    this.logger.log(`Updating tracking status ${id}`);
-    try {
-      return await this.trackingStatusService.update(id, dto);
-    } catch (error) {
-      this.logger.error(`Error updating tracking status ${id}`, error.stack);
-      throw this.handleException(error);
-    }
+    this.logger.log(`Request to update tracking status with ID: ${id}`);
+    return this.trackingStatusService.update(id, dto);
   }
 
-  @Delete(':id/soft-remove')
-  async softRemove(@Param('id', ParseUUIDPipe) id: string) {
-    this.logger.warn(`Removing tracking status ${id}`);
-    try {
-      return await this.trackingStatusService.softRemove(id);
-    } catch (error) {
-      this.logger.error(`Error removing tracking status ${id}`, error.stack);
-      throw this.handleException(error);
-    }
+  @Delete(':id')
+  remove(
+    @Param('id' , ParseUUIDPipe) id: string,
+    @Query('mode') mode: 'soft' | 'hard' = 'soft',
+    @Req() req: Request & { user: JwtPayloadUser }
+  ) {
+    return this.trackingStatusService.softRemove(id);
   }
 
   @Patch(':id/restore')
-  async restore(@Param('id', ParseUUIDPipe) id: string) {
-    this.logger.warn(`Restoring tracking status ${id}`);
-    try {
-      return await this.trackingStatusService.restore(id);
-    } catch (error) {
-      this.logger.error(`Error restoring tracking status ${id}`, error.stack);
-      throw this.handleException(error);
-    }
-  }
-  private handleException(error: any) {
-    if (
-      error instanceof NotFoundException ||
-      error instanceof BadRequestException
-    ) {
-      return error;
-    }
-    return new InternalServerErrorException('Unexpected error occurred');
+  restore(@Param('id' , ParseUUIDPipe) id: string) {
+    return this.trackingStatusService.restore(id);
   }
 }
