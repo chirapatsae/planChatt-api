@@ -56,7 +56,7 @@ export class TrackingStatus {
     @Column( {name : 'is_latest' , default : true})
     isLatest : boolean
 
-    @OneToMany(() => Comment , (comment) => comment.trackingStatus , {
+    @OneToMany(() => Comment , (comment) => comment.trackingStatusId , {
         onDelete: 'CASCADE',
         onUpdate: 'CASCADE',
     })

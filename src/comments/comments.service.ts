@@ -37,10 +37,9 @@ export class CommentsService {
       const comment = this.commentRepo.create({
         detail: createCommentDto.detail,
         step: createCommentDto.step,
-        trackingStatus: trackingStatus,
+        trackingStatusId: trackingStatus, 
       });
 
-      // Save to database
       await this.commentRepo.save(comment);
 
       return comment;
@@ -48,32 +47,5 @@ export class CommentsService {
       throw error;
     }
   }
-
-
-  async findByTrackingStatus(trackingStatusId: string) {
-    try {
-      const trackingStatus = await this.trackingStatusRepo.findOne({
-        where: { id: trackingStatusId },
-        relations: ['comments'],
-      });
-
-      if (!trackingStatus) {
-        throw new NotFoundException(`Tracking status with ID ${trackingStatusId} not found`);
-      }
-
-      if (!trackingStatus.comments || trackingStatus.comments.length === 0) {
-        throw new BadRequestException(`No comments found for tracking status ID ${trackingStatusId}`);
-      }
-
-      return trackingStatus;
-
-    } catch (error) {
-      if (error instanceof NotFoundException) {
-        throw error;
-      }
-      throw new InternalServerErrorException('Failed to fetch tracking status');
-    }
-  }
-
 
 }

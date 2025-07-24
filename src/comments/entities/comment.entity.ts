@@ -18,11 +18,12 @@ export class Comment {
     @Column({ name: 'create_at' , default: () => 'CURRENT_TIMESTAMP' })
     createAt: Date;
 
+
     @ManyToOne(() => TrackingStatus, (trackingStatus) => trackingStatus.comments, {
         onDelete: 'CASCADE',
         onUpdate: 'CASCADE',
     })
     @JoinColumn({ name: 'tracking_status_id' })
-    trackingStatus: TrackingStatus
+    trackingStatusId: TrackingStatus
 
 }
