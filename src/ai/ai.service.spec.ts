@@ -37,6 +37,10 @@ const validRegenerateDto: RegenerateFieldDto = {
   modificationPrompt: 'ขอแบบสั้นลง',
 };
 
+beforeAll(() => {
+  jest.spyOn(console, 'error').mockImplementation(() => {});
+});
+
 describe('AiService', () => {
   let service: AiService;
 
