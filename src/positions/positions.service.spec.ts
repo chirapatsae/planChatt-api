@@ -13,8 +13,6 @@ import { UpdatePositionDto } from './dto/update-position.dto';
 
 describe('PositionsService', () => {
   let service: PositionsService;
-  let positionRepository: Repository<Position>;
-  let userRepository: Repository<User>;
 
   const mockPosition = {
     id: 'position-1',

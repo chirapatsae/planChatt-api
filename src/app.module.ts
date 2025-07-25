@@ -45,6 +45,7 @@ import { GovernmentAgenciesModule } from './government-agencies/government-agenc
 import { GovernmentAgency } from './government-agencies/entities/government-agency.entity';
 import { WorkHistoryAmphoeResponsibilityModule } from './work-history-amphoe-responsibility/work-history-amphoe-responsibility.module';
 import { WorkHistoryAmphoeResponsibility } from './work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity';
+import { UserActivityLogsModule } from './user-activity-logs/user-activity-logs.module';
 
 @Module({
   imports: [
@@ -100,6 +101,7 @@ import { WorkHistoryAmphoeResponsibility } from './work-history-amphoe-responsib
     PositionsModule,
     GovernmentAgenciesModule,
     WorkHistoryAmphoeResponsibilityModule,
+    UserActivityLogsModule,
   ],
   controllers: [AppController, AiController],
   providers: [AppService, AiService],

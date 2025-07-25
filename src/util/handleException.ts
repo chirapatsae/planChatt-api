@@ -20,7 +20,6 @@ export function handleException(logger: Logger, error: any): never {
       throw new BadRequestException('Data with this value already exists.');
     }
   }
-
   // 4. Default to a generic internal server error
   throw new InternalServerErrorException(
     'An unexpected error occurred on the server.',

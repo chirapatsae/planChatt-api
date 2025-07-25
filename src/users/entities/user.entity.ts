@@ -1,5 +1,6 @@
 import { Exclude } from 'class-transformer';
 import { Position } from 'src/positions/entities/position.entity';
+import { UserActivityLog } from 'src/user-activity-logs/entities/user-activity-log.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import {
   Column,
@@ -69,4 +70,10 @@ export class User {
     onUpdate: 'CASCADE',
   })
   position: Position[];
+
+  @OneToMany(() => UserActivityLog, (userActivityLog) => userActivityLog.createdBy, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  userActivityLogs: UserActivityLog[];
 }
