@@ -8,31 +8,39 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-
       - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
-
       - name: Install dependencies
         run: npm install
-
       # - name: Run ESLint
       #   run: npm run lint
-
       - name: Run Prettier
         run: npm run format
-
       - name: Run tests
         run: npm test
+      - name: Docker Login
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
+  owasp:
+    runs-on: ubuntu-latest
+    needs: ci
+    if: always()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      - name: Install dependencies
+        run: npm install
       - name: Start server
         run: npm start &
-
       - name: Wait for server to be ready
         run: |
           for i in {1..10}; do
@@ -43,10 +51,6 @@ jobs:
             echo "Waiting for server...";
             sleep 3;
           done
-
-      - name: Docker Login
-        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-
       - name: OWASP ZAP Full Scan
         uses: zaproxy/action-full-scan@v0.6.0
         with:
