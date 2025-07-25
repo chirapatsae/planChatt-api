@@ -58,6 +58,7 @@ const minimalWorkHistory = {
     createdWorkHistory: [],
     updatedWorkHistory: [],
     position: [],
+    userActivityLogs: [],
   },
   workStatus: {
     id: 'workstatus-uuid',
