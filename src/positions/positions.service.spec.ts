@@ -63,10 +63,6 @@ describe('PositionsService', () => {
     }).compile();
 
     service = module.get<PositionsService>(PositionsService);
-    positionRepository = module.get<Repository<Position>>(
-      getRepositoryToken(Position),
-    );
-    userRepository = module.get<Repository<User>>(getRepositoryToken(User));
   });
 
   afterEach(() => {

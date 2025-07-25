@@ -38,6 +38,7 @@ const mockUser = (overrides: Partial<User> = {}): User => ({
   createdWorkHistory: [],
   updatedWorkHistory: [],
   position: [],
+  userActivityLogs: [],
   ...overrides,
 });
 

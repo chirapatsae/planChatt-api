@@ -90,6 +90,7 @@ describe('AuthService', () => {
     createdWorkHistory: [],
     updatedWorkHistory: [],
     position: [],
+    userActivityLogs: [],
   };
   const workHistory = [
     {
@@ -165,6 +166,7 @@ describe('AuthService', () => {
     createdWorkHistory: [],
     updatedWorkHistory: [],
     position: [],
+    userActivityLogs: [],
   };
 
   describe('handleOAuthLogin', () => {
@@ -176,8 +178,8 @@ describe('AuthService', () => {
     it('should login existing user and return accessToken (success)', async () => {
       (jwt.decode as jest.Mock).mockReturnValue(validDecoded);
       (hashCitizenId as jest.Mock).mockReturnValue(hashedCid);
-      userRepository.findOne.mockResolvedValue({ ...user });
-      userService.update.mockResolvedValue({ ...user });
+      userRepository.findOne.mockResolvedValue({ ...user, userActivityLogs: [] });
+      userService.update.mockResolvedValue({ ...user, userActivityLogs: [] });
       jwtService.sign.mockReturnValue('signed-token');
 
       const result = await service.handleOAuthLogin(
