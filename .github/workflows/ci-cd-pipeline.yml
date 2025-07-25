@@ -20,14 +20,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run SonarQube Scan
-        uses: SonarSource/sonarcloud-github-action@v2
+      # รัน SonarQube Scanner
+      - name: Run SonarQube Scanner
+        uses: sonarsource/sonarqube-scan-action@v2
+        env:
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
           args: >
-            -Dsonar.projectKey=YOUR_PROJECT_KEY
-            -Dsonar.organization=YOUR_ORG
-            -Dsonar.host.url=https://sonarcloud.io
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+            -Dsonar.projectKey=chirapatsae_api_reserver_room
+            -Dsonar.sources=.
+            -Dsonar.tests=tests
+            -Dsonar.test.inclusions=tests/**/*.spec.js,tests/**/*.test.js
+            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
 
   zap-scan:
     runs-on: ubuntu-latest
