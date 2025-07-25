@@ -10,6 +10,7 @@ import { Position } from './entities/position.entity';
 import { User } from '../users/entities/user.entity';
 import { CreatePositionDto } from './dto/create-position.dto';
 import { UpdatePositionDto } from './dto/update-position.dto';
+import { Logger } from '@nestjs/common';
 
 describe('PositionsService', () => {
   let service: PositionsService;
@@ -46,6 +47,10 @@ describe('PositionsService', () => {
   const mockUserRepository = {
     findOne: jest.fn(),
   };
+
+  beforeAll(() => {
+    jest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+  });
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({

@@ -14,6 +14,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import * as handleExceptionModule from 'src/util/handleException';
+import { Logger } from '@nestjs/common';
+
+beforeAll(() => {
+  jest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+});
 
 const mockPlan = (overrides: Partial<Plan> = {}): Plan =>
   ({

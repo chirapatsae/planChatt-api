@@ -19,6 +19,7 @@ import {
 } from '@nestjs/common';
 import { CreateProjectGroupDto } from './dto/create-project-group.dto';
 import { UpdateProjectGroupDto } from './dto/update-project-group.dto';
+import { Logger } from '@nestjs/common';
 
 // Helper to create a mock repository
 type MockedRepository<T extends object> = jest.Mocked<Repository<T>>;
@@ -36,6 +37,10 @@ function createMockRepository<T extends object>(): MockedRepository<T> {
     // Add other Repository methods as needed
   } as unknown as MockedRepository<T>;
 }
+
+beforeAll(() => {
+  jest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+});
 
 describe('ProjectGroupsService', () => {
   let service: ProjectGroupsService;
