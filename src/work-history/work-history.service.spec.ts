@@ -158,6 +158,10 @@ describe('WorkHistoryService', () => {
     jest.clearAllMocks();
   });
 
+  beforeAll(() => {
+    jest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+  });
+
   afterEach(() => {
     jest.clearAllMocks();
   });
