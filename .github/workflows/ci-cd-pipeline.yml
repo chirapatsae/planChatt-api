@@ -30,7 +30,6 @@ jobs:
           args: >
             -Dsonar.projectKey=chirapatsae_api_reserver_room
             -Dsonar.sources=.
-            -Dsonar.tests=tests
             -Dsonar.organization=chirapatsae
             -Dsonar.test.inclusions=tests/**/*.spec.js,tests/**/*.test.js
             -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
