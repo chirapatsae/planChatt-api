@@ -17,8 +17,8 @@ jobs:
           node-version: '18'
       - name: Install dependencies
         run: npm install
-      # - name: Run ESLint
-      #   run: npm run lint
+      - name: Run ESLint
+        run: npm run lint
       - name: Run Prettier
         run: npm run format
       - name: Run tests
@@ -54,7 +54,7 @@ jobs:
       - name: OWASP ZAP Full Scan
         uses: zaproxy/action-full-scan@v0.6.0
         with:
-          target: 'http://localhost:3000'
+          target: 'http://127.0.0.1.nip.io:3000'
           fail_action: true
         env:
-          ZAP_API_KEY: ${{ secrets.ZAP_API_KEY }} 
+          ZAP_API_KEY: ${{ secrets.ZAP_API_KEY }}
