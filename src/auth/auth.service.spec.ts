@@ -18,6 +18,11 @@ jest.mock('src/util/encryption.util', () => ({
   hashCitizenId: jest.fn(),
 }));
 
+beforeAll(() => {
+  jest.spyOn(console, 'log').mockImplementation(() => {});
+  jest.spyOn(console, 'error').mockImplementation(() => {});
+});
+
 describe('AuthService', () => {
   let service: AuthService;
   let userRepository: jest.Mocked<Repository<User>>;

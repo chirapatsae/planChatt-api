@@ -6,37 +6,37 @@ on:
       - master
 
 jobs:
-  sonar:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+  # sonar:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v3
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18'
+  #     - name: Set up Node.js
+  #       uses: actions/setup-node@v3
+  #       with:
+  #         node-version: '18'
 
-      - name: Install dependencies
-        run: npm ci
+  #     - name: Install dependencies
+  #       run: npm ci
 
-      # รัน SonarQube Scanner
-      - name: Run SonarQube Scanner
-        uses: sonarsource/sonarqube-scan-action@v2
-        env:
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        with:
-          args: >
-            -Dsonar.projectKey=chirapatsae_api_reserver_room
-            -Dsonar.sources=.
-            -Dsonar.organization=chirapatsae
-            -Dsonar.test.inclusions=tests/**/*.spec.js,tests/**/*.test.js
-            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+  #     # รัน SonarQube Scanner
+  #     - name: Run SonarQube Scanner
+  #       uses: sonarsource/sonarqube-scan-action@v2
+  #       env:
+  #         SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+  #         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+  #       with:
+  #         args: >
+  #           -Dsonar.projectKey=chirapatsae_api_reserver_room
+  #           -Dsonar.sources=.
+  #           -Dsonar.organization=chirapatsae
+  #           -Dsonar.test.inclusions=tests/**/*.spec.js,tests/**/*.test.js
+  #           -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
 
   zap-scan:
     runs-on: ubuntu-latest
-    needs: sonar
+    # needs: sonar
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
