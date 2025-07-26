@@ -172,6 +172,7 @@ describe('AuthService', () => {
     updatedWorkHistory: [],
     position: [],
     userActivityLogs: [],
+    aiUsageQuota: undefined, // Optional relationship
   };
 
   describe('handleOAuthLogin', () => {
@@ -183,8 +184,8 @@ describe('AuthService', () => {
     it('should login existing user and return accessToken (success)', async () => {
       (jwt.decode as jest.Mock).mockReturnValue(validDecoded);
       (hashCitizenId as jest.Mock).mockReturnValue(hashedCid);
-      userRepository.findOne.mockResolvedValue({ ...user, userActivityLogs: [] });
-      userService.update.mockResolvedValue({ ...user, userActivityLogs: [] });
+      userRepository.findOne.mockResolvedValue({ ...user, userActivityLogs: [] } as any);
+      userService.update.mockResolvedValue({ ...user, userActivityLogs: [] } as any);
       jwtService.sign.mockReturnValue('signed-token');
 
       const result = await service.handleOAuthLogin(
@@ -208,7 +209,7 @@ describe('AuthService', () => {
       (jwt.decode as jest.Mock).mockReturnValue(validDecoded);
       (hashCitizenId as jest.Mock).mockReturnValue(hashedCid);
       userRepository.findOne.mockResolvedValue(null);
-      userService.create.mockResolvedValue({ ...user, isFirstLogin: true });
+      userService.create.mockResolvedValue({ ...user, isFirstLogin: true } as any);
       jwtService.sign.mockReturnValue('signed-token');
 
       const result = await service.handleOAuthLogin(
@@ -272,8 +273,8 @@ describe('AuthService', () => {
     it('should handle user with no workHistory gracefully', async () => {
       (jwt.decode as jest.Mock).mockReturnValue(validDecoded);
       (hashCitizenId as jest.Mock).mockReturnValue(hashedCid);
-      userRepository.findOne.mockResolvedValue({ ...user, workHistory: [] });
-      userService.update.mockResolvedValue({ ...user, workHistory: [] });
+      userRepository.findOne.mockResolvedValue({ ...user, workHistory: [] } as any);
+      userService.update.mockResolvedValue({ ...user, workHistory: [] } as any);
       jwtService.sign.mockReturnValue('signed-token');
       const result = await service.handleOAuthLogin(
         validIdToken,
@@ -288,8 +289,8 @@ describe('AuthService', () => {
     it('should handle empty string/edge case inputs', async () => {
       (jwt.decode as jest.Mock).mockReturnValue(validDecoded);
       (hashCitizenId as jest.Mock).mockReturnValue(hashedCid);
-      userRepository.findOne.mockResolvedValue({ ...user });
-      userService.update.mockResolvedValue({ ...user });
+      userRepository.findOne.mockResolvedValue({ ...user } as any);
+      userService.update.mockResolvedValue({ ...user } as any);
       jwtService.sign.mockReturnValue('signed-token');
       // Empty divisionId
       const result = await service.handleOAuthLogin(
@@ -312,8 +313,8 @@ describe('AuthService', () => {
     it('should handle negative/zero/invalid user id edge cases', async () => {
       (jwt.decode as jest.Mock).mockReturnValue(validDecoded);
       (hashCitizenId as jest.Mock).mockReturnValue(hashedCid);
-      userRepository.findOne.mockResolvedValue({ ...user, id: '0' });
-      userService.update.mockResolvedValue({ ...user, id: '0' });
+      userRepository.findOne.mockResolvedValue({ ...user, id: '0' } as any);
+      userService.update.mockResolvedValue({ ...user, id: '0' } as any);
       jwtService.sign.mockReturnValue('signed-token');
       const result = await service.handleOAuthLogin(
         validIdToken,

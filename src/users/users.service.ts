@@ -63,6 +63,7 @@ export class UsersService {
             },
             governmentAgencies: true,
           },
+          aiUsageQuota: true,
         },
       });
     } catch (error) {
@@ -86,6 +87,7 @@ export class UsersService {
             },
             governmentAgencies: true,
           },
+          aiUsageQuota: true,
         },
       });
 

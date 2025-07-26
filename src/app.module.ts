@@ -46,6 +46,9 @@ import { GovernmentAgency } from './government-agencies/entities/government-agen
 import { WorkHistoryAmphoeResponsibilityModule } from './work-history-amphoe-responsibility/work-history-amphoe-responsibility.module';
 import { WorkHistoryAmphoeResponsibility } from './work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity';
 import { UserActivityLogsModule } from './user-activity-logs/user-activity-logs.module';
+import { AiUsageQuotasModule } from './ai-usage-quotas/ai-usage-quotas.module';
+import { UserActivityLog } from './user-activity-logs/entities/user-activity-log.entity';
+import { AiUsageQuota } from './ai-usage-quotas/entities/ai-usage-quota.entity';
 
 @Module({
   imports: [
@@ -61,6 +64,7 @@ import { UserActivityLogsModule } from './user-activity-logs/user-activity-logs.
       database: 'project_bank',
       entities: [
         User,
+        UserActivityLog,
         Strategy,
         Tactic,
         Plan,
@@ -79,6 +83,7 @@ import { UserActivityLogsModule } from './user-activity-logs/user-activity-logs.
         WorkStatus,
         Position,
         GovernmentAgency,
+        AiUsageQuota
       ],
       synchronize: true,
     }),
@@ -102,6 +107,7 @@ import { UserActivityLogsModule } from './user-activity-logs/user-activity-logs.
     GovernmentAgenciesModule,
     WorkHistoryAmphoeResponsibilityModule,
     UserActivityLogsModule,
+    AiUsageQuotasModule,
   ],
   controllers: [AppController, AiController],
   providers: [AppService, AiService],

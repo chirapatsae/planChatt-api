@@ -7,6 +7,7 @@ import { Status } from 'src/status/entities/status.entity';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { Comment } from 'src/comments/entities/comment.entity';
+import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { Comment } from 'src/comments/entities/comment.entity';
       Status,
       WorkHistory,
       Comment,
+      ProjectGroup,
     ]),
   ],
   controllers: [TrackingStatusController],

@@ -1,4 +1,5 @@
 import { Exclude } from 'class-transformer';
+import { AiUsageQuota } from 'src/ai-usage-quotas/entities/ai-usage-quota.entity';
 import { Position } from 'src/positions/entities/position.entity';
 import { UserActivityLog } from 'src/user-activity-logs/entities/user-activity-log.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
@@ -6,7 +7,9 @@ import {
   Column,
   DeleteDateColumn,
   Entity,
+  JoinColumn,
   OneToMany,
+  OneToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
 
@@ -76,4 +79,8 @@ export class User {
     onUpdate: 'CASCADE',
   })
   userActivityLogs: UserActivityLog[];
+
+  @OneToOne(() => AiUsageQuota, (aiUsageQuota) => aiUsageQuota.user)
+  @JoinColumn({ name: 'ai_usage_quota_id' })
+  aiUsageQuota?: AiUsageQuota;
 }

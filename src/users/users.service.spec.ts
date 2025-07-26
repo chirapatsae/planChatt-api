@@ -12,14 +12,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 
-// Mock utility functions except handleException
 jest.mock('../util/encryption.util', () => ({
   encryption: jest.fn(async (v) => `encrypted-${v}`),
   decryption: jest.fn(async (v) => v.replace('encrypted-', '')),
   hashCitizenId: jest.fn((v) => `hash-${v}`),
 }));
 
-import { encryption, decryption, hashCitizenId } from '../util/encryption.util';
+import {  decryption } from '../util/encryption.util';
 import * as handleExceptionModule from '../util/handleException';
 
 const mockUser = (overrides: Partial<User> = {}): User => ({
@@ -39,6 +38,7 @@ const mockUser = (overrides: Partial<User> = {}): User => ({
   updatedWorkHistory: [],
   position: [],
   userActivityLogs: [],
+  aiUsageQuota: undefined, // Optional relationship
   ...overrides,
 });
 
@@ -168,6 +168,7 @@ describe('UsersService', () => {
             workHistoryResponsibleAdmins: { amphoe: true },
             governmentAgencies: true,
           },
+          aiUsageQuota: true,
         },
       });
       expect(result).toHaveLength(2);
@@ -199,6 +200,7 @@ describe('UsersService', () => {
             workHistoryResponsibleAdmins: { amphoe: true },
             governmentAgencies: true,
           },
+          aiUsageQuota: true,
         },
       });
       expect(result.citizenId).toBe('1234567890123');
@@ -235,6 +237,36 @@ describe('UsersService', () => {
       await expect(service.findOne('')).rejects.toBeInstanceOf(
         NotFoundException,
       );
+    });
+
+    it('should return user with aiUsageQuota relationship', async () => {
+      const mockAiUsageQuota = {
+        id: 'quota-123',
+        periodStart: new Date('2024-01-01'),
+        periodEnd: new Date('2024-12-31'),
+        quotaLimit: 1000,
+        quotaUsed: 100,
+        remainingQuota: 900,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        deletedAt: undefined,
+        user: undefined as any,
+      };
+
+      const userWithQuota = mockUser({
+        aiUsageQuota: mockAiUsageQuota,
+      });
+
+      userRepository.findOne.mockResolvedValue(userWithQuota);
+      (decryption as jest.Mock).mockResolvedValue('1234567890123');
+      
+      const result = await service.findOne('uuid-1');
+      
+      expect(result.aiUsageQuota).toBeDefined();
+      expect(result.aiUsageQuota?.id).toBe('quota-123');
+      expect(result.aiUsageQuota?.quotaLimit).toBe(1000);
+      expect(result.aiUsageQuota?.quotaUsed).toBe(100);
+      expect(result.aiUsageQuota?.remainingQuota).toBe(900);
     });
   });
 
