@@ -1,5 +1,6 @@
+import { AiUsageLog } from "src/ai-usage-logs/entities/ai-usage-log.entity";
 import { User } from "src/users/entities/user.entity";
-import { Column, CreateDateColumn, Entity, OneToOne, PrimaryGeneratedColumn, UpdateDateColumn, DeleteDateColumn, JoinColumn } from "typeorm";
+import { Column, CreateDateColumn, Entity, OneToOne, PrimaryGeneratedColumn, UpdateDateColumn, DeleteDateColumn, JoinColumn, OneToMany } from "typeorm";
 
 @Entity('ai_usage_quotas')
 export class AiUsageQuota {
@@ -33,4 +34,7 @@ export class AiUsageQuota {
     @OneToOne(() => User, (user) => user.aiUsageQuota)
     @JoinColumn({ name: 'user_id' })
     user : User;
+
+    @OneToMany(() => AiUsageLog , (aiUsageLog) => aiUsageLog.aiUsageQuota)
+    aiUsageLogs : AiUsageLog[]
 }

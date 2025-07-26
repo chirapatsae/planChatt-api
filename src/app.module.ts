@@ -49,6 +49,7 @@ import { UserActivityLogsModule } from './user-activity-logs/user-activity-logs.
 import { AiUsageQuotasModule } from './ai-usage-quotas/ai-usage-quotas.module';
 import { UserActivityLog } from './user-activity-logs/entities/user-activity-log.entity';
 import { AiUsageQuota } from './ai-usage-quotas/entities/ai-usage-quota.entity';
+import { AiUsageLogsModule } from './ai-usage-logs/ai-usage-logs.module';
 
 @Module({
   imports: [
@@ -108,6 +109,7 @@ import { AiUsageQuota } from './ai-usage-quotas/entities/ai-usage-quota.entity';
     WorkHistoryAmphoeResponsibilityModule,
     UserActivityLogsModule,
     AiUsageQuotasModule,
+    AiUsageLogsModule,
   ],
   controllers: [AppController, AiController],
   providers: [AppService, AiService],
