@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { NotFoundException, InternalServerErrorException, Logger } from '@nestjs/common';
 import { AiUsageLogsService } from './ai-usage-logs.service';
 import { AiUsageLog } from './entities/ai-usage-log.entity';
 import { CreateAiUsageLogDto } from './dto/create-ai-usage-log.dto';
@@ -11,6 +11,14 @@ import { AiUsageQuota } from 'src/ai-usage-quotas/entities/ai-usage-quota.entity
 describe('AiUsageLogsService', () => {
   let service: AiUsageLogsService;
   let repository: Repository<AiUsageLog>;
+
+  beforeAll(() => {
+    jest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+  });
+
+  afterAll(() => {
+    jest.restoreAllMocks();
+  });
 
   const mockRepository = {
     create: jest.fn(),
