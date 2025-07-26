@@ -63,6 +63,7 @@ describe('AiUsageQuotasService', () => {
     updatedAt: new Date(),
     deletedAt: undefined,
     user: mockUser,
+    aiUsageLogs: [],
   };
 
   const mockCreateDto: CreateAiUsageQuotaDto = {

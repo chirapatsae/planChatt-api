@@ -251,6 +251,7 @@ describe('UsersService', () => {
         updatedAt: new Date(),
         deletedAt: undefined,
         user: undefined as any,
+        aiUsageLogs: [],
       };
 
       const userWithQuota = mockUser({
