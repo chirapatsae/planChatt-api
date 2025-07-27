@@ -1,98 +1,218 @@
+# ระบบจัดการโครงการของรัฐบาล (Government Project Management System)
+
 <p align="center">
   <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
 </p>
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+## 📋 คำอธิบาย
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+ระบบจัดการโครงการของรัฐบาลที่พัฒนาด้วย NestJS เป็นแพลตฟอร์มสำหรับการจัดการโครงการ งบประมาณ และการติดตามสถานะของโครงการต่างๆ ของหน่วยงานภาครัฐ โดยมีฟีเจอร์หลักดังนี้:
 
-## Description
+### 🚀 ฟีเจอร์หลัก
+- **การจัดการผู้ใช้และสิทธิ์** - ระบบจัดการผู้ใช้ พร้อมระบบ Authentication และ Authorization
+- **การจัดการโครงการ** - ระบบจัดการข้อมูลโครงการ กลยุทธ์ แผนงาน และยุทธวิธี
+- **การจัดการงบประมาณ** - ระบบติดตามและจัดการงบประมาณโครงการ
+- **การติดตามสถานะ** - ระบบติดตามสถานะและความคืบหน้าของโครงการ
+- **การสร้างรายงาน PDF** - ระบบสร้างรายงานโครงการในรูปแบบ PDF
+- **ระบบ AI** - ระบบ AI สำหรับช่วยในการจัดการและวิเคราะห์ข้อมูล
+- **การจัดการพื้นที่** - ระบบจัดการข้อมูลอำเภอ และองค์กรปกครองส่วนท้องถิ่น
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## 🛠️ เทคโนโลยีที่ใช้
 
-## Project setup
+- **Backend Framework**: NestJS (Node.js)
+- **Database**: PostgreSQL
+- **ORM**: TypeORM
+- **Authentication**: JWT + Passport
+- **PDF Generation**: PDFMake
+- **AI Integration**: OpenAI API
+- **Email Service**: Nodemailer
+- **Testing**: Jest
+- **Containerization**: Docker
 
+## 📦 การติดตั้ง
+
+### ความต้องการของระบบ
+- Node.js 18+
+- PostgreSQL 12+
+- npm หรือ yarn
+
+### ขั้นตอนการติดตั้ง
+
+1. **Clone โปรเจกต์**
 ```bash
-$ npm install
+git clone <repository-url>
+cd server_new
 ```
 
-## Compile and run the project
-
+2. **ติดตั้ง Dependencies**
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+npm install
 ```
 
-## Run tests
+3. **ตั้งค่าฐานข้อมูล**
+- สร้างฐานข้อมูล PostgreSQL ชื่อ `project_bank`
+- ตั้งค่า connection string ใน `src/app.module.ts`
 
-```bash
-# unit tests
-$ npm run test
+4. **ตั้งค่า Environment Variables**
+สร้างไฟล์ `.env` ในโฟลเดอร์หลัก:
+```env
+# Database
+DB_HOST=localhost
+DB_PORT=5432
+DB_USERNAME=postgres
+DB_PASSWORD=your_password
+DB_DATABASE=project_bank
 
-# e2e tests
-$ npm run test:e2e
+# JWT
+JWT_SECRET=your_jwt_secret
+LOGIN_SECRET=your_login_secret
 
-# test coverage
-$ npm run test:cov
+# Email
+EMAIL_USER=your_email@gmail.com
+EMAIL_PASS=your_email_password
+
+# OpenAI
+OPENAI_API_KEY=your_openai_api_key
+
+# Encryption
+ALGORITHM=aes-256-cbc
+SECRET_KEY=your_secret_key
+SALT=your_salt
 ```
 
-## Deployment
+## 🚀 การรันโปรเจกต์
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
+### Development Mode
 ```bash
-$ npm install -g mau
-$ mau deploy
+npm run start:dev
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+### Production Mode
+```bash
+npm run build
+npm run start:prod
+```
 
-## Resources
+### Debug Mode
+```bash
+npm run start:debug
+```
 
-Check out a few resources that may come in handy when working with NestJS:
+## 🧪 การทดสอบ
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+### Unit Tests
+```bash
+npm run test
+```
 
-## Support
+### E2E Tests
+```bash
+npm run test:e2e
+```
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+### Test Coverage
+```bash
+npm run test:cov
+```
 
-## Stay in touch
+## 📁 โครงสร้างโปรเจกต์
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+```
+src/
+├── ai/                          # ระบบ AI
+├── auth/                        # ระบบ Authentication
+├── budget/                      # ระบบจัดการงบประมาณ
+├── budget_plan/                 # ระบบแผนงบประมาณ
+├── comments/                    # ระบบความคิดเห็น
+├── government-agencies/         # ระบบหน่วยงานรัฐ
+├── local-administrative-organizations/  # ระบบองค์กรปกครองส่วนท้องถิ่น
+├── pdf/                        # ระบบสร้าง PDF
+├── plan/                       # ระบบแผนงาน
+├── positions/                  # ระบบตำแหน่งงาน
+├── project-groups/             # ระบบกลุ่มโครงการ
+├── roles/                      # ระบบบทบาท
+├── status/                     # ระบบสถานะ
+├── strategy/                   # ระบบกลยุทธ์
+├── tactic/                     # ระบบยุทธวิธี
+├── tracking-status/            # ระบบติดตามสถานะ
+├── users/                      # ระบบผู้ใช้
+├── work-history/               # ระบบประวัติงาน
+├── work-status/                # ระบบสถานะงาน
+└── util/                       # ระบบยูทิลิตี้
+```
 
-## License
+## 🔧 API Endpoints
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+### Authentication
+- `POST /api/v1/auth/login` - เข้าสู่ระบบ
+- `POST /api/v1/auth/register` - ลงทะเบียน
+
+### Users
+- `GET /api/v1/users` - ดึงข้อมูลผู้ใช้
+- `POST /api/v1/users` - สร้างผู้ใช้ใหม่
+- `PUT /api/v1/users/:id` - อัปเดตข้อมูลผู้ใช้
+- `DELETE /api/v1/users/:id` - ลบผู้ใช้
+
+### Projects
+- `GET /api/v1/work-history` - ดึงข้อมูลโครงการ
+- `POST /api/v1/work-history` - สร้างโครงการใหม่
+- `PUT /api/v1/work-history/:id` - อัปเดตโครงการ
+- `DELETE /api/v1/work-history/:id` - ลบโครงการ
+
+### Budget
+- `GET /api/v1/budget` - ดึงข้อมูลงบประมาณ
+- `POST /api/v1/budget` - สร้างงบประมาณใหม่
+- `PUT /api/v1/budget/:id` - อัปเดตงบประมาณ
+
+### PDF Generation
+- `POST /api/v1/pdf/generate` - สร้างรายงาน PDF
+
+### AI Services
+- `POST /api/v1/ai/generate-project` - สร้างโครงการด้วย AI
+
+## 🐳 การ Deploy ด้วย Docker
+
+### Build Docker Image
+```bash
+docker build -t government-project-api .
+```
+
+### Run Docker Container
+```bash
+docker run -p 3000:3000 government-project-api
+```
+
+## 🔒 ความปลอดภัย
+
+- **JWT Authentication** - ระบบยืนยันตัวตนด้วย JWT
+- **Role-based Access Control** - ระบบควบคุมสิทธิ์ตามบทบาท
+- **Input Validation** - การตรวจสอบข้อมูลนำเข้า
+- **SQL Injection Protection** - การป้องกัน SQL Injection ผ่าน TypeORM
+- **CORS Configuration** - การตั้งค่า CORS สำหรับความปลอดภัย
+
+## 📊 การติดตามและ Logging
+
+- **User Activity Logs** - บันทึกกิจกรรมของผู้ใช้
+- **AI Usage Logs** - บันทึกการใช้งาน AI
+- **Error Handling** - การจัดการข้อผิดพลาด
+- **Health Check** - ระบบตรวจสอบสถานะ API
+
+## 🤝 การมีส่วนร่วม
+
+1. Fork โปรเจกต์
+2. สร้าง Feature Branch (`git checkout -b feature/AmazingFeature`)
+3. Commit การเปลี่ยนแปลง (`git commit -m 'Add some AmazingFeature'`)
+4. Push ไปยัง Branch (`git push origin feature/AmazingFeature`)
+5. เปิด Pull Request
+
+## 📝 License
+
+โปรเจกต์นี้เป็นส่วนหนึ่งของระบบจัดการโครงการของรัฐบาล
+
+## 📞 การติดต่อ
+
+หากมีคำถามหรือต้องการความช่วยเหลือ กรุณาติดต่อทีมพัฒนา
+
+---
+
+**หมายเหตุ**: โปรเจกต์นี้พัฒนาด้วย NestJS และใช้สำหรับการจัดการโครงการของหน่วยงานภาครัฐ

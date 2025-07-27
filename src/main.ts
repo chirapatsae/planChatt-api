@@ -5,9 +5,14 @@ import {
   ValidationPipe,
   VersioningType,
 } from '@nestjs/common';
+import helmet from 'helmet';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  
+  // Security middleware - Helmet
+  app.use(helmet());
+  
   app.enableCors({
     origin: ['http://localhost:5173', 'https://9094fafecec2.ngrok-free.app'], // ✅ ระบุให้ตรง
     credentials: true,
@@ -23,7 +28,11 @@ async function bootstrap() {
     new ValidationPipe({
       whitelist: true, // ลบ field ที่ไม่ได้อยู่ใน DTO
       forbidNonWhitelisted: true, // ถ้ามี field แปลก จะ throw error
+      forbidUnknownValues: true, // ป้องกัน unknown values
       transform: true, // แปลง string เป็น number อัตโนมัติถ้า type ตรง
+      transformOptions: {
+        enableImplicitConversion: true, // แปลง string เป็น number อัตโนมัติถ้า type ตรง
+      }
     }),
   );
   app.useGlobalInterceptors(new ClassSerializerInterceptor(app.get(Reflector)));

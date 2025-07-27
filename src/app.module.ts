@@ -50,6 +50,8 @@ import { AiUsageQuotasModule } from './ai-usage-quotas/ai-usage-quotas.module';
 import { UserActivityLog } from './user-activity-logs/entities/user-activity-log.entity';
 import { AiUsageQuota } from './ai-usage-quotas/entities/ai-usage-quota.entity';
 import { AiUsageLogsModule } from './ai-usage-logs/ai-usage-logs.module';
+import { AiUsageLog } from './ai-usage-logs/entities/ai-usage-log.entity';
+import { ProjectTypesModule } from './project-types/project-types.module';
 
 @Module({
   imports: [
@@ -84,7 +86,8 @@ import { AiUsageLogsModule } from './ai-usage-logs/ai-usage-logs.module';
         WorkStatus,
         Position,
         GovernmentAgency,
-        AiUsageQuota
+        AiUsageQuota,
+        AiUsageLog
       ],
       synchronize: true,
     }),
@@ -110,6 +113,7 @@ import { AiUsageLogsModule } from './ai-usage-logs/ai-usage-logs.module';
     UserActivityLogsModule,
     AiUsageQuotasModule,
     AiUsageLogsModule,
+    ProjectTypesModule,
   ],
   controllers: [AppController, AiController],
   providers: [AppService, AiService],
