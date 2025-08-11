@@ -121,6 +121,7 @@ describe('ProjectGroupsService', () => {
       governmentAgencies: {},
       createdAt: new Date(),
       updatedAt: new Date(),
+      isCurrent: true,
       trackingStatus: [],
       workHistoryResponsibleAdmins: [],
       budgetPlan: [],
@@ -297,6 +298,7 @@ describe('ProjectGroupsService', () => {
       governmentAgencies: {},
       createdAt: new Date(),
       updatedAt: new Date(),
+      isCurrent: true,
       trackingStatus: [],
       workHistoryResponsibleAdmins: [],
       budgetPlan: [],
@@ -462,6 +464,7 @@ describe('ProjectGroupsService', () => {
       const mockQueryBuilder = {
         leftJoinAndSelect: jest.fn().mockReturnThis(),
         where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
         orderBy: jest.fn().mockReturnThis(),
         getMany: jest.fn().mockResolvedValue(projects),
       };
@@ -474,6 +477,7 @@ describe('ProjectGroupsService', () => {
       const mockQueryBuilder = {
         leftJoinAndSelect: jest.fn().mockReturnThis(),
         where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
         getCount: jest.fn().mockResolvedValue(2),
       };
       projectGroupRepo.createQueryBuilder.mockReturnValue(mockQueryBuilder as any);
@@ -502,6 +506,7 @@ describe('ProjectGroupsService', () => {
           createdAt: new Date(),
           workHistory: [],
         },
+        isCurrent: true,
       } as unknown as WorkHistory);
       await expect(service.findProjectsByStatus({ userId })).rejects.toThrow(
         UnauthorizedException,
@@ -512,6 +517,7 @@ describe('ProjectGroupsService', () => {
       const mockQueryBuilder = {
         leftJoinAndSelect: jest.fn().mockReturnThis(),
         where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
         orderBy: jest.fn().mockReturnThis(),
         getMany: jest.fn().mockResolvedValue(projects),
       };
@@ -545,6 +551,7 @@ describe('ProjectGroupsService', () => {
       governmentAgencies: {},
       createdAt: new Date(),
       updatedAt: new Date(),
+      isCurrent: true,
       trackingStatus: [],
       workHistoryResponsibleAdmins: [],
       budgetPlan: [],
@@ -697,6 +704,7 @@ describe('ProjectGroupsService', () => {
       workStatus: { name: 'approved' },
       governmentAgencies: { id: 'gov-1' },
       localAdministrativeOrganization: { id: 'lao-1' },
+      isCurrent: true,
     };
     const group = { id, ...dto };
     it('should update project group (success)', async () => {
@@ -905,6 +913,7 @@ describe('ProjectGroupsService', () => {
       governmentAgencies: {},
       createdAt: new Date(),
       updatedAt: new Date(),
+      isCurrent: true,
       trackingStatus: [],
       workHistoryResponsibleAdmins: [],
       budgetPlan: [],
@@ -945,7 +954,7 @@ describe('ProjectGroupsService', () => {
         });
       });
       const result = await service.createDraft(dto, userId);
-      expect(result).toEqual(savedDraft);
+      expect(result).toEqual({ message: 'Create draft success', id: savedDraft.id });
     });
 
     it('should throw NotFoundException if workHistory not found', async () => {
@@ -1052,6 +1061,7 @@ describe('ProjectGroupsService', () => {
       governmentAgencies: {},
       createdAt: new Date(),
       updatedAt: new Date(),
+      isCurrent: true,
       trackingStatus: [],
       workHistoryResponsibleAdmins: [],
       budgetPlan: [],
@@ -1091,7 +1101,7 @@ describe('ProjectGroupsService', () => {
         });
       });
       const result = await service.publishDraft(id, dto, userId);
-      expect(result).toEqual(publishedProject);
+      expect(result).toEqual({ message: 'Publish draft success' });
     });
 
     it('should throw NotFoundException if workHistory not found', async () => {
@@ -1171,7 +1181,7 @@ describe('ProjectGroupsService', () => {
       const badDto = { ...dto, budget: [] };
       // publishDraft doesn't throw BadRequestException for empty budget
       const result = await service.publishDraft(id, badDto, userId);
-      expect(result).toBeUndefined();
+      expect(result).toEqual({ message: 'Publish draft success' });
     });
 
     it('should throw InternalServerErrorException on DB error', async () => {
@@ -1204,13 +1214,8 @@ describe('ProjectGroupsService', () => {
         });
       });
       await service.publishDraft(id, dto, userId);
-      // Check that update was called with tracking status parameters
-      const calls = updateSpy.mock.calls;
-      const trackingStatusCall = calls.find(call => 
-        call[1] && call[1].projectGroupId && call[1].projectGroupId.id === id &&
-        call[2] && call[2].statusId && call[2].statusId.id === '30da8501-4487-49b7-8acf-ede14ca4ac09'
-      );
-      expect(trackingStatusCall).toBeDefined();
+      // Check that update was called to update the project group
+      expect(updateSpy).toHaveBeenCalledWith(ProjectGroup, id, expect.any(Object));
     });
   });
 

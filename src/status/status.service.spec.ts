@@ -59,6 +59,7 @@ const sampleWorkHistory = {
   deletedAt: undefined,
   updatedAt: new Date(),
   updatedBy: minimalEntity,
+  isCurrent: true,
   workHistoryResponsibleAdmins: [],
   budgetPlan: [],
   creatorStrategy: [],

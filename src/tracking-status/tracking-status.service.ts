@@ -40,7 +40,7 @@ export class TrackingStatusService {
     try {
       return await this.dataSource.transaction(async (manager) => {
         // หา workHistory ของ user
-        const workHistory = await manager.findOne(this.workHistoryRepo.target, {
+        const workHistory = await manager.findOne(WorkHistory, {
           where: { user: { id: userId } },
         });
         if (!workHistory) {
@@ -48,7 +48,7 @@ export class TrackingStatusService {
         }
   
         // หา projectGroup
-        const projectGroup = await manager.findOne(this.projectGroupRepo.target, {
+        const projectGroup = await manager.findOne(ProjectGroup, {
           where: { id: dto.projectId },
         });
         if (!projectGroup) {
@@ -56,7 +56,7 @@ export class TrackingStatusService {
         }
   
         // หา status
-        const status = await manager.findOne(this.statusRepo.target, {
+        const status = await manager.findOne(Status, {
           where: { id: dto.statusId },
         });
         if (!status) {
@@ -64,31 +64,31 @@ export class TrackingStatusService {
         }
   
         // อัปเดต TrackingStatus ตัวเก่าให้ isLatest = false
-        await manager.update(this.trackingStatusRepo.target, {
+        await manager.update(TrackingStatus, {
           projectGroupId: projectGroup,
         }, {
           isLatest: false,
         });
   
         // สร้าง TrackingStatus ใหม่
-        const tracking = manager.create(this.trackingStatusRepo.target, {
+        const tracking = manager.create(TrackingStatus, {
           createdBy: workHistory,
           projectGroupId: projectGroup,
           statusId: status,
           isLatest: true,
         });
-        const savedTracking = await manager.save(this.trackingStatusRepo.target, tracking);
+        const savedTracking = await manager.save(TrackingStatus, tracking);
 
         if (dto.comments?.length) {
           const commentEntities = dto.comments.map((c) =>
-            manager.create(this.commentRepo.target, {
+            manager.create(Comment, {
               step: c.step,
               detail: c.detail,
-              trackingStatusId: savedTracking, // <-- fix here
+              trackingStatusId: savedTracking,
             }),
           );
-          await manager.save(this.commentRepo.target, commentEntities);
-        }''
+          await manager.save(Comment, commentEntities);
+        }
   
         return savedTracking;
       });

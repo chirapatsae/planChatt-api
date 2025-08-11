@@ -87,6 +87,7 @@ const minimalWorkHistory = {
   deletedAt: undefined,
   updatedAt: new Date(),
   updatedBy: undefined,
+  isCurrent: true,
   workHistoryResponsibleAdmins: [],
   budgetPlan: [],
   creatorStrategy: [],

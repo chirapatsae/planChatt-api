@@ -61,10 +61,13 @@ describe('AmphoesService', () => {
 
   describe('create', () => {
     const dto: CreateAmphoeDto = { code: 'A001', name: 'Amphoe Test' };
+    
     it('should create and return an amphoe (success)', async () => {
       amphoeRepository.create.mockReturnValue(mockAmphoe());
       amphoeRepository.save.mockResolvedValue(mockAmphoe());
+      
       const result = await service.create(dto);
+      
       expect(amphoeRepository.create).toHaveBeenCalledWith({
         id: dto.code,
         name: dto.name,
@@ -72,53 +75,81 @@ describe('AmphoesService', () => {
       expect(amphoeRepository.save).toHaveBeenCalled();
       expect(result).toEqual(mockAmphoe());
     });
+
     it('should throw ConflictException (DB unique violation)', async () => {
       amphoeRepository.create.mockReturnValue(mockAmphoe());
       amphoeRepository.save.mockRejectedValue({ code: '23505' });
+      
       handleExceptionSpy = jest
         .spyOn(handleExceptionModule, 'handleException')
         .mockImplementation(() => {
           throw new ConflictException();
         });
+      
       await expect(service.create(dto)).rejects.toBeInstanceOf(
         ConflictException,
       );
     });
+
     it('should throw BadRequestException (invalid input)', async () => {
       amphoeRepository.create.mockImplementation(() => {
         throw new BadRequestException();
       });
+      
       handleExceptionSpy = jest
         .spyOn(handleExceptionModule, 'handleException')
         .mockImplementation(() => {
           throw new BadRequestException();
         });
+      
       await expect(service.create({ ...dto, code: '' })).rejects.toBeInstanceOf(
         BadRequestException,
       );
     });
+
     it('should throw InternalServerErrorException (other DB error)', async () => {
       amphoeRepository.create.mockReturnValue(mockAmphoe());
       amphoeRepository.save.mockRejectedValue(new Error('DB error'));
+      
       handleExceptionSpy = jest
         .spyOn(handleExceptionModule, 'handleException')
         .mockImplementation(() => {
           throw new InternalServerErrorException();
         });
+      
       await expect(service.create(dto)).rejects.toBeInstanceOf(
         InternalServerErrorException,
       );
     });
+
     it('should handle edge case: empty code', async () => {
       amphoeRepository.create.mockImplementation(() => {
         throw new BadRequestException();
       });
+      
       handleExceptionSpy = jest
         .spyOn(handleExceptionModule, 'handleException')
         .mockImplementation(() => {
           throw new BadRequestException();
         });
+      
       await expect(service.create({ ...dto, code: '' })).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+
+    it('should handle edge case: empty name', async () => {
+      amphoeRepository.create.mockImplementation(() => {
+        throw new BadRequestException();
+      });
+      
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new BadRequestException();
+        });
+      
+      await expect(service.create({ ...dto, name: '' })).rejects.toBeInstanceOf(
         BadRequestException,
       );
     });
@@ -126,24 +157,41 @@ describe('AmphoesService', () => {
 
   describe('findAll', () => {
     it('should return all amphoes (success)', async () => {
-      amphoeRepository.find.mockResolvedValue([
+      const mockAmphoes = [
         mockAmphoe(),
-        mockAmphoe({ id: 'A002' }),
-      ]);
+        mockAmphoe({ id: 'A002', name: 'Amphoe Test 2' }),
+      ];
+      amphoeRepository.find.mockResolvedValue(mockAmphoes);
+      
       const result = await service.findAll();
+      
       expect(amphoeRepository.find).toHaveBeenCalledWith({
-        where: { deletedAt: undefined },
         relations: ['localAdministrativeOrganization'],
       });
       expect(result).toHaveLength(2);
+      expect(result).toEqual(mockAmphoes);
     });
+
+    it('should return empty array when no amphoes exist', async () => {
+      amphoeRepository.find.mockResolvedValue([]);
+      
+      const result = await service.findAll();
+      
+      expect(amphoeRepository.find).toHaveBeenCalledWith({
+        relations: ['localAdministrativeOrganization'],
+      });
+      expect(result).toEqual([]);
+    });
+
     it('should throw InternalServerErrorException', async () => {
       amphoeRepository.find.mockRejectedValue(new Error('DB error'));
+      
       handleExceptionSpy = jest
         .spyOn(handleExceptionModule, 'handleException')
         .mockImplementation(() => {
           throw new InternalServerErrorException();
         });
+      
       await expect(service.findAll()).rejects.toBeInstanceOf(
         InternalServerErrorException,
       );
@@ -152,44 +200,70 @@ describe('AmphoesService', () => {
 
   describe('findOne', () => {
     it('should return an amphoe by id (success)', async () => {
-      amphoeRepository.findOne.mockResolvedValue(mockAmphoe());
+      const mockAmphoeData = mockAmphoe();
+      amphoeRepository.findOne.mockResolvedValue(mockAmphoeData);
+      
       const result = await service.findOne('A001');
+      
       expect(amphoeRepository.findOne).toHaveBeenCalledWith({
         where: { id: 'A001' },
         relations: ['localAdministrativeOrganization'],
       });
-      expect(result).toEqual(mockAmphoe());
+      expect(result).toEqual(mockAmphoeData);
     });
+
     it('should throw NotFoundException if amphoe not found', async () => {
       amphoeRepository.findOne.mockResolvedValue(undefined);
+      
       handleExceptionSpy = jest
         .spyOn(handleExceptionModule, 'handleException')
         .mockImplementation(() => {
           throw new NotFoundException();
         });
+      
       await expect(service.findOne('not-exist')).rejects.toBeInstanceOf(
         NotFoundException,
       );
     });
+
     it('should throw InternalServerErrorException', async () => {
       amphoeRepository.findOne.mockRejectedValue(new Error('DB error'));
+      
       handleExceptionSpy = jest
         .spyOn(handleExceptionModule, 'handleException')
         .mockImplementation(() => {
           throw new InternalServerErrorException();
         });
+      
       await expect(service.findOne('A001')).rejects.toBeInstanceOf(
         InternalServerErrorException,
       );
     });
+
     it('should handle edge case: empty id', async () => {
       amphoeRepository.findOne.mockResolvedValue(undefined);
+      
       handleExceptionSpy = jest
         .spyOn(handleExceptionModule, 'handleException')
         .mockImplementation(() => {
           throw new NotFoundException();
         });
+      
       await expect(service.findOne('')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+
+    it('should handle edge case: null id', async () => {
+      amphoeRepository.findOne.mockResolvedValue(undefined);
+      
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      
+      await expect(service.findOne(null as any)).rejects.toBeInstanceOf(
         NotFoundException,
       );
     });
@@ -197,14 +271,14 @@ describe('AmphoesService', () => {
 
   describe('update', () => {
     const updateDto: UpdateAmphoeDto = { name: 'Updated Amphoe' };
+    
     it('should update and return the amphoe (success)', async () => {
-      amphoeRepository.preload.mockResolvedValue(
-        mockAmphoe({ name: 'Updated Amphoe' }),
-      );
-      amphoeRepository.save.mockResolvedValue(
-        mockAmphoe({ name: 'Updated Amphoe' }),
-      );
+      const updatedAmphoe = mockAmphoe({ name: 'Updated Amphoe' });
+      amphoeRepository.preload.mockResolvedValue(updatedAmphoe);
+      amphoeRepository.save.mockResolvedValue(updatedAmphoe);
+      
       const result = await service.update('A001', updateDto);
+      
       expect(amphoeRepository.preload).toHaveBeenCalledWith({
         id: 'A001',
         ...updateDto,
@@ -212,37 +286,75 @@ describe('AmphoesService', () => {
       expect(amphoeRepository.save).toHaveBeenCalled();
       expect(result.name).toBe('Updated Amphoe');
     });
+
+    it('should update only provided fields', async () => {
+      const partialUpdateDto = { name: 'Partial Update' };
+      const updatedAmphoe = mockAmphoe({ name: 'Partial Update' });
+      amphoeRepository.preload.mockResolvedValue(updatedAmphoe);
+      amphoeRepository.save.mockResolvedValue(updatedAmphoe);
+      
+      const result = await service.update('A001', partialUpdateDto);
+      
+      expect(amphoeRepository.preload).toHaveBeenCalledWith({
+        id: 'A001',
+        ...partialUpdateDto,
+      });
+      expect(result.name).toBe('Partial Update');
+    });
+
     it('should throw NotFoundException if amphoe not found', async () => {
       amphoeRepository.preload.mockResolvedValue(undefined);
+      
       handleExceptionSpy = jest
         .spyOn(handleExceptionModule, 'handleException')
         .mockImplementation(() => {
           throw new NotFoundException();
         });
+      
       await expect(
         service.update('not-exist', updateDto),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
+
     it('should throw InternalServerErrorException', async () => {
       amphoeRepository.preload.mockResolvedValue(mockAmphoe());
       amphoeRepository.save.mockRejectedValue(new Error('DB error'));
+      
       handleExceptionSpy = jest
         .spyOn(handleExceptionModule, 'handleException')
         .mockImplementation(() => {
           throw new InternalServerErrorException();
         });
+      
       await expect(service.update('A001', updateDto)).rejects.toBeInstanceOf(
         InternalServerErrorException,
       );
     });
+
     it('should handle edge case: empty id', async () => {
       amphoeRepository.preload.mockResolvedValue(undefined);
+      
       handleExceptionSpy = jest
         .spyOn(handleExceptionModule, 'handleException')
         .mockImplementation(() => {
           throw new NotFoundException();
         });
+      
       await expect(service.update('', updateDto)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+
+    it('should handle edge case: null id', async () => {
+      amphoeRepository.preload.mockResolvedValue(undefined);
+      
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      
+      await expect(service.update(null as any, updateDto)).rejects.toBeInstanceOf(
         NotFoundException,
       );
     });
@@ -251,42 +363,67 @@ describe('AmphoesService', () => {
   describe('remove', () => {
     it('should permanently delete an amphoe (success)', async () => {
       amphoeRepository.delete.mockResolvedValue({ affected: 1 });
+      
       const result = await service.remove('A001');
+      
       expect(amphoeRepository.delete).toHaveBeenCalledWith('A001');
       expect(result).toEqual({
         message: 'Amphoe with ID A001 has been permanently removed.',
       });
     });
+
     it('should throw NotFoundException if amphoe not found', async () => {
       amphoeRepository.delete.mockResolvedValue({ affected: 0 });
+      
       handleExceptionSpy = jest
         .spyOn(handleExceptionModule, 'handleException')
         .mockImplementation(() => {
           throw new NotFoundException();
         });
+      
       await expect(service.remove('not-exist')).rejects.toBeInstanceOf(
         NotFoundException,
       );
     });
+
     it('should throw InternalServerErrorException', async () => {
       amphoeRepository.delete.mockRejectedValue(new Error('DB error'));
+      
       handleExceptionSpy = jest
         .spyOn(handleExceptionModule, 'handleException')
         .mockImplementation(() => {
           throw new InternalServerErrorException();
         });
+      
       await expect(service.remove('A001')).rejects.toBeInstanceOf(
         InternalServerErrorException,
       );
     });
+
     it('should handle edge case: empty id', async () => {
       amphoeRepository.delete.mockResolvedValue({ affected: 0 });
+      
       handleExceptionSpy = jest
         .spyOn(handleExceptionModule, 'handleException')
         .mockImplementation(() => {
           throw new NotFoundException();
         });
+      
       await expect(service.remove('')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+
+    it('should handle edge case: null id', async () => {
+      amphoeRepository.delete.mockResolvedValue({ affected: 0 });
+      
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      
+      await expect(service.remove(null as any)).rejects.toBeInstanceOf(
         NotFoundException,
       );
     });
@@ -295,42 +432,67 @@ describe('AmphoesService', () => {
   describe('softRemove', () => {
     it('should soft delete an amphoe (success)', async () => {
       amphoeRepository.softDelete.mockResolvedValue({ affected: 1 });
+      
       const result = await service.softRemove('A001');
+      
       expect(amphoeRepository.softDelete).toHaveBeenCalledWith('A001');
       expect(result).toEqual({
         message: 'Amphoe with ID A001 has been soft-removed.',
       });
     });
+
     it('should throw NotFoundException if amphoe not found', async () => {
       amphoeRepository.softDelete.mockResolvedValue({ affected: 0 });
+      
       handleExceptionSpy = jest
         .spyOn(handleExceptionModule, 'handleException')
         .mockImplementation(() => {
           throw new NotFoundException();
         });
+      
       await expect(service.softRemove('not-exist')).rejects.toBeInstanceOf(
         NotFoundException,
       );
     });
+
     it('should throw InternalServerErrorException', async () => {
       amphoeRepository.softDelete.mockRejectedValue(new Error('DB error'));
+      
       handleExceptionSpy = jest
         .spyOn(handleExceptionModule, 'handleException')
         .mockImplementation(() => {
           throw new InternalServerErrorException();
         });
+      
       await expect(service.softRemove('A001')).rejects.toBeInstanceOf(
         InternalServerErrorException,
       );
     });
+
     it('should handle edge case: empty id', async () => {
       amphoeRepository.softDelete.mockResolvedValue({ affected: 0 });
+      
       handleExceptionSpy = jest
         .spyOn(handleExceptionModule, 'handleException')
         .mockImplementation(() => {
           throw new NotFoundException();
         });
+      
       await expect(service.softRemove('')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+
+    it('should handle edge case: null id', async () => {
+      amphoeRepository.softDelete.mockResolvedValue({ affected: 0 });
+      
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      
+      await expect(service.softRemove(null as any)).rejects.toBeInstanceOf(
         NotFoundException,
       );
     });
@@ -339,42 +501,67 @@ describe('AmphoesService', () => {
   describe('restore', () => {
     it('should restore a soft-deleted amphoe (success)', async () => {
       amphoeRepository.restore.mockResolvedValue({ affected: 1 });
+      
       const result = await service.restore('A001');
+      
       expect(amphoeRepository.restore).toHaveBeenCalledWith('A001');
       expect(result).toEqual({
         message: 'Amphoe with ID A001 has been restored.',
       });
     });
+
     it('should throw NotFoundException if amphoe not found', async () => {
       amphoeRepository.restore.mockResolvedValue({ affected: 0 });
+      
       handleExceptionSpy = jest
         .spyOn(handleExceptionModule, 'handleException')
         .mockImplementation(() => {
           throw new NotFoundException();
         });
+      
       await expect(service.restore('not-exist')).rejects.toBeInstanceOf(
         NotFoundException,
       );
     });
+
     it('should throw InternalServerErrorException', async () => {
       amphoeRepository.restore.mockRejectedValue(new Error('DB error'));
+      
       handleExceptionSpy = jest
         .spyOn(handleExceptionModule, 'handleException')
         .mockImplementation(() => {
           throw new InternalServerErrorException();
         });
+      
       await expect(service.restore('A001')).rejects.toBeInstanceOf(
         InternalServerErrorException,
       );
     });
+
     it('should handle edge case: empty id', async () => {
       amphoeRepository.restore.mockResolvedValue({ affected: 0 });
+      
       handleExceptionSpy = jest
         .spyOn(handleExceptionModule, 'handleException')
         .mockImplementation(() => {
           throw new NotFoundException();
         });
+      
       await expect(service.restore('')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+
+    it('should handle edge case: null id', async () => {
+      amphoeRepository.restore.mockResolvedValue({ affected: 0 });
+      
+      handleExceptionSpy = jest
+        .spyOn(handleExceptionModule, 'handleException')
+        .mockImplementation(() => {
+          throw new NotFoundException();
+        });
+      
+      await expect(service.restore(null as any)).rejects.toBeInstanceOf(
         NotFoundException,
       );
     });

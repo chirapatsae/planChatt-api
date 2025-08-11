@@ -63,7 +63,7 @@ export class ProjectGroupsService {
         const [budgetPlan, strategy, tactic, plan] = await this.validateForeignKeys(manager, dto);
         const agencyData = this.getAgencyData(workHistory);
 
-        const group = manager.create(this.projectGroupRepo.target, {
+        const group = manager.create(ProjectGroup, {
           title: dto.title,
           objective: dto.objective,
           goal: dto.goal,
@@ -84,7 +84,7 @@ export class ProjectGroupsService {
 
         const savedGroup = await manager.save(group);
 
-        const trackingStatus = manager.create(this.trackingStatusRepo.target, {
+        const trackingStatus = manager.create(TrackingStatus, {
           projectGroupId: savedGroup,
           statusId: { id: 'bc3caeba-0701-4132-9acf-a8e3086cb16d' },
           workHistory: { id: workHistory.id },
@@ -96,7 +96,7 @@ export class ProjectGroupsService {
         }
 
         const budgets = dto.budget.map((item) =>
-          manager.create(this.budgetRepo.target, {
+          manager.create(Budget, {
             projectGroupId: { id: savedGroup.id },
             year: item.year,
             quantity: item.quantity,
@@ -143,13 +143,13 @@ export class ProjectGroupsService {
         if (plan) projectGroupData.plan = plan;
 
         const group = manager.create(
-          this.projectGroupRepo.target,
+          ProjectGroup,
           projectGroupData,
         );
         const savedGroupResult = await manager.save(group);
         if (dto.budget && dto.budget.length > 0) {
           const budgets = dto.budget.map((item) =>
-            manager.create(this.budgetRepo.target, {
+            manager.create(Budget, {
               projectGroupId: { id: savedGroupResult.id },
               year: item.year,
               quantity: item.quantity,
@@ -171,7 +171,7 @@ export class ProjectGroupsService {
     try {
       await this.dataSource.transaction(async (manager) => {
         // ตรวจสอบว่า draft มีอยู่จริงและเป็นของ user นี้
-        const existingDraft = await manager.findOne(this.projectGroupRepo.target, {
+        const existingDraft = await manager.findOne(ProjectGroup, {
           where: {
             id,
             isDraft: true,
@@ -210,9 +210,9 @@ export class ProjectGroupsService {
         };
 
         // อัพเดท project group
-        await manager.update(this.projectGroupRepo.target, id, projectGroupData);
+        await manager.update(ProjectGroup, id, projectGroupData);
 
-        const trackingStatus = manager.create(this.trackingStatusRepo.target, {
+        const trackingStatus = manager.create(TrackingStatus, {
           projectGroupId: { id },
           statusId: { id: 'bc3caeba-0701-4132-9acf-a8e3086cb16d' },
           workHistory: { id: workHistory.id },
@@ -220,12 +220,12 @@ export class ProjectGroupsService {
         await manager.save(trackingStatus);
 
         // Delete existing budgets
-        await manager.delete(this.budgetRepo.target, { projectGroupId: { id } });
+        await manager.delete(Budget, { projectGroupId: { id } });
 
         // Create new budgets if provided
         if (dto.budget && dto.budget.length > 0) {
           const budgets = dto.budget.map((item) =>
-            manager.create(this.budgetRepo.target, {
+            manager.create(Budget, {
               projectGroupId: { id },
               year: item.year,
               quantity: item.quantity,
@@ -245,7 +245,7 @@ export class ProjectGroupsService {
     try {
       await this.dataSource.transaction(async (manager) => {
         // ตรวจสอบว่า draft มีอยู่จริงและเป็นของ user นี้
-        const existingDraft = await manager.findOne(this.projectGroupRepo.target, {
+        const existingDraft = await manager.findOne(ProjectGroup, {
           where: {
             id,
             isDraft: true,
@@ -281,15 +281,15 @@ export class ProjectGroupsService {
           isDraft: true,
         };
 
-        await manager.update(this.projectGroupRepo.target, id, projectGroupData);
+        await manager.update(ProjectGroup, id, projectGroupData);
 
         // Delete existing budgets
-        await manager.delete(this.budgetRepo.target, { projectGroupId: { id } });
+        await manager.delete(Budget, { projectGroupId: { id } });
 
         // Create new budgets if provided
         if (dto.budget && dto.budget.length > 0) {
           const budgets = dto.budget.map((item) =>
-            manager.create(this.budgetRepo.target, {
+            manager.create(Budget, {
               projectGroupId: { id },
               year: item.year,
               quantity: item.quantity,
@@ -309,7 +309,7 @@ export class ProjectGroupsService {
     try {
       await this.dataSource.transaction(async (manager) => {
         // 1. ตรวจสอบว่ามี draft จริง และเป็นของ user นี้
-        const existingDraft = await manager.findOne(this.projectGroupRepo.target, {
+        const existingDraft = await manager.findOne(ProjectGroup, {
           where: {
             id,
             isDraft: true,
@@ -323,13 +323,13 @@ export class ProjectGroupsService {
         }
   
         // 2. อัปเดต isDraft เป็น false
-        await manager.update(this.projectGroupRepo.target, { id }, { isDraft: false });
+        await manager.update(ProjectGroup, { id }, { isDraft: false });
   
         // 3. ดึง workHistory ของผู้ใช้
         const workHistory = await this.getWorkHistory(manager, userId);
   
         // 4. บันทึกสถานะใหม่ (tracking)
-        const trackingStatus = manager.create(this.trackingStatusRepo.target, {
+        const trackingStatus = manager.create(TrackingStatus, {
           projectGroupId: { id },
           statusId: { id: 'bc3caeba-0701-4132-9acf-a8e3086cb16d' }, // เปลี่ยนตาม status จริงถ้ามี
           workHistory: { id: workHistory.id },
@@ -498,7 +498,7 @@ export class ProjectGroupsService {
   ): Promise<ProjectGroup> {
     return await this.dataSource.transaction(async (manager) => {
       // 1. ตรวจสอบ workHistory
-      const workHistory = await manager.findOne(this.workHistoryRepo.target, {
+      const workHistory = await manager.findOne(WorkHistory, {
         where: { user: { id: userId } },
         relations: [
           'localAdministrativeOrganization',
@@ -514,7 +514,7 @@ export class ProjectGroupsService {
 
       // 2. ตรวจสอบ duplicate title (ยกเว้นตัวเอง)
       const duplicateTitle = await manager.findOne(
-        this.projectGroupRepo.target,
+        ProjectGroup,
         {
           where: {
             title: dto.title,
@@ -530,13 +530,13 @@ export class ProjectGroupsService {
 
       // 3. ตรวจสอบ foreign key
       const [strategy, tactic, plan] = await Promise.all([
-        manager.findOne(this.strategyRepo.target, {
+        manager.findOne(Strategy, {
           where: { id: dto.strategyId },
         }),
-        manager.findOne(this.tacticRepo.target, {
+        manager.findOne(Tactic, {
           where: { id: dto.tacticId },
         }),
-        manager.findOne(this.planRepo.target, { where: { id: dto.planId } }),
+        manager.findOne(Plan, { where: { id: dto.planId } }),
       ]);
       if (!strategy)
         throw new NotFoundException(`Strategy ID not found: ${dto.strategyId}`);
@@ -546,7 +546,7 @@ export class ProjectGroupsService {
         throw new NotFoundException(`Plan ID not found: ${dto.planId}`);
 
       // 5. ดึง group เดิม
-      const group = await manager.findOne(this.projectGroupRepo.target, {
+      const group = await manager.findOne(ProjectGroup, {
         where: { id },
         relations: ['strategy', 'tactic', 'plan'],
       });
@@ -615,7 +615,7 @@ export class ProjectGroupsService {
 
   // ───────────────────── Helpers ─────────────────────
   private async getWorkHistory(manager: EntityManager, userId: string) {
-    const workHistory = await manager.findOne(this.workHistoryRepo.target, {
+    const workHistory = await manager.findOne(WorkHistory, {
       where: { user: { id: userId } },
       relations: ['localAdministrativeOrganization', 'governmentAgencies'],
     });
@@ -635,7 +635,7 @@ export class ProjectGroupsService {
       whereCondition.id = Not(id);
     }
 
-    const existing = await manager.findOne(this.projectGroupRepo.target, {
+    const existing = await manager.findOne(ProjectGroup, {
       where: whereCondition,
     });
     if (existing) {
@@ -645,10 +645,10 @@ export class ProjectGroupsService {
 
   private async validateForeignKeys(manager: EntityManager, dto: CreateProjectGroupDto) {
     const [budgetPlan, strategy, tactic, plan] = await Promise.all([
-      manager.findOne(this.budgetPlanRepo.target, { where: { id: dto.budgetPlanId } }),
-      manager.findOne(this.strategyRepo.target, { where: { id: dto.strategyId } }),
-      manager.findOne(this.tacticRepo.target, { where: { id: dto.tacticId } }),
-      manager.findOne(this.planRepo.target, { where: { id: dto.planId } }),
+      manager.findOne(BudgetPlan, { where: { id: dto.budgetPlanId } }),
+      manager.findOne(Strategy, { where: { id: dto.strategyId } }),
+      manager.findOne(Tactic, { where: { id: dto.tacticId } }),
+      manager.findOne(Plan, { where: { id: dto.planId } }),
     ]);
 
     if (!budgetPlan) throw new NotFoundException(`Budget Plan ID not found: ${dto.budgetPlanId}`);
