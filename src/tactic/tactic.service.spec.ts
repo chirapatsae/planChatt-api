@@ -184,7 +184,11 @@ describe('TacticService', () => {
       const result = await service.findOne('T001');
       expect(tacticRepo.findOne).toHaveBeenCalledWith({
         where: { id: 'T001' },
-        relations: ['strategy', 'createdBy', 'deletedBy', 'planTactics'],
+        relations: {
+          planTactics: {
+            plan: true,
+          }
+        }
       });
       expect(result).toEqual(mockTactic());
     });

@@ -27,7 +27,10 @@ export class WorkHistoryController {
   constructor(private readonly workHistoryService: WorkHistoryService) {}
 
   @Get()
-  findAll(@Query('status') status: string, @Query('role') role: string) {
+  findAll(
+    @Query('status') status: string, 
+    @Query('role') role: string
+  ) {
     return this.workHistoryService.findAll(status, role);
   }
 

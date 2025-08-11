@@ -7,7 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { CreateTrackingStatusDto } from './dto/create-tracking-status.dto';
 import { UpdateTrackingStatusDto } from './dto/update-tracking-status.dto';
 import { User } from 'src/users/entities/user.entity';
@@ -32,57 +32,71 @@ export class TrackingStatusService {
     private readonly workHistoryRepo: Repository<WorkHistory>,
     @InjectRepository(Comment)
     private readonly commentRepo: Repository<Comment>,
+
+    private readonly dataSource: DataSource,
   ) {}
 
-  async create(
-    dto: CreateTrackingStatusDto,
-    userId: string,
-  ): Promise<TrackingStatus> {
+  async create(dto: CreateTrackingStatusDto, userId: string): Promise<TrackingStatus> {
     try {
-      // หา workHistory ของ user
-      const workHistory = await this.workHistoryRepo.findOne({
-        where: { user: { id: userId } },
+      return await this.dataSource.transaction(async (manager) => {
+        // หา workHistory ของ user
+        const workHistory = await manager.findOne(this.workHistoryRepo.target, {
+          where: { user: { id: userId } },
+        });
+        if (!workHistory) {
+          throw new NotFoundException(`WorkHistory for user ${userId} not found`);
+        }
+  
+        // หา projectGroup
+        const projectGroup = await manager.findOne(this.projectGroupRepo.target, {
+          where: { id: dto.projectId },
+        });
+        if (!projectGroup) {
+          throw new NotFoundException(`ProjectGroup with ID ${dto.projectId} not found`);
+        }
+  
+        // หา status
+        const status = await manager.findOne(this.statusRepo.target, {
+          where: { id: dto.statusId },
+        });
+        if (!status) {
+          throw new NotFoundException(`Status with ID ${dto.statusId} not found`);
+        }
+  
+        // อัปเดต TrackingStatus ตัวเก่าให้ isLatest = false
+        await manager.update(this.trackingStatusRepo.target, {
+          projectGroupId: projectGroup,
+        }, {
+          isLatest: false,
+        });
+  
+        // สร้าง TrackingStatus ใหม่
+        const tracking = manager.create(this.trackingStatusRepo.target, {
+          createdBy: workHistory,
+          projectGroupId: projectGroup,
+          statusId: status,
+          isLatest: true,
+        });
+        const savedTracking = await manager.save(this.trackingStatusRepo.target, tracking);
+
+        if (dto.comments?.length) {
+          const commentEntities = dto.comments.map((c) =>
+            manager.create(this.commentRepo.target, {
+              step: c.step,
+              detail: c.detail,
+              trackingStatusId: savedTracking, // <-- fix here
+            }),
+          );
+          await manager.save(this.commentRepo.target, commentEntities);
+        }''
+  
+        return savedTracking;
       });
-      if (!workHistory)
-        throw new NotFoundException(`WorkHistory for user ${userId} not found`);
-
-      // หา projectGroup
-      const projectGroup = await this.projectGroupRepo.findOne({
-        where: { id: dto.projectId },
-      });
-      if (!projectGroup)
-        throw new NotFoundException(
-          `ProjectGroup with ID ${dto.projectId} not found`,
-        );
-
-      // หา status
-      const status = await this.statusRepo.findOne({
-        where: { id: dto.statusId },
-      });
-      if (!status)
-        throw new NotFoundException(`Status with ID ${dto.statusId} not found`);
-
-      // set isLatest = true และอัปเดตตัวเก่าให้ isLatest = false
-      await this.trackingStatusRepo.update(
-        { projectGroupId: projectGroup },
-        { isLatest: false },
-      );
-
-      // สร้าง TrackingStatus
-      const tracking = this.trackingStatusRepo.create({
-        comment: undefined, // ไม่ใช้ comment ตรง entity
-        createdBy: workHistory,
-        projectGroupId: projectGroup,
-        statusId: status,
-        isLatest: true,
-      });
-      const savedTracking = await this.trackingStatusRepo.save(tracking);
-
-      return savedTracking;
     } catch (error) {
       handleException(this.logger, error);
     }
   }
+  
 
   async findAll(): Promise<TrackingStatus[]> {
     try {

@@ -9,7 +9,6 @@ import {
   ConflictException,
   InternalServerErrorException,
   NotFoundException,
-  Logger,
 } from '@nestjs/common';
 import * as handleExceptionModule from 'src/util/handleException';
 
@@ -32,7 +31,6 @@ describe('ProjectTypesService', () => {
   let service: ProjectTypesService;
   let projectTypeRepository: ReturnType<typeof mockProjectTypeRepository>;
   let handleExceptionSpy: jest.SpyInstance;
-  let logger: Logger;
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -44,18 +42,9 @@ describe('ProjectTypesService', () => {
           provide: getRepositoryToken(ProjectType),
           useValue: projectTypeRepository,
         },
-        {
-          provide: Logger,
-          useValue: {
-            error: jest.fn(),
-            warn: jest.fn(),
-            log: jest.fn(),
-          },
-        },
       ],
     }).compile();
     service = module.get<ProjectTypesService>(ProjectTypesService);
-    logger = module.get<Logger>(Logger);
   });
 
   afterEach(() => {

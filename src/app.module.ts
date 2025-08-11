@@ -52,6 +52,7 @@ import { AiUsageQuota } from './ai-usage-quotas/entities/ai-usage-quota.entity';
 import { AiUsageLogsModule } from './ai-usage-logs/ai-usage-logs.module';
 import { AiUsageLog } from './ai-usage-logs/entities/ai-usage-log.entity';
 import { ProjectTypesModule } from './project-types/project-types.module';
+import { ProjectType } from './project-types/entities/project-type.entity';
 
 @Module({
   imports: [
@@ -87,7 +88,8 @@ import { ProjectTypesModule } from './project-types/project-types.module';
         Position,
         GovernmentAgency,
         AiUsageQuota,
-        AiUsageLog
+        AiUsageLog,
+        ProjectType,
       ],
       synchronize: true,
     }),

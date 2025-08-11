@@ -8,9 +8,9 @@ import { handleException } from 'src/util/handleException';
 
 @Injectable()
 export class ProjectTypesService {
+  private readonly logger = new Logger(ProjectTypesService.name);
+
   constructor(
-    private readonly logger: Logger,
-    
     @InjectRepository(ProjectType)
     private readonly projectTypeRepository: Repository<ProjectType>,
   ) {}

@@ -108,6 +108,15 @@ export class WorkHistoryService {
         workHistory.governmentAgencies = govAgency;
       }
 
+      // Disactive workHistory อื่นๆ ของ user เดียวกันก่อน
+      await this.workHistoryRepository.update(
+        { user: { id: userId }, isCurrent: true },
+        { isCurrent: false }
+      );
+
+      // ตั้งค่า isCurrent = true สำหรับ workHistory ใหม่
+      workHistory.isCurrent = true;
+
       return this.workHistoryRepository.save(workHistory);
     } catch (error) {
       handleException(this.logger, error);
@@ -115,8 +124,8 @@ export class WorkHistoryService {
   }
 
   async findAll(
-    workStatusId?: string,
-    roleId?: string,
+    workStatusName?: string,
+    roleName?: string,
   ): Promise<WorkHistory[]> {
     try {
       const query = this.workHistoryRepository
@@ -139,10 +148,11 @@ export class WorkHistoryService {
           'work_history.governmentAgencies',
           'governmentAgencies',
         )
-        .leftJoinAndSelect('responsibilities.amphoe', 'respAmphoe');
-      if (workStatusId)
-        query.andWhere('workStatus.id = :workStatusId', { workStatusId });
-      if (roleId) query.andWhere('role.id = :roleId', { roleId });
+        .leftJoinAndSelect('responsibilities.amphoe', 'respAmphoe')
+        .where('work_history.isCurrent = :isCurrent', { isCurrent: true });
+      if (workStatusName)
+        query.andWhere('workStatus.name = :workStatusName', { workStatusName });
+      if (roleName) query.andWhere('role.name = :roleName', { roleName });
 
       return query.getMany();
     } catch (error) {
@@ -160,10 +170,12 @@ export class WorkHistoryService {
           'localAdministrativeOrganization',
           'workStatus',
           'role',
-          'position',
           'createdBy',
           'updatedBy',
           'governmentAgencies',
+          'workHistoryResponsibleAdmins',
+          'workHistoryResponsibleAdmins.amphoe'
+
         ],
       });
       if (!workHistory) {
@@ -228,8 +240,13 @@ export class WorkHistoryService {
       workHistory.workStatus = workStatus;
       workHistory.role = role;
       workHistory.updatedBy = updator;
-
-      if (governmentAgenciesId) {
+      
+      // Clear government agencies if amphoe is not 3001 AND lao is not 3001027
+      if (amphoe.id !== '3001' && localAdministrativeOrganizationId !== '3001027') {
+        workHistory.governmentAgencies = null;
+        // Force save to ensure the null value is persisted
+        await this.workHistoryRepository.save(workHistory);
+      } else if (governmentAgenciesId) {
         const govAgency = await this.governmentAgencyRepository.findOneBy({
           id: governmentAgenciesId,
         });

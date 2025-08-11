@@ -16,11 +16,9 @@ export class PlanService {
   constructor(
     @InjectRepository(Plan)
     private readonly planRepo: Repository<Plan>,
-    @InjectRepository(Tactic)
-    private readonly tacticRepo: Repository<Tactic>,
 
-    @InjectRepository(PlanTactic)
-    private readonly planTacticRepo: Repository<PlanTactic>,
+
+
     @InjectRepository(WorkHistory)
     private readonly workHistoryRepository: Repository<WorkHistory>,
   ) {}

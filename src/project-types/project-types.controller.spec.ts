@@ -3,7 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { ProjectTypesController } from './project-types.controller';
 import { ProjectTypesService } from './project-types.service';
 import { ProjectType } from './entities/project-type.entity';
-import { Logger, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { NotFoundException, InternalServerErrorException } from '@nestjs/common';
 import { CreateProjectTypeDto } from './dto/create-project-type.dto';
 import { UpdateProjectTypeDto } from './dto/update-project-type.dto';
 
@@ -35,14 +35,6 @@ describe('ProjectTypesController', () => {
         {
           provide: getRepositoryToken(ProjectType),
           useValue: projectTypeRepository,
-        },
-        {
-          provide: Logger,
-          useValue: {
-            error: jest.fn(),
-            warn: jest.fn(),
-            log: jest.fn(),
-          },
         },
       ],
     }).compile();

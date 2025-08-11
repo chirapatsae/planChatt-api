@@ -110,6 +110,21 @@ export class BudgetService {
     }
   }
 
+  async replaceBudgets(projectGroupId: string, budgets: { year: number, quantity: number }[]) {
+    // ลบของเก่าก่อน
+    await this.budgetRepo.delete({ projectGroupId: { id: projectGroupId } });
+  
+    // เพิ่มใหม่ทั้งหมด
+    const newBudgets = budgets.map(b => this.budgetRepo.create({
+      projectGroupId: { id: projectGroupId },
+      year: b.year,
+      quantity: b.quantity,
+    }));
+  
+    return await this.budgetRepo.save(newBudgets);
+  }
+  
+
   async remove(id: string): Promise<{ message: string }> {
     try {
       const result = await this.budgetRepo.delete(id);

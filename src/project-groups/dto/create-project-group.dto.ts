@@ -7,6 +7,7 @@ import {
   IsUUID,
   IsArray,
   ValidateNested,
+  IsBoolean,
 } from 'class-validator';
 import { CreateBudgetDto } from 'src/budget/dto/create-budget.dto';
 import { Budget } from 'src/budget/entities/budget.entity';
@@ -15,19 +16,19 @@ export class CreateProjectGroupDto {
   @IsNotEmpty()
   title: string;
 
-  @IsNotEmpty()
-  objective: string;
+  @IsOptional()
+  objective?: string;
 
-  @IsNotEmpty()
-  goal: string;
+  @IsOptional()
+  goal?: string;
 
-  @IsNotEmpty()
+  @IsOptional()
   @IsNumber()
-  startLat: number;
+  startLat?: number;
 
-  @IsNotEmpty()
+  @IsOptional()
   @IsNumber()
-  startLng: number;
+  startLng?: number;
 
   @IsOptional()
   @IsNumber()
@@ -37,31 +38,37 @@ export class CreateProjectGroupDto {
   @IsNumber()
   endLng?: number;
 
-  @IsNotEmpty()
-  indicator: string;
+  @IsOptional()
+  indicator?: string;
 
-  @IsNotEmpty()
-  expected: string;
+  @IsOptional()
+  expected?: string;
 
   @IsNotEmpty()
   @IsInt()
   projectYear: number;
 
-  @IsNotEmpty()
-  strategyId: string;
+  @IsOptional()
+  strategyId?: string;
 
-  @IsNotEmpty()
-  tacticId: string;
+  @IsOptional()
+  tacticId?: string;
 
-  @IsNotEmpty()
-  planId: string;
+  @IsOptional()
+  planId?: string;
 
   @IsNotEmpty()
   @IsUUID()
   budgetPlanId: string;
 
+  @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => CreateBudgetDto)
-  budget: CreateBudgetDto[];
+  budget?: CreateBudgetDto[];
+
+  @IsOptional()
+  @IsBoolean()
+  isDraft?: boolean;
+
 }

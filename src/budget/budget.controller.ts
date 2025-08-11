@@ -9,6 +9,7 @@ import {
   ParseIntPipe,
   Query,
   ParseUUIDPipe,
+  Put,
 } from '@nestjs/common';
 import { CreateBudgetDto } from './dto/create-budget.dto';
 import { UpdateBudgetDto } from './dto/update-budget.dto';
@@ -20,7 +21,7 @@ import { IsUUID } from 'class-validator';
   version: '1',
 })
 export class BudgetController {
-  constructor(private readonly budgetService: BudgetService) {}
+  constructor(private readonly budgetService: BudgetService) { }
 
   @Post()
   create(@Body() dto: CreateBudgetDto) {
@@ -44,6 +45,15 @@ export class BudgetController {
   update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateBudgetDto) {
     return this.budgetService.update(id, dto);
   }
+
+  @Put('project-group/:projectGroupId')
+  async updateProjectGroupBudgets(
+    @Param('projectGroupId') projectGroupId: string,
+    @Body() body: { budgets: { year: number, quantity: number }[] }
+  ) {
+    return this.budgetService.replaceBudgets(projectGroupId, body.budgets);
+  }
+
 
   @Delete(':id')
   remove(

@@ -33,7 +33,6 @@ export class AmphoesService {
   async findAll(): Promise<Amphoe[]> {
     try {
       return await this.amphoeRepository.find({
-        where: { deletedAt: undefined },
         relations: ['localAdministrativeOrganization'],
       });
     } catch (error) {

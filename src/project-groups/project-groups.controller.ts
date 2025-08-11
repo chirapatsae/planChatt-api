@@ -23,7 +23,7 @@ import { JwtAuthGuard } from 'src/auth/auth.guard';
 })
 @UseGuards(JwtAuthGuard)
 export class ProjectGroupsController {
-  constructor(private readonly projectGroupsService: ProjectGroupsService) {}
+  constructor(private readonly projectGroupsService: ProjectGroupsService) { }
 
   @Post()
   async create(
@@ -33,10 +33,45 @@ export class ProjectGroupsController {
     return this.projectGroupsService.create(dto, req.user.userId);
   }
 
+  @Post('draft')
+  async createDraft(
+    @Body() dto: CreateProjectGroupDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    return this.projectGroupsService.createDraft(dto, req.user.userId);
+  }
+
+  @Patch('draft/:id/simple-publish')
+  async simplePublishDraft(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    return this.projectGroupsService.simplePublish(id, req.user.userId);
+  }
+  
+  
+  @Patch('draft/:id')
+  async updateDraft(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateProjectGroupDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    return this.projectGroupsService.updateDraft(id, dto, req.user.userId);
+  }
+
+  @Patch('draft/:id/publish')
+  async publishDraft(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateProjectGroupDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    return this.projectGroupsService.publishDraft(id, dto, req.user.userId);
+  }
+
   @Get('/by-status')
   async findByStatus(
     @Req() req: Request & { user: JwtPayloadUser },
-    @Query('type') type: 'draft' | 'pending' | 'edit' | 'approved',
+    @Query('type') type: 'draft' | 'ready' | 'pending' | 'edit' | 'approved' | 'rejected',
     @Query('countOnly') countOnly?: string,
   ) {
     return this.projectGroupsService.findProjectsByStatus({
@@ -69,6 +104,8 @@ export class ProjectGroupsController {
   ) {
     return this.projectGroupsService.update(id, dto, req.user.userId);
   }
+
+
 
   @Delete(':id')
   remove(

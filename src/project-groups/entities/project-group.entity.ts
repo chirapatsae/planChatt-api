@@ -32,15 +32,15 @@ export class ProjectGroup {
   @Column('text')
   goal: string;
 
-  @Column('decimal', { precision: 10, scale: 7 })
-  startLat: number;
-
-  @Column('decimal', { precision: 10, scale: 7 })
-  startLng: number;
-
+  @Column('decimal', { precision: 10, scale: 7, nullable: true })
+  startLat: number | null;
+  
+  @Column('decimal', { precision: 10, scale: 7, nullable: true })
+  startLng: number | null;
+  
   @Column('decimal', { precision: 10, scale: 7, nullable: true })
   endLat: number | null;
-
+  
   @Column('decimal', { precision: 10, scale: 7, nullable: true })
   endLng: number | null;
 
@@ -52,6 +52,9 @@ export class ProjectGroup {
 
   @Column()
   projectYear: number;
+
+  @Column({ default: false })
+  isDraft: boolean;
 
   @ManyToOne(() => Strategy, (strategy) => strategy.projectGroup, {
     onDelete: 'CASCADE',

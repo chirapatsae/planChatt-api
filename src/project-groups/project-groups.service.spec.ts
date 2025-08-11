@@ -455,18 +455,28 @@ describe('ProjectGroupsService', () => {
     ];
     beforeEach(() => {
       workHistoryRepo.findOne.mockReset();
-      projectGroupRepo.find.mockReset();
-      projectGroupRepo.count.mockReset();
+      projectGroupRepo.createQueryBuilder.mockReset();
     });
     it('should return projects (success)', async () => {
       workHistoryRepo.findOne.mockResolvedValue(workHistory);
-      projectGroupRepo.find.mockResolvedValue(projects);
+      const mockQueryBuilder = {
+        leftJoinAndSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue(projects),
+      };
+      projectGroupRepo.createQueryBuilder.mockReturnValue(mockQueryBuilder as any);
       const result = await service.findProjectsByStatus({ userId });
       expect(result).toEqual(projects);
     });
     it('should return count if countOnly', async () => {
       workHistoryRepo.findOne.mockResolvedValue(workHistory);
-      projectGroupRepo.count.mockResolvedValue(2);
+      const mockQueryBuilder = {
+        leftJoinAndSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        getCount: jest.fn().mockResolvedValue(2),
+      };
+      projectGroupRepo.createQueryBuilder.mockReturnValue(mockQueryBuilder as any);
       const result = await service.findProjectsByStatus({
         userId,
         countOnly: true,
@@ -499,7 +509,13 @@ describe('ProjectGroupsService', () => {
     });
     it('should handle edge case: type filter', async () => {
       workHistoryRepo.findOne.mockResolvedValue(workHistory);
-      projectGroupRepo.find.mockResolvedValue(projects);
+      const mockQueryBuilder = {
+        leftJoinAndSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue(projects),
+      };
+      projectGroupRepo.createQueryBuilder.mockReturnValue(mockQueryBuilder as any);
       const result = await service.findProjectsByStatus({
         userId,
         type: 'draft',
@@ -856,6 +872,396 @@ describe('ProjectGroupsService', () => {
     it('should handle edge case: empty id', async () => {
       projectGroupRepo.restore.mockResolvedValue({ affected: 0 } as any);
       await expect(service.restore('')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  // --- createDraft ---
+  describe('createDraft', () => {
+    const userId = 'user-1';
+    const dto: CreateProjectGroupDto = {
+      title: 'Test Draft Group',
+      objective: 'Objective',
+      goal: 'Goal',
+      startLat: 1,
+      startLng: 2,
+      endLat: 3,
+      endLng: 4,
+      indicator: 'Indicator',
+      expected: 'Expected',
+      projectYear: 2024,
+      strategyId: 'strategy-1',
+      tacticId: 'tactic-1',
+      planId: 'plan-1',
+      budgetPlanId: 'budget-plan-1',
+      budget: [{ year: 2024, quantity: 100 } as any],
+    };
+    const workHistory: WorkHistory = {
+      id: 'wh-uuid',
+      amphoe: {},
+      localAdministrativeOrganization: {},
+      user: {},
+      workStatus: {},
+      role: {},
+      governmentAgencies: {},
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      trackingStatus: [],
+      workHistoryResponsibleAdmins: [],
+      budgetPlan: [],
+      creatorStrategy: [],
+      deletorStrategy: [],
+      creatorProjectGroup: [],
+      responsibleProjectGroup: [],
+      creatorTactic: [],
+      deletorTactic: [],
+      creatorPlan: [],
+      deletorPlan: [],
+    } as any;
+    const budgetPlan = { id: 'budget-plan-1' };
+    const strategy = { id: 'strategy-1' };
+    const tactic = { id: 'tactic-1' };
+    const plan = { id: 'plan-1' };
+    const savedDraft = { id: 'pg-draft-1', ...dto, isDraft: true } as any;
+
+    it('should create a draft project group (success)', async () => {
+      (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
+        return cb({
+          findOne: jest
+            .fn()
+            .mockResolvedValueOnce(workHistory) // workHistory
+            .mockResolvedValueOnce(null) // duplicateTitle
+            .mockResolvedValueOnce(budgetPlan) // budgetPlan
+            .mockResolvedValueOnce(strategy) // strategy
+            .mockResolvedValueOnce(tactic) // tactic
+            .mockResolvedValueOnce(plan), // plan
+          create: jest
+            .fn()
+            .mockReturnValueOnce(savedDraft)
+            .mockReturnValueOnce({}),
+          save: jest
+            .fn()
+            .mockResolvedValueOnce(savedDraft)
+            .mockResolvedValueOnce({}),
+        });
+      });
+      const result = await service.createDraft(dto, userId);
+      expect(result).toEqual(savedDraft);
+    });
+
+    it('should throw NotFoundException if workHistory not found', async () => {
+      (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
+        return cb({
+          findOne: jest.fn().mockResolvedValueOnce(null),
+        });
+      });
+      await expect(service.createDraft(dto, userId)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('should throw ConflictException if duplicate title', async () => {
+      (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
+        return cb({
+          findOne: jest
+            .fn()
+            .mockResolvedValueOnce(workHistory) // workHistory
+            .mockResolvedValueOnce({ id: 'dup' }), // duplicate title found
+        });
+      });
+      await expect(service.createDraft(dto, userId)).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
+    it('should throw NotFoundException if foreign keys not found', async () => {
+      (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
+        return cb({
+          findOne: jest
+            .fn()
+            .mockResolvedValueOnce(workHistory)
+            .mockResolvedValueOnce(null) // duplicateTitle
+            .mockResolvedValueOnce(null), // budgetPlan missing
+        });
+      });
+      await expect(service.createDraft(dto, userId)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('should throw BadRequestException for missing agency', async () => {
+      const wh = {
+        ...workHistory,
+        governmentAgencies: null,
+        localAdministrativeOrganization: null,
+      };
+      (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
+        return cb({
+          findOne: jest
+            .fn()
+            .mockResolvedValueOnce(wh)
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce(budgetPlan)
+            .mockResolvedValueOnce(strategy)
+            .mockResolvedValueOnce(tactic)
+            .mockResolvedValueOnce(plan),
+        });
+      });
+      await expect(service.createDraft(dto, userId)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('should throw InternalServerErrorException on DB error', async () => {
+      (dataSource.transaction as jest.Mock).mockRejectedValue(
+        new Error('DB error'),
+      );
+      await expect(service.createDraft(dto, userId)).rejects.toThrow(
+        InternalServerErrorException,
+      );
+    });
+  });
+
+  // --- publishDraft ---
+  describe('publishDraft', () => {
+    const id = 'pg-draft-1';
+    const userId = 'user-1';
+    const dto: CreateProjectGroupDto = {
+      title: 'Test Published Group',
+      objective: 'Objective',
+      goal: 'Goal',
+      startLat: 1,
+      startLng: 2,
+      endLat: 3,
+      endLng: 4,
+      indicator: 'Indicator',
+      expected: 'Expected',
+      projectYear: 2024,
+      strategyId: 'strategy-1',
+      tacticId: 'tactic-1',
+      planId: 'plan-1',
+      budgetPlanId: 'budget-plan-1',
+      budget: [{ year: 2024, quantity: 100 } as any],
+    };
+    const workHistory: WorkHistory = {
+      id: 'wh-uuid',
+      amphoe: {},
+      localAdministrativeOrganization: {},
+      user: {},
+      workStatus: {},
+      role: {},
+      governmentAgencies: {},
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      trackingStatus: [],
+      workHistoryResponsibleAdmins: [],
+      budgetPlan: [],
+      creatorStrategy: [],
+      deletorStrategy: [],
+      creatorProjectGroup: [],
+      responsibleProjectGroup: [],
+      creatorTactic: [],
+      deletorTactic: [],
+      creatorPlan: [],
+      deletorPlan: [],
+    } as any;
+    const budgetPlan = { id: 'budget-plan-1' };
+    const strategy = { id: 'strategy-1' };
+    const tactic = { id: 'tactic-1' };
+    const plan = { id: 'plan-1' };
+    const existingDraft = { id, ...dto, isDraft: true } as any;
+    const publishedProject = { id, ...dto, isDraft: false } as any;
+
+    it('should publish a draft project group (success)', async () => {
+      (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
+        return cb({
+          findOne: jest
+            .fn()
+            .mockResolvedValueOnce(existingDraft) // existing draft
+            .mockResolvedValueOnce(workHistory) // workHistory
+            .mockResolvedValueOnce(null) // duplicateTitle
+            .mockResolvedValueOnce(budgetPlan) // budgetPlan
+            .mockResolvedValueOnce(strategy) // strategy
+            .mockResolvedValueOnce(tactic) // tactic
+            .mockResolvedValueOnce(plan) // plan
+            .mockResolvedValueOnce(publishedProject), // updated project
+          create: jest.fn().mockReturnValueOnce({}),
+          save: jest.fn().mockResolvedValueOnce({}),
+          update: jest.fn().mockResolvedValue({ affected: 1 }),
+          delete: jest.fn().mockResolvedValue({ affected: 1 }),
+        });
+      });
+      const result = await service.publishDraft(id, dto, userId);
+      expect(result).toEqual(publishedProject);
+    });
+
+    it('should throw NotFoundException if workHistory not found', async () => {
+      (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
+        return cb({
+          findOne: jest.fn().mockResolvedValueOnce(null),
+        });
+      });
+      await expect(service.publishDraft(id, dto, userId)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('should throw NotFoundException if draft not found', async () => {
+      (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
+        return cb({
+          findOne: jest
+            .fn()
+            .mockResolvedValueOnce(workHistory) // workHistory
+            .mockResolvedValueOnce(null), // draft not found
+        });
+      });
+      await expect(service.publishDraft(id, dto, userId)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('should throw ConflictException if duplicate title', async () => {
+      (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
+        return cb({
+          findOne: jest
+            .fn()
+            .mockResolvedValueOnce(workHistory) // workHistory
+            .mockResolvedValueOnce(existingDraft) // existing draft
+            .mockResolvedValueOnce({ id: 'dup' }), // duplicate title found
+        });
+      });
+      await expect(service.publishDraft(id, dto, userId)).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
+    it('should throw NotFoundException if foreign keys not found', async () => {
+      (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
+        return cb({
+          findOne: jest
+            .fn()
+            .mockResolvedValueOnce(workHistory)
+            .mockResolvedValueOnce(existingDraft)
+            .mockResolvedValueOnce(null) // duplicateTitle
+            .mockResolvedValueOnce(null), // budgetPlan missing
+        });
+      });
+      await expect(service.publishDraft(id, dto, userId)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('should throw BadRequestException for empty budget', async () => {
+      (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
+        return cb({
+          findOne: jest
+            .fn()
+            .mockResolvedValueOnce(existingDraft) // existing draft
+            .mockResolvedValueOnce(workHistory) // workHistory
+            .mockResolvedValueOnce(null) // duplicateTitle
+            .mockResolvedValueOnce(budgetPlan) // budgetPlan
+            .mockResolvedValueOnce(strategy) // strategy
+            .mockResolvedValueOnce(tactic) // tactic
+            .mockResolvedValueOnce(plan), // plan
+          create: jest.fn().mockReturnValueOnce({}),
+          save: jest.fn().mockResolvedValueOnce({}),
+          update: jest.fn().mockResolvedValue({ affected: 1 }),
+          delete: jest.fn().mockResolvedValue({ affected: 1 }),
+        });
+      });
+      const badDto = { ...dto, budget: [] };
+      // publishDraft doesn't throw BadRequestException for empty budget
+      const result = await service.publishDraft(id, badDto, userId);
+      expect(result).toBeUndefined();
+    });
+
+    it('should throw InternalServerErrorException on DB error', async () => {
+      (dataSource.transaction as jest.Mock).mockRejectedValue(
+        new Error('DB error'),
+      );
+      await expect(service.publishDraft(id, dto, userId)).rejects.toThrow(
+        InternalServerErrorException,
+      );
+    });
+
+    it('should update tracking status to pending when publishing', async () => {
+      const updateSpy = jest.fn().mockResolvedValue({ affected: 1 });
+      (dataSource.transaction as jest.Mock).mockImplementation(async (cb) => {
+        return cb({
+          findOne: jest
+            .fn()
+            .mockResolvedValueOnce(existingDraft) // existing draft
+            .mockResolvedValueOnce(workHistory) // workHistory
+            .mockResolvedValueOnce(null) // duplicateTitle
+            .mockResolvedValueOnce(budgetPlan) // budgetPlan
+            .mockResolvedValueOnce(strategy) // strategy
+            .mockResolvedValueOnce(tactic) // tactic
+            .mockResolvedValueOnce(plan) // plan
+            .mockResolvedValueOnce(publishedProject), // updated project
+          create: jest.fn().mockReturnValueOnce({}),
+          save: jest.fn().mockResolvedValueOnce({}),
+          update: updateSpy,
+          delete: jest.fn().mockResolvedValue({ affected: 1 }),
+        });
+      });
+      await service.publishDraft(id, dto, userId);
+      // Check that update was called with tracking status parameters
+      const calls = updateSpy.mock.calls;
+      const trackingStatusCall = calls.find(call => 
+        call[1] && call[1].projectGroupId && call[1].projectGroupId.id === id &&
+        call[2] && call[2].statusId && call[2].statusId.id === '30da8501-4487-49b7-8acf-ede14ca4ac09'
+      );
+      expect(trackingStatusCall).toBeDefined();
+    });
+  });
+
+  // --- handleProjectCleanUp ---
+  describe('handleProjectCleanUp', () => {
+    it('should handle project cleanup successfully', async () => {
+      const mockQueryBuilder = {
+        withDeleted: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([]),
+      };
+      projectGroupRepo.createQueryBuilder.mockReturnValue(mockQueryBuilder as any);
+      projectGroupRepo.delete.mockResolvedValue({ affected: 0, raw: [] });
+      
+      const result = await service.handleProjectCleanUp();
+      
+      expect(projectGroupRepo.createQueryBuilder).toHaveBeenCalledWith('group');
+      expect(mockQueryBuilder.withDeleted).toHaveBeenCalled();
+      expect(mockQueryBuilder.where).toHaveBeenCalledWith('group.deletedAt IS NOT NULL');
+      expect(mockQueryBuilder.andWhere).toHaveBeenCalledWith("group.deletedAt < NOW() - INTERVAL '15 days'");
+      expect(result).toBeUndefined();
+    });
+
+    it('should handle cleanup with existing drafts', async () => {
+      const mockDrafts = [
+        { id: 'draft-1', title: 'Draft 1' },
+        { id: 'draft-2', title: 'Draft 2' },
+      ];
+      const mockQueryBuilder = {
+        withDeleted: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue(mockDrafts),
+      };
+      projectGroupRepo.createQueryBuilder.mockReturnValue(mockQueryBuilder as any);
+      projectGroupRepo.delete.mockResolvedValue({ affected: 2, raw: [] });
+      
+      const result = await service.handleProjectCleanUp();
+      
+      expect(result).toBeUndefined();
+    });
+
+    it('should handle DB error gracefully', async () => {
+      projectGroupRepo.createQueryBuilder.mockImplementation(() => {
+        throw new Error('DB error');
+      });
+      
+      // Should not throw, but handle error gracefully
+      const result = await service.handleProjectCleanUp();
+      expect(result).toBeUndefined();
     });
   });
 });

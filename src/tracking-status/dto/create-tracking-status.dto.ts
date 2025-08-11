@@ -27,4 +27,18 @@ export class CreateTrackingStatusDto {
   @ValidateNested({ each: true })
   @Type(() => CreateCommentInput)
   comment?: CreateCommentInput[];
+
+  @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => CreateComments)
+  comments?: CreateComments[]
+}
+
+export class CreateComments {
+  @IsNotEmpty()
+  detail: string;
+
+  @IsNumber()
+  @IsNotEmpty()
+  step: number;
 }

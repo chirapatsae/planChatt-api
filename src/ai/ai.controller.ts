@@ -17,6 +17,7 @@ export class AiController {
 
   private parseSection(text: string, keyword: string): string | null {
     const keyText = keyword.replace(':', '');
+    // รองรับทั้ง format **ชื่อโครงการ:** และ ชื่อโครงการ:
     const regex = new RegExp(
       `(?:\\*\\*)?${keyText}(?:\\*\\*)?\\s*:([^]*?)(?=\\n\\s*\\*\\*|$)`,
       's',
@@ -30,6 +31,17 @@ export class AiController {
         .replace(/^\s*\*{1,2}\s*/, '')
         .trim();
       return cleanedContent;
+    }
+
+    // Fallback: ลองหาแบบไม่มี **
+    const fallbackRegex = new RegExp(
+      `${keyText}\\s*:([^]*?)(?=\\n\\s*[^\\n]*:|$)`,
+      's',
+    );
+    const fallbackMatch = text.match(fallbackRegex);
+    
+    if (fallbackMatch && fallbackMatch[1]) {
+      return fallbackMatch[1].trim();
     }
 
     return null;
@@ -47,11 +59,18 @@ export class AiController {
     if (!rawResult) {
       return { message: 'AI failed to generate a result.' };
     }
+
+    // Debug: Log the raw result
+    console.log('Raw AI Result:', rawResult);
+
     const title = this.parseSection(rawResult, 'ชื่อโครงการ:');
     const objective = this.parseSection(rawResult, 'วัตถุประสงค์:');
     const goal = this.parseSection(rawResult, 'เป้าหมาย:');
     const expected = this.parseSection(rawResult, 'ผลที่คาดว่าจะได้รับ:');
     const indicator = this.parseSection(rawResult, 'ตัวชี้วัด:');
+
+    // Debug: Log parsed results
+    console.log('Parsed Results:', { title, objective, goal, expected, indicator });
 
     return {
       title,

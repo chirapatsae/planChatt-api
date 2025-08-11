@@ -11,6 +11,8 @@ import { handleException } from 'src/util/handleException';
 import { CreateTacticDto } from './dto/create-tactic.dto';
 import { UpdateTacticDto } from './dto/update-tactic.dto';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
+import { PlanTactic } from 'src/plan/entities/plan-tactic.entity';
+import { Plan } from 'src/plan/entities/plan.entity';
 
 @Injectable()
 export class TacticService {
@@ -19,6 +21,7 @@ export class TacticService {
   constructor(
     @InjectRepository(Tactic)
     private readonly tacticRepo: Repository<Tactic>,
+
     @InjectRepository(WorkHistory)
     private readonly workHistoryRepository: Repository<WorkHistory>,
   ) {}
@@ -59,8 +62,12 @@ export class TacticService {
     try {
       const tactic = await this.tacticRepo.findOne({
         where: { id },
-        relations: ['strategy', 'createdBy', 'deletedBy', 'planTactics'],
-      });
+        relations : {
+            planTactics : {
+              plan : true,
+            }
+        }
+      })
       if (!tactic) {
         throw new NotFoundException(`Tactic with ID ${id} not found`);
       }

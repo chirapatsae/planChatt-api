@@ -10,6 +10,7 @@ import {
   OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
+  Column,
 } from 'typeorm';
 import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
@@ -72,12 +73,13 @@ export class WorkHistory {
     () => GovernmentAgency,
     (govermentAgency) => govermentAgency.workHistory,
     {
+    
       onDelete: 'CASCADE',
       onUpdate: 'CASCADE',
     },
   )
   @JoinColumn({ name: 'government_agencies_id' })
-  governmentAgencies?: GovernmentAgency;
+  governmentAgencies?: GovernmentAgency | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
@@ -94,6 +96,9 @@ export class WorkHistory {
 
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
+
+  @Column({ name: 'is_current', default: true })
+  isCurrent: boolean;
 
   @ManyToOne(() => User, (user) => user.updatedWorkHistory, {
     onUpdate: 'CASCADE',
