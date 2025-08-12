@@ -53,6 +53,13 @@ import { AiUsageLogsModule } from './ai-usage-logs/ai-usage-logs.module';
 import { AiUsageLog } from './ai-usage-logs/entities/ai-usage-log.entity';
 import { ProjectTypesModule } from './project-types/project-types.module';
 import { ProjectType } from './project-types/entities/project-type.entity';
+import { AnnouncementsModule } from './announcements/announcements.module';
+import { Announcement } from './announcements/entities/announcement.entity';
+import { AnnouncementRolesModule } from './announcement-roles/announcement-roles.module';
+import { AnnouncementRole } from './announcement-roles/entities/announcement-role.entity';
+import { NotificationLogsModule } from './notification-logs/notification-logs.module';
+import { NotificationLog } from './notification-logs/entities/notification-log.entity';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -90,6 +97,9 @@ import { ProjectType } from './project-types/entities/project-type.entity';
         AiUsageQuota,
         AiUsageLog,
         ProjectType,
+        Announcement,
+        AnnouncementRole,
+        NotificationLog,
       ],
       synchronize: true,
     }),
@@ -116,6 +126,10 @@ import { ProjectType } from './project-types/entities/project-type.entity';
     AiUsageQuotasModule,
     AiUsageLogsModule,
     ProjectTypesModule,
+    AnnouncementsModule,
+    AnnouncementRolesModule,
+    NotificationLogsModule,
+    NotificationsModule,
   ],
   controllers: [AppController, AiController],
   providers: [AppService, AiService],

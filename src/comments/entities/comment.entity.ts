@@ -1,7 +1,5 @@
-import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
-import { Status } from 'src/status/entities/status.entity';
+
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
-import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import {
   Column,
   Entity,

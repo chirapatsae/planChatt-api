@@ -1,4 +1,6 @@
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
+import { AnnouncementRole } from 'src/announcement-roles/entities/announcement-role.entity';
+import { NotificationLog } from 'src/notification-logs/entities/notification-log.entity';
 import {
   Column,
   CreateDateColumn,
@@ -27,4 +29,14 @@ export class Role {
     onUpdate: 'CASCADE',
   })
   workHistory: WorkHistory[];
+
+  @OneToMany(() => AnnouncementRole, (announcementRole) => announcementRole.role, {
+    onDelete: 'CASCADE',
+  })
+  announcementRoles: AnnouncementRole[];
+
+  @OneToMany(() => NotificationLog, (notificationLog) => notificationLog.role, {
+    onDelete: 'CASCADE',
+  })
+  notificationLogs: NotificationLog[];
 }

@@ -23,6 +23,7 @@ import { Strategy } from 'src/strategy/entities/strategy.entity';
 import { Tactic } from 'src/tactic/entities/tactic.entity';
 import { Plan } from 'src/plan/entities/plan.entity';
 import { Status } from 'src/status/entities/status.entity';
+import { Announcement } from 'src/announcements/entities/announcement.entity';
 
 @Entity({ name: 'work_history' })
 export class WorkHistory {
@@ -202,4 +203,14 @@ export class WorkHistory {
     onUpdate: 'CASCADE',
   })
   deletorStatus: Status[];
+
+  @OneToMany(
+    () => Announcement,
+    (annoucement) => annoucement.createdBy,
+    {
+      onDelete: 'CASCADE',
+      onUpdate: 'CASCADE',
+    },
+  )
+  creatorAnnoucements: Announcement[];
 }
