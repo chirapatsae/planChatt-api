@@ -95,7 +95,7 @@ export class AnnouncementsService {
 
   async update(id: string, updateAnnouncementDto: UpdateAnnouncementDto, userId: string): Promise<Announcement> {
     const { roleIds, ...updateData } = updateAnnouncementDto;
-    
+    console.log(updateData);
     const announcement = await this.findOne(id);
     
     // Update announcement data
