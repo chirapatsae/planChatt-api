@@ -10,6 +10,7 @@ import { Role } from 'src/roles/entities/role.entity';
 import { GovernmentAgency } from 'src/government-agencies/entities/government-agency.entity';
 import { Position } from 'src/positions/entities/position.entity';
 import { WorkStatus } from 'src/work-status/entities/work-status.entity';
+import { WebsocketModule } from 'src/websocket/websocket.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { WorkStatus } from 'src/work-status/entities/work-status.entity';
       Position,
       WorkStatus,
     ]),
+    WebsocketModule,
   ],
   controllers: [WorkHistoryController],
   providers: [WorkHistoryService],

@@ -11,15 +11,18 @@ import {
 
 export enum UserRole {
   USER = 'user',
+  STAFF = 'staff',
   ADMIN = 'admin',
-  SUPERADMIN = 'superadmin',
+  SUPERADMIN = 'super-admin',
+  CLEVEL = 'c-level',
+
 }
 
 export enum WorkHistoryStatus {
-  UNVERIFY = 'unverify',
+  PENDING = 'pending',
   APPROVED = 'approved',
   SUSPENDED = 'suspended',
-  BANNED = 'banned',
+  MOVE = 'move',
 }
 export class UpdateWorkHistoryDto extends PartialType(CreateWorkHistoryDto) {
   @IsOptional()
@@ -27,20 +30,20 @@ export class UpdateWorkHistoryDto extends PartialType(CreateWorkHistoryDto) {
   @IsString({ each: true })
   responsibleAmphoeIds?: string[];
 
-  // 2. เปลี่ยนจาก @IsString เป็น @IsEnum และแก้ Type
-  @IsOptional()
-  @IsEnum(UserRole, {
-    message: 'Invalid role. Must be one of: user, admin, superadmin',
-  })
-  role?: UserRole;
+  // // 2. เปลี่ยนจาก @IsString เป็น @IsEnum และแก้ Type
+  // @IsOptional()
+  // @IsEnum(UserRole, {
+  //   message: 'Invalid role. Must be one of: user, admin, superadmin',
+  // })
+  // role?: UserRole;
 
-  // 3. เปลี่ยนจาก @IsString เป็น @IsEnum และแก้ Type
-  @IsOptional()
-  @IsEnum(WorkHistoryStatus, {
-    message:
-      'Invalid status. Must be one of: unverify, approved, suspended, banned',
-  })
-  status?: WorkHistoryStatus;
+  // // 3. เปลี่ยนจาก @IsString เป็น @IsEnum และแก้ Type
+  // @IsOptional()
+  // @IsEnum(WorkHistoryStatus, {
+  //   message:
+  //     'Invalid status. Must be one of: unverify, approved, suspended, banned',
+  // })
+  // status?: WorkHistoryStatus;
 }
 
 // DTO สำหรับการโอนย้าย responsibility

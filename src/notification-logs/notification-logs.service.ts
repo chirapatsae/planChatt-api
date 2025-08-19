@@ -73,6 +73,24 @@ export class NotificationLogsService {
   }
 
   async logSuccess(announcementId: string, roleId: string): Promise<NotificationLog> {
+    // ตรวจสอบจาก announcement_id และ role_id โดยตรง
+    const existingLog = await this.notificationLogRepository.findOne({
+      where: { 
+        announcementId, 
+        roleId
+      }
+    });
+
+    if (existingLog) {
+      // อัปเดต status เป็น SUCCESS ถ้ายังไม่ใช่
+      if (existingLog.status !== NotificationLogStatus.SUCCESS) {
+        existingLog.status = NotificationLogStatus.SUCCESS;
+        existingLog.sentAt = new Date();
+        return this.notificationLogRepository.save(existingLog);
+      }
+      return existingLog; // ไม่สร้างซ้ำ
+    }
+
     return this.create({
       announcementId,
       roleId,
@@ -82,6 +100,25 @@ export class NotificationLogsService {
   }
 
   async logFailure(announcementId: string, roleId: string, errorMessage: string): Promise<NotificationLog> {
+    // ตรวจสอบจาก announcement_id และ role_id โดยตรง
+    const existingLog = await this.notificationLogRepository.findOne({
+      where: { 
+        announcementId, 
+        roleId
+      }
+    });
+
+    if (existingLog) {
+      // อัปเดต status และ errorMessage ถ้ายังไม่ใช่ FAILED
+      if (existingLog.status !== NotificationLogStatus.FAILED) {
+        existingLog.status = NotificationLogStatus.FAILED;
+        existingLog.errorMessage = errorMessage;
+        existingLog.sentAt = new Date();
+        return this.notificationLogRepository.save(existingLog);
+      }
+      return existingLog; // ไม่สร้างซ้ำ
+    }
+
     return this.create({
       announcementId,
       roleId,

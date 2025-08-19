@@ -1,7 +1,6 @@
 import {
   IsNotEmpty,
   IsOptional,
-  IsBoolean,
   IsUUID,
   IsString,
 } from 'class-validator';
@@ -19,11 +18,9 @@ export class CreateWorkHistoryDto {
   @IsNotEmpty()
   userId: string;
 
-  @IsUUID()
   @IsOptional()
   workStatusId?: string;
 
-  @IsUUID()
   @IsOptional()
   roleId?: string;
 

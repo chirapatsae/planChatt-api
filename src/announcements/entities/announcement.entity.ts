@@ -12,6 +12,7 @@ import {
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { AnnouncementRole } from 'src/announcement-roles/entities/announcement-role.entity';
 import { NotificationLog } from 'src/notification-logs/entities/notification-log.entity';
+import { UserNotification } from 'src/user-notifications/entities/user-notification.entity';
 
 export enum AnnouncementStatus {
   DRAFT = 'draft',
@@ -83,6 +84,12 @@ export class Announcement {
     onDelete: 'CASCADE',
   })
   notificationLogs: NotificationLog[];
+
+  @OneToMany(() => UserNotification, (userNotification) => userNotification.announcement, {
+    cascade: true,
+    onDelete: 'CASCADE',
+  })
+  userNotifications: UserNotification[];
 
   @DeleteDateColumn({ name: 'deleted_at', nullable: true })
   deletedAt?: Date;

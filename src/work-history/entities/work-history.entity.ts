@@ -24,6 +24,7 @@ import { Tactic } from 'src/tactic/entities/tactic.entity';
 import { Plan } from 'src/plan/entities/plan.entity';
 import { Status } from 'src/status/entities/status.entity';
 import { Announcement } from 'src/announcements/entities/announcement.entity';
+import { UserNotification } from 'src/user-notifications/entities/user-notification.entity';
 
 @Entity({ name: 'work_history' })
 export class WorkHistory {
@@ -213,4 +214,10 @@ export class WorkHistory {
     },
   )
   creatorAnnoucements: Announcement[];
+
+  @OneToMany(() => UserNotification, (userNotification) => userNotification.workHistory, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  userNotifications: UserNotification[];
 }

@@ -12,8 +12,6 @@ import { User } from 'src/users/entities/user.entity';
 import { UsersService } from 'src/users/users.service';
 import { CreateUserDto } from 'src/users/dto/create-user.dto';
 import { hashCitizenId } from 'src/util/encryption.util';
-import * as dotenv from 'dotenv';
-dotenv.config();
 
 @Injectable()
 export class AuthService {
@@ -55,14 +53,16 @@ export class AuthService {
           firstname: decoded.given_name,
           lastname: decoded.family_name,
         };
-        user = await this.userService.create(newUserDto);
+        
+        // Pass the pre-calculated hash to ensure consistency
+        user = await this.userService.create(newUserDto, hashedCid);
       } else {
         user.prefix = decoded.title;
         user.firstname = decoded.given_name;
         user.lastname = decoded.family_name;
         user = await this.userService.update(user.id, user);
       }
-      const isFirstLogin = user.isFirstLogin;
+      const isFirstLogin = user.isFirstLogin || true;
 
       const latestWH =
         user.workHistory
@@ -71,8 +71,6 @@ export class AuthService {
             (a, b) =>
               new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
           )[0] ?? {};
-
-      console.log(latestWH);
 
       const divisionId = isFirstLogin
         ? divisionIdFromDto
@@ -122,7 +120,6 @@ export class AuthService {
       ) {
         throw error;
       }
-      console.error('❌ handleOAuthLogin Error:', error);
       throw new InternalServerErrorException('OAuth login failed');
     }
   }

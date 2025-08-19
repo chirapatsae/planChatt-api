@@ -1,6 +1,4 @@
-import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import {
-  BadRequestException,
   Injectable,
   Logger,
   NotFoundException,
@@ -29,9 +27,10 @@ export class UsersService {
   /**
    * Creates a new user. Unique constraints are handled by the database.
    */
-  async create(createUserDto: CreateUserDto): Promise<User> {
+  async create(createUserDto: CreateUserDto, preCalculatedHash?: string): Promise<User> {
     try {
-      const hashedCid = hashCitizenId(createUserDto.citizenId);
+      // Use pre-calculated hash if provided, otherwise calculate new one
+      const hashedCid = preCalculatedHash || hashCitizenId(createUserDto.citizenId);
       const encryptedCid = await encryption(createUserDto.citizenId);
 
       const user = this.userRepository.create({

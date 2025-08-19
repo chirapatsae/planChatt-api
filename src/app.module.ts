@@ -60,6 +60,9 @@ import { AnnouncementRole } from './announcement-roles/entities/announcement-rol
 import { NotificationLogsModule } from './notification-logs/notification-logs.module';
 import { NotificationLog } from './notification-logs/entities/notification-log.entity';
 import { NotificationsModule } from './notifications/notifications.module';
+import { UserNotificationsModule } from './user-notifications/user-notifications.module';
+import { UserNotification } from './user-notifications/entities/user-notification.entity';
+import { WebsocketModule } from './websocket/websocket.module';
 
 @Module({
   imports: [
@@ -100,6 +103,7 @@ import { NotificationsModule } from './notifications/notifications.module';
         Announcement,
         AnnouncementRole,
         NotificationLog,
+        UserNotification,
       ],
       synchronize: true,
     }),
@@ -130,6 +134,8 @@ import { NotificationsModule } from './notifications/notifications.module';
     AnnouncementRolesModule,
     NotificationLogsModule,
     NotificationsModule,
+    UserNotificationsModule,
+    WebsocketModule,
   ],
   controllers: [AppController, AiController],
   providers: [AppService, AiService],

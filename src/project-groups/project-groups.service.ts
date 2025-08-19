@@ -362,7 +362,7 @@ export class ProjectGroupsService {
       ],
     });
     if (!workHistory) return countOnly ? 0 : [];
-    if (workHistory.workStatus.id !== 'c844d2a7-cf8b-4db1-958c-d7209dd30ff5')
+    if (workHistory.workStatus.id !== process.env.APPROVED_WORK_STATUS)
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
 
     const query = this.projectGroupRepo

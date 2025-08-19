@@ -7,6 +7,7 @@ import {
   Param,
   Delete,
   UseGuards,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { NotificationLogsService } from './notification-logs.service';
 import { CreateNotificationLogDto } from './dto/create-notification-log.dto';
@@ -33,12 +34,12 @@ export class NotificationLogsController {
   }
 
   @Get('announcement/:announcementId')
-  findByAnnouncement(@Param('announcementId') announcementId: string) {
+  findByAnnouncement(@Param('announcementId', ParseUUIDPipe) announcementId: string) {
     return this.notificationLogsService.findByAnnouncement(announcementId);
   }
 
   @Get('role/:roleId')
-  findByRole(@Param('roleId') roleId: string) {
+  findByRole(@Param('roleId', ParseUUIDPipe) roleId: string) {
     return this.notificationLogsService.findByRole(roleId);
   }
 
@@ -48,17 +49,17 @@ export class NotificationLogsController {
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
+  findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.notificationLogsService.findOne(id);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateNotificationLogDto: UpdateNotificationLogDto) {
+  update(@Param('id', ParseUUIDPipe) id: string, @Body() updateNotificationLogDto: UpdateNotificationLogDto) {
     return this.notificationLogsService.update(id, updateNotificationLogDto);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
+  remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.notificationLogsService.remove(id);
   }
 }

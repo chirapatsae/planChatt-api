@@ -37,25 +37,25 @@ export class AnnouncementsController {
     return this.announcementsService.findAll();
   }
 
-  @Get('status/:status')
-  findByStatus(@Param('status') status: AnnouncementStatus) {
-    return this.announcementsService.findByStatus(status);
-  }
+  // @Get('status/:status')
+  // findByStatus(@Param('status') status: AnnouncementStatus) {
+  //   return this.announcementsService.findByStatus(status);
+  // }
 
-  @Get('role/:roleId')
-  findByRole(@Param('roleId') roleId: string) {
-    return this.announcementsService.findByRole(roleId);
-  }
+  // @Get('role/:roleId')
+  // findByRole(@Param('roleId') roleId: string) {
+  //   return this.announcementsService.findByRole(roleId);
+  // }
 
-  @Get('work-history/:workHistoryId')
-  findByWorkHistory(@Param('workHistoryId') workHistoryId: string) {
-    return this.announcementsService.findByWorkHistory(workHistoryId);
-  }
+  // @Get('work-history/:workHistoryId')
+  // findByWorkHistory(@Param('workHistoryId') workHistoryId: string) {
+  //   return this.announcementsService.findByWorkHistory(workHistoryId);
+  // }
 
-  @Get('pending-notifications')
-  getPendingNotifications() {
-    return this.announcementsService.getPendingNotifications();
-  }
+  // @Get('pending-notifications')
+  // getPendingNotifications() {
+  //   return this.announcementsService.getPendingNotifications();
+  // }
 
   @Get(':id')
   findOne(@Param('id') id: string) {

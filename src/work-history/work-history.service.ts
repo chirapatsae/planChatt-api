@@ -16,6 +16,7 @@ import { WorkStatus } from 'src/work-status/entities/work-status.entity';
 import { Role } from 'src/roles/entities/role.entity';
 import { GovernmentAgency } from 'src/government-agencies/entities/government-agency.entity';
 import { Position } from 'src/positions/entities/position.entity';
+import { WebsocketService } from 'src/websocket/websocket/websocket.service';
 
 @Injectable()
 export class WorkHistoryService {
@@ -45,6 +46,8 @@ export class WorkHistoryService {
 
     @InjectRepository(Position)
     private readonly positionRepository: Repository<Position>,
+
+    private readonly webSocketService: WebsocketService,
   ) {}
 
   async create(
@@ -80,15 +83,22 @@ export class WorkHistoryService {
       const user = await this.userRepository.findOneBy({ id: userId });
       if (!user) throw new NotFoundException('User not found');
 
-      const resolvedWorkStatusId =
-        workStatusId ?? '64db0afc-c6e0-43ae-aa96-92bc289dc1b7';
-      const workStatus = await this.workStatusRepository.findOneBy({
-        id: resolvedWorkStatusId,
-      });
+      // Resolve workStatus by id, fallback to default name 'pending'
+      let workStatus: WorkStatus | null = null;
+      if (workStatusId) {
+        workStatus = await this.workStatusRepository.findOneBy({ id: workStatusId });
+      } else {
+        workStatus = await this.workStatusRepository.findOneBy({ name: 'pending' });
+      }
       if (!workStatus) throw new NotFoundException('Work status not found');
 
-      const resolvedRoleId = roleId ?? '74585119-b006-452c-ae3e-154b193aa83e';
-      const role = await this.roleRepository.findOneBy({ id: resolvedRoleId });
+      // Resolve role by id, fallback to default name 'user'
+      let role: Role | null = null;
+      if (roleId) {
+        role = await this.roleRepository.findOneBy({ id: roleId });
+      } else {
+        role = await this.roleRepository.findOneBy({ name: 'user' });
+      }
       if (!role) throw new NotFoundException('Role not found');
 
       const workHistory = new WorkHistory();
@@ -196,7 +206,6 @@ export class WorkHistoryService {
       const {
         amphoeId,
         localAdministrativeOrganizationId,
-        userId,
         workStatusId,
         roleId,
         governmentAgenciesId,
@@ -209,8 +218,12 @@ export class WorkHistoryService {
 
       const workHistory = await this.workHistoryRepository.findOne({
         where: { id },
+        relations: ['workStatus'],
       });
       if (!workHistory) throw new NotFoundException('Work history not found');
+
+      // Store previous work status for comparison
+      const previousWorkStatus = workHistory.workStatus?.name;
 
       const amphoe = await this.amphoeRepository.findOneBy({ id: amphoeId });
       if (!amphoe) throw new NotFoundException('Amphoe not found');
@@ -223,23 +236,27 @@ export class WorkHistoryService {
           'Local Administrative Organization not found',
         );
 
-      const user = await this.userRepository.findOneBy({ id: userId });
-      if (!user) throw new NotFoundException('User not found');
+      // Resolve work status and role by id if provided; otherwise keep current
+      let workStatus = workHistory.workStatus;
+      if (workStatusId) {
+        const found = await this.workStatusRepository.findOneBy({ id: workStatusId });
+        if (!found) throw new NotFoundException('Work status not found');
+        workStatus = found;
+      }
 
-      const workStatus = await this.workStatusRepository.findOneBy({
-        id: workStatusId,
-      });
-      if (!workStatus) throw new NotFoundException('Work status not found');
-
-      const role = await this.roleRepository.findOneBy({ id: roleId });
-      if (!role) throw new NotFoundException('Role not found');
+      let role = workHistory.role;
+      if (roleId) {
+        const foundRole = await this.roleRepository.findOneBy({ id: roleId });
+        if (!foundRole) throw new NotFoundException('Role not found');
+        role = foundRole;
+      }
 
       workHistory.amphoe = amphoe;
       workHistory.localAdministrativeOrganization = lao;
-      workHistory.user = user;
       workHistory.workStatus = workStatus;
       workHistory.role = role;
       workHistory.updatedBy = updator;
+      workHistory.isCurrent = true;
       
       // Clear government agencies if amphoe is not 3001 AND lao is not 3001027
       if (amphoe.id !== '3001' && localAdministrativeOrganizationId !== '3001027') {
@@ -255,7 +272,80 @@ export class WorkHistoryService {
         workHistory.governmentAgencies = govAgency;
       }
 
-      return await this.workHistoryRepository.save(workHistory);
+      const savedWorkHistory = await this.workHistoryRepository.save(workHistory);
+
+      // Send notification if work status changed
+      if (previousWorkStatus !== workStatus.name) {
+        try {
+          // ส่ง notification ทั่วไป
+          await this.webSocketService.notifyWorkStatusUpdate({
+            userId: workHistory.user.id,
+            workStatus: workStatus.name,
+            workHistoryId: workHistory.id,
+            previousWorkStatus,
+            updatedBy: updator.id,
+            timestamp: new Date(),
+          });
+
+          // ถ้า work status เปลี่ยนเป็น 'approved' ให้ส่ง event เฉพาะ
+          if (workStatus.name === 'approved') {
+            await this.webSocketService.notifyUser({
+              userId: workHistory.user.id,
+              event: 'work-status-approved',
+              data: {
+                workStatus: 'approved',
+                workHistoryId: workHistory.id,
+                userId: workHistory.user.id,
+                role: role.name, // เพิ่ม role
+                message: 'Your account has been approved!',
+                timestamp: new Date(),
+              }
+            });
+          }
+
+          // ถ้า work status เปลี่ยนเป็น 'suspended' ให้ส่ง event เฉพาะ
+          if (workStatus.name === 'suspended') {
+            await this.webSocketService.notifyUser({
+              userId: workHistory.user.id,
+              event: 'work-status-suspended',
+              data: {
+                workStatus: 'suspended',
+                workHistoryId: workHistory.id,
+                userId: workHistory.user.id,
+                message: 'Your account has been suspended!',
+                timestamp: new Date(),
+              }
+            });
+          }
+
+          // ถ้า work status เปลี่ยนกลับเป็น 'pending' ให้ส่ง event เฉพาะ
+          if (workStatus.name === 'pending') {
+            await this.webSocketService.notifyUser({
+              userId: workHistory.user.id,
+              event: 'work-status-pending',
+              data: {
+                workStatus: 'pending',
+                workHistoryId: workHistory.id,
+                userId: workHistory.user.id,
+                message: 'Your account status has been changed back to pending!',
+                timestamp: new Date(),
+              }
+            });
+          }
+          
+          this.logger.log(
+            `Work status updated from ${previousWorkStatus} to ${workStatus.name} for user ${workHistory.user.id}`,
+          );
+        } catch (notificationError) {
+          this.logger.error(
+            `Failed to send work status update notification: ${notificationError.message}`,
+            notificationError.stack,
+          );
+          // Don't fail the main operation if notification fails
+        }
+      }
+
+      return savedWorkHistory;
     } catch (error) {
       handleException(this.logger, error);
     }

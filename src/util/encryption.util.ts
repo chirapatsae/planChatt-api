@@ -36,7 +36,7 @@ export async function decryption(encryptedData: string): Promise<string> {
 }
 
 export function hashCitizenId(citizenId: string): string {
-  return createHmac('sha256', process.env.SECRET_KEY || '')
+  return createHmac('sha256', secretKey)
     .update(citizenId)
     .digest('hex');
 }

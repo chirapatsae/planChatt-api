@@ -66,6 +66,7 @@ export class AnnouncementsService {
 
     // If status is PUBLISHED, set notificationStatus to pending
     if (savedAnnouncement.status === AnnouncementStatus.PUBLISHED) {
+      savedAnnouncement.publishDateTime = new Date();
       savedAnnouncement.notificationStatus = NotificationStatus.PENDING;
       await this.announcementRepository.save(savedAnnouncement);
     }
@@ -130,22 +131,22 @@ export class AnnouncementsService {
     await this.announcementRepository.softDelete(id);
   }
 
-  async findByStatus(status: AnnouncementStatus): Promise<Announcement[]> {
-    return this.announcementRepository.find({
-      where: { status },
-      relations: ['createdBy', 'createdBy.user', 'announcementRoles', 'announcementRoles.role'],
-      order: { createdAt: 'DESC' },
-    });
-  }
+  // async findByStatus(status: AnnouncementStatus): Promise<Announcement[]> {
+  //   return this.announcementRepository.find({
+  //     where: { status },
+  //     relations: ['createdBy', 'createdBy.user', 'announcementRoles', 'announcementRoles.role'],
+  //     order: { createdAt: 'DESC' },
+  //   });
+  // }
 
-  async findByRole(roleId: string): Promise<Announcement[]> {
-    const announcementRoles = await this.announcementRoleRepository.find({
-      where: { role: { id: roleId } },
-      relations: ['announcement', 'announcement.createdBy', 'announcement.createdBy.user', 'announcement.announcementRoles', 'announcement.announcementRoles.role'],
-    });
+  // async findByRole(roleId: string): Promise<Announcement[]> {
+  //   const announcementRoles = await this.announcementRoleRepository.find({
+  //     where: { role: { id: roleId } },
+  //     relations: ['announcement', 'announcement.createdBy', 'announcement.createdBy.user', 'announcement.announcementRoles', 'announcement.announcementRoles.role'],
+  //   });
 
-    return announcementRoles.map(ar => ar.announcement);
-  }
+  //   return announcementRoles.map(ar => ar.announcement);
+  // }
 
   async getPendingNotifications(): Promise<Announcement[]> {
     return this.announcementRepository.find({
@@ -161,6 +162,22 @@ export class AnnouncementsService {
     const announcement = await this.findOne(id);
     announcement.notificationStatus = status;
     return this.announcementRepository.save(announcement);
+  }
+
+  async updateNotificationStatusIfPending(id: string, newStatus: NotificationStatus): Promise<boolean> {
+    // อัปเดต status เฉพาะเมื่อเป็น PENDING เท่านั้น (ป้องกัน race condition)
+    const result = await this.announcementRepository.update(
+      { 
+        id, 
+        notificationStatus: NotificationStatus.PENDING 
+      },
+      { 
+        notificationStatus: newStatus 
+      }
+    );
+    
+    // result.affected > 0 หมายความว่ามีการอัปเดตสำเร็จ
+    return (result.affected || 0) > 0;
   }
 
   async findScheduledAnnouncements(): Promise<Announcement[]> {
@@ -190,6 +207,13 @@ export class AnnouncementsService {
       where: { createdBy: { id: workHistoryId } },
       relations: ['announcementRoles', 'announcementRoles.role'],
       order: { createdAt: 'DESC' },
+    });
+  }
+
+  async getWorkHistoriesByRole(roleId: string): Promise<WorkHistory[]> {
+    return this.workHistoryRepository.find({
+      where: { role: { id: roleId } },
+      relations: ['user', 'role'],
     });
   }
 }
