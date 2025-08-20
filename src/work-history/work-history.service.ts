@@ -48,7 +48,7 @@ export class WorkHistoryService {
     private readonly positionRepository: Repository<Position>,
 
     private readonly webSocketService: WebsocketService,
-  ) {}
+  ) { }
 
   async create(
     dto: CreateWorkHistoryDto,
@@ -210,7 +210,6 @@ export class WorkHistoryService {
         roleId,
         governmentAgenciesId,
       } = dto;
-
       const updator = await this.userRepository.findOne({
         where: { id: updateId },
       });
@@ -218,11 +217,17 @@ export class WorkHistoryService {
 
       const workHistory = await this.workHistoryRepository.findOne({
         where: { id },
-        relations: ['workStatus'],
+        relations: ['workStatus', 'user', 'role'],
       });
       if (!workHistory) throw new NotFoundException('Work history not found');
 
+      // Ensure user is loaded
+      if (!workHistory.user) {
+        throw new NotFoundException('User not found in work history');
+      }
+
       // Store previous work status for comparison
+      const previousRole = workHistory.role?.name;
       const previousWorkStatus = workHistory.workStatus?.name;
 
       const amphoe = await this.amphoeRepository.findOneBy({ id: amphoeId });
@@ -244,11 +249,21 @@ export class WorkHistoryService {
         workStatus = found;
       }
 
+      // Ensure workStatus is not undefined
+      if (!workStatus) {
+        throw new NotFoundException('Work status is required but not found');
+      }
+
       let role = workHistory.role;
       if (roleId) {
         const foundRole = await this.roleRepository.findOneBy({ id: roleId });
         if (!foundRole) throw new NotFoundException('Role not found');
         role = foundRole;
+      }
+
+      // Ensure role is not undefined
+      if (!role) {
+        throw new NotFoundException('Role is required but not found');
       }
 
       workHistory.amphoe = amphoe;
@@ -257,7 +272,7 @@ export class WorkHistoryService {
       workHistory.role = role;
       workHistory.updatedBy = updator;
       workHistory.isCurrent = true;
-      
+
       // Clear government agencies if amphoe is not 3001 AND lao is not 3001027
       if (amphoe.id !== '3001' && localAdministrativeOrganizationId !== '3001027') {
         workHistory.governmentAgencies = null;
@@ -273,69 +288,36 @@ export class WorkHistoryService {
       }
 
       const savedWorkHistory = await this.workHistoryRepository.save(workHistory);
-
-      // Send notification if work status changed
-      if (previousWorkStatus !== workStatus.name) {
+      if (previousWorkStatus !== workStatus?.name || previousRole !== role?.name) {
         try {
-          // ส่ง notification ทั่วไป
-          await this.webSocketService.notifyWorkStatusUpdate({
-            userId: workHistory.user.id,
-            workStatus: workStatus.name,
-            workHistoryId: workHistory.id,
-            previousWorkStatus,
-            updatedBy: updator.id,
-            timestamp: new Date(),
-          });
-
-          // ถ้า work status เปลี่ยนเป็น 'approved' ให้ส่ง event เฉพาะ
-          if (workStatus.name === 'approved') {
-            await this.webSocketService.notifyUser({
+          this.logger.log(`Sending work status update notification to user ${workHistory.user.id}: ${workStatus?.name}`,
+            // ส่ง notification ทั่วไป (work-status-updated)
+            await this.webSocketService.notifyWorkStatusUpdate({
               userId: workHistory.user.id,
-              event: 'work-status-approved',
-              data: {
-                workStatus: 'approved',
-                workHistoryId: workHistory.id,
-                userId: workHistory.user.id,
-                role: role.name, // เพิ่ม role
-                message: 'Your account has been approved!',
-                timestamp: new Date(),
-              }
-            });
-          }
+              workStatus: workStatus?.name || 'unknown',
+              workHistoryId: workHistory.id,
+              previousWorkStatus,
+              previousRole,
+              updatedBy: updator.id,
+              role: role?.name || 'unknown',
+              timestamp: new Date(),
+            }))
 
-          // ถ้า work status เปลี่ยนเป็น 'suspended' ให้ส่ง event เฉพาะ
-          if (workStatus.name === 'suspended') {
-            await this.webSocketService.notifyUser({
-              userId: workHistory.user.id,
-              event: 'work-status-suspended',
-              data: {
-                workStatus: 'suspended',
-                workHistoryId: workHistory.id,
-                userId: workHistory.user.id,
-                message: 'Your account has been suspended!',
-                timestamp: new Date(),
-              }
-            });
-          }
 
-          // ถ้า work status เปลี่ยนกลับเป็น 'pending' ให้ส่ง event เฉพาะ
-          if (workStatus.name === 'pending') {
-            await this.webSocketService.notifyUser({
-              userId: workHistory.user.id,
-              event: 'work-status-pending',
-              data: {
-                workStatus: 'pending',
-                workHistoryId: workHistory.id,
-                userId: workHistory.user.id,
-                message: 'Your account status has been changed back to pending!',
-                timestamp: new Date(),
-              }
-            });
+          // Log ตามสิ่งที่เปลี่ยน
+          if (previousWorkStatus !== workStatus?.name && previousRole !== role?.name) {
+            this.logger.log(
+              `Work status and role updated for user ${workHistory.user.id}: status ${previousWorkStatus} → ${workStatus?.name}, role ${previousRole} → ${role?.name}`,
+            );
+          } else if (previousWorkStatus !== workStatus?.name) {
+            this.logger.log(
+              `Work status updated from ${previousWorkStatus} to ${workStatus?.name} for user ${workHistory.user.id}`,
+            );
+          } else if (previousRole !== role?.name) {
+            this.logger.log(
+              `Role updated from ${previousRole} to ${role?.name} for user ${workHistory.user.id}`,
+            );
           }
-          
-          this.logger.log(
-            `Work status updated from ${previousWorkStatus} to ${workStatus.name} for user ${workHistory.user.id}`,
-          );
         } catch (notificationError) {
           this.logger.error(
             `Failed to send work status update notification: ${notificationError.message}`,

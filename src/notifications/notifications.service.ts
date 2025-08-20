@@ -17,7 +17,6 @@ export class NotificationsService {
     private readonly webSocketService: WebsocketService,
   ) {}
 
-  @Cron('0 */1 * * * *') // ทุก 1 นาที
   async handleScheduledAnnouncements() {
     this.logger.log('🕐 === CRON JOB STARTED ===');
     this.logger.log(`Timestamp: ${new Date().toISOString()}`);
@@ -119,15 +118,13 @@ export class NotificationsService {
         try {
           for (const workHistory of workHistories) {
             if (workHistory.user?.id) {
-              await this.webSocketService.notifyUser({
+              // ใช้ notifyWorkStatusUpdate แทน notifyUser (เพราะ notifyUser ไม่มีอยู่แล้ว)
+              await this.webSocketService.notifyWorkStatusUpdate({
                 userId: workHistory.user.id,
-                event: 'announcement-received',
-                data: {
-                  announcementId: announcement.id,
-                  announcementTitle: announcement.title,
-                  roleName: announcementRole.role.name,
-                  message: `New announcement: ${announcement.title}`,
-                },
+                workStatus: 'announcement', // ใช้ workStatus เป็น announcement
+                workHistoryId: workHistory.id,
+                role: announcementRole.role.name,
+                timestamp: new Date(),
               });
             }
           }

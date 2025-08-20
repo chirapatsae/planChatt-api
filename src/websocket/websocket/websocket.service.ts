@@ -6,7 +6,9 @@ export interface WorkStatusUpdateNotification {
   workStatus: string;
   workHistoryId: string;
   previousWorkStatus?: string;
+  previousRole?: string;
   updatedBy?: string;
+  role?: string;
   timestamp: Date;
 }
 
@@ -20,14 +22,14 @@ export interface GeneralNotification {
 export class WebsocketService {
   private readonly logger = new Logger(WebsocketService.name);
 
-  constructor(private readonly webSocketGateway: WebsocketGateway) {}
+  constructor(private readonly webSocketGateway: WebsocketGateway) { }
 
   /**
    * ส่ง notification เมื่อ work status เปลี่ยน
    */
   async notifyWorkStatusUpdate(notification: WorkStatusUpdateNotification) {
     try {
-      const { userId, workStatus, workHistoryId } = notification;
+      const { userId, workStatus, workHistoryId, role, previousRole, previousWorkStatus, updatedBy } = notification;
 
       this.logger.log(
         `Sending work status update notification to user ${userId}: ${workStatus}`,
@@ -38,17 +40,11 @@ export class WebsocketService {
         userId,
         workStatus,
         workHistoryId,
+        role,
+        previousRole,      // ← เพิ่ม previousRole
+        previousWorkStatus, // ← เพิ่ม previousWorkStatus
+        updatedBy,         // ← เพิ่ม updatedBy
       );
-
-      // ถ้า work status เป็น 'approved' ให้ส่ง broadcast ไปยัง admin ทั้งหมด
-      if (workStatus === 'approved') {
-        this.webSocketGateway.broadcastToAll('work-status-approved', {
-          workStatus,
-          workHistoryId,
-          userId,
-          message: `Work status approved for user ${userId}`,
-        });
-      }
 
       return {
         success: true,
@@ -58,83 +54,6 @@ export class WebsocketService {
     } catch (error) {
       this.logger.error(
         `Failed to send work status update notification: ${error.message}`,
-        error.stack,
-      );
-      throw error;
-    }
-  }
-
-  /**
-   * ส่ง notification ทั่วไปไปยัง user เฉพาะ
-   */
-  async notifyUser(notification: GeneralNotification) {
-    try {
-      const { userId, event, data } = notification;
-
-      this.logger.log(
-        `Sending ${event} notification to user ${userId}`,
-      );
-
-      this.webSocketGateway.notifyUser(userId, event, data);
-
-      return {
-        success: true,
-        message: `Notification sent successfully to user ${userId}`,
-        timestamp: new Date().toISOString(),
-      };
-    } catch (error) {
-      this.logger.error(
-        `Failed to send notification to user ${notification.userId}: ${error.message}`,
-        error.stack,
-      );
-      throw error;
-    }
-  }
-
-  /**
-   * ส่ง notification ไปยัง room เฉพาะ
-   */
-  async notifyRoom(roomName: string, event: string, data: any) {
-    try {
-      this.logger.log(
-        `Sending ${event} notification to room ${roomName}`,
-      );
-
-      this.webSocketGateway.notifyRoom(roomName, event, data);
-
-      return {
-        success: true,
-        message: `Notification sent successfully to room ${roomName}`,
-        timestamp: new Date().toISOString(),
-      };
-    } catch (error) {
-      this.logger.error(
-        `Failed to send notification to room ${roomName}: ${error.message}`,
-        error.stack,
-      );
-      throw error;
-    }
-  }
-
-  /**
-   * ส่ง broadcast ไปยัง clients ทั้งหมด
-   */
-  async broadcastToAll(event: string, data: any) {
-    try {
-      this.logger.log(
-        `Broadcasting ${event} to all clients`,
-      );
-
-      this.webSocketGateway.broadcastToAll(event, data);
-
-      return {
-        success: true,
-        message: `Broadcast sent successfully to all clients`,
-        timestamp: new Date().toISOString(),
-      };
-    } catch (error) {
-      this.logger.error(
-        `Failed to broadcast ${event}: ${error.message}`,
         error.stack,
       );
       throw error;
@@ -153,40 +72,6 @@ export class WebsocketService {
    */
   getConnectedClients() {
     return this.webSocketGateway.getConnectedClients();
-  }
-
-  /**
-   * ส่ง notification เมื่อ work status เปลี่ยนเป็น 'approved'
-   */
-  async notifyWorkStatusApproved(
-    userId: string,
-    workHistoryId: string,
-    updatedBy: string,
-  ) {
-    return this.notifyWorkStatusUpdate({
-      userId,
-      workStatus: 'approved',
-      workHistoryId,
-      updatedBy,
-      timestamp: new Date(),
-    });
-  }
-
-  /**
-   * ส่ง notification เมื่อ work status เปลี่ยนเป็น 'pending'
-   */
-  async notifyWorkStatusPending(
-    userId: string,
-    workHistoryId: string,
-    updatedBy: string,
-  ) {
-    return this.notifyWorkStatusUpdate({
-      userId,
-      workStatus: 'pending',
-      workHistoryId,
-      updatedBy,
-      timestamp: new Date(),
-    });
   }
 
   /**

@@ -23,7 +23,7 @@ import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 })
 @UseGuards(JwtAuthGuard)
 export class UserNotificationsController {
-  constructor(private readonly userNotificationsService: UserNotificationsService) {}
+  constructor(private readonly userNotificationsService: UserNotificationsService) { }
 
   @Post()
   create(@Body() createUserNotificationDto: CreateUserNotificationDto) {
@@ -43,7 +43,7 @@ export class UserNotificationsController {
 
   @Get('unread-count')
   async getUnreadCount(
-    @Request() req:Request & { user: JwtPayloadUser }
+    @Request() req: Request & { user: JwtPayloadUser }
   ) {
     const count = await this.userNotificationsService.getUnreadCount(req.user.userId);
     return { unreadCount: count };
@@ -54,30 +54,9 @@ export class UserNotificationsController {
     return this.userNotificationsService.findByWorkHistory(workHistoryId);
   }
 
-  @Get('by-announcement/:announcementId')
-  findByAnnouncement(@Param('announcementId', ParseUUIDPipe) announcementId: string) {
-    return this.userNotificationsService.findByAnnouncement(announcementId);
-  }
-
-  @Get('by-status/:workHistoryId/:status')
-  findByStatus(
-    @Param('workHistoryId', ParseUUIDPipe) workHistoryId: string,
-    @Param('status') status: string,
-  ) {
-    return this.userNotificationsService.findByStatus(workHistoryId, status as any);
-  }
-
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.userNotificationsService.findOne(id);
-  }
-
-  @Patch(':id')
-  update(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() updateUserNotificationDto: UpdateUserNotificationDto,
-  ) {
-    return this.userNotificationsService.update(id, updateUserNotificationDto);
   }
 
   @Patch(':id/read')

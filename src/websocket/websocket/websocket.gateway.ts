@@ -62,7 +62,6 @@ export class WebsocketGateway
       room: `user-${userId}`
     });
   }
-
   @SubscribeMessage('leave-user-room')
   handleLeaveUserRoom(@ConnectedSocket() client: Socket) {
     // Remove client from connected clients
@@ -77,46 +76,22 @@ export class WebsocketGateway
   }
 
   // Method to notify specific user about work status update
-  notifyWorkStatusUpdate(userId: string, workStatus: string, workHistoryId: string) {
+  notifyWorkStatusUpdate(userId: string, workStatus: string, workHistoryId: string, role?: string, previousRole?: string, previousWorkStatus?: string, updatedBy?: string) {
     this.server.to(`user-${userId}`).emit('work-status-updated', {
+      userId,  // ← เพิ่ม userId
       workStatus,
       workHistoryId,
+      role,
+      previousRole,      // ← เพิ่ม previousRole
+      previousWorkStatus, // ← เพิ่ม previousWorkStatus
+      updatedBy,         // ← เพิ่ม updatedBy
       timestamp: new Date().toISOString(),
       message: `Your work status has been updated to: ${workStatus}`,
     });
     
-    this.logger.log(`Notified user ${userId} about work status update: ${workStatus}`);
+    this.logger.log(`Notified user ${userId} about work status update: ${workStatus}, role: ${role}, previousRole: ${previousRole}, previousWorkStatus: ${previousWorkStatus}`);
   }
 
-  // Method to notify specific user about general notification
-  notifyUser(userId: string, event: string, data: any) {
-    this.server.to(`user-${userId}`).emit(event, {
-      ...data,
-      timestamp: new Date().toISOString(),
-    });
-    
-    this.logger.log(`Notified user ${userId} about event: ${event}`);
-  }
-
-  // Method to notify all connected clients about broadcast message
-  broadcastToAll(event: string, data: any) {
-    this.server.emit(event, {
-      ...data,
-      timestamp: new Date().toISOString(),
-    });
-    
-    this.logger.log(`Broadcasted event: ${event} to all clients`);
-  }
-
-  // Method to notify specific room
-  notifyRoom(roomName: string, event: string, data: any) {
-    this.server.to(roomName).emit(event, {
-      ...data,
-      timestamp: new Date().toISOString(),
-    });
-    
-    this.logger.log(`Notified room ${roomName} about event: ${event}`);
-  }
 
   // Get connected clients info for debugging
   getConnectedClients() {

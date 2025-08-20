@@ -14,7 +14,7 @@ describe('WorkHistoryService', () => {
           provide: WebsocketService,
           useValue: {
             notifyWorkStatusUpdate: jest.fn(),
-            notifyUser: jest.fn(),
+            // notifyUser ไม่มีอยู่แล้ว เพราะเราลบออก
           },
         },
       ],
@@ -49,16 +49,12 @@ describe('WorkHistoryService', () => {
         timestamp: new Date().toISOString(),
       });
 
-      jest.spyOn(websocketService, 'notifyUser').mockResolvedValue({
-        success: true,
-        message: 'User notification sent',
-        timestamp: new Date().toISOString(),
-      });
+      // notifyUser ไม่มีอยู่แล้ว เพราะเราลบออก
 
       // Test the update method (you'll need to mock all dependencies)
       // This is a basic test structure
       expect(websocketService.notifyWorkStatusUpdate).toBeDefined();
-      expect(websocketService.notifyUser).toBeDefined();
+      // expect(websocketService.notifyUser).toBeDefined(); // ไม่มี notifyUser แล้ว
     });
   });
 });
