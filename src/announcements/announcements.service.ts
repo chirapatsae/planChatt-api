@@ -10,6 +10,7 @@ import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { AnnouncementSchedulerService } from './announcement-scheduler.service';
 import { UserNotificationsService } from '../user-notifications/user-notifications.service';
 import { NotificationLogsService } from '../notification-logs/notification-logs.service';
+import { WebsocketService } from '../websocket/websocket/websocket.service';
 
 @Injectable()
 export class AnnouncementsService {
@@ -26,6 +27,7 @@ export class AnnouncementsService {
     private readonly announcementSchedulerService: AnnouncementSchedulerService,
     private readonly userNotificationsService: UserNotificationsService,
     private readonly notificationLogsService: NotificationLogsService,
+    private readonly websocketService: WebsocketService,
   ) {}
 
   async create(createAnnouncementDto: CreateAnnouncementDto, userId: string): Promise<Announcement> {
@@ -211,12 +213,14 @@ export class AnnouncementsService {
     }
 
     const allWorkHistories: WorkHistory[] = [];
+    const roleNames: string[] = [];
     
-    // รวบรวม workHistories ของทุก roles
+    // รวบรวม workHistories ของทุก roles และ role names
     for (const announcementRole of announcement.announcementRoles) {
       const workHistories = await this.getWorkHistoriesByRole(announcementRole.role.id);
       console.log(`Found ${workHistories.length} work histories for role ${announcementRole.role.name}`);
       allWorkHistories.push(...workHistories);
+      roleNames.push(announcementRole.role.name);
       
       // บันทึก notification log
       try {
@@ -235,6 +239,29 @@ export class AnnouncementsService {
         console.error('❌ Failed to create user notifications:', error);
         throw error;
       }
+
+      // Broadcast announcement to role rooms
+      try {
+        await this.websocketService.broadcastAnnouncementToRoles({
+          announcement: {
+            id: announcement.id,
+            title: announcement.title,
+            description: announcement.description,
+            status: announcement.status,
+            publishDateTime: announcement.publishDateTime,
+            startDate: announcement.startDate,
+            endDate: announcement.endDate,
+            createdBy: announcement.createdBy,
+          },
+          roleNames,
+          message: `New announcement published for roles: ${roleNames.join(', ')}`,
+        });
+        console.log(`📢 Successfully broadcasted announcement to ${roleNames.length} role rooms: ${roleNames.join(', ')}`);
+      } catch (error) {
+        console.error('❌ Failed to broadcast announcement to role rooms:', error);
+        // ไม่ throw error เพราะไม่ต้องการให้ announcement creation ล้มเหลว
+      }
+      
     } else {
       console.log(`⚠️ No work histories to create notifications for`);
     }

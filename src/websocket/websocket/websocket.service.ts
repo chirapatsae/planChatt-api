@@ -18,6 +18,19 @@ export interface GeneralNotification {
   data: any;
 }
 
+export interface AnnouncementNotification {
+  announcement: any;
+  roleNames: string[];
+  message?: string;
+}
+
+export interface RoleNotification {
+  roleNames: string[];
+  event: string;
+  data: any;
+  message?: string;
+}
+
 @Injectable()
 export class WebsocketService {
   private readonly logger = new Logger(WebsocketService.name);
@@ -61,6 +74,65 @@ export class WebsocketService {
   }
 
   /**
+   * ส่ง announcement notification ไปยัง role rooms
+   */
+  async broadcastAnnouncementToRoles(notification: AnnouncementNotification) {
+    try {
+      const { announcement, roleNames, message } = notification;
+
+      this.logger.log(
+        `Broadcasting announcement to ${roleNames.length} role rooms: ${roleNames.join(', ')}`,
+      );
+
+      // ส่ง announcement ไปยัง role rooms
+      this.webSocketGateway.broadcastAnnouncementToRoles(roleNames, announcement);
+
+      return {
+        success: true,
+        message: `Announcement broadcasted successfully to ${roleNames.length} role rooms`,
+        roleNames,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      this.logger.error(
+        `Failed to broadcast announcement to role rooms: ${error.message}`,
+        error.stack,
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * ส่ง general notification ไปยัง role rooms
+   */
+  async broadcastNotificationToRoles(notification: RoleNotification) {
+    try {
+      const { roleNames, event, data, message } = notification;
+
+      this.logger.log(
+        `Broadcasting ${event} notification to ${roleNames.length} role rooms: ${roleNames.join(', ')}`,
+      );
+
+      // ส่ง notification ไปยัง role rooms
+      this.webSocketGateway.broadcastNotificationToRoles(roleNames, data);
+
+      return {
+        success: true,
+        message: `Notification broadcasted successfully to ${roleNames.length} role rooms`,
+        roleNames,
+        event,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      this.logger.error(
+        `Failed to broadcast notification to role rooms: ${error.message}`,
+        error.stack,
+      );
+      throw error;
+    }
+  }
+
+  /**
    * ตรวจสอบว่า user เชื่อมต่ออยู่หรือไม่
    */
   isUserConnected(userId: string): boolean {
@@ -72,6 +144,13 @@ export class WebsocketService {
    */
   getConnectedClients() {
     return this.webSocketGateway.getConnectedClients();
+  }
+
+  /**
+   * ดึงข้อมูล clients ใน role room เฉพาะ
+   */
+  getClientsInRoleRoom(roleName: string): string[] {
+    return this.webSocketGateway.getClientsInRoleRoom(roleName);
   }
 
   /**

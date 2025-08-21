@@ -9,6 +9,7 @@ import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { UserNotificationsModule } from '../user-notifications/user-notifications.module';
 import { NotificationLogsModule } from '../notification-logs/notification-logs.module';
 import { AnnouncementSchedulerModule } from './announcement-scheduler.module';
+import { WebsocketModule } from '../websocket/websocket.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { AnnouncementSchedulerModule } from './announcement-scheduler.module';
     UserNotificationsModule,
     NotificationLogsModule,
     AnnouncementSchedulerModule,
+    WebsocketModule,
   ],
   controllers: [AnnouncementsController],
   providers: [AnnouncementsService],

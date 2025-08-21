@@ -24,7 +24,7 @@ export class WebsocketGateway
   server: Server;
 
   private readonly logger = new Logger(WebsocketGateway.name);
-  private connectedClients = new Map<string, { userId: string; socket: Socket }>();
+  private connectedClients = new Map<string, { userId: string; socket: Socket; roles: string[] }>();
 
   handleConnection(client: Socket) {
     this.logger.log(`Client connected: ${client.id}`);
@@ -51,8 +51,8 @@ export class WebsocketGateway
     // Join user-specific room
     client.join(`user-${userId}`);
     
-    // Store client connection with userId
-    this.connectedClients.set(client.id, { userId, socket: client });
+    // Store client connection with userId and empty roles array
+    this.connectedClients.set(client.id, { userId, socket: client, roles: [] });
     
     this.logger.log(`User ${userId} joined room: user-${userId}`);
     
@@ -62,6 +62,34 @@ export class WebsocketGateway
       room: `user-${userId}`
     });
   }
+
+  @SubscribeMessage('join-role-room')
+  handleJoinRoleRoom(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { roleName: string },
+  ) {
+    const { roleName } = data;
+    
+    // Join role-specific room
+    client.join(`role-${roleName}`);
+    
+    // Update client's roles in connectedClients
+    const clientInfo = this.connectedClients.get(client.id);
+    if (clientInfo) {
+      if (!clientInfo.roles.includes(roleName)) {
+        clientInfo.roles.push(roleName);
+      }
+    }
+    
+    this.logger.log(`Client ${client.id} joined role room: role-${roleName}`);
+    
+    // Send confirmation
+    client.emit('joined-room', { 
+      message: `Joined role room: ${roleName}`,
+      room: `role-${roleName}`
+    });
+  }
+
   @SubscribeMessage('leave-user-room')
   handleLeaveUserRoom(@ConnectedSocket() client: Socket) {
     // Remove client from connected clients
@@ -73,6 +101,25 @@ export class WebsocketGateway
     }
     
     this.logger.log(`Client ${client.id} left user room`);
+  }
+
+  @SubscribeMessage('leave-role-room')
+  handleLeaveRoleRoom(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { roleName: string },
+  ) {
+    const { roleName } = data;
+    
+    // Leave role-specific room
+    client.leave(`role-${roleName}`);
+    
+    // Update client's roles in connectedClients
+    const clientInfo = this.connectedClients.get(client.id);
+    if (clientInfo) {
+      clientInfo.roles = clientInfo.roles.filter(role => role !== roleName);
+    }
+    
+    this.logger.log(`Client ${client.id} left role room: role-${roleName}`);
   }
 
   // Method to notify specific user about work status update
@@ -92,12 +139,44 @@ export class WebsocketGateway
     this.logger.log(`Notified user ${userId} about work status update: ${workStatus}, role: ${role}, previousRole: ${previousRole}, previousWorkStatus: ${previousWorkStatus}`);
   }
 
+  // Method to broadcast announcement to role rooms
+  broadcastAnnouncementToRoles(roleNames: string[], announcement: any) {
+    for (const roleName of roleNames) {
+      const roomName = `role-${roleName}`;
+      this.server.to(roomName).emit('announcement-published', {
+        type: 'announcement-published',
+        announcement,
+        role: roleName,
+        timestamp: new Date().toISOString(),
+        message: `New announcement published for role: ${roleName}`,
+      });
+      
+      this.logger.log(`Broadcasted announcement to role room: ${roomName}`);
+    }
+  }
+
+  // Method to broadcast general notification to role rooms
+  broadcastNotificationToRoles(roleNames: string[], notification: any) {
+    for (const roleName of roleNames) {
+      const roomName = `role-${roleName}`;
+      this.server.to(roomName).emit('notification', {
+        type: 'notification',
+        notification,
+        role: roleName,
+        timestamp: new Date().toISOString(),
+        message: `New notification for role: ${roleName}`,
+      });
+      
+      this.logger.log(`Broadcasted notification to role room: ${roomName}`);
+    }
+  }
 
   // Get connected clients info for debugging
   getConnectedClients() {
-    return Array.from(this.connectedClients.entries()).map(([socketId, { userId }]) => ({
+    return Array.from(this.connectedClients.entries()).map(([socketId, { userId, roles }]) => ({
       socketId,
       userId,
+      roles,
     }));
   }
 
@@ -119,5 +198,16 @@ export class WebsocketGateway
       }
     }
     return null;
+  }
+
+  // Get all clients in a specific role room
+  getClientsInRoleRoom(roleName: string): string[] {
+    const clients: string[] = [];
+    for (const [socketId, value] of this.connectedClients.entries()) {
+      if (value.roles.includes(roleName)) {
+        clients.push(socketId);
+      }
+    }
+    return clients;
   }
 }
