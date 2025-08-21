@@ -43,7 +43,7 @@ export class UserNotificationsService {
       // Use user.id to find user notifications
       return await this.userNotificationRepository.find({
         where: { user: { id: workHistory.user.id } },
-        relations: ['announcement'],
+        relations: ['announcement', 'announcement.createdBy', 'announcement.createdBy.user'],
         order: { createdAt: 'DESC' },
       });
     } catch (error) {
