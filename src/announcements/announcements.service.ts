@@ -7,6 +7,9 @@ import { Announcement, AnnouncementStatus, NotificationStatus } from './entities
 import { AnnouncementRole } from 'src/announcement-roles/entities/announcement-role.entity';
 import { Role } from 'src/roles/entities/role.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
+import { AnnouncementSchedulerService } from './announcement-scheduler.service';
+import { UserNotificationsService } from '../user-notifications/user-notifications.service';
+import { NotificationLogsService } from '../notification-logs/notification-logs.service';
 
 @Injectable()
 export class AnnouncementsService {
@@ -19,6 +22,10 @@ export class AnnouncementsService {
     private roleRepository: Repository<Role>,
     @InjectRepository(WorkHistory)
     private workHistoryRepository: Repository<WorkHistory>,
+    
+    private readonly announcementSchedulerService: AnnouncementSchedulerService,
+    private readonly userNotificationsService: UserNotificationsService,
+    private readonly notificationLogsService: NotificationLogsService,
   ) {}
 
   async create(createAnnouncementDto: CreateAnnouncementDto, userId: string): Promise<Announcement> {
@@ -45,6 +52,10 @@ export class AnnouncementsService {
     // Create the announcement
     const announcement = this.announcementRepository.create({
       ...announcementData,
+      // Convert string dates to Date objects
+      publishDateTime: announcementData.publishDateTime ? new Date(announcementData.publishDateTime) : undefined,
+      startDate: announcementData.startDate ? new Date(announcementData.startDate) : undefined,
+      endDate: announcementData.endDate ? new Date(announcementData.endDate) : undefined,
       createdBy: { id: workHistory.id },
     });
     
@@ -64,11 +75,26 @@ export class AnnouncementsService {
       await this.announcementRoleRepository.save(announcementRoles);
     }
 
-    // If status is PUBLISHED, set notificationStatus to pending
+    // If status is PUBLISHED, send notifications immediately
     if (savedAnnouncement.status === AnnouncementStatus.PUBLISHED) {
       savedAnnouncement.publishDateTime = new Date();
       savedAnnouncement.notificationStatus = NotificationStatus.PENDING;
       await this.announcementRepository.save(savedAnnouncement);
+      
+      // ต้องหา announcement ที่มี relations ก่อน
+      const announcementWithRelations = await this.findOne(savedAnnouncement.id);
+      
+      // ส่ง notifications ทันที + บันทึก user_notifications
+      await this.sendNotificationsAndCreateUserNotifications(announcementWithRelations);
+    }
+
+    // Schedule announcement if it's SCHEDULED
+    if (savedAnnouncement.status === AnnouncementStatus.SCHEDULED) {
+      // Ensure publishDateTime is set for scheduled announcements
+      if (!savedAnnouncement.publishDateTime) {
+        throw new Error('Scheduled announcements must have a publishDateTime');
+      }
+      await this.announcementSchedulerService.scheduleAnnouncement(savedAnnouncement);
     }
 
     return this.findOne(savedAnnouncement.id);
@@ -99,8 +125,17 @@ export class AnnouncementsService {
     console.log(updateData);
     const announcement = await this.findOne(id);
     
+    // Create a properly typed update object
+    const updateObject: Partial<Announcement> = {
+      ...updateData,
+      // Convert string dates to Date objects
+      publishDateTime: updateData.publishDateTime ? new Date(updateData.publishDateTime) : undefined,
+      startDate: updateData.startDate ? new Date(updateData.startDate) : undefined,
+      endDate: updateData.endDate ? new Date(updateData.endDate) : undefined,
+    };
+    
     // Update announcement data
-    Object.assign(announcement, updateData);
+    Object.assign(announcement, updateObject);
     await this.announcementRepository.save(announcement);
 
     // Update role relationships if roleIds are provided
@@ -131,22 +166,6 @@ export class AnnouncementsService {
     await this.announcementRepository.softDelete(id);
   }
 
-  // async findByStatus(status: AnnouncementStatus): Promise<Announcement[]> {
-  //   return this.announcementRepository.find({
-  //     where: { status },
-  //     relations: ['createdBy', 'createdBy.user', 'announcementRoles', 'announcementRoles.role'],
-  //     order: { createdAt: 'DESC' },
-  //   });
-  // }
-
-  // async findByRole(roleId: string): Promise<Announcement[]> {
-  //   const announcementRoles = await this.announcementRoleRepository.find({
-  //     where: { role: { id: roleId } },
-  //     relations: ['announcement', 'announcement.createdBy', 'announcement.createdBy.user', 'announcement.announcementRoles', 'announcement.announcementRoles.role'],
-  //   });
-
-  //   return announcementRoles.map(ar => ar.announcement);
-  // }
 
   async getPendingNotifications(): Promise<Announcement[]> {
     return this.announcementRepository.find({
@@ -164,50 +183,16 @@ export class AnnouncementsService {
     return this.announcementRepository.save(announcement);
   }
 
-  async updateNotificationStatusIfPending(id: string, newStatus: NotificationStatus): Promise<boolean> {
-    // อัปเดต status เฉพาะเมื่อเป็น PENDING เท่านั้น (ป้องกัน race condition)
-    const result = await this.announcementRepository.update(
-      { 
-        id, 
-        notificationStatus: NotificationStatus.PENDING 
-      },
-      { 
-        notificationStatus: newStatus 
-      }
-    );
+  async updateStatus(id: string, status: AnnouncementStatus): Promise<Announcement> {
+    const announcement = await this.findOne(id);
+    announcement.status = status;
     
-    // result.affected > 0 หมายความว่ามีการอัปเดตสำเร็จ
-    return (result.affected || 0) > 0;
-  }
-
-  async findScheduledAnnouncements(): Promise<Announcement[]> {
-    const now = new Date();
-    return this.announcementRepository
-      .createQueryBuilder('announcement')
-      .leftJoinAndSelect('announcement.announcementRoles', 'announcementRoles')
-      .leftJoinAndSelect('announcementRoles.role', 'role')
-      .where('announcement.status = :status', { status: AnnouncementStatus.SCHEDULED })
-      .andWhere('announcement.publishDateTime <= :now', { now })
-      .getMany();
-  }
-
-  async processScheduledToPublished(): Promise<void> {
-    const scheduledAnnouncements = await this.findScheduledAnnouncements();
-    
-    for (const announcement of scheduledAnnouncements) {
-      // Change status from SCHEDULED to PUBLISHED
-      announcement.status = AnnouncementStatus.PUBLISHED;
+    if (status === AnnouncementStatus.PUBLISHED) {
+      announcement.publishDateTime = new Date();
       announcement.notificationStatus = NotificationStatus.PENDING;
-      await this.announcementRepository.save(announcement);
     }
-  }
-
-  async findByWorkHistory(workHistoryId: string): Promise<Announcement[]> {
-    return this.announcementRepository.find({
-      where: { createdBy: { id: workHistoryId } },
-      relations: ['announcementRoles', 'announcementRoles.role'],
-      order: { createdAt: 'DESC' },
-    });
+    
+    return this.announcementRepository.save(announcement);
   }
 
   async getWorkHistoriesByRole(roleId: string): Promise<WorkHistory[]> {
@@ -215,5 +200,46 @@ export class AnnouncementsService {
       where: { role: { id: roleId } },
       relations: ['user', 'role'],
     });
+  }
+
+  // ส่ง notifications และสร้าง user_notifications สำหรับ PUBLISHED announcements
+  async sendNotificationsAndCreateUserNotifications(announcement: Announcement): Promise<void> {
+
+    if (!announcement.announcementRoles || announcement.announcementRoles.length === 0) {
+      console.log(`❌ No announcement roles assigned to announcement ${announcement.id}`);
+      return;
+    }
+
+    const allWorkHistories: WorkHistory[] = [];
+    
+    // รวบรวม workHistories ของทุก roles
+    for (const announcementRole of announcement.announcementRoles) {
+      const workHistories = await this.getWorkHistoriesByRole(announcementRole.role.id);
+      console.log(`Found ${workHistories.length} work histories for role ${announcementRole.role.name}`);
+      allWorkHistories.push(...workHistories);
+      
+      // บันทึก notification log
+      try {
+        await this.notificationLogsService.logSuccess(announcement.id, announcementRole.role.id);
+      } catch (error) {
+        console.error('Failed to log notification:', error);
+      }
+    }
+
+    // สร้าง user_notifications สำหรับทุก users
+    if (allWorkHistories.length > 0) {
+      try {
+        const result = await this.userNotificationsService.createBulk(announcement, allWorkHistories);
+        console.log(`✅ Successfully created ${result.length} user notifications for ${allWorkHistories.length} users`);
+      } catch (error) {
+        console.error('❌ Failed to create user notifications:', error);
+        throw error;
+      }
+    } else {
+      console.log(`⚠️ No work histories to create notifications for`);
+    }
+
+    // อัพเดท notification status เป็น SENT
+    await this.updateNotificationStatus(announcement.id, NotificationStatus.SENT);
   }
 }

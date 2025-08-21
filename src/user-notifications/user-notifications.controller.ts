@@ -13,7 +13,6 @@ import {
 } from '@nestjs/common';
 import { UserNotificationsService } from './user-notifications.service';
 import { CreateUserNotificationDto } from './dto/create-user-notification.dto';
-import { UpdateUserNotificationDto } from './dto/update-user-notification.dto';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 
@@ -30,11 +29,6 @@ export class UserNotificationsController {
     return this.userNotificationsService.create(createUserNotificationDto);
   }
 
-  @Get()
-  findAll() {
-    return this.userNotificationsService.findAll();
-  }
-
   @Get('my-notifications')
   async findMyNotifications(@Request() req: Request & { user: JwtPayloadUser }) {
     // ใช้ userId จาก JWT เพื่อหา workHistory แล้วดึง notifications
@@ -49,37 +43,10 @@ export class UserNotificationsController {
     return { unreadCount: count };
   }
 
-  @Get('by-work-history/:workHistoryId')
-  findByWorkHistory(@Param('workHistoryId', ParseUUIDPipe) workHistoryId: string) {
-    return this.userNotificationsService.findByWorkHistory(workHistoryId);
-  }
-
-  @Get(':id')
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.userNotificationsService.findOne(id);
-  }
 
   @Patch(':id/read')
   markAsRead(@Param('id', ParseUUIDPipe) id: string) {
     return this.userNotificationsService.markAsRead(id);
   }
 
-  @Patch('bulk/read')
-  markAsReadBulk(@Body() body: { ids: string[] }) {
-    // Validate that all IDs are valid UUIDs
-    if (!body.ids.every(id => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))) {
-      throw new Error('All IDs must be valid UUIDs');
-    }
-    return this.userNotificationsService.markAsReadBulk(body.ids);
-  }
-
-  @Patch('work-history/:workHistoryId/read-all')
-  markAllAsRead(@Param('workHistoryId', ParseUUIDPipe) workHistoryId: string) {
-    return this.userNotificationsService.markAllAsRead(workHistoryId);
-  }
-
-  @Delete(':id')
-  remove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.userNotificationsService.remove(id);
-  }
 } 

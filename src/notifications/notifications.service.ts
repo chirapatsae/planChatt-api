@@ -17,57 +17,8 @@ export class NotificationsService {
     private readonly webSocketService: WebsocketService,
   ) {}
 
-  async handleScheduledAnnouncements() {
-    this.logger.log('🕐 === CRON JOB STARTED ===');
-    this.logger.log(`Timestamp: ${new Date().toISOString()}`);
-    
-    try {
-      // Step 1: Process SCHEDULED → PUBLISHED
-      this.logger.log('📅 Step 1: Processing SCHEDULED → PUBLISHED');
-      await this.processScheduledToPublished();
-      
-      // Step 2: Send notifications for PUBLISHED + pending
-      this.logger.log('📢 Step 2: Sending pending notifications');
-      await this.sendPendingNotifications();
-      
-      this.logger.log('✅ === CRON JOB COMPLETED ===');
-    } catch (error) {
-      this.logger.error('❌ === CRON JOB ERROR ===');
-      this.logger.error('Error processing scheduled announcements:', error);
-    }
-  }
 
-  private async processScheduledToPublished(): Promise<void> {
-    this.logger.log('Processing scheduled to published announcements...');
-    await this.announcementsService.processScheduledToPublished();
-  }
 
-  private async sendPendingNotifications(): Promise<void> {
-    this.logger.log('📢 === SENDING PENDING NOTIFICATIONS ===');
-    
-    try {
-      const pendingAnnouncements = await this.announcementsService.getPendingNotifications();
-      this.logger.log(`Found ${pendingAnnouncements.length} pending announcements`);
-      
-      if (pendingAnnouncements.length === 0) {
-        this.logger.log('ℹ️ No pending announcements to process');
-        return;
-      }
-      
-      for (const announcement of pendingAnnouncements) {
-        this.logger.log(`📋 Processing announcement: ${announcement.id} - "${announcement.title}"`);
-        try {
-          await this.sendNotificationsToAnnouncementRoles(announcement);
-        } catch (error) {
-          this.logger.error(`❌ Error processing announcement ${announcement.id}:`, error);
-        }
-      }
-      
-      this.logger.log(`✅ Completed processing ${pendingAnnouncements.length} announcements`);
-    } catch (error) {
-      this.logger.error('❌ Error sending pending notifications:', error);
-    }
-  }
 
   private async sendNotificationsToAnnouncementRoles(announcement: any) {
     this.logger.log(`=== START PROCESSING ANNOUNCEMENT: ${announcement.id} ===`);

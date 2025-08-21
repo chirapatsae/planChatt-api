@@ -30,6 +30,7 @@ import { PlanModule } from './plan/plan.module';
 import { PlanTactic } from './plan/entities/plan-tactic.entity';
 import { PdfModule } from './pdf/pdf.module';
 import { ScheduleModule } from '@nestjs/schedule';
+import { BullModule } from '@nestjs/bull';
 import { CommentsModule } from './comments/comments.module';
 import { Comment } from './comments/entities/comment.entity';
 import { AiController } from './ai/ai.controller';
@@ -67,6 +68,12 @@ import { WebsocketModule } from './websocket/websocket.module';
 @Module({
   imports: [
     ScheduleModule.forRoot(),
+    BullModule.forRoot({
+      redis: {
+        host: 'localhost',
+        port: 6379,
+      },
+    }),
     UsersModule,
     WorkHistoryModule,
     TypeOrmModule.forRoot({

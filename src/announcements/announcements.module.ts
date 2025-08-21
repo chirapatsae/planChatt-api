@@ -6,9 +6,17 @@ import { Announcement } from './entities/announcement.entity';
 import { AnnouncementRole } from 'src/announcement-roles/entities/announcement-role.entity';
 import { Role } from 'src/roles/entities/role.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
+import { UserNotificationsModule } from '../user-notifications/user-notifications.module';
+import { NotificationLogsModule } from '../notification-logs/notification-logs.module';
+import { AnnouncementSchedulerModule } from './announcement-scheduler.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Announcement, AnnouncementRole, Role, WorkHistory])],
+  imports: [
+    TypeOrmModule.forFeature([Announcement, AnnouncementRole, Role, WorkHistory]),
+    UserNotificationsModule,
+    NotificationLogsModule,
+    AnnouncementSchedulerModule,
+  ],
   controllers: [AnnouncementsController],
   providers: [AnnouncementsService],
   exports: [AnnouncementsService],

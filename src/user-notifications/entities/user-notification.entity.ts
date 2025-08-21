@@ -9,6 +9,7 @@ import {
 } from 'typeorm';
 import { Announcement } from 'src/announcements/entities/announcement.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
+import { User } from 'src/users/entities/user.entity';
 
 export enum UserNotificationStatus {
   UNREAD = 'unread',
@@ -42,9 +43,9 @@ export class UserNotification {
   @JoinColumn({ name: 'announcement_id' })
   announcement: Announcement;
 
-  @ManyToOne(() => WorkHistory, (workHistory) => workHistory.userNotifications, {
+  @ManyToOne(() => User, (user) => user.userNotifications, {
     onDelete: 'CASCADE',
   })
-  @JoinColumn({ name: 'work_history_id' })
-  workHistory: WorkHistory;
+  @JoinColumn({ name: 'user_id' })
+  user: User;
 } 

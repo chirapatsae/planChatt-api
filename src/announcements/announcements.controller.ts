@@ -12,7 +12,6 @@ import {
 import { AnnouncementsService } from './announcements.service';
 import { CreateAnnouncementDto } from './dto/create-announcement.dto';
 import { UpdateAnnouncementDto } from './dto/update-announcement.dto';
-import { AnnouncementStatus } from './entities/announcement.entity';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 
@@ -36,26 +35,6 @@ export class AnnouncementsController {
   findAll() {
     return this.announcementsService.findAll();
   }
-
-  // @Get('status/:status')
-  // findByStatus(@Param('status') status: AnnouncementStatus) {
-  //   return this.announcementsService.findByStatus(status);
-  // }
-
-  // @Get('role/:roleId')
-  // findByRole(@Param('roleId') roleId: string) {
-  //   return this.announcementsService.findByRole(roleId);
-  // }
-
-  // @Get('work-history/:workHistoryId')
-  // findByWorkHistory(@Param('workHistoryId') workHistoryId: string) {
-  //   return this.announcementsService.findByWorkHistory(workHistoryId);
-  // }
-
-  // @Get('pending-notifications')
-  // getPendingNotifications() {
-  //   return this.announcementsService.getPendingNotifications();
-  // }
 
   @Get(':id')
   findOne(@Param('id') id: string) {

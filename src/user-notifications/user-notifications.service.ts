@@ -18,9 +18,6 @@ export class UserNotificationsService {
     private workHistoryRepository: Repository<WorkHistory>,
   ) {}
 
-  /**
-   * Create a new user notification
-   */
   async create(createUserNotificationDto: CreateUserNotificationDto): Promise<UserNotification> {
     try {
       const userNotification = this.userNotificationRepository.create(createUserNotificationDto);
@@ -30,23 +27,6 @@ export class UserNotificationsService {
     }
   }
 
-  /**
-   * Get all user notifications
-   */
-  async findAll(): Promise<UserNotification[]> {
-    try {
-      return await this.userNotificationRepository.find({
-        relations: ['announcement', 'workHistory', 'workHistory.user', 'workHistory.role'],
-        order: { createdAt: 'DESC' },
-      });
-    } catch (error) {
-      handleException(this.logger, error);
-    }
-  }
-
-  /**
-   * Get user notifications by user ID (from JWT)
-   */
   async findByUserId(userId: string): Promise<UserNotification[]> {
     try {
       // Find workHistory from userId
@@ -60,9 +40,9 @@ export class UserNotificationsService {
         return [];
       }
 
-      // Use workHistory.id to find user notifications
+      // Use user.id to find user notifications
       return await this.userNotificationRepository.find({
-        where: { workHistory: { id: workHistory.id } },
+        where: { user: { id: workHistory.user.id } },
         relations: ['announcement'],
         order: { createdAt: 'DESC' },
       });
@@ -71,9 +51,6 @@ export class UserNotificationsService {
     }
   }
 
-  /**
-   * Get unread count for a user
-   */
   async getUnreadCount(userId: string): Promise<number> {
     try {
       const workHistory = await this.workHistoryRepository.findOne({
@@ -87,7 +64,7 @@ export class UserNotificationsService {
 
       return await this.userNotificationRepository.count({
         where: {
-          workHistory: { id: workHistory.id },
+          user: { id: workHistory.user.id },
           status: UserNotificationStatus.UNREAD
         },
       });
@@ -97,47 +74,12 @@ export class UserNotificationsService {
     }
   }
 
-  /**
-   * Get user notifications by work history ID
-   */
-  async findByWorkHistory(workHistoryId: string): Promise<UserNotification[]> {
-    try {
-      return await this.userNotificationRepository.find({
-        where: { workHistory: { id: workHistoryId } },
-        relations: ['announcement'],
-        order: { createdAt: 'DESC' },
-      });
-    } catch (error) {
-      handleException(this.logger, error);
-    }
-  }
-
-  /**
-   * Get a single user notification by ID
-   */
-  async findOne(id: string): Promise<UserNotification> {
-    try {
-      const userNotification = await this.userNotificationRepository.findOne({
-        where: { id },
-        relations: ['announcement', 'workHistory', 'workHistory.user', 'workHistory.role'],
-      });
-
-      if (!userNotification) {
-        throw new NotFoundException(`UserNotification with ID ${id} not found`);
-      }
-
-      return userNotification;
-    } catch (error) {
-      handleException(this.logger, error);
-    }
-  }
-
-  /**
-   * Mark a notification as read
-   */
   async markAsRead(id: string): Promise<UserNotification> {
     try {
-      const userNotification = await this.findOne(id);
+      const userNotification = await this.userNotificationRepository.findOne({ where: { id } });
+      if (!userNotification) {
+        throw new NotFoundException(`User notification with ID ${id} not found`);
+      }
 
       if (userNotification.status === UserNotificationStatus.UNREAD) {
         userNotification.status = UserNotificationStatus.READ;
@@ -151,81 +93,22 @@ export class UserNotificationsService {
     }
   }
 
-  /**
-   * Mark multiple notifications as read
-   */
-  async markAsReadBulk(ids: string[]): Promise<UserNotification[]> {
-    try {
-      const userNotifications = await this.userNotificationRepository.findBy({ id: In(ids) });
-
-      const updatedNotifications = userNotifications.map(notification => {
-        if (notification.status === UserNotificationStatus.UNREAD) {
-          notification.status = UserNotificationStatus.READ;
-          notification.readAt = new Date();
-        }
-        return notification;
-      });
-
-      return await this.userNotificationRepository.save(updatedNotifications);
-    } catch (error) {
-      handleException(this.logger, error);
-    }
-  }
-
-  /**
-   * Mark all notifications as read for a work history
-   */
-  async markAllAsRead(workHistoryId: string): Promise<void> {
-    try {
-      await this.userNotificationRepository.update(
-        {
-          workHistory: { id: workHistoryId },
-          status: UserNotificationStatus.UNREAD
-        },
-        {
-          status: UserNotificationStatus.READ,
-          readAt: new Date()
-        }
-      );
-      
-      this.logger.log(`Marked all notifications as read for workHistory ${workHistoryId}`);
-    } catch (error) {
-      handleException(this.logger, error);
-    }
-  }
-
-  /**
-   * Delete a user notification
-   */
-  async remove(id: string): Promise<void> {
-    try {
-      const userNotification = await this.findOne(id);
-      await this.userNotificationRepository.remove(userNotification);
-      this.logger.log(`Deleted user notification ${id}`);
-    } catch (error) {
-      handleException(this.logger, error);
-    }
-  }
-
-  /**
-   * Create bulk notifications for an announcement
-   */
   async createBulk(announcement: any, workHistories: any[]): Promise<UserNotification[]> {
     try {
-      // Check existing notifications by announcement_id and work_history_id
+      // Check existing notifications by announcement_id and user_id
       const existingNotifications = await this.userNotificationRepository.find({
         where: {
           announcement: { id: announcement.id },
-          workHistory: { id: In(workHistories.map(wh => wh.id)) }
+          user: { id: In(workHistories.map(wh => wh.user.id)) }
         },
-        select: ['workHistory']
+        select: ['user']
       });
 
-      const existingWorkHistoryIds = existingNotifications.map(n => n.workHistory.id);
+      const existingUserIds = existingNotifications.map(n => n.user.id);
 
-      // Create only for workHistories that don't have notifications yet
+      // Create only for users that don't have notifications yet
       const newWorkHistories = workHistories.filter(wh =>
-        !existingWorkHistoryIds.includes(wh.id)
+        !existingUserIds.includes(wh.user.id)
       );
 
       if (newWorkHistories.length === 0) {
@@ -236,7 +119,7 @@ export class UserNotificationsService {
       const userNotifications = newWorkHistories.map(workHistory =>
         this.userNotificationRepository.create({
           announcement,
-          workHistory,
+          user: workHistory.user,
           status: UserNotificationStatus.UNREAD,
         })
       );

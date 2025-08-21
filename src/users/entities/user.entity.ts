@@ -2,6 +2,7 @@ import { Exclude } from 'class-transformer';
 import { AiUsageQuota } from 'src/ai-usage-quotas/entities/ai-usage-quota.entity';
 import { Position } from 'src/positions/entities/position.entity';
 import { UserActivityLog } from 'src/user-activity-logs/entities/user-activity-log.entity';
+import { UserNotification } from 'src/user-notifications/entities/user-notification.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import {
   Column,
@@ -83,4 +84,10 @@ export class User {
   @OneToOne(() => AiUsageQuota, (aiUsageQuota) => aiUsageQuota.user)
   @JoinColumn({ name: 'ai_usage_quota_id' })
   aiUsageQuota?: AiUsageQuota;
+
+  @OneToMany(() => UserNotification, (userNotification) => userNotification.user, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  userNotifications: UserNotification[];
 }

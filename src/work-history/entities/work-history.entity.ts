@@ -215,9 +215,5 @@ export class WorkHistory {
   )
   creatorAnnoucements: Announcement[];
 
-  @OneToMany(() => UserNotification, (userNotification) => userNotification.workHistory, {
-    onDelete: 'CASCADE',
-    onUpdate: 'CASCADE',
-  })
-  userNotifications: UserNotification[];
+
 }
