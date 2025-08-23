@@ -64,6 +64,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { UserNotificationsModule } from './user-notifications/user-notifications.module';
 import { UserNotification } from './user-notifications/entities/user-notification.entity';
 import { WebsocketModule } from './websocket/websocket.module';
+import { EventsModule } from './events/events.module';
 
 @Module({
   imports: [
@@ -143,6 +144,7 @@ import { WebsocketModule } from './websocket/websocket.module';
     NotificationsModule,
     UserNotificationsModule,
     WebsocketModule,
+    EventsModule,
   ],
   controllers: [AppController, AiController],
   providers: [AppService, AiService],
