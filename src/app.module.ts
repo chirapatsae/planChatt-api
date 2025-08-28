@@ -65,6 +65,9 @@ import { UserNotificationsModule } from './user-notifications/user-notifications
 import { UserNotification } from './user-notifications/entities/user-notification.entity';
 import { WebsocketModule } from './websocket/websocket.module';
 import { EventsModule } from './events/events.module';
+import { Event } from './events/entities/event.entity';
+import { AttachmentEventModule } from './attachment-event/attachment-event.module';
+import { AttachmentEvent } from './attachment-event/entities/attachment-event.entity';
 
 @Module({
   imports: [
@@ -112,6 +115,8 @@ import { EventsModule } from './events/events.module';
         AnnouncementRole,
         NotificationLog,
         UserNotification,
+        Event,
+        AttachmentEvent,
       ],
       synchronize: true,
     }),
@@ -145,6 +150,7 @@ import { EventsModule } from './events/events.module';
     UserNotificationsModule,
     WebsocketModule,
     EventsModule,
+    AttachmentEventModule,
   ],
   controllers: [AppController, AiController],
   providers: [AppService, AiService],

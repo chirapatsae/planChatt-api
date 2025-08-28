@@ -35,6 +35,8 @@
     "@nestjs/typeorm": "^11.0.0",
     "@nestjs/websockets": "^11.1.5",
     "@types/helmet": "^0.0.48",
+    "@types/multer": "^2.0.0",
+    "@types/uuid": "^10.0.0",
     "axios": "^1.8.4",
     "bull": "^4.16.5",
     "class-transformer": "^0.5.1",
@@ -53,6 +55,7 @@
     "rxjs": "^7.8.1",
     "socket.io": "^4.8.1",
     "typeorm": "^0.3.21",
+    "uuid": "^11.1.0",
     "wordcut": "^0.9.1"
   },
   "devDependencies": {
