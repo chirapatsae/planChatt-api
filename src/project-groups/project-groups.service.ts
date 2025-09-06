@@ -86,8 +86,8 @@ export class ProjectGroupsService {
 
         const trackingStatus = manager.create(TrackingStatus, {
           projectGroupId: savedGroup,
-          statusId: { id: 'bc3caeba-0701-4132-9acf-a8e3086cb16d' },
-          workHistory: { id: workHistory.id },
+          statusId: { id: '8219cd82-fa61-4292-bd0d-fa58b08507e1' },
+          createdBy: workHistory,
         });
         await manager.save(trackingStatus);
 
@@ -214,8 +214,8 @@ export class ProjectGroupsService {
 
         const trackingStatus = manager.create(TrackingStatus, {
           projectGroupId: { id },
-          statusId: { id: 'bc3caeba-0701-4132-9acf-a8e3086cb16d' },
-          workHistory: { id: workHistory.id },
+          statusId: { id: '8219cd82-fa61-4292-bd0d-fa58b08507e1' },
+          createdBy: workHistory,
         });
         await manager.save(trackingStatus);
 
@@ -317,33 +317,33 @@ export class ProjectGroupsService {
           },
           relations: ['createdBy', 'createdBy.user'],
         });
-  
+
         if (!existingDraft) {
           throw new NotFoundException(`Draft with ID ${id} not found or already published`);
         }
-  
+
         // 2. อัปเดต isDraft เป็น false
         await manager.update(ProjectGroup, { id }, { isDraft: false });
-  
+
         // 3. ดึง workHistory ของผู้ใช้
         const workHistory = await this.getWorkHistory(manager, userId);
-  
+
         // 4. บันทึกสถานะใหม่ (tracking)
         const trackingStatus = manager.create(TrackingStatus, {
           projectGroupId: { id },
-          statusId: { id: 'bc3caeba-0701-4132-9acf-a8e3086cb16d' }, // เปลี่ยนตาม status จริงถ้ามี
-          workHistory: { id: workHistory.id },
+          statusId: { id: '8219cd82-fa61-4292-bd0d-fa58b08507e1' }, // เปลี่ยนตาม status จริงถ้ามี
+          createdBy: workHistory,
         });
         await manager.save(trackingStatus);
       });
-  
+
       return { message: 'Draft published successfully' };
     } catch (error) {
       handleException(this.logger, error);
     }
   }
-  
-    
+
+
 
   async findProjectsByStatus(options: {
     userId: string;
@@ -353,9 +353,10 @@ export class ProjectGroupsService {
     const { userId, countOnly, type } = options;
 
     const workHistory = await this.workHistoryRepo.findOne({
-      where: { user: { id: userId }  , isCurrent: true},
+      where: { user: { id: userId }, isCurrent: true },
       relations: [
         'user',
+        'role',
         'localAdministrativeOrganization',
         'governmentAgencies',
         'workStatus',
@@ -385,7 +386,10 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('workHistory.governmentAgencies', 'governmentAgencies')
       .leftJoinAndSelect('workHistory.workStatus', 'workStatus')
       .leftJoinAndSelect('projectGroup.responsibleAgency', 'responsibleAgency')
-      .leftJoinAndSelect('projectGroup.originAgencyId', 'originAgencyId');
+      .leftJoinAndSelect('projectGroup.originAgencyId', 'originAgencyId')
+      .leftJoinAndSelect('projectGroup.favorites', 'favorites')
+      .leftJoinAndSelect('favorites.userId', 'userId');
+
 
     // Add conditions based on type
     if (type) {
@@ -397,39 +401,40 @@ export class ProjectGroupsService {
         case 'ready':
           query.andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
             .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-            .andWhere('status.id = :statusId', { statusId: 'bc3caeba-0701-4132-9acf-a8e3086cb16d' });
+            .andWhere('status.name = :statusName', { statusName: 'Ready' });
           break;
         case 'pending':
           query.andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
             .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-            .andWhere('status.id = :statusId', { statusId: '30da8501-4487-49b7-8acf-ede14ca4ac09' });
+            .andWhere('status.name = :statusName', { statusName: 'Pending' });
           break;
         case 'edit':
           query.andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
             .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-            .andWhere('status.id = :statusId', { statusId: 'e4173695-f605-4f80-b8ab-7f4569fc8f60' });
+            .andWhere('status.name = :statusName', { statusName: 'Revision' });
           break;
         case 'approved':
           query.andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
             .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-            .andWhere('status.id = :statusId', { statusId: 'ef3bffe9-cf5b-41bf-bee2-3390197c8bc5' });
+            .andWhere('status.name = :statusName', { statusName: 'Approved' });
           break;
         case 'rejected':
           query.andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
             .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-            .andWhere('status.id = :statusId', { statusId: '044b598d-952e-4c33-92bf-69e7e4cf63c8' });
+            .andWhere('status.name = :statusName', { statusName: 'Rejected' });
           break;
         // no default
       }
     }
 
-    // Add agency conditions
-    if (workHistory.governmentAgencies) {
-      // Internal agency (ภาครัฐ)
-      query.andWhere('responsibleAgency.id = :agencyId', { agencyId: workHistory.governmentAgencies.id });
-    } else {
-      // External (องค์กรปกครองท้องถิ่น)
-      query.andWhere('originAgencyId.id = :agencyId', { agencyId: workHistory.localAdministrativeOrganization.id });
+    //Role conditions
+    if (workHistory.role.name === 'user') {
+      if (workHistory.governmentAgencies) {
+        query.andWhere('responsibleAgency.id = :agencyId', { agencyId: workHistory.governmentAgencies.id });
+      } else {
+        query.andWhere('originAgencyId.id = :agencyId', { agencyId: workHistory.localAdministrativeOrganization.id });
+
+      }
     }
 
     if (countOnly) {
@@ -478,7 +483,7 @@ export class ProjectGroupsService {
     try {
       const projectGroup = await this.projectGroupRepo.findOne({
         where: { id },
-        relations: ['createdBy', 'createdBy.user', 'createdBy.amphoe', 'createdBy.localAdministrativeOrganization', 'strategy', 'tactic', 'plan', 'budgetPlan', 'budgets', 'trackingStatus', 'trackingStatus.comments', 'trackingStatus.statusId', 'trackingStatus.createdBy', 'trackingStatus.createdBy.user', 'trackingStatus.createdBy.localAdministrativeOrganization', 'trackingStatus.createdBy.governmentAgencies', 'trackingStatus.createdBy.workStatus', 'trackingStatus.createdBy.workStatus','responsibleAgency', 'originAgencyId'],
+        relations: ['createdBy', 'createdBy.user', 'createdBy.amphoe', 'createdBy.localAdministrativeOrganization', 'strategy', 'tactic', 'plan', 'budgetPlan', 'budgets', 'trackingStatus', 'trackingStatus.comments', 'trackingStatus.statusId', 'trackingStatus.createdBy', 'trackingStatus.createdBy.user', 'trackingStatus.createdBy.localAdministrativeOrganization', 'trackingStatus.createdBy.governmentAgencies', 'trackingStatus.createdBy.workStatus', 'trackingStatus.createdBy.workStatus', 'responsibleAgency', 'originAgencyId'],
       });
 
       if (!projectGroup) {

@@ -1,5 +1,6 @@
 import { Exclude } from 'class-transformer';
 import { AiUsageQuota } from 'src/ai-usage-quotas/entities/ai-usage-quota.entity';
+import { Favorite } from 'src/favorite/entities/favorite.entity';
 import { Position } from 'src/positions/entities/position.entity';
 import { UserActivityLog } from 'src/user-activity-logs/entities/user-activity-log.entity';
 import { UserNotification } from 'src/user-notifications/entities/user-notification.entity';
@@ -90,4 +91,10 @@ export class User {
     onUpdate: 'CASCADE',
   })
   userNotifications: UserNotification[];
+
+  @OneToMany(() => Favorite, (favorite) => favorite.userId, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  favorites: Favorite[];
 }

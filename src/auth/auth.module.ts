@@ -8,8 +8,6 @@ import { PassportModule } from '@nestjs/passport';
 import { JwtStrategy } from './jwt.strategy';
 import { JwtModule } from '@nestjs/jwt';
 import { UsersService } from 'src/users/users.service';
-import * as dotenv from 'dotenv';
-dotenv.config();
 
 @Module({
   imports: [

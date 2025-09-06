@@ -8,10 +8,23 @@ import {
 import { promisify } from 'util';
 import * as dotenv from 'dotenv';
 
+// Load environment variables at module level
 dotenv.config();
+
 const algorithm = process.env.ALGORITHM || '';
 const secretKey = process.env.SECRET_KEY || '';
 const salt = process.env.SALT || '';
+
+// Validate that required environment variables are set
+if (!secretKey) {
+  throw new Error('SECRET_KEY environment variable is required');
+}
+if (!salt) {
+  throw new Error('SALT environment variable is required');
+}
+if (!algorithm) {
+  throw new Error('ALGORITHM environment variable is required');
+}
 
 async function generateKey(): Promise<Buffer> {
   return (await promisify(scrypt)(secretKey, salt, 32)) as Buffer;

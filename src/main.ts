@@ -8,6 +8,10 @@ import {
 import helmet from 'helmet';
 import { join } from 'path';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import * as dotenv from 'dotenv';
+
+// Load environment variables at the very beginning
+dotenv.config();
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -16,7 +20,7 @@ async function bootstrap() {
   app.use(helmet());
   
   app.enableCors({
-    origin: ['http://localhost:5173', 'https://9094fafecec2.ngrok-free.app'], // ✅ ระบุให้ตรง
+    origin: ['http://localhost:5173', 'https://fd8d7e563d16.ngrok-free.app'], // ✅ ระบุให้ตรง
     credentials: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     allowedHeaders: ['Content-Type', 'Authorization', 'Secret-Key'], // ✅ สำหรับ custom header

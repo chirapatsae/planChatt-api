@@ -17,6 +17,7 @@ import { Plan } from 'src/plan/entities/plan.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
 import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
 import { GovernmentAgency } from 'src/government-agencies/entities/government-agency.entity';
+import { Favorite } from 'src/favorite/entities/favorite.entity';
 
 @Entity('project_groups')
 export class ProjectGroup {
@@ -137,4 +138,10 @@ export class ProjectGroup {
     onDelete: 'CASCADE',
   })
   trackingStatus: TrackingStatus[];
+
+  @OneToMany(() => Favorite, (favorite) => favorite.projectGroupId, {
+    onUpdate: 'CASCADE',
+    onDelete: 'CASCADE',
+  })
+  favorites: Favorite[];
 }

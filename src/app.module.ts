@@ -68,6 +68,8 @@ import { EventsModule } from './events/events.module';
 import { Event } from './events/entities/event.entity';
 import { AttachmentEventModule } from './attachment-event/attachment-event.module';
 import { AttachmentEvent } from './attachment-event/entities/attachment-event.entity';
+import { FavoriteModule } from './favorite/favorite.module';
+import { Favorite } from './favorite/entities/favorite.entity';
 
 @Module({
   imports: [
@@ -117,8 +119,15 @@ import { AttachmentEvent } from './attachment-event/entities/attachment-event.en
         UserNotification,
         Event,
         AttachmentEvent,
+        Favorite,
       ],
       synchronize: true,
+      extra: {
+        query_timeout: 60000,
+        connectionTimeoutMillis: 30000,
+        acquireTimeoutMillis: 30000,
+        idleTimeoutMillis: 30000,
+      },
     }),
     AmphoesModule,
     LocalAdministrativeOrganizationsModule,
@@ -151,6 +160,7 @@ import { AttachmentEvent } from './attachment-event/entities/attachment-event.en
     WebsocketModule,
     EventsModule,
     AttachmentEventModule,
+    FavoriteModule,
   ],
   controllers: [AppController, AiController],
   providers: [AppService, AiService],

@@ -29,21 +29,6 @@ export class UpdateWorkHistoryDto extends PartialType(CreateWorkHistoryDto) {
   @IsArray()
   @IsString({ each: true })
   responsibleAmphoeIds?: string[];
-
-  // // 2. เปลี่ยนจาก @IsString เป็น @IsEnum และแก้ Type
-  // @IsOptional()
-  // @IsEnum(UserRole, {
-  //   message: 'Invalid role. Must be one of: user, admin, superadmin',
-  // })
-  // role?: UserRole;
-
-  // // 3. เปลี่ยนจาก @IsString เป็น @IsEnum และแก้ Type
-  // @IsOptional()
-  // @IsEnum(WorkHistoryStatus, {
-  //   message:
-  //     'Invalid status. Must be one of: unverify, approved, suspended, banned',
-  // })
-  // status?: WorkHistoryStatus;
 }
 
 // DTO สำหรับการโอนย้าย responsibility

@@ -210,6 +210,7 @@ export class WorkHistoryService {
         roleId,
         governmentAgenciesId,
       } = dto;
+      console.log(dto);
       const updator = await this.userRepository.findOne({
         where: { id: updateId },
       });

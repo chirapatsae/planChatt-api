@@ -45,6 +45,7 @@ export class AuthService {
           'workHistory.role',
         ],
       });
+      
       // ถ้า user ไม่พบ สร้างใหม่
       if (!user) {
         const newUserDto: CreateUserDto = {
@@ -54,8 +55,31 @@ export class AuthService {
           lastname: decoded.family_name,
         };
         
-        // Pass the pre-calculated hash to ensure consistency
-        user = await this.userService.create(newUserDto, hashedCid);
+        try {
+          // Pass the pre-calculated hash to ensure consistency
+          user = await this.userService.create(newUserDto, hashedCid);
+        } catch (error) {
+          // Handle potential duplicate user creation due to race conditions
+          if (error.code === '23505') { // PostgreSQL unique constraint violation
+            // Try to find the user again - it might have been created by another request
+            user = await this.userRepository.findOne({
+              where: { citizenIdHash: hashedCid },
+              relations: [
+                'workHistory',
+                'workHistory.amphoe',
+                'workHistory.localAdministrativeOrganization',
+                'workHistory.workStatus',
+                'workHistory.role',
+              ],
+            });
+            
+            if (!user) {
+              throw new InternalServerErrorException('Failed to create or find user after duplicate constraint violation');
+            }
+          } else {
+            throw error;
+          }
+        }
       } else {
         user.prefix = decoded.title;
         user.firstname = decoded.given_name;

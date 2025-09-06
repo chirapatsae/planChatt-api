@@ -31,6 +31,18 @@ export class UsersService {
     try {
       // Use pre-calculated hash if provided, otherwise calculate new one
       const hashedCid = preCalculatedHash || hashCitizenId(createUserDto.citizenId);
+      
+      // Check if user with this hash already exists before creating
+      const existingUser = await this.userRepository.findOne({
+        where: { citizenIdHash: hashedCid }
+      });
+      
+      if (existingUser) {
+        this.logger.warn(`User with hash ${hashedCid} already exists. Returning existing user.`);
+        existingUser.citizenId = await decryption(existingUser.citizenId);
+        return existingUser;
+      }
+      
       const encryptedCid = await encryption(createUserDto.citizenId);
 
       const user = this.userRepository.create({
@@ -43,6 +55,8 @@ export class UsersService {
       savedUser.citizenId = await decryption(savedUser.citizenId); // Decrypt for the response
       return savedUser;
     } catch (error) {
+      // Log the error details for debugging
+      this.logger.error(`Failed to create user: ${JSON.stringify(createUserDto)}`, error);
       handleException(this.logger, error);
     }
   }
