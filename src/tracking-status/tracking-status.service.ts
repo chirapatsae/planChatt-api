@@ -34,7 +34,7 @@ export class TrackingStatusService {
     private readonly commentRepo: Repository<Comment>,
 
     private readonly dataSource: DataSource,
-  ) {}
+  ) { }
 
   async create(dto: CreateTrackingStatusDto, userId: string): Promise<TrackingStatus> {
     try {
@@ -46,7 +46,7 @@ export class TrackingStatusService {
         if (!workHistory) {
           throw new NotFoundException(`WorkHistory for user ${userId} not found`);
         }
-  
+
         // หา projectGroup
         const projectGroup = await manager.findOne(ProjectGroup, {
           where: { id: dto.projectId },
@@ -54,7 +54,7 @@ export class TrackingStatusService {
         if (!projectGroup) {
           throw new NotFoundException(`ProjectGroup with ID ${dto.projectId} not found`);
         }
-  
+
         // หา status
         const status = await manager.findOne(Status, {
           where: { id: dto.statusId },
@@ -62,14 +62,14 @@ export class TrackingStatusService {
         if (!status) {
           throw new NotFoundException(`Status with ID ${dto.statusId} not found`);
         }
-  
+
         // อัปเดต TrackingStatus ตัวเก่าให้ isLatest = false
         await manager.update(TrackingStatus, {
           projectGroupId: projectGroup,
         }, {
           isLatest: false,
         });
-  
+
         // สร้าง TrackingStatus ใหม่
         const tracking = manager.create(TrackingStatus, {
           createdBy: workHistory,
@@ -89,12 +89,50 @@ export class TrackingStatusService {
           );
           await manager.save(Comment, commentEntities);
         }
-  
+
         return savedTracking;
       });
     } catch (error) {
       handleException(this.logger, error);
     }
+  }
+
+  async createMany(dtos: CreateTrackingStatusDto[], userId: string) {
+    const workHistory = await this.workHistoryRepo.findOne({
+      where: { user: { id: userId } },
+    });
+  
+    if (!workHistory) {
+      throw new NotFoundException(`WorkHistory for user ${userId} not found`);
+    }
+  
+    return this.dataSource.transaction(async (manager) => {
+      const results: TrackingStatus[] = [];
+  
+      for (const dto of dtos) {
+        const { projectId, statusId } = dto;
+  
+        // 1) update old tracking status
+        await manager.update(
+          TrackingStatus,
+          { projectGroupId  : projectId},
+          { isLatest: false },
+        );
+  
+        // 2) create new tracking status
+        const tracking = manager.create(TrackingStatus, {
+          createdBy: workHistory,
+          projectGroupId: { id: projectId },
+          statusId: { id: statusId },
+          isLatest: true,
+        });
+  
+        const savedTracking = await manager.save(TrackingStatus, tracking);
+        results.push(savedTracking);
+      }
+  
+      return results;
+    });
   }
   
 

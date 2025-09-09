@@ -9,7 +9,6 @@ import { FindOptionsWhere, Repository } from 'typeorm';
 import { CreateWorkHistoryAmphoeResponsibilityDto } from './dto/create-work-history-amphoe-responsibility.dto';
 import {
   UpdateWorkHistoryAmphoeResponsibilityDto,
-  TransferResponsibilityDto,
 } from './dto/update-work-history-amphoe-responsibility.dto';
 import { WorkHistoryAmphoeResponsibility } from './entities/work-history-amphoe-responsibility.entity';
 import { WorkHistory } from '../work-history/entities/work-history.entity';
@@ -50,7 +49,7 @@ export class WorkHistoryAmphoeResponsibilityService {
 
       if (
         workHistory.workStatus?.name !== 'approved' ||
-        workHistory.role?.name !== 'admin'
+        workHistory.role?.name !== 'staff'
       ) {
         throw new BadRequestException(
           'Responsibilities can only be added to an approved admin work history.',

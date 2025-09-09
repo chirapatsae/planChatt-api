@@ -94,7 +94,15 @@ export class ProjectGroupsService {
         if (!Array.isArray(dto.budget) || dto.budget.length === 0) {
           throw new BadRequestException('งบประมาณไม่ถูกต้องหรือไม่มีข้อมูล');
         }
-
+        // Validate budget year is within budget plan range
+        for (const budgetItem of dto.budget) {
+          if (budgetItem.year < (budgetPlan as BudgetPlan).startYear || budgetItem.year > (budgetPlan as BudgetPlan).endYear) {
+            throw new BadRequestException(
+              `ปีงบประมาณต้องอยู่ในช่วง พ.ศ. ${(budgetPlan as BudgetPlan).startYear} - ${(budgetPlan as BudgetPlan).endYear} (ปีที่ส่งมา: ${budgetItem.year})`
+            );
+          }
+        }
+        
         const budgets = dto.budget.map((item) =>
           manager.create(Budget, {
             projectGroupId: { id: savedGroup.id },
@@ -148,6 +156,15 @@ export class ProjectGroupsService {
         );
         const savedGroupResult = await manager.save(group);
         if (dto.budget && dto.budget.length > 0) {
+          // Validate budget year is within budget plan range
+          for (const budgetItem of dto.budget) {
+            if (budgetItem.year < (budgetPlan as BudgetPlan).startYear || budgetItem.year > (budgetPlan as BudgetPlan).endYear) {
+              throw new BadRequestException(
+                `ปีงบประมาณต้องอยู่ในช่วง พ.ศ. ${(budgetPlan as BudgetPlan).startYear} - ${(budgetPlan as BudgetPlan).endYear} (ปีที่ส่งมา: ${budgetItem.year})`
+              );
+            }
+          }
+
           const budgets = dto.budget.map((item) =>
             manager.create(Budget, {
               projectGroupId: { id: savedGroupResult.id },
@@ -224,6 +241,15 @@ export class ProjectGroupsService {
 
         // Create new budgets if provided
         if (dto.budget && dto.budget.length > 0) {
+          // Validate budget year is within budget plan range
+          for (const budgetItem of dto.budget) {
+            if (budgetItem.year < (budgetPlan as BudgetPlan).startYear || budgetItem.year > (budgetPlan as BudgetPlan).endYear) {
+              throw new BadRequestException(
+                `ปีงบประมาณต้องอยู่ในช่วง พ.ศ. ${(budgetPlan as BudgetPlan).startYear} - ${(budgetPlan as BudgetPlan).endYear} (ปีที่ส่งมา: ${budgetItem.year})`
+              );
+            }
+          }
+
           const budgets = dto.budget.map((item) =>
             manager.create(Budget, {
               projectGroupId: { id },
@@ -288,6 +314,15 @@ export class ProjectGroupsService {
 
         // Create new budgets if provided
         if (dto.budget && dto.budget.length > 0) {
+          // Validate budget year is within budget plan range
+          for (const budgetItem of dto.budget) {
+            if (budgetItem.year < (budgetPlan as BudgetPlan).startYear || budgetItem.year > (budgetPlan as BudgetPlan).endYear) {
+              throw new BadRequestException(
+                `ปีงบประมาณต้องอยู่ในช่วง พ.ศ. ${(budgetPlan as BudgetPlan).startYear} - ${(budgetPlan as BudgetPlan).endYear} (ปีที่ส่งมา: ${budgetItem.year})`
+              );
+            }
+          }
+
           const budgets = dto.budget.map((item) =>
             manager.create(Budget, {
               projectGroupId: { id },
@@ -343,12 +378,10 @@ export class ProjectGroupsService {
     }
   }
 
-
-
   async findProjectsByStatus(options: {
     userId: string;
     countOnly?: boolean;
-    type?: 'draft' | 'ready' | 'pending' | 'edit' | 'approved' | 'rejected';
+    type?: 'draft' | 'ready' | 'pending' | 'edit' | 'verified' | 'approved' | 'rejected' | 'draft-development-plan';
   }) {
     const { userId, countOnly, type } = options;
 
@@ -360,10 +393,12 @@ export class ProjectGroupsService {
         'localAdministrativeOrganization',
         'governmentAgencies',
         'workStatus',
+        'workHistoryResponsibleAdmins',
+        'workHistoryResponsibleAdmins.amphoe',
       ],
     });
     if (!workHistory) return countOnly ? 0 : [];
-    if (workHistory.workStatus.id !== process.env.APPROVED_WORK_STATUS)
+    if (workHistory.workStatus.name !== "approved")
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
 
     const query = this.projectGroupRepo
@@ -387,6 +422,7 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('workHistory.workStatus', 'workStatus')
       .leftJoinAndSelect('projectGroup.responsibleAgency', 'responsibleAgency')
       .leftJoinAndSelect('projectGroup.originAgencyId', 'originAgencyId')
+      .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
       .leftJoinAndSelect('projectGroup.favorites', 'favorites')
       .leftJoinAndSelect('favorites.userId', 'userId');
 
@@ -401,7 +437,8 @@ export class ProjectGroupsService {
         case 'ready':
           query.andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
             .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-            .andWhere('status.name = :statusName', { statusName: 'Ready' });
+            .andWhere('status.name = :statusName', { statusName: 'Ready' })
+            .andWhere('localAdministrativeOrganization.id = :localAdministrativeOrganizationId', { localAdministrativeOrganizationId: workHistory.localAdministrativeOrganization.id });
           break;
         case 'pending':
           query.andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
@@ -411,8 +448,19 @@ export class ProjectGroupsService {
         case 'edit':
           query.andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
             .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-            .andWhere('status.name = :statusName', { statusName: 'Revision' });
+            .andWhere('status.name = :statusName', { statusName: 'Revision' })
+            .andWhere('projectGroup.createdBy.id = :workHistoryId', { workHistoryId: workHistory.id });
           break;
+        case 'verified':
+          query.andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
+            .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+            .andWhere('status.name = :statusName', { statusName: 'Verified' });
+          break;
+          case 'draft-development-plan':
+            query.andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
+              .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+              .andWhere('status.name = :statusName', { statusName: 'Draft Development Plan' });
+            break;
         case 'approved':
           query.andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
             .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })

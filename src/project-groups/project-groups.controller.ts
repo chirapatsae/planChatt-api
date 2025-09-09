@@ -71,7 +71,7 @@ export class ProjectGroupsController {
   @Get('/by-status')
   async findByStatus(
     @Req() req: Request & { user: JwtPayloadUser },
-    @Query('type') type: 'draft' | 'ready' | 'pending' | 'edit' | 'approved' | 'rejected',
+    @Query('type') type: 'draft' | 'ready' | 'pending' | 'edit' | 'verified' | 'approved' | 'rejected' | 'draft-development-plan',
     @Query('countOnly') countOnly?: string,
   ) {
     return this.projectGroupsService.findProjectsByStatus({
