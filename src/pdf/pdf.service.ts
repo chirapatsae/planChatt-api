@@ -2,15 +2,23 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
+import { PdfDraftDocument } from './entities/pdf-draft-document.entity';
+import { User } from 'src/users/entities/user.entity';
 import * as PdfPrinter from 'pdfmake';
 import * as path from 'path';
 import * as Wordcut from 'wordcut';
+import * as fs from 'fs';
+import { promises as fsp } from 'fs';
 
 @Injectable()
 export class PdfService {
   constructor(
     @InjectRepository(BudgetPlan)
     private readonly budgetPlanRepo: Repository<BudgetPlan>,
+    @InjectRepository(PdfDraftDocument)
+    private readonly pdfDraftRepo: Repository<PdfDraftDocument>,
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
   ) {
     Wordcut.init();
   }
@@ -282,5 +290,174 @@ export class PdfService {
       pdfDoc.on('error', (err) => reject(err));
       pdfDoc.end();
     });
+  }
+
+  // Database-backed draft PDF persistence
+  private async ensureDirectory(directoryPath: string): Promise<void> {
+    await fsp.mkdir(directoryPath, { recursive: true });
+  }
+
+  private async getLatestBudgetPlanOrFail(): Promise<BudgetPlan> {
+    const bp = await this.budgetPlanRepo.findOneBy({ isLatest: true });
+    if (!bp) throw new Error('BudgetPlan not found');
+    return bp;
+  }
+
+  private getDraftBaseDir(): string {
+    // uploads/pdf/{budgetPlanId}
+    const root = path.resolve(__dirname, '../../uploads/pdf');
+    return root;
+  }
+
+  private getBudgetPlanDir(budgetPlanId: string | number): string {
+    return path.join(this.getDraftBaseDir(), String(budgetPlanId));
+  }
+
+  private async getNextVersion(budgetPlanId: string | number): Promise<number> {
+    const latest = await this.pdfDraftRepo.findOne({
+      where: { budgetPlanId: String(budgetPlanId) },
+      order: { version: 'DESC' }
+    });
+    return latest ? latest.version + 1 : 1;
+  }
+
+  async saveDraftPdfAndMeta(options: {
+    pdfBuffer: Buffer;
+    projectIdsSnapshot: Array<string | number>;
+    createdById: string;
+  }): Promise<{
+    version: number;
+    filePath: string;
+    fileUrl: string;
+    projectCount: number;
+    createdAt: string;
+    createdBy: { id: string; firstname: string; lastname: string };
+  }> {
+    const bp = await this.getLatestBudgetPlanOrFail();
+    const budgetPlanId = bp.id;
+    const baseDir = this.getBudgetPlanDir(budgetPlanId);
+    await this.ensureDirectory(baseDir);
+
+    const version = await this.getNextVersion(budgetPlanId);
+    const fileName = `draft-plan-v${version}.pdf`;
+    const absFilePath = path.join(baseDir, fileName);
+
+    // write pdf file
+    await fsp.writeFile(absFilePath, options.pdfBuffer);
+
+    // save to database
+    const pdfDraft = this.pdfDraftRepo.create({
+      budgetPlanId: String(budgetPlanId),
+      version,
+      filePath: absFilePath,
+      projectIdsSnapshot: options.projectIdsSnapshot,
+      projectCount: options.projectIdsSnapshot.length,
+      createdById: options.createdById,
+    });
+
+    const saved = await this.pdfDraftRepo.save(pdfDraft);
+    
+    // get user info
+    const user = await this.userRepo.findOne({
+      where: { id: options.createdById },
+      select: ['id', 'firstname', 'lastname']
+    });
+
+    const fileUrl = `/v1/pdf/draft/latest/stream`;
+    return {
+      version: saved.version,
+      filePath: saved.filePath,
+      fileUrl,
+      projectCount: saved.projectCount,
+      createdAt: saved.createdAt.toISOString(),
+      createdBy: user ? { id: user.id, firstname: user.firstname, lastname: user.lastname } : { id: options.createdById, firstname: '', lastname: '' },
+    };
+  }
+
+  async getLatestDraftMeta(): Promise<
+    | {
+        exists: false;
+      }
+    | {
+        exists: true;
+        version: number;
+        fileUrl: string;
+        projectCount: number;
+        createdAt: string;
+        projectIdsSnapshot: Array<string | number>;
+        filePath: string;
+        createdBy: { id: string; firstname: string; lastname: string };
+      }
+  > {
+    const bp = await this.getLatestBudgetPlanOrFail();
+    const latest = await this.pdfDraftRepo.findOne({
+      where: { budgetPlanId: String(bp.id) },
+      order: { version: 'DESC' },
+      relations: ['createdBy']
+    });
+
+    if (!latest) return { exists: false };
+
+    return {
+      exists: true,
+      version: latest.version,
+      fileUrl: `/v1/pdf/draft/latest/stream`,
+      projectCount: latest.projectCount,
+      createdAt: latest.createdAt.toISOString(),
+      projectIdsSnapshot: latest.projectIdsSnapshot,
+      filePath: latest.filePath,
+      createdBy: {
+        id: latest.createdBy.id,
+        firstname: latest.createdBy.firstname,
+        lastname: latest.createdBy.lastname
+      }
+    };
+  }
+
+  async readLatestDraftFile(): Promise<{ filePath: string; stream: fs.ReadStream } | null> {
+    const meta = await this.getLatestDraftMeta();
+    if (!meta || !meta.exists) return null;
+    const stream = fs.createReadStream(meta.filePath);
+    return { filePath: meta.filePath, stream };
+  }
+
+  async getAllDraftVersions(): Promise<Array<{
+    version: number;
+    fileUrl: string;
+    projectCount: number;
+    createdAt: string;
+    createdBy: { id: string; firstname: string; lastname: string };
+  }>> {
+    const bp = await this.getLatestBudgetPlanOrFail();
+    const versions = await this.pdfDraftRepo.find({
+      where: { budgetPlanId: String(bp.id) },
+      order: { version: 'DESC' },
+      relations: ['createdBy']
+    });
+
+    return versions.map(v => ({
+      version: v.version,
+      fileUrl: `/v1/pdf/draft/${v.version}/stream`,
+      projectCount: v.projectCount,
+      createdAt: v.createdAt.toISOString(),
+      createdBy: {
+        id: v.createdBy.id,
+        firstname: v.createdBy.firstname,
+        lastname: v.createdBy.lastname
+      }
+    }));
+  }
+
+  async readDraftFileByVersion(version: number): Promise<{ filePath: string; stream: fs.ReadStream } | null> {
+    const bp = await this.getLatestBudgetPlanOrFail();
+    const draft = await this.pdfDraftRepo.findOne({
+      where: { budgetPlanId: String(bp.id), version },
+      relations: ['createdBy']
+    });
+
+    if (!draft) return null;
+    
+    const stream = fs.createReadStream(draft.filePath);
+    return { filePath: draft.filePath, stream };
   }
 }

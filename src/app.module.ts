@@ -70,6 +70,7 @@ import { AttachmentEventModule } from './attachment-event/attachment-event.modul
 import { AttachmentEvent } from './attachment-event/entities/attachment-event.entity';
 import { FavoriteModule } from './favorite/favorite.module';
 import { Favorite } from './favorite/entities/favorite.entity';
+import { PdfDraftDocument } from './pdf/entities/pdf-draft-document.entity';
 
 @Module({
   imports: [
@@ -120,6 +121,7 @@ import { Favorite } from './favorite/entities/favorite.entity';
         Event,
         AttachmentEvent,
         Favorite,
+        PdfDraftDocument,
       ],
       synchronize: true,
       extra: {
