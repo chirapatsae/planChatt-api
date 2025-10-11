@@ -52,7 +52,6 @@ export class EventsController {
     @Query('dateFilter') dateFilter?: string,
     @Query('location') location?: string,
   ): Promise<EventResponseDto[]> {
-    this.logger.log('Fetching events with filters', { search, status, dateFilter, location });
     return this.eventsService.findAll({ search, status, dateFilter, location });
   }
 

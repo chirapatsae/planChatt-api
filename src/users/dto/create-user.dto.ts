@@ -12,6 +12,10 @@ export class CreateUserDto {
   @Matches(/^[0-9]{13}$/, { message: 'citizenId must be a 13-digit number' })
   citizenId: string;
 
+  @IsNotEmpty()
+  @Matches(/^[a-f0-9]{64}$/, { message: 'citizenIdHash must be a 64-character hexadecimal string' })
+  citizenIdHash: string;
+
   @IsEmail({}, { message: 'Invalid email format' })
   @IsOptional()
   email?: string;

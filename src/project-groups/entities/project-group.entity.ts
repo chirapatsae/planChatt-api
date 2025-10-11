@@ -111,6 +111,7 @@ export class ProjectGroup {
     {
       onUpdate: 'CASCADE',
       onDelete: 'CASCADE',
+      nullable: true,
     },
   )
   @JoinColumn({ name: 'origin_agency_id' })
@@ -122,7 +123,7 @@ export class ProjectGroup {
     {
       onUpdate: 'CASCADE',
       onDelete: 'CASCADE',
-    },
+    }, 
   )
   @JoinColumn({ name: 'responsible_agency_id' })
   responsibleAgency: GovernmentAgency;

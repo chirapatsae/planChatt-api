@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -15,6 +16,7 @@ import { hashCitizenId } from 'src/util/encryption.util';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
@@ -32,9 +34,9 @@ export class AuthService {
       if (!decoded?.sub || decoded.iss !== 'https://imauth.bora.dopa.go.th') {
         throw new UnauthorizedException('Invalid id_token');
       }
-
+      this.logger.log('>>> decoded', decoded);
       const hashedCid = hashCitizenId(decoded.pid);
-
+      this.logger.log('>>> hashedCid', hashedCid);
       let user = await this.userRepository.findOne({
         where: { citizenIdHash: hashedCid },
         relations: [
@@ -45,23 +47,21 @@ export class AuthService {
           'workHistory.role',
         ],
       });
-      
+      this.logger.log('>>> user', user);
       // ถ้า user ไม่พบ สร้างใหม่
-      if (!user) {
+      if (!user || !user.id) {
+        this.logger.log('>>> user not found, creating new user');
         const newUserDto: CreateUserDto = {
-          citizenId: decoded.pid,
+          citizenId: decoded.pid,    // เก็บ plain หรือ encrypt ไว้ก็ได้ ถ้าอยากถอดคืน
+          citizenIdHash: hashedCid,  // เก็บ hash สำหรับ unique check
           prefix: decoded.title,
           firstname: decoded.given_name,
           lastname: decoded.family_name,
         };
-        
         try {
-          // Pass the pre-calculated hash to ensure consistency
           user = await this.userService.create(newUserDto, hashedCid);
         } catch (error) {
-          // Handle potential duplicate user creation due to race conditions
           if (error.code === '23505') { // PostgreSQL unique constraint violation
-            // Try to find the user again - it might have been created by another request
             user = await this.userRepository.findOne({
               where: { citizenIdHash: hashedCid },
               relations: [
@@ -81,12 +81,13 @@ export class AuthService {
           }
         }
       } else {
+        this.logger.log('>>> user found', user);
         user.prefix = decoded.title;
         user.firstname = decoded.given_name;
         user.lastname = decoded.family_name;
         user = await this.userService.update(user.id, user);
       }
-      const isFirstLogin = user.isFirstLogin || true;
+      const isFirstLogin = user.isFirstLogin ?? true;
 
       const latestWH =
         user.workHistory

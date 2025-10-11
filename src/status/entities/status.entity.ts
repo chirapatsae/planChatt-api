@@ -19,6 +19,9 @@ export class Status {
   @Column()
   name: string;
 
+  @Column({ nullable: true  , default: ''})
+  th_name: string;
+
   @CreateDateColumn({ name: 'create_at' })
   createdAt: Date;
   @ManyToOne(() => WorkHistory, (workHistory) => workHistory.creatorStatus, {

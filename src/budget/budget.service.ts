@@ -25,35 +25,33 @@ export class BudgetService {
     private readonly projectGroupRepo: Repository<ProjectGroup>,
   ) {}
 
-  async create(dto: CreateBudgetDto): Promise<Budget> {
+  async create(dto: CreateBudgetDto): Promise<Budget[]> {
     try {
-      this.logger.log(`Creating budget for group ${dto.projectGroupId}`);
-      // Find the associated project group and its budget plan
-      const projectGroup = await this.projectGroupRepo.findOne({
-        where: { id: dto.projectGroupId },
-        relations: ['budgetPlanId'],
-      });
+      this.logger.log(`Creating budget for group ${dto.projectGroupId || dto.revisedProjectGroupId}`);
+      
+        const budgetData: any = {
+          year: dto.year,
+          quantity: dto.quantity,
+        };
 
-      if (!projectGroup)
-        throw new NotFoundException(
-          `Project group with ID ${dto.projectGroupId} not found`,
-        );
-      const plan = projectGroup.budgetPlan;
-      if (!plan)
-        throw new BadRequestException(
-          `Project group ${dto.projectGroupId} does not have an associated budget plan.`,
-        );
+      if (dto.projectGroupId) {
+        const projectGroup = await this.projectGroupRepo.findOne({
+          where: { id: dto.projectGroupId },
+        });
 
-      // Validate that the budget year is within the plan's valid range
-      if (dto.year < plan.startYear || dto.year > plan.endYear) {
-        throw new BadRequestException(
-          `Budget year ${dto.year} is outside the budget plan's range (${plan.startYear} - ${plan.endYear}).`,
-        );
+        if (!projectGroup)
+          throw new NotFoundException(
+            `Project group with ID ${dto.projectGroupId} not found`,
+          );
+        
+        budgetData.projectGroupId = { id: dto.projectGroupId };
       }
-      const budget = this.budgetRepo.create({
-        ...dto,
-        projectGroupId: { id: dto.projectGroupId },
-      });
+
+      if (dto.revisedProjectGroupId) {
+        budgetData.revisedProjectGroupId = { id: dto.revisedProjectGroupId };
+      }
+
+      const budget = this.budgetRepo.create(budgetData);
 
       return await this.budgetRepo.save(budget);
     } catch (error) {
@@ -69,7 +67,7 @@ export class BudgetService {
       }
       return await this.budgetRepo.find({
         where,
-        relations: ['projectGroupId', 'projectVersionId', 'budgetPlanId'],
+        relations: ['projectGroupId', 'revisedProjectGroupId'],
       });
     } catch (error) {
       handleException(this.logger, error);
@@ -80,7 +78,7 @@ export class BudgetService {
     try {
       const budget = await this.budgetRepo.findOne({
         where: { id },
-        relations: ['projectGroupId', 'projectVersionId', 'budgetPlanId'],
+        relations: ['projectGroupId', 'revisedProjectGroupId'],
       });
 
       if (!budget) {

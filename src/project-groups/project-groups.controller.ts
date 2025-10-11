@@ -13,7 +13,7 @@ import {
 } from '@nestjs/common';
 import { ProjectGroupsService } from './project-groups.service';
 import { CreateProjectGroupDto } from './dto/create-project-group.dto';
-import { UpdateProjectGroupDto } from './dto/update-project-group.dto';
+import { BulkAssignAgencyDto, UpdateProjectGroupDto } from './dto/update-project-group.dto';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 
@@ -48,8 +48,16 @@ export class ProjectGroupsController {
   ) {
     return this.projectGroupsService.simplePublish(id, req.user.userId);
   }
-  
-  
+
+  @Patch('bulk-assign-agency')
+  async bulkAssignAgency(
+    @Body() dto: BulkAssignAgencyDto[],
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    return this.projectGroupsService.bulkAssignAgency(dto, req.user.userId);
+  }
+
+
   @Patch('draft/:id')
   async updateDraft(
     @Param('id', ParseUUIDPipe) id: string,
@@ -71,8 +79,10 @@ export class ProjectGroupsController {
   @Get('/by-status')
   async findByStatus(
     @Req() req: Request & { user: JwtPayloadUser },
-    @Query('type') type: 'draft' | 'ready' | 'pending' | 'edit' | 'verified' | 'approved' | 'rejected' | 'draft-development-plan',
+    @Query('type') type: 'draft' | 'ready' | 'pending' | 'edit' | 'verified' | 'approved' | 'rejected' | 'draft-development-plan' | 'provincial-committee',
     @Query('countOnly') countOnly?: string,
+    @Query('isCoordinate') isCoordinate?: boolean,
+
   ) {
     return this.projectGroupsService.findProjectsByStatus({
       userId: req.user.userId,
@@ -80,10 +90,158 @@ export class ProjectGroupsController {
       countOnly: countOnly === 'true' || countOnly === '1',
     });
   }
+  //รอตรวจสอบ ประสานแผน
+  @Get('/by-status-pending-coordinate')
+  async findByStatusPendingCoordinate(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('countOnly') countOnly?: string,
 
+  ) {
+    return this.projectGroupsService.findByStatusPendingCoordinate({
+      userId: req.user.userId,
+      countOnly: countOnly === 'true' || countOnly === '1',
+    });
+  }
+  //รอตรวจสอบ ส่วนราชการภายใน
+  @Get('/by-status-pending-agency')
+  async findByStatusPendingAgency(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('countOnly') countOnly?: string,
+
+  ) {
+    return this.projectGroupsService.findByStatusPendingAgency({
+      userId: req.user.userId,
+      countOnly: countOnly === 'true' || countOnly === '1',
+    });
+  }
+  //นำเข้าคณะกรรมการระดับจังหวัด
+  @Get('/by-status-provincial-committee')
+  async findByStatusProvincialCommittee(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('countOnly') countOnly?: string,
+
+  ) {
+    return this.projectGroupsService.findByStatusProvincialCommittee({
+      userId: req.user.userId,
+      countOnly: countOnly === 'true' || countOnly === '1',
+    });
+  }
+    //นำเข้าคณะกรรมการพิจารณาแผน
+    @Get('/by-status-plan-committee')
+    async findByStatusPlanCommittee(
+      @Req() req: Request & { user: JwtPayloadUser },
+      @Query('countOnly') countOnly?: string,
+  
+    ) {
+      return this.projectGroupsService.findByStatusPlanCommittee({
+        userId: req.user.userId,
+        countOnly: countOnly === 'true' || countOnly === '1',
+      });
+    }
+
+  //ผ่านการตรวจสอบ ส่วนราชการภายใน
+  @Get('/by-status-verified-agency')
+  async findByStatusVerifiedAgency(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('countOnly') countOnly?: string,
+
+  ) {
+    return this.projectGroupsService.findByStatusVerifiedAgency({
+      userId: req.user.userId,
+      countOnly: countOnly === 'true' || countOnly === '1',
+    });
+  }
+
+  //อยู่ในอำนาจ
+  @Get('/by-status-authority')
+  async findByStatusInAuthority(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('countOnly') countOnly?: string,
+
+  ) {
+    return this.projectGroupsService.findProjectsByStatusInAuthority({
+      userId: req.user.userId,
+      countOnly: countOnly === 'true' || countOnly === '1',
+    });
+  }
+
+  //อยู่นอกอำนาจ
+  @Get('/by-status-authority-out')
+  async findByStatusInAuthorityOut(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('countOnly') countOnly?: string,
+
+  ) {
+    return this.projectGroupsService.findProjectsByStatusInAuthorityOut({
+      userId: req.user.userId,
+      countOnly: countOnly === 'true' || countOnly === '1',
+    });
+  }
+
+  //โครงการประสานที่ผ่านการอนุมัติ
+  @Get('/by-status-approved-coordinate')
+  async findByStatusApprovedCoordinate(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('countOnly') countOnly?: string,
+
+  ) {
+    return this.projectGroupsService.findByStatusApprovedCoordinate({
+      userId: req.user.userId,
+      countOnly: countOnly === 'true' || countOnly === '1',
+    });
+  }
+  //โครงการส่วนราชการภายในที่ผ่านการอนุมัติ
+  @Get('/by-status-approved-agency')
+  async findByStatusApprovedAgency(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('countOnly') countOnly?: string,
+
+  ) {
+    return this.projectGroupsService.findByStatusApprovedAgency({
+      userId: req.user.userId,
+      countOnly: countOnly === 'true' || countOnly === '1',
+    });
+  }
+
+  @Get('/by-status-approved')
+  async findByStatusApproved(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('countOnly') countOnly?: string,
+    @Query('budgetPlanId' , ParseUUIDPipe) budgetPlanId?: string,
+
+  ) {
+    return this.projectGroupsService.findByStatusApproved({
+      userId: req.user.userId,
+      countOnly: countOnly === 'true' || countOnly === '1',
+      budgetPlanId,
+    });
+  }
+
+  // โครงการล่าสุดทั้งหมด (ไม่กรองสถานะ)
+  @Get('/latest-all')
+  async findLatestAllProjects(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('countOnly') countOnly?: string,
+    @Query('budgetPlanId', ParseUUIDPipe) budgetPlanId?: string,
+  ) {
+    return this.projectGroupsService.findLatestAllProjects({
+      userId: req.user.userId,
+      countOnly: countOnly === 'true' || countOnly === '1',
+      budgetPlanId,
+    });
+  }
   @Get('delete')
   async findDelete(@Req() req: Request & { user: JwtPayloadUser }) {
     return this.projectGroupsService.findDelete(req.user.userId);
+  }
+
+  // แสดงประวัติทุก version ของโครงการ
+  @Get(':id/versions')
+  async findAllVersions(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    return this.projectGroupsService.findAllVersions(id, req.user.userId);
   }
 
   @Get(':id')

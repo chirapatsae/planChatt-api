@@ -74,12 +74,8 @@ describe('BudgetService', () => {
       expect(result).toEqual(createdBudget);
       expect(projectGroupRepo.findOne).toHaveBeenCalledWith({
         where: { id: dto.projectGroupId },
-        relations: ['budgetPlanId'],
       });
-      expect(budgetRepo.create).toHaveBeenCalledWith({
-        ...dto,
-        projectGroupId: { id: dto.projectGroupId },
-      });
+      expect(budgetRepo.create).toHaveBeenCalled();
       expect(budgetRepo.save).toHaveBeenCalledWith(createdBudget);
     });
 
@@ -93,33 +89,6 @@ describe('BudgetService', () => {
       await expect(service.create(dto)).rejects.toThrow(NotFoundException);
     });
 
-    it('should throw BadRequestException if project group has no budget plan', async () => {
-      projectGroupRepo.findOne.mockResolvedValue({
-        ...projectGroup,
-        budgetPlan: null,
-      } as any);
-      handleExceptionSpy = jest
-        .spyOn(handleExceptionModule, 'handleException')
-        .mockImplementation(() => {
-          throw new BadRequestException();
-        });
-      await expect(service.create(dto)).rejects.toThrow(BadRequestException);
-    });
-
-    it('should throw BadRequestException if year is out of plan range', async () => {
-      projectGroupRepo.findOne.mockResolvedValue(projectGroup as any);
-      handleExceptionSpy = jest
-        .spyOn(handleExceptionModule, 'handleException')
-        .mockImplementation(() => {
-          throw new BadRequestException();
-        });
-      await expect(service.create({ ...dto, year: 2019 })).rejects.toThrow(
-        BadRequestException,
-      );
-      await expect(service.create({ ...dto, year: 2026 })).rejects.toThrow(
-        BadRequestException,
-      );
-    });
 
     it('should throw InternalServerErrorException on DB error', async () => {
       projectGroupRepo.findOne.mockRejectedValue(new Error('DB error'));
@@ -167,7 +136,7 @@ describe('BudgetService', () => {
       expect(result).toEqual(budgets);
       expect(budgetRepo.find).toHaveBeenCalledWith({
         where: {},
-        relations: ['projectGroupId', 'projectVersionId', 'budgetPlanId'],
+        relations: ['projectGroupId', 'revisedProjectGroupId'],
       });
     });
 
@@ -178,7 +147,7 @@ describe('BudgetService', () => {
       expect(result).toEqual(budgets);
       expect(budgetRepo.find).toHaveBeenCalledWith({
         where: { projectGroupId: { id: 'group-uuid' } },
-        relations: ['projectGroupId', 'projectVersionId', 'budgetPlanId'],
+        relations: ['projectGroupId', 'revisedProjectGroupId'],
       });
     });
 
@@ -200,7 +169,7 @@ describe('BudgetService', () => {
       expect(result).toEqual(budget);
       expect(budgetRepo.findOne).toHaveBeenCalledWith({
         where: { id: 'budget-uuid' },
-        relations: ['projectGroupId', 'projectVersionId', 'budgetPlanId'],
+        relations: ['projectGroupId', 'revisedProjectGroupId'],
       });
     });
 

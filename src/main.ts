@@ -20,10 +20,10 @@ async function bootstrap() {
   app.use(helmet());
   
   app.enableCors({
-    origin: ['http://localhost:5173', 'https://fd8d7e563d16.ngrok-free.app'], // ✅ ระบุให้ตรง
+    origin: ['http://localhost:5173', 'https://restrict-villages-financial-locally.trycloudflare.com'], 
     credentials: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-    allowedHeaders: ['Content-Type', 'Authorization', 'Secret-Key'], // ✅ สำหรับ custom header
+    allowedHeaders: ['Content-Type', 'Authorization', 'Secret-Key'],
   });
 
   // Serve static files from uploads directory

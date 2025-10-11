@@ -55,5 +55,5 @@ export class LocalAdministrativeOrganization {
       onUpdate: 'CASCADE',
     },
   )
-  originAgencyProjectGroup: WorkHistory[];
+  originAgencyProjectGroup: ProjectGroup[];
 }

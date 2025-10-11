@@ -65,7 +65,7 @@ export class TrackingStatusService {
 
         // อัปเดต TrackingStatus ตัวเก่าให้ isLatest = false
         await manager.update(TrackingStatus, {
-          projectGroupId: projectGroup,
+          projectGroupId: { id: projectGroup.id },
         }, {
           isLatest: false,
         });
@@ -98,43 +98,47 @@ export class TrackingStatusService {
   }
 
   async createMany(dtos: CreateTrackingStatusDto[], userId: string) {
-    const workHistory = await this.workHistoryRepo.findOne({
-      where: { user: { id: userId } },
-    });
-  
-    if (!workHistory) {
-      throw new NotFoundException(`WorkHistory for user ${userId} not found`);
-    }
-  
-    return this.dataSource.transaction(async (manager) => {
-      const results: TrackingStatus[] = [];
-  
-      for (const dto of dtos) {
-        const { projectId, statusId } = dto;
-  
-        // 1) update old tracking status
-        await manager.update(
-          TrackingStatus,
-          { projectGroupId  : projectId},
-          { isLatest: false },
-        );
-  
-        // 2) create new tracking status
-        const tracking = manager.create(TrackingStatus, {
-          createdBy: workHistory,
-          projectGroupId: { id: projectId },
-          statusId: { id: statusId },
-          isLatest: true,
-        });
-  
-        const savedTracking = await manager.save(TrackingStatus, tracking);
-        results.push(savedTracking);
+    try {
+      const workHistory = await this.workHistoryRepo.findOne({
+        where: { user: { id: userId } },
+      });
+
+      if (!workHistory) {
+        throw new NotFoundException(`WorkHistory for user ${userId} not found`);
       }
-  
-      return results;
-    });
+
+      return this.dataSource.transaction(async (manager) => {
+        const results: TrackingStatus[] = [];
+
+        for (const dto of dtos) {
+          const { projectId, statusId } = dto;
+
+          // 1) update old tracking status
+          await manager.update(
+            TrackingStatus,
+            { projectGroupId: { id: projectId } },
+            { isLatest: false },
+          );
+
+          // 2) create new tracking status
+          const tracking = manager.create(TrackingStatus, {
+            createdBy: workHistory,
+            projectGroupId: { id: projectId },
+            statusId: { id: statusId },
+            isLatest: true,
+          });
+
+          const savedTracking = await manager.save(TrackingStatus, tracking);
+          results.push(savedTracking);
+        }
+
+        return results;
+      });
+    } catch (error) {
+      handleException(this.logger, error);
+    }
   }
-  
+
 
   async findAll(): Promise<TrackingStatus[]> {
     try {

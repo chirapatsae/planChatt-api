@@ -9,7 +9,7 @@ import {
 } from 'typeorm';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { IsOptional } from 'class-validator';
-import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
+import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 
 @Entity('budget')
 export class Budget {
@@ -24,15 +24,13 @@ export class Budget {
   projectGroupId?: ProjectGroup;
 
   @IsOptional()
-  @Column({ name: 'project_version_id', nullable: true })
-  projectVersionId?: number;
-
-  @ManyToOne(() => BudgetPlan, (budgetPlan) => budgetPlan.budget, {
-    onUpdate: 'CASCADE',
+  @ManyToOne(() => RevisedProjectGroup, (revisedProjectGroup) => revisedProjectGroup.budgets, {
     onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+    nullable: true,
   })
-  @JoinColumn({ name: 'budget_plan_id' })
-  budgetPlanId;
+  @JoinColumn({ name: 'revised_project_group_id' })
+  revisedProjectGroupId?: RevisedProjectGroup;
 
   @Column()
   year: number;

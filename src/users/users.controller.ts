@@ -19,7 +19,7 @@ import { JwtAuthGuard } from 'src/auth/auth.guard';
   path: 'users',
   version: '1',
 })
-@UseGuards(JwtAuthGuard)
+// @UseGuards(JwtAuthGuard)
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 

@@ -13,7 +13,7 @@ export class CreateBudgetDto {
 
   @IsUUID()
   @IsOptional()
-  projectVersionId?: number;
+  revisedProjectGroupId?: string;
 
   @IsInt()
   year: number;

@@ -16,6 +16,7 @@ export class CreateCommentInput {
 }
 
 export class CreateTrackingStatusDto {
+  @IsUUID()
   @IsNotEmpty()
   projectId: string;
 

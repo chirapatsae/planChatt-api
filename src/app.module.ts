@@ -71,6 +71,16 @@ import { AttachmentEvent } from './attachment-event/entities/attachment-event.en
 import { FavoriteModule } from './favorite/favorite.module';
 import { Favorite } from './favorite/entities/favorite.entity';
 import { PdfDraftDocument } from './pdf/entities/pdf-draft-document.entity';
+import { PdfApprovedDocument } from './pdf/entities/pdf-approved-document.entity';
+import { PdfInAuthorityDocument } from './pdf/entities/pdf-in-authority-document.entity';
+import { PdfOutAuthorityDocument } from './pdf/entities/pdf-out-authority-document.entity';
+import { EmailModule } from './util/email/email.module';
+import { RevisionTypeModule } from './revision-type/revision-type.module';
+import { RevisionType } from './revision-type/entities/revision-type.entity';
+import { DevelopmentPlanRevisionModule } from './development-plan-revision/development-plan-revision.module';
+import { DevelopmentPlanRevision } from './development-plan-revision/entities/development-plan-revision.entity';
+import { RevisedProjectGroupModule } from './revised-project-group/revised-project-group.module';
+import { RevisedProjectGroup } from './revised-project-group/entities/revised-project-group.entity';
 
 @Module({
   imports: [
@@ -122,6 +132,12 @@ import { PdfDraftDocument } from './pdf/entities/pdf-draft-document.entity';
         AttachmentEvent,
         Favorite,
         PdfDraftDocument,
+        PdfApprovedDocument,
+        PdfInAuthorityDocument,
+        PdfOutAuthorityDocument,
+        RevisionType,
+        DevelopmentPlanRevision,
+        RevisedProjectGroup,
       ],
       synchronize: true,
       extra: {
@@ -163,6 +179,10 @@ import { PdfDraftDocument } from './pdf/entities/pdf-draft-document.entity';
     EventsModule,
     AttachmentEventModule,
     FavoriteModule,
+    EmailModule,
+    RevisionTypeModule,
+    DevelopmentPlanRevisionModule,
+    RevisedProjectGroupModule,
   ],
   controllers: [AppController, AiController],
   providers: [AppService, AiService],

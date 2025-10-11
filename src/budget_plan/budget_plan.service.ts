@@ -29,7 +29,19 @@ export class BudgetPlanService {
 
   async create(dto: CreateBudgetPlanDto, userId: string): Promise<BudgetPlan> {
     try {
-      const { name, startYear, endYear } = dto;
+      const { name, startYear, endYear, startDate, endDate } = dto;
+
+      // Validate date range if provided
+      if (startDate && endDate) {
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        
+        if (start >= end) {
+          throw new BadRequestException(
+            'วันที่เปิดต้องน้อยกว่าวันที่ปิด',
+          );
+        }
+      }
 
       const workHistory = await this.workHistoryRepository.findOne({
         where: { user: { id: userId }, workStatus: { name: 'approved' } },
@@ -75,6 +87,8 @@ export class BudgetPlanService {
           startYear,
           endYear,
           isLatest: true,
+          startDate: startDate ? new Date(startDate) : null,
+          endDate: endDate ? new Date(endDate) : null,
           createdBy: { id: workHistory.id },
         });
 
@@ -90,6 +104,7 @@ export class BudgetPlanService {
       return await this.budgetPlanRepository.find({
         relations: ['createdBy'],
         order: { createAt: 'DESC' },
+        where: { isLatest: true },
       });
     } catch (error) {
       handleException(this.logger, error);
@@ -99,7 +114,7 @@ export class BudgetPlanService {
   async findOne(id: string): Promise<BudgetPlan> {
     try {
       const budgetPlan = await this.budgetPlanRepository.findOne({
-        where: { id },
+        where: { id  , isLatest: true},
         relations: ['projectGroup', 'workHistory'],
       });
 
@@ -135,6 +150,16 @@ export class BudgetPlanService {
         throw new BadRequestException('startYear ต้องน้อยกว่า endYear');
       }
 
+      // Validate date range if provided
+      const startDate = dto.startDate ? new Date(dto.startDate) : budgetPlan.startDate;
+      const endDate = dto.endDate ? new Date(dto.endDate) : budgetPlan.endDate;
+      
+      if (startDate && endDate && startDate >= endDate) {
+        throw new BadRequestException(
+          'วันที่เปิดต้องน้อยกว่าวันที่ปิด',
+        );
+      }
+
       const otherPlans = await this.budgetPlanRepository.find({
         where: { id: Not(id) },
       });
@@ -161,6 +186,8 @@ export class BudgetPlanService {
 
       const updated = this.budgetPlanRepository.merge(budgetPlan, {
         ...dto,
+        startDate: dto.startDate ? new Date(dto.startDate) : budgetPlan.startDate,
+        endDate: dto.endDate ? new Date(dto.endDate) : budgetPlan.endDate,
       });
 
       return await this.budgetPlanRepository.save(updated);

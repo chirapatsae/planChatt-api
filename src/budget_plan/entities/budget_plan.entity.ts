@@ -1,4 +1,3 @@
-import { Budget } from 'src/budget/entities/budget.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import {
@@ -29,6 +28,12 @@ export class BudgetPlan {
   @Column({ name: 'is_latest' })
   isLatest: boolean;
 
+  @Column({ name: 'start_date', type: 'timestamp', nullable: true })
+  startDate: Date | null;
+
+  @Column({ name: 'end_date', type: 'timestamp', nullable: true })
+  endDate: Date | null;
+
   @CreateDateColumn({ name: 'create_at' })
   createAt: Date;
 
@@ -47,10 +52,4 @@ export class BudgetPlan {
     onDelete: 'CASCADE',
   })
   projectGroup: ProjectGroup[];
-
-  @OneToMany(() => Budget, (budget) => budget.budgetPlanId, {
-    onUpdate: 'CASCADE',
-    onDelete: 'CASCADE',
-  })
-  budget: Budget[];
 }

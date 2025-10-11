@@ -11,6 +11,8 @@ import { Plan } from 'src/plan/entities/plan.entity';
 import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
 import { Strategy } from 'src/strategy/entities/strategy.entity';
+import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
+import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
 
 @Module({
   imports: [
@@ -24,6 +26,8 @@ import { Strategy } from 'src/strategy/entities/strategy.entity';
       Plan,
       BudgetPlan,
       TrackingStatus,
+      RevisedProjectGroup,
+      DevelopmentPlanRevision,
     ]),
   ],
   controllers: [ProjectGroupsController],
