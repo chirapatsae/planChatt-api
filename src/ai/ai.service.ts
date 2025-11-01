@@ -1,6 +1,7 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, Inject, forwardRef } from '@nestjs/common';
 import { OpenAI } from 'openai';
 import { RegenerateFieldDto } from './dto/generate-project.dto';
+import { ProjectGroupsService } from '../project-groups/project-groups.service';
 
 @Injectable()
 export class AiService {

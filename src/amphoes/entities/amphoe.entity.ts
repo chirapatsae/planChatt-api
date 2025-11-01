@@ -2,6 +2,7 @@ import { Exclude } from 'class-transformer';
 import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { WorkHistoryAmphoeResponsibility } from 'src/work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity';
+import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import {
   Column,
   DeleteDateColumn,
@@ -52,5 +53,15 @@ export class Amphoe {
       onUpdate: 'CASCADE',
     },
   )
-  workHistoryResponsibleAdmins: WorkHistoryAmphoeResponsibility[];
+  workHistoryResponsibleAmphoe: WorkHistoryAmphoeResponsibility[];
+
+  @OneToMany(
+    () => ProjectGroup,
+    (projectGroup) => projectGroup.amphoe,
+    {
+      onDelete: 'CASCADE',
+      onUpdate: 'CASCADE',
+    },
+  )
+  projectGroups: ProjectGroup[];
 }

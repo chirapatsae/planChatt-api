@@ -15,7 +15,7 @@ export class WorkHistoryAmphoeResponsibility {
 
   @ManyToOne(
     () => WorkHistory,
-    (workHistory) => workHistory.workHistoryResponsibleAdmins,
+    (workHistory) => workHistory.workHistoryResponsibleAmphoe,
     {
       onDelete: 'CASCADE',
       onUpdate: 'CASCADE',
@@ -24,7 +24,7 @@ export class WorkHistoryAmphoeResponsibility {
   @JoinColumn({ name: 'work_history_id' })
   workHistory: WorkHistory;
 
-  @ManyToOne(() => Amphoe, (amphoe) => amphoe.workHistoryResponsibleAdmins, {
+  @ManyToOne(() => Amphoe, (amphoe) => amphoe.workHistoryResponsibleAmphoe, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',
   })

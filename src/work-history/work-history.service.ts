@@ -147,7 +147,7 @@ export class WorkHistoryService {
           'lao',
         )
         .leftJoinAndSelect(
-          'work_history.workHistoryResponsibleAdmins',
+          'work_history.workHistoryResponsibleAmphoe',
           'responsibilities',
         )
         .leftJoinAndSelect('work_history.role', 'role')
@@ -183,8 +183,10 @@ export class WorkHistoryService {
           'createdBy',
           'updatedBy',
           'governmentAgencies',
-          'workHistoryResponsibleAdmins',
-          'workHistoryResponsibleAdmins.amphoe'
+          'workHistoryResponsibleAmphoe',
+          'workHistoryResponsibleAmphoe.amphoe',
+          'workHistoryResponsibleGovernmentAgency',
+          'workHistoryResponsibleGovernmentAgency.governmentAgency',
 
         ],
       });

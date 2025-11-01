@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
+import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { PdfDraftDocument } from './entities/pdf-draft-document.entity';
 import { PdfApprovedDocument } from './entities/pdf-approved-document.entity';
 import { PdfInAuthorityDocument } from './entities/pdf-in-authority-document.entity';
@@ -18,6 +19,8 @@ export class PdfService {
   constructor(
     @InjectRepository(BudgetPlan)
     private readonly budgetPlanRepo: Repository<BudgetPlan>,
+    @InjectRepository(ProjectGroup)
+    private readonly projectGroupRepo: Repository<ProjectGroup>,
     @InjectRepository(PdfDraftDocument)
     private readonly pdfDraftRepo: Repository<PdfDraftDocument>,
     @InjectRepository(PdfApprovedDocument)
@@ -39,7 +42,7 @@ export class PdfService {
         return {
           text: [data, { text: '\u200b', font: 'Roboto' }],
         };
-      });
+      }).flat();
     return parts;
   }
 
@@ -599,6 +602,14 @@ export class PdfService {
 
     const saved = await this.pdfApprovedRepo.save(pdfApproved);
     
+    // Mark projects as booked
+    if (options.projectIdsSnapshot && options.projectIdsSnapshot.length > 0) {
+      await this.projectGroupRepo.update(
+        { id: In(options.projectIdsSnapshot) },
+        { isBooked: true, bookedAt: new Date() }
+      );
+    }
+    
     // get user info
     const user = await this.userRepo.findOne({
       where: { id: options.createdById },
@@ -748,6 +759,14 @@ export class PdfService {
 
     const saved = await this.pdfInAuthorityRepo.save(pdfInAuthority);
     
+    // Mark projects as booked
+    if (options.projectIdsSnapshot && options.projectIdsSnapshot.length > 0) {
+      await this.projectGroupRepo.update(
+        { id: In(options.projectIdsSnapshot) },
+        { isBooked: true, bookedAt: new Date() }
+      );
+    }
+    
     // get user info
     const user = await this.userRepo.findOne({
       where: { id: options.createdById },
@@ -896,6 +915,14 @@ export class PdfService {
     });
 
     const saved = await this.pdfOutAuthorityRepo.save(pdfOutAuthority);
+    
+    // Mark projects as booked
+    if (options.projectIdsSnapshot && options.projectIdsSnapshot.length > 0) {
+      await this.projectGroupRepo.update(
+        { id: In(options.projectIdsSnapshot) },
+        { isBooked: true, bookedAt: new Date() }
+      );
+    }
     
     // get user info
     const user = await this.userRepo.findOne({

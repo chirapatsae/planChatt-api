@@ -104,13 +104,6 @@ export class RevisedProjectGroup {
   @JoinColumn({ name: 'create_by' })
   createdBy?: WorkHistory;
 
-  @ManyToOne(
-    () => WorkHistory,
-    (workHistory) => workHistory.responsibleProjectGroup,
-  )
-  @JoinColumn({ name: 'responsible_by' })
-  responsibleBy?: WorkHistory;
-
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

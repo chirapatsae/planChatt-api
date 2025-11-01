@@ -1,5 +1,7 @@
+import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
+import { PlanPhase } from 'src/plan-phase/entities/plan-phase.entity';
 import {
   Column,
   CreateDateColumn,
@@ -52,4 +54,16 @@ export class BudgetPlan {
     onDelete: 'CASCADE',
   })
   projectGroup: ProjectGroup[];
+
+  @OneToMany(() => DevelopmentPlanRevision, (dpr) =>  dpr.budgetPlan, {
+    onUpdate: 'CASCADE',
+    onDelete: 'CASCADE',
+  })
+  developmentPlanRevision : DevelopmentPlanRevision[];
+
+  @OneToMany(() => PlanPhase, (planPhase) => planPhase.budgetPlan, {
+    onUpdate: 'CASCADE',
+    onDelete: 'CASCADE',
+  })
+  planPhases: PlanPhase[];
 }

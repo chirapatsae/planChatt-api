@@ -11,7 +11,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, IsNull, Not, Repository } from 'typeorm';
 import { ProjectGroup } from './entities/project-group.entity';
-import { CreateProjectGroupDto } from './dto/create-project-group.dto';
+import { CreateDraftProjectGroupDto, CreateProjectGroupDto } from './dto/create-project-group.dto';
 import { BulkAssignAgencyDto, UpdateProjectGroupDto } from './dto/update-project-group.dto';
 import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
@@ -25,6 +25,8 @@ import { GovernmentAgency } from 'src/government-agencies/entities/government-ag
 import { User } from 'src/users/entities/user.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
+import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
+import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
 import {
   IUnifiedProjectDisplay,
   UnifiedProjectMapper,
@@ -69,6 +71,12 @@ export class ProjectGroupsService {
     @InjectRepository(DevelopmentPlanRevision)
     private readonly developmentPlanRevisionRepo: Repository<DevelopmentPlanRevision>,
 
+    @InjectRepository(Amphoe)
+    private readonly amphoeRepo: Repository<Amphoe>,
+
+    @InjectRepository(LocalAdministrativeOrganization)
+    private readonly localAdministrativeOrgRepo: Repository<LocalAdministrativeOrganization>,
+
     private readonly dataSource: DataSource,
   ) { }
 
@@ -96,6 +104,8 @@ export class ProjectGroupsService {
           plan,
           budgetPlan,
           createdBy: workHistory,
+          amphoe : {id : workHistory.amphoe.id},
+          localAdministrativeOrganization : {id : workHistory.localAdministrativeOrganization.id},
           ...agencyData,
         });
 
@@ -103,8 +113,9 @@ export class ProjectGroupsService {
 
         const trackingStatus = manager.create(TrackingStatus, {
           projectGroupId: savedGroup,
-          statusId: { id: '8219cd82-fa61-4292-bd0d-fa58b08507e1' },
+          statusId: { id: '8219cd82-fa61-4292-bd0d-fa58b08507e1' }, //รอนำส่ง
           createdBy: workHistory,
+          isLatest: true,
         });
         await manager.save(trackingStatus);
 
@@ -139,18 +150,27 @@ export class ProjectGroupsService {
 
 
 
-  async createDraft(dto: CreateProjectGroupDto, userId: string) {
+  async createDraft(dto: CreateDraftProjectGroupDto, userId: string) {
     try {
       const savedDraft = await this.dataSource.transaction(async (manager) => {
         const workHistory = await this.getWorkHistory(manager, userId);
         await this.ensureNoDuplicateTitle(manager, dto.title, workHistory.id, undefined);
-        const [budgetPlan, strategy, tactic, plan] = await this.validateForeignKeys(manager, dto);
+        // Validate only strategy, tactic, plan for draft (skip budgetPlan validation)
+        const [strategy, tactic, plan] = await Promise.all([
+          dto.strategyId ? manager.findOne(Strategy, { where: { id: dto.strategyId } }) : null,
+          dto.tacticId ? manager.findOne(Tactic, { where: { id: dto.tacticId } }) : null,
+          dto.planId ? manager.findOne(Plan, { where: { id: dto.planId } }) : null,
+        ]);
+
+        if (dto.strategyId && !strategy) throw new NotFoundException(`Strategy ID not found: ${dto.strategyId}`);
+        if (dto.tacticId && !tactic) throw new NotFoundException(`Tactic ID not found: ${dto.tacticId}`);
+        if (dto.planId && !plan) throw new NotFoundException(`Plan ID not found: ${dto.planId}`);
+        
         const agencyData = this.getAgencyData(workHistory);
 
-        const projectGroupData: any = {
+        let projectGroupData : any = {
           title: dto.title,
           projectYear: dto.projectYear,
-          budgetPlan,
           createdBy: workHistory,
           isDraft: true,
           objective: dto.objective || '',
@@ -162,7 +182,7 @@ export class ProjectGroupsService {
           indicator: dto.indicator || '',
           expected: dto.expected || '',
           ...agencyData,
-        };
+        }
 
         if (strategy) projectGroupData.strategy = strategy;
         if (tactic) projectGroupData.tactic = tactic;
@@ -173,25 +193,6 @@ export class ProjectGroupsService {
           projectGroupData,
         );
         const savedGroupResult = await manager.save(group);
-        if (dto.budget && dto.budget.length > 0) {
-          // Validate budget year is within budget plan range
-          for (const budgetItem of dto.budget) {
-            if (budgetItem.year < (budgetPlan as BudgetPlan).startYear || budgetItem.year > (budgetPlan as BudgetPlan).endYear) {
-              throw new BadRequestException(
-                `ปีงบประมาณต้องอยู่ในช่วง พ.ศ. ${(budgetPlan as BudgetPlan).startYear} - ${(budgetPlan as BudgetPlan).endYear} (ปีที่ส่งมา: ${budgetItem.year})`
-              );
-            }
-          }
-
-          const budgets = dto.budget.map((item) =>
-            manager.create(Budget, {
-              projectGroupId: { id: savedGroupResult.id },
-              year: item.year,
-              quantity: item.quantity,
-            })
-          );
-          await manager.save(budgets);
-        }
 
         return savedGroupResult;
       });
@@ -240,6 +241,8 @@ export class ProjectGroupsService {
           tactic,
           plan,
           budgetPlan,
+          amphoe : {id : workHistory.amphoe.id},
+          localAdministrativeOrganization : {id : workHistory.localAdministrativeOrganization.id},
           isDraft: false,
           ...agencyData,
         };
@@ -411,8 +414,8 @@ export class ProjectGroupsService {
         'localAdministrativeOrganization',
         'governmentAgencies',
         'workStatus',
-        'workHistoryResponsibleAdmins',
-        'workHistoryResponsibleAdmins.amphoe',
+        'workHistoryResponsibleAmphoe',
+        'workHistoryResponsibleAmphoe.amphoe',
       ],
     });
     if (!workHistory) return countOnly ? 0 : [];
@@ -625,8 +628,8 @@ export class ProjectGroupsService {
         'localAdministrativeOrganization',
         'governmentAgencies',
         'workStatus',
-        'workHistoryResponsibleAdmins',
-        'workHistoryResponsibleAdmins.amphoe',
+        'workHistoryResponsibleAmphoe',
+        'workHistoryResponsibleAmphoe.amphoe',
       ],
     });
     if (!workHistory) return countOnly ? 0 : [];
@@ -664,6 +667,32 @@ export class ProjectGroupsService {
       .andWhere('projectGroup.responsibleAgency IS NULL')
       .andWhere('budgetPlan.isLatest = :budgetPlanIsLatest', { budgetPlanIsLatest: true });
 
+       // Role-based filtering
+    const userRole = workHistory.role.name;
+    
+    if (userRole === 'admin' || userRole === 'super-admin' || userRole === 'c-level') {
+      // Admin/Super-admin/C-level: เห็นทุกโครงการ
+      // ไม่เพิ่มเงื่อนไขกรองเพิ่มเติม
+    } else if (userRole === 'staff') {
+      // Staff: เห็นเฉพาะโครงการในอำเภอที่รับผิดชอบ
+      const responsibleAmphoeIds = workHistory.workHistoryResponsibleAmphoe.map(
+        (resp) => resp.amphoe.id
+      );
+      
+      if (responsibleAmphoeIds.length > 0) {
+        query.andWhere('amphoe.id IN (:...responsibleAmphoeIds)', { 
+          responsibleAmphoeIds 
+        });
+      } else {
+        // ถ้าไม่ได้รับผิดชอบอำเภอใดเลย ให้ไม่เห็นโครงการใด
+        query.andWhere('1 = 0'); // Always false condition
+      }
+    } else {
+        // ถ้าไม่มีหน่วยงาน ให้ไม่เห็นโครงการใด
+        query.andWhere('1 = 0'); // Always false condition
+    }
+
+
     if (countOnly) {
       const count = await query.getCount();
       return count;
@@ -688,8 +717,8 @@ export class ProjectGroupsService {
         'localAdministrativeOrganization',
         'governmentAgencies',
         'workStatus',
-        'workHistoryResponsibleAdmins',
-        'workHistoryResponsibleAdmins.amphoe',
+        'workHistoryResponsibleGovernmentAgency',
+        'workHistoryResponsibleGovernmentAgency.governmentAgency',
       ],
     });
     if (!workHistory) return countOnly ? 0 : [];
@@ -718,6 +747,8 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('projectGroup.responsibleAgency', 'responsibleAgency')
       .leftJoinAndSelect('projectGroup.originAgencyId', 'originAgencyId')
       .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
+      .leftJoinAndSelect('projectGroup.amphoe', 'projectAmphoe')
+      .leftJoinAndSelect('projectGroup.localAdministrativeOrganization', 'projectLAO')
       .leftJoinAndSelect('projectGroup.favorites', 'favorites')
       .leftJoinAndSelect('favorites.userId', 'userId')
       .andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
@@ -726,6 +757,30 @@ export class ProjectGroupsService {
       .andWhere('projectGroup.originAgencyId IS NULL')
       .andWhere('projectGroup.responsibleAgency IS NOT NULL')
       .andWhere('budgetPlan.isLatest = :budgetPlanIsLatest', { budgetPlanIsLatest: true });
+
+    // Role-based filtering
+    const userRole = workHistory.role.name;
+    
+    if (userRole === 'admin' || userRole === 'super-admin' || userRole === 'c-level') {
+      // Admin/Super-admin/C-level: เห็นทุกโครงการ
+      // ไม่เพิ่มเงื่อนไขกรองเพิ่มเติม
+    } else if (userRole === 'staff') {
+      // Staff: เห็นเฉพาะโครงการในอำเภอที่รับผิดชอบ
+      const responsibleGovernmentAgencyIds = workHistory.workHistoryResponsibleGovernmentAgency.map(
+        (resp) => resp.governmentAgency.id
+      );
+      
+      if (responsibleGovernmentAgencyIds.length > 0) {
+        query.andWhere('responsibleAgency.id IN (:...responsibleGovernmentAgencyIds)', { 
+          responsibleGovernmentAgencyIds 
+        });
+      } else {
+        // ถ้าไม่ได้รับผิดชอบอำเภอใดเลย ให้ไม่เห็นโครงการใด
+        query.andWhere('1 = 0'); // Always false condition
+      }
+    } else {
+        query.andWhere('1 = 0'); // Always false condition
+    }
 
     if (countOnly) {
       const count = await query.getCount();
@@ -751,8 +806,8 @@ export class ProjectGroupsService {
         'localAdministrativeOrganization',
         'governmentAgencies',
         'workStatus',
-        'workHistoryResponsibleAdmins',
-        'workHistoryResponsibleAdmins.amphoe',
+        'workHistoryResponsibleAmphoe',
+        'workHistoryResponsibleAmphoe.amphoe',
       ],
     });
     if (!workHistory) return countOnly ? 0 : [];
@@ -785,7 +840,7 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('favorites.userId', 'userId')
       .andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-      .andWhere('status.name = :statusName', { statusName: 'Provincial Committee' })
+      .andWhere('status.name = :statusName', { statusName: 'Pending_Approval' })
       .andWhere('projectGroup.originAgencyId IS NOT NULL')
       .andWhere('budgetPlan.isLatest = :budgetPlanIsLatest', { budgetPlanIsLatest: true });
 
@@ -813,8 +868,8 @@ export class ProjectGroupsService {
         'localAdministrativeOrganization',
         'governmentAgencies',
         'workStatus',
-        'workHistoryResponsibleAdmins',
-        'workHistoryResponsibleAdmins.amphoe',
+        'workHistoryResponsibleAmphoe',
+        'workHistoryResponsibleAmphoe.amphoe',
       ],
     });
     if (!workHistory) return countOnly ? 0 : [];
@@ -847,7 +902,7 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('favorites.userId', 'userId')
       .andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-      .andWhere('status.name = :statusName', { statusName: 'Plan Committee' })
+      .andWhere('status.name = :statusName', { statusName: 'Pending_Approval' })
       .andWhere('projectGroup.originAgencyId IS  NULL')
       .andWhere('projectGroup.responsibleAgency IS NOT NULL')
       .andWhere('budgetPlan.isLatest = :budgetPlanIsLatest', { budgetPlanIsLatest: true });
@@ -876,8 +931,8 @@ export class ProjectGroupsService {
         'localAdministrativeOrganization',
         'governmentAgencies',
         'workStatus',
-        'workHistoryResponsibleAdmins',
-        'workHistoryResponsibleAdmins.amphoe',
+        'workHistoryResponsibleAmphoe',
+        'workHistoryResponsibleAmphoe.amphoe',
       ],
     });
     if (!workHistory) return countOnly ? 0 : [];
@@ -939,8 +994,8 @@ export class ProjectGroupsService {
         'localAdministrativeOrganization',
         'governmentAgencies',
         'workStatus',
-        'workHistoryResponsibleAdmins',
-        'workHistoryResponsibleAdmins.amphoe',
+        'workHistoryResponsibleAmphoe',
+        'workHistoryResponsibleAmphoe.amphoe',
       ],
     });
     if (!workHistory) return countOnly ? 0 : [];
@@ -975,7 +1030,6 @@ export class ProjectGroupsService {
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
       .andWhere('status.name = :statusName', { statusName: 'Verified' })
       .andWhere('projectGroup.originAgencyId IS NOT NULL')
-      .andWhere('projectGroup.responsibleAgency IS NULL')
       .andWhere('budgetPlan.isLatest = :budgetPlanIsLatest', { budgetPlanIsLatest: true });
 
 
@@ -1004,8 +1058,8 @@ export class ProjectGroupsService {
         'localAdministrativeOrganization',
         'governmentAgencies',
         'workStatus',
-        'workHistoryResponsibleAdmins',
-        'workHistoryResponsibleAdmins.amphoe',
+        'workHistoryResponsibleAmphoe',
+        'workHistoryResponsibleAmphoe.amphoe',
       ],
     });
     if (!workHistory) return countOnly ? 0 : [];
@@ -1171,6 +1225,7 @@ export class ProjectGroupsService {
    */
   private async findOriginalApprovedProjects(
     budgetPlanId: string,
+    responsibleAgencyId?: string,
   ): Promise<ProjectGroup[]> {
     const query = this.projectGroupRepo
       .createQueryBuilder('projectGroup')
@@ -1216,6 +1271,11 @@ export class ProjectGroupsService {
       // ไม่มี active revision
       .andWhere('activeRevision.id IS NULL');
 
+    // Filter by responsible agency if provided
+    if (responsibleAgencyId) {
+      query.andWhere('projectGroup.responsibleAgency.id = :responsibleAgencyId', { responsibleAgencyId });
+    }
+
     return await query.getMany();
   }
 
@@ -1224,6 +1284,7 @@ export class ProjectGroupsService {
    */
   private async findRevisedApprovedProjects(
     budgetPlanId: string,
+    responsibleAgencyId?: string,
   ): Promise<RevisedProjectGroup[]> {
     const query = this.revisedProjectGroupRepo
       .createQueryBuilder('revisedProject')
@@ -1254,6 +1315,11 @@ export class ProjectGroupsService {
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
       .andWhere('status.name = :statusName', { statusName: 'Approved' })
       .andWhere('budgetPlan.id = :budgetPlanId', { budgetPlanId });
+
+    // Filter by responsible agency if provided
+    if (responsibleAgencyId) {
+      query.andWhere('revisedProject.responsibleAgency.id = :responsibleAgencyId', { responsibleAgencyId });
+    }
 
     return await query.getMany();
   }
@@ -1374,7 +1440,7 @@ export class ProjectGroupsService {
     if (workHistory.workStatus.name !== 'approved')
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
 
-    const allowedRoles = ['staff', 'admin', 'super-admin', 'c-level'];
+    const allowedRoles = ['user','staff', 'admin', 'super-admin', 'c-level'];
     if (!allowedRoles.includes(workHistory.role.name))
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
 
@@ -1415,24 +1481,1782 @@ export class ProjectGroupsService {
     return combined;
   }
 
-  async findByStatusApproved(option: {
-    userId: string;
-    countOnly?: boolean;
-    budgetPlanId?: string;
-  }): Promise<IUnifiedProjectDisplay[] | number> {
-    const { userId, countOnly, budgetPlanId } = option;
-    
-    // Validate user permissions
+  async findExecutiveDashboard(userId: string): Promise<any> {
     const workHistory = await this.workHistoryRepo.findOne({
       where: { user: { id: userId } },
       relations: ['workStatus', 'role'],
     });
 
-    if (!workHistory) return countOnly ? 0 : [];
+    if (!workHistory) return [];
     if (workHistory.workStatus.name !== 'approved')
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
 
     const allowedRoles = ['staff', 'admin', 'super-admin', 'c-level'];
+    if (!allowedRoles.includes(workHistory.role.name))
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+
+    const strategies = await this.strategyRepo.find({
+      where: { deletedAt: IsNull() }
+    });
+
+    // Find budget plan - ตรวจสอบทั้ง budget plan และ development plan revision
+    let budgetPlan = await this.budgetPlanRepo.findOne({
+      where: { isLatest: true }
+    });
+    
+    let isUsingMainPlan = true;
+    if (!budgetPlan || budgetPlan.id === null) {
+      const developmentPlanRevision = await this.developmentPlanRevisionRepo.findOne({
+        where: { isLatest: true },
+        relations: ['budgetPlan']
+      });
+      if (!developmentPlanRevision) {
+        throw new NotFoundException('Development plan revision not found');
+      }
+      budgetPlan = developmentPlanRevision.budgetPlan;
+      isUsingMainPlan = false;
+    }
+
+    // Query all projects
+    const [originalProjects, revisedProjects] = await Promise.all([
+      this.findOriginalLatestProjects(budgetPlan.id),
+      this.findRevisedLatestProjects(budgetPlan.id),
+    ]);
+    const allProjects = [...originalProjects, ...revisedProjects];
+
+    // Get statistics by strategy
+    const strategyStats = await this.getStrategyStatistics(allProjects, strategies);
+
+    // Get budget allocation by year
+    const budgetByYear = await this.getBudgetByYear(allProjects, budgetPlan);
+
+    // Get budget allocation by strategy (for treemap)
+    const budgetByStrategy = await this.getBudgetByStrategy(allProjects, strategies);
+
+    // Get budget allocation by government agencies
+    const budgetByAgencies = await this.getBudgetByAgencies(allProjects);
+
+    // Calculate project counts by standardized categories
+    const projectCounts = allProjects.reduce((counts, project) => {
+      let statusName = 'Unknown';
+      
+      if (project.trackingStatus && project.trackingStatus.length > 0) {
+        const latestTrackingStatus = project.trackingStatus.find(ts => ts.isLatest) || project.trackingStatus[0];
+        statusName = latestTrackingStatus?.statusId?.name || 'Unknown';
+      }
+      
+      const category = this.mapStatusToCategory(statusName);
+      counts[category] = (counts[category] || 0) + 1;
+      
+      return counts;
+    }, {});
+
+    // Ensure all status categories are always present with 0 if no projects
+    const standardizedProjectCounts = {
+      approved: projectCounts['approved'] || 0,
+      pending: projectCounts['pending'] || 0,
+      rejected: projectCounts['rejected'] || 0
+    };
+
+    // Calculate approval rate
+    const totalProjects = allProjects.length;
+    const approvedCount = standardizedProjectCounts.approved;
+    const approvalRate = totalProjects > 0 ? (approvedCount / totalProjects) * 100 : 0;
+
+    return {
+      // Plan information
+      planInfo: {
+        budgetPlanId: budgetPlan.id,
+        budgetPlanName: budgetPlan.name,
+        startYear: budgetPlan.startYear,
+        endYear: budgetPlan.endYear,
+        isUsingMainPlan,
+        planType: isUsingMainPlan ? 'main' : 'revision'
+      },
+      
+      // Project counts
+      projectCounts: {
+        approved: standardizedProjectCounts.approved,
+        pending: standardizedProjectCounts.pending,
+        rejected: standardizedProjectCounts.rejected,
+        total: totalProjects
+      },
+      
+      // Approval rate
+      approvalRate: Math.round(approvalRate * 100) / 100,
+      
+      // Strategy statistics with projects
+      strategyStatistics: strategyStats,
+      
+      // Budget allocation by year (for waterfall chart)
+      budgetByYear: budgetByYear,
+      
+      // Budget allocation by strategy (for treemap)
+      budgetByStrategy: budgetByStrategy,
+      
+      // Budget allocation by government agencies
+      budgetByAgencies: budgetByAgencies,
+      
+      // Trend analysis data
+      trendAnalysis: await this.getTrendAnalysis(allProjects, budgetPlan),
+      
+      // All projects
+      projects: allProjects,
+      length: allProjects.length
+    };
+  }
+
+  async findExecutiveMapDistrictData(userId: string): Promise<any> {
+    const workHistory = await this.workHistoryRepo.findOne({
+      where: { user: { id: userId } },
+      relations: ['workStatus', 'role'],
+    });
+
+    if (!workHistory) return [];
+    if (workHistory.workStatus.name !== 'approved')
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+
+    const allowedRoles = ['staff', 'admin', 'super-admin', 'c-level'];
+    if (!allowedRoles.includes(workHistory.role.name))
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+
+    // Find budget plan
+    let budgetPlan = await this.budgetPlanRepo.findOne({
+      where: { isLatest: true }
+    });
+    
+    let isUsingMainPlan = true;
+    if (!budgetPlan || budgetPlan.id === null) {
+      const developmentPlanRevision = await this.developmentPlanRevisionRepo.findOne({
+        where: { isLatest: true },
+        relations: ['budgetPlan']
+      });
+      if (!developmentPlanRevision) {
+        throw new NotFoundException('Development plan revision not found');
+      }
+      budgetPlan = developmentPlanRevision.budgetPlan;
+      isUsingMainPlan = false;
+    }
+
+    // Get all amphoes
+    const amphoes = await this.amphoeRepo.find({
+      where: { deletedAt: IsNull() },
+      relations: ['localAdministrativeOrganization'],
+      order: { name: 'ASC' }
+    });
+
+    // Get all local administrative organizations
+    const localOrgs = await this.localAdministrativeOrgRepo.find({
+      where: { deleteAt: IsNull() },
+      relations: ['amphoe'],
+      order: { name: 'ASC' }
+    });
+
+    // Query all projects (original + revised) - ใช้เหมือนบรรทัด 1465-1470
+    const [originalProjects, revisedProjects] = await Promise.all([
+      this.findOriginalLatestProjects(budgetPlan.id),
+      this.findRevisedLatestProjects(budgetPlan.id),
+    ]);
+    const allProjects = [...originalProjects, ...revisedProjects];
+
+    // Transform to district structure: Amphoe > LAO > Projects
+    const districtData = this.transformToDistrictStructure(amphoes, localOrgs, allProjects);
+
+    // Calculate statistics
+    const statistics = this.calculateDistrictStatistics(districtData);
+
+    return {
+      // Plan information
+      planInfo: {
+        budgetPlanId: budgetPlan.id,
+        budgetPlanName: budgetPlan.name,
+        startYear: budgetPlan.startYear,
+        endYear: budgetPlan.endYear,
+        isUsingMainPlan,
+        planType: isUsingMainPlan ? 'main' : 'revision'
+      },
+
+      // District structure: Amphoe > Local Organization > Projects
+      districts: districtData,
+
+      // Statistics
+      statistics: statistics,
+
+      // Total counts
+      totalAmphoes: amphoes.length,
+      totalLocalOrgs: localOrgs.length,
+      totalProjects: allProjects.length
+    };
+  }
+
+  async findExecutiveMapData(userId: string): Promise<any> {
+    const workHistory = await this.workHistoryRepo.findOne({
+      where: { user: { id: userId } },
+      relations: ['workStatus', 'role'],
+    });
+
+    if (!workHistory) return [];
+    if (workHistory.workStatus.name !== 'approved')
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+
+    const allowedRoles = ['staff', 'admin', 'super-admin', 'c-level'];
+    if (!allowedRoles.includes(workHistory.role.name))
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+
+    // Find budget plan
+    let budgetPlan = await this.budgetPlanRepo.findOne({
+      where: { isLatest: true }
+    });
+    
+    let isUsingMainPlan = true;
+    if (!budgetPlan || budgetPlan.id === null) {
+      const developmentPlanRevision = await this.developmentPlanRevisionRepo.findOne({
+        where: { isLatest: true },
+        relations: ['budgetPlan']
+      });
+      if (!developmentPlanRevision) {
+        throw new NotFoundException('Development plan revision not found');
+      }
+      budgetPlan = developmentPlanRevision.budgetPlan;
+      isUsingMainPlan = false;
+    }
+
+    // Query all projects with location data
+    const [originalProjects, revisedProjects] = await Promise.all([
+      this.findOriginalLatestProjects(budgetPlan.id),
+      this.findRevisedLatestProjects(budgetPlan.id),
+    ]);
+    const allProjects = [...originalProjects, ...revisedProjects];
+
+    // Get strategies for marker customization
+    const strategies = await this.strategyRepo.find({
+      where: { deletedAt: IsNull() }
+    });
+
+    // Transform projects to map markers
+    const markers = this.transformProjectsToMarkers(allProjects);
+
+    // Group markers by amphoe
+    const markersByAmphoe = this.groupMarkersByAmphoe(markers);
+
+    // Get map statistics
+    const mapStatistics = this.calculateMapStatistics(markers);
+
+    return {
+      // Plan information
+      planInfo: {
+        budgetPlanId: budgetPlan.id,
+        budgetPlanName: budgetPlan.name,
+        startYear: budgetPlan.startYear,
+        endYear: budgetPlan.endYear,
+        isUsingMainPlan,
+        planType: isUsingMainPlan ? 'main' : 'revision'
+      },
+
+      // Map center (Nakhon Ratchasima province center)
+      mapCenter: {
+        latitude: 14.9799,
+        longitude: 102.0977,
+        zoom: 9
+      },
+
+      // All markers for the map
+      markers: markers,
+
+      // Markers grouped by amphoe for clustering
+      markersByAmphoe: markersByAmphoe,
+
+      // Statistics
+      statistics: mapStatistics,
+
+      // Strategy colors for custom markers
+      strategyColors: strategies.map(strategy => ({
+        strategyId: strategy.id,
+        strategyName: strategy.name,
+        color: this.getStrategyColor(strategy.id)
+      })),
+
+      // Total counts
+      totalProjects: allProjects.length,
+      projectsWithLocation: markers.length,
+      projectsWithoutLocation: allProjects.length - markers.length
+    };
+  }
+
+  async findExecutivePlanAnalysis(userId: string): Promise<any> {
+    const workHistory = await this.workHistoryRepo.findOne({
+      where: { user: { id: userId } },
+      relations: ['workStatus', 'role'],
+    });
+
+    if (!workHistory) return [];
+    if (workHistory.workStatus.name !== 'approved')
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+
+    const allowedRoles = ['staff', 'admin', 'super-admin', 'c-level'];
+    if (!allowedRoles.includes(workHistory.role.name))
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+
+    // Find budget plan
+    let budgetPlan = await this.budgetPlanRepo.findOne({
+      where: { isLatest: true }
+    });
+    
+    let isUsingMainPlan = true;
+    if (!budgetPlan || budgetPlan.id === null) {
+      const developmentPlanRevision = await this.developmentPlanRevisionRepo.findOne({
+        where: { isLatest: true },
+        relations: ['budgetPlan']
+      });
+      if (!developmentPlanRevision) {
+        throw new NotFoundException('Development plan revision not found');
+      }
+      budgetPlan = developmentPlanRevision.budgetPlan;
+      isUsingMainPlan = false;
+    }
+
+    // Get all plans, tactics, and strategies
+    const [plans, tactics, strategies] = await Promise.all([
+      this.planRepo.find({ where: { deletedAt: IsNull() } }),
+      this.tacticRepo.find({ where: { deletedAt: IsNull() } }),
+      this.strategyRepo.find({ where: { deletedAt: IsNull() } })
+    ]);
+
+    // Query all projects
+    const [originalProjects, revisedProjects] = await Promise.all([
+      this.findOriginalLatestProjects(budgetPlan.id),
+      this.findRevisedLatestProjects(budgetPlan.id),
+    ]);
+    const allProjects = [...originalProjects, ...revisedProjects];
+
+    // Get plan analysis data
+    const planAnalysis = await this.getPlanAnalysis(allProjects, plans, tactics, strategies);
+    
+    // Get timeline analysis
+    const timelineAnalysis = await this.getTimelineAnalysis(allProjects, budgetPlan);
+
+    // Get plan comparison data
+    const planComparison = await this.getPlanComparison(allProjects, plans);
+
+    return {
+      // Plan information
+      planInfo: {
+        budgetPlanId: budgetPlan.id,
+        budgetPlanName: budgetPlan.name,
+        startYear: budgetPlan.startYear,
+        endYear: budgetPlan.endYear,
+        isUsingMainPlan,
+        planType: isUsingMainPlan ? 'main' : 'revision'
+      },
+      
+      // Plan hierarchy analysis (Sunburst Chart)
+      planHierarchy: planAnalysis,
+      
+      // Timeline analysis
+      timelineAnalysis: timelineAnalysis,
+      
+      // Plan comparison
+      planComparison: planComparison,
+      
+      // All projects for reference
+      projects: allProjects,
+      length: allProjects.length
+    };
+  }
+
+  async findExecutiveStrategies(userId: string): Promise<any> {
+    const workHistory = await this.workHistoryRepo.findOne({
+      where: { user: { id: userId } },
+      relations: ['workStatus', 'role'],
+    });
+
+    if (!workHistory) return [];
+    if (workHistory.workStatus.name !== 'approved')
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+
+    const allowedRoles = ['staff', 'admin', 'super-admin', 'c-level'];
+    if (!allowedRoles.includes(workHistory.role.name))
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+
+    const strategies = await this.strategyRepo.find({
+      where: { deletedAt: IsNull() }
+    });
+
+    // Find budget plan - ตรวจสอบทั้ง budget plan และ development plan revision
+    let budgetPlan = await this.budgetPlanRepo.findOne({
+      where: { isLatest: true }
+    });
+    
+    let isUsingMainPlan = true;
+    if (!budgetPlan || budgetPlan.id === null) {
+      const developmentPlanRevision = await this.developmentPlanRevisionRepo.findOne({
+        where: { isLatest: true },
+        relations: ['budgetPlan']
+      });
+      if (!developmentPlanRevision) {
+        throw new NotFoundException('Development plan revision not found');
+      }
+      budgetPlan = developmentPlanRevision.budgetPlan;
+      isUsingMainPlan = false;
+    }
+
+    // Query all projects
+    const [originalProjects, revisedProjects] = await Promise.all([
+      this.findOriginalLatestProjects(budgetPlan.id),
+      this.findRevisedLatestProjects(budgetPlan.id),
+    ]);
+    const allProjects = [...originalProjects, ...revisedProjects];
+
+    // Get statistics by strategy
+    const strategyStats = await this.getStrategyStatistics(allProjects, strategies);
+
+    // Calculate project counts by standardized categories
+    const projectCounts = allProjects.reduce((counts, project) => {
+      let statusName = 'Unknown';
+      
+      if (project.trackingStatus && project.trackingStatus.length > 0) {
+        const latestTrackingStatus = project.trackingStatus.find(ts => ts.isLatest) || project.trackingStatus[0];
+        statusName = latestTrackingStatus?.statusId?.name || 'Unknown';
+      }
+      
+      const category = this.mapStatusToCategory(statusName);
+      counts[category] = (counts[category] || 0) + 1;
+      
+      return counts;
+    }, {});
+
+    // Ensure all status categories are always present with 0 if no projects
+    const standardizedProjectCounts = {
+      approved: projectCounts['approved'] || 0,
+      pending: projectCounts['pending'] || 0,
+      rejected: projectCounts['rejected'] || 0
+    };
+
+    // Calculate approval rate
+    const totalProjects = allProjects.length;
+    const approvedCount = standardizedProjectCounts.approved;
+    const approvalRate = totalProjects > 0 ? (approvedCount / totalProjects) * 100 : 0;
+
+    return {
+      // Plan information
+      planInfo: {
+        budgetPlanId: budgetPlan.id,
+        budgetPlanName: budgetPlan.name,
+        startYear: budgetPlan.startYear,
+        endYear: budgetPlan.endYear,
+        isUsingMainPlan,
+        planType: isUsingMainPlan ? 'main' : 'revision'
+      },
+      
+      // Project counts
+      projectCounts: {
+        approved: standardizedProjectCounts.approved,
+        pending: standardizedProjectCounts.pending,
+        rejected: standardizedProjectCounts.rejected,
+        total: totalProjects
+      },
+      
+      // Approval rate
+      approvalRate: Math.round(approvalRate * 100) / 100,
+      
+      // Strategy statistics
+      strategyStatistics: strategyStats,
+      
+      // All projects
+      projects: allProjects,
+      length: allProjects.length
+    };
+  }
+
+
+  /**
+   * Transform projects to map markers
+   */
+  private transformProjectsToMarkers(projects: any[]): any[] {
+    return projects
+      .filter(project => {
+        // Filter projects that have location data
+        const hasStartLocation = (project.startLat !== null && project.startLng !== null) ||
+                                 (project.originalProject?.startLat !== null && project.originalProject?.startLng !== null);
+        const hasEndLocation = (project.endLat !== null && project.endLng !== null) ||
+                               (project.originalProject?.endLat !== null && project.originalProject?.endLng !== null);
+        return hasStartLocation || hasEndLocation;
+      })
+      .map(project => {
+        // Get project details
+        const startLat = project.startLat || project.originalProject?.startLat;
+        const startLng = project.startLng || project.originalProject?.startLng;
+        const endLat = project.endLat || project.originalProject?.endLat;
+        const endLng = project.endLng || project.originalProject?.endLng;
+        
+        const strategy = project.strategy || project.originalProject?.strategy;
+        const plan = project.plan || project.originalProject?.plan;
+        const originAgency = project.originAgencyId || project.originalProject?.originAgencyId;
+        const responsibleAgency = project.responsibleAgency || project.originalProject?.responsibleAgency;
+
+        // Calculate total budget
+        const budgets = project.budgets || project.originalProject?.budgets || [];
+        const totalBudget = budgets.reduce((sum: number, budget: any) => {
+          const quantity = typeof budget.quantity === 'string' ? parseFloat(budget.quantity) : (budget.quantity || 0);
+          return sum + quantity;
+        }, 0);
+
+        // Get status
+        let statusName = 'Unknown';
+        let statusCategory = 'unknown';
+        if (project.trackingStatus && project.trackingStatus.length > 0) {
+          const latestTrackingStatus = project.trackingStatus.find(ts => ts.isLatest) || project.trackingStatus[0];
+          statusName = latestTrackingStatus?.statusId?.name || 'Unknown';
+          statusCategory = this.mapStatusToCategory(statusName);
+        }
+
+        const tactic = project.tactic || project.originalProject?.tactic;
+        const goal = project.goal || project.originalProject?.goal;
+        const indicator = project.indicator || project.originalProject?.indicator;
+        const expected = project.expected || project.originalProject?.expected;
+
+        // Get budget breakdown by year
+        const budgetByYear = budgets.reduce((acc: any[], budget: any) => {
+          const quantity = typeof budget.quantity === 'string' ? parseFloat(budget.quantity) : (budget.quantity || 0);
+          const existing = acc.find(b => b.year === budget.year);
+          if (existing) {
+            existing.amount += quantity;
+          } else {
+            acc.push({
+              year: budget.year,
+              amount: quantity
+            });
+          }
+          return acc;
+        }, []).map(b => ({
+          year: b.year,
+          amount: Math.round(b.amount * 100) / 100
+        }));
+
+        return {
+          projectId: project.id,
+          title: project.title || project.originalProject?.title,
+          objective: project.objective || project.originalProject?.objective,
+          goal: goal,
+          indicator: indicator,
+          expected: expected,
+          
+          // Location data
+          startLocation: startLat && startLng ? {
+            latitude: parseFloat(startLat.toString()),
+            longitude: parseFloat(startLng.toString()),
+            type: 'start'
+          } : null,
+          
+          endLocation: endLat && endLng ? {
+            latitude: parseFloat(endLat.toString()),
+            longitude: parseFloat(endLng.toString()),
+            type: 'end'
+          } : null,
+
+          // Primary location (use start if available, otherwise end)
+          location: startLat && startLng ? {
+            latitude: parseFloat(startLat.toString()),
+            longitude: parseFloat(startLng.toString())
+          } : endLat && endLng ? {
+            latitude: parseFloat(endLat.toString()),
+            longitude: parseFloat(endLng.toString())
+          } : null,
+
+          // Project details
+          budget: Math.round(totalBudget * 100) / 100,
+          budgetByYear: budgetByYear,
+          status: statusName,
+          statusCategory: statusCategory,
+          
+          // Strategy, Tactic & Plan
+          strategy: strategy ? {
+            id: strategy.id,
+            name: strategy.name,
+            color: this.getStrategyColor(strategy.id)
+          } : null,
+          
+          tactic: tactic ? {
+            id: tactic.id,
+            name: tactic.name
+          } : null,
+          
+          plan: plan ? {
+            id: plan.id,
+            name: plan.name
+          } : null,
+
+          // Agency info
+          originAgency: originAgency ? {
+            id: originAgency.id,
+            name: originAgency.name,
+            type: originAgency.type,
+            amphoe: originAgency.amphoe?.name || null
+          } : null,
+
+          responsibleAgency: responsibleAgency ? {
+            id: responsibleAgency.id,
+            name: responsibleAgency.name || responsibleAgency.th_name
+          } : null,
+
+          // Metadata
+          isRevised: !!project.originalProject,
+          isDraft: project.isDraft || project.originalProject?.isDraft || false,
+          projectYear: project.projectYear || project.originalProject?.projectYear,
+          createdAt: project.createdAt || project.originalProject?.createdAt
+        };
+      })
+      .filter(marker => marker.location !== null); // Ensure we have at least one valid location
+  }
+
+  /**
+   * Group markers by amphoe for clustering
+   */
+  private groupMarkersByAmphoe(markers: any[]): any[] {
+    const amphoeMap = new Map();
+
+    markers.forEach(marker => {
+      const amphoeName = marker.originAgency?.amphoe || 'ไม่ระบุอำเภอ';
+      
+      if (!amphoeMap.has(amphoeName)) {
+        amphoeMap.set(amphoeName, {
+          amphoeName: amphoeName,
+          projectCount: 0,
+          totalBudget: 0,
+          markers: [],
+          center: { latitude: 0, longitude: 0 } // Will calculate later
+        });
+      }
+
+      const amphoeData = amphoeMap.get(amphoeName);
+      amphoeData.projectCount += 1;
+      amphoeData.totalBudget += marker.budget;
+      amphoeData.markers.push(marker);
+    });
+
+    // Calculate center point for each amphoe
+    return Array.from(amphoeMap.values()).map(amphoe => {
+      const latSum = amphoe.markers.reduce((sum: number, m: any) => sum + m.location.latitude, 0);
+      const lngSum = amphoe.markers.reduce((sum: number, m: any) => sum + m.location.longitude, 0);
+      
+      return {
+        amphoeName: amphoe.amphoeName,
+        projectCount: amphoe.projectCount,
+        totalBudget: Math.round(amphoe.totalBudget * 100) / 100,
+        center: {
+          latitude: latSum / amphoe.markers.length,
+          longitude: lngSum / amphoe.markers.length
+        },
+        markers: amphoe.markers
+      };
+    }).sort((a, b) => b.projectCount - a.projectCount);
+  }
+
+  /**
+   * Calculate map statistics
+   */
+  private calculateMapStatistics(markers: any[]): any {
+    const statusBreakdown = markers.reduce((counts, marker) => {
+      counts[marker.statusCategory] = (counts[marker.statusCategory] || 0) + 1;
+      return counts;
+    }, {});
+
+    const strategyBreakdown = markers.reduce((counts, marker) => {
+      const strategyName = marker.strategy?.name || 'ไม่ระบุยุทธศาสตร์';
+      counts[strategyName] = (counts[strategyName] || 0) + 1;
+      return counts;
+    }, {});
+
+    const totalBudget = markers.reduce((sum, marker) => sum + marker.budget, 0);
+
+    return {
+      totalBudget: Math.round(totalBudget * 100) / 100,
+      averageBudget: markers.length > 0 ? Math.round((totalBudget / markers.length) * 100) / 100 : 0,
+      statusBreakdown: {
+        approved: statusBreakdown['approved'] || 0,
+        pending: statusBreakdown['pending'] || 0,
+        rejected: statusBreakdown['rejected'] || 0
+      },
+      strategyBreakdown: strategyBreakdown,
+      projectsWithBothLocations: markers.filter(m => m.startLocation && m.endLocation).length,
+      projectsWithStartOnly: markers.filter(m => m.startLocation && !m.endLocation).length,
+      projectsWithEndOnly: markers.filter(m => !m.startLocation && m.endLocation).length
+    };
+  }
+
+  /**
+   * Get color for strategy (for custom marker icons)
+   */
+  private getStrategyColor(strategyId: string): string {
+    // Hash strategy ID to generate consistent color
+    const colors = [
+      '#FF6B6B', // Red
+      '#4ECDC4', // Teal
+      '#45B7D1', // Blue
+      '#FFA07A', // Light Salmon
+      '#98D8C8', // Mint
+      '#F7DC6F', // Yellow
+      '#BB8FCE', // Purple
+      '#85C1E2', // Sky Blue
+      '#F8B739', // Orange
+      '#52B788', // Green
+    ];
+
+    // Simple hash function
+    let hash = 0;
+    for (let i = 0; i < strategyId.length; i++) {
+      hash = strategyId.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    
+    return colors[Math.abs(hash) % colors.length];
+  }
+
+  /**
+   * Transform data to district structure (Amphoe > LAO > Projects)
+   */
+  private transformToDistrictStructure(amphoes: any[], localOrgs: any[], allProjects: any[]): any[] {
+    // แสดงทุกอำเภอแม้ไม่มีโครงการ (array เปล่า) และ sort ตาม id
+    const sortedAmphoes = [...amphoes].sort((a, b) => a.id.localeCompare(b.id));
+    
+    return sortedAmphoes.map(amphoe => {
+      // Get LAOs for this amphoe (แสดงทุกอปทแม้ไม่มีโครงการ) และ sort ตาม id
+      const amphoeLAOs = localOrgs
+        .filter(lao => lao.amphoe?.id === amphoe.id)
+        .sort((a, b) => a.id.localeCompare(b.id));
+      
+      // Transform LAOs with their projects (แสดงทุกอปทแม้ไม่มีโครงการ)
+      const localOrganizations = amphoeLAOs.map(lao => {
+        // Find projects for this LAO
+        const laoProjects = allProjects.filter(project => {
+          const originAgency = project.originAgencyId || project.originalProject?.originAgencyId;
+          const responsibleAgency = project.responsibleAgency || project.originalProject?.responsibleAgency;
+          
+          // กรณีปกติ: มี originAgency
+          if (originAgency && originAgency.id === lao.id) {
+            return true;
+          }
+          
+          // กรณีพิเศษ: ไม่มี originAgency แต่มี responsibleAgency ให้กำหนดเป็นอปท 3001027
+          if (!originAgency && responsibleAgency && lao.id === '3001027') {
+            return true;
+          }
+          
+          return false;
+        });
+
+        // Transform projects to detailed format
+        const transformedProjects = laoProjects.map(project => {
+          const strategy = project.strategy || project.originalProject?.strategy;
+          const tactic = project.tactic || project.originalProject?.tactic;
+          const plan = project.plan || project.originalProject?.plan;
+          const responsibleAgency = project.responsibleAgency || project.originalProject?.responsibleAgency;
+
+          // Calculate total budget
+          const budgets = project.budgets || project.originalProject?.budgets || [];
+          const totalBudget = budgets.reduce((sum: number, budget: any) => {
+            const quantity = typeof budget.quantity === 'string' ? parseFloat(budget.quantity) : (budget.quantity || 0);
+            return sum + quantity;
+          }, 0);
+
+          // Get budget breakdown by year
+          const budgetByYear = budgets.reduce((acc: any[], budget: any) => {
+            const quantity = typeof budget.quantity === 'string' ? parseFloat(budget.quantity) : (budget.quantity || 0);
+            const existing = acc.find(b => b.year === budget.year);
+            if (existing) {
+              existing.amount += quantity;
+            } else {
+              acc.push({
+                year: budget.year,
+                amount: quantity
+              });
+            }
+            return acc;
+          }, []).map(b => ({
+            year: b.year,
+            amount: Math.round(b.amount * 100) / 100
+          }));
+
+          // Get status
+          let statusName = 'Unknown';
+          let statusCategory = 'unknown';
+          if (project.trackingStatus && project.trackingStatus.length > 0) {
+            const latestTrackingStatus = project.trackingStatus.find(ts => ts.isLatest) || project.trackingStatus[0];
+            statusName = latestTrackingStatus?.statusId?.name || 'Unknown';
+            statusCategory = this.mapStatusToCategory(statusName);
+          }
+
+          return {
+            projectId: project.id,
+            title: project.title || project.originalProject?.title,
+            objective: project.objective || project.originalProject?.objective,
+            goal: project.goal || project.originalProject?.goal,
+            indicator: project.indicator || project.originalProject?.indicator,
+            expected: project.expected || project.originalProject?.expected,
+            projectYear: project.projectYear || project.originalProject?.projectYear,
+            
+            // Budget
+            budget: Math.round(totalBudget * 100) / 100,
+            budgetByYear: budgetByYear,
+            
+            // Status
+            status: statusName,
+            statusCategory: statusCategory,
+            
+            // Strategy & Plan
+            strategy: strategy ? {
+              id: strategy.id,
+              name: strategy.name,
+              color: this.getStrategyColor(strategy.id)
+            } : null,
+            
+            tactic: tactic ? {
+              id: tactic.id,
+              name: tactic.name
+            } : null,
+            
+            plan: plan ? {
+              id: plan.id,
+              name: plan.name
+            } : null,
+
+            // Agency info
+            originAgency: {
+              id: lao.id,
+              name: lao.name,
+              type: lao.type,
+              amphoe: amphoe.name
+            },
+
+            responsibleAgency: responsibleAgency ? {
+              id: responsibleAgency.id,
+              name: responsibleAgency.name || responsibleAgency.th_name
+            } : null,
+
+            // Metadata
+            isRevised: !!project.originalProject,
+            isDraft: project.isDraft || project.originalProject?.isDraft || false,
+            createdAt: project.createdAt || project.originalProject?.createdAt
+          };
+        });
+
+        // Calculate LAO statistics
+        const laoProjectCount = transformedProjects.length;
+        const laoTotalBudget = transformedProjects.reduce((sum, project) => sum + project.budget, 0);
+        
+        const laoStatusBreakdown = transformedProjects.reduce((counts, project) => {
+          counts[project.statusCategory] = (counts[project.statusCategory] || 0) + 1;
+          return counts;
+        }, {});
+
+        return {
+          laoId: lao.id,
+          laoName: lao.name,
+          laoType: lao.type,
+          projectCount: laoProjectCount,
+          totalBudget: Math.round(laoTotalBudget * 100) / 100,
+          statusBreakdown: {
+            approved: laoStatusBreakdown['approved'] || 0,
+            pending: laoStatusBreakdown['pending'] || 0,
+            rejected: laoStatusBreakdown['rejected'] || 0
+          },
+          projects: transformedProjects
+        };
+      });
+
+      // Add LAOs that have projects but no existing LAO record in the system
+      // This handles edge cases where projects exist but LAO record is missing
+      const projectsWithoutLAO = allProjects.filter(project => {
+        const originAgency = project.originAgencyId || project.originalProject?.originAgencyId;
+        const responsibleAgency = project.responsibleAgency || project.originalProject?.responsibleAgency;
+        
+        // กรณีปกติ: มี originAgency แต่ไม่มี LAO record
+        if (originAgency && 
+            originAgency.amphoe?.id === amphoe.id && 
+            !amphoeLAOs.some(lao => lao.id === originAgency.id)) {
+          return true;
+        }
+        
+        // กรณีพิเศษ: ไม่มี originAgency แต่มี responsibleAgency (จะไปอยู่ในอปท 3001027)
+        if (!originAgency && responsibleAgency) {
+          return false; // ไม่ต้องเพิ่มในส่วนนี้ เพราะจะไปอยู่ในอปท 3001027 อยู่แล้ว
+        }
+        
+        return false;
+      });
+
+      if (projectsWithoutLAO.length > 0) {
+        // Group by origin agency
+        const projectsByAgency = projectsWithoutLAO.reduce((groups: any, project: any) => {
+          const originAgency = project.originAgencyId || project.originalProject?.originAgencyId;
+          const responsibleAgency = project.responsibleAgency || project.originalProject?.responsibleAgency;
+          
+          // กรณีปกติ: มี originAgency
+          if (originAgency) {
+            const agencyId = originAgency.id;
+            if (!groups[agencyId]) {
+              groups[agencyId] = {
+                agency: originAgency,
+                projects: []
+              };
+            }
+            groups[agencyId].projects.push(project);
+          }
+          // กรณีพิเศษ: ไม่มี originAgency แต่มี responsibleAgency ให้ไปอยู่ในอปท 3001027
+          else if (responsibleAgency) {
+            // ไม่ต้องเพิ่มในส่วนนี้ เพราะโครงการเหล่านี้จะไปอยู่ในอปท 3001027 อยู่แล้ว
+            // ผ่านเงื่อนไขใน filter ด้านบน
+          }
+          
+          return groups;
+        }, {});
+
+        // Transform each agency group
+        Object.values(projectsByAgency).forEach((group: any) => {
+          const agency = group.agency;
+          const agencyProjects = group.projects;
+          
+          const transformedProjects = agencyProjects.map(project => {
+            // Same transformation logic as above
+            const strategy = project.strategy || project.originalProject?.strategy;
+            const tactic = project.tactic || project.originalProject?.tactic;
+            const plan = project.plan || project.originalProject?.plan;
+            const responsibleAgency = project.responsibleAgency || project.originalProject?.responsibleAgency;
+
+            const budgets = project.budgets || project.originalProject?.budgets || [];
+            const totalBudget = budgets.reduce((sum: number, budget: any) => {
+              const quantity = typeof budget.quantity === 'string' ? parseFloat(budget.quantity) : (budget.quantity || 0);
+              return sum + quantity;
+            }, 0);
+
+            let statusName = 'Unknown';
+            let statusCategory = 'unknown';
+            if (project.trackingStatus && project.trackingStatus.length > 0) {
+              const latestTrackingStatus = project.trackingStatus.find(ts => ts.isLatest) || project.trackingStatus[0];
+              statusName = latestTrackingStatus?.statusId?.name || 'Unknown';
+              statusCategory = this.mapStatusToCategory(statusName);
+            }
+
+            return {
+              projectId: project.id,
+              title: project.title || project.originalProject?.title,
+              objective: project.objective || project.originalProject?.objective,
+              goal: project.goal || project.originalProject?.goal,
+              indicator: project.indicator || project.originalProject?.indicator,
+              expected: project.expected || project.originalProject?.expected,
+              projectYear: project.projectYear || project.originalProject?.projectYear,
+              
+              budget: Math.round(totalBudget * 100) / 100,
+              status: statusName,
+              statusCategory: statusCategory,
+              
+              strategy: strategy ? {
+                id: strategy.id,
+                name: strategy.name,
+                color: this.getStrategyColor(strategy.id)
+              } : null,
+              
+              tactic: tactic ? {
+                id: tactic.id,
+                name: tactic.name
+              } : null,
+              
+              plan: plan ? {
+                id: plan.id,
+                name: plan.name
+              } : null,
+
+              originAgency: {
+                id: agency.id,
+                name: agency.name,
+                type: agency.type,
+                amphoe: amphoe.name
+              },
+
+              responsibleAgency: responsibleAgency ? {
+                id: responsibleAgency.id,
+                name: responsibleAgency.name || responsibleAgency.th_name
+              } : null,
+
+              isRevised: !!project.originalProject,
+              isDraft: project.isDraft || project.originalProject?.isDraft || false,
+              createdAt: project.createdAt || project.originalProject?.createdAt
+            };
+          });
+
+          const laoProjectCount = transformedProjects.length;
+          const laoTotalBudget = transformedProjects.reduce((sum, project) => sum + project.budget, 0);
+          
+          const laoStatusBreakdown = transformedProjects.reduce((counts, project) => {
+            counts[project.statusCategory] = (counts[project.statusCategory] || 0) + 1;
+            return counts;
+          }, {});
+
+          localOrganizations.push({
+            laoId: agency.id,
+            laoName: agency.name,
+            laoType: agency.type,
+            projectCount: laoProjectCount,
+            totalBudget: Math.round(laoTotalBudget * 100) / 100,
+            statusBreakdown: {
+              approved: laoStatusBreakdown['approved'] || 0,
+              pending: laoStatusBreakdown['pending'] || 0,
+              rejected: laoStatusBreakdown['rejected'] || 0
+            },
+            projects: transformedProjects
+          });
+        });
+      }
+
+      // Sort LAOs by project count (descending)
+      localOrganizations.sort((a: any, b: any) => b.projectCount - a.projectCount);
+
+      // Calculate amphoe statistics
+      const amphoeProjectCount = localOrganizations.reduce((sum, org) => sum + org.projectCount, 0);
+      const amphoeTotalBudget = localOrganizations.reduce((sum, org) => sum + org.totalBudget, 0);
+      
+      const amphoeStatusBreakdown = localOrganizations.reduce((counts, org) => {
+        counts.approved += org.statusBreakdown.approved;
+        counts.pending += org.statusBreakdown.pending;
+        counts.rejected += org.statusBreakdown.rejected;
+        return counts;
+      }, { approved: 0, pending: 0, rejected: 0 });
+
+      return {
+        amphoeId: amphoe.id,
+        amphoeName: amphoe.name,
+        localOrgCount: localOrganizations.length,
+        projectCount: amphoeProjectCount,
+        totalBudget: Math.round(amphoeTotalBudget * 100) / 100,
+        statusBreakdown: amphoeStatusBreakdown,
+        localOrganizations: localOrganizations
+      };
+    }).sort((a, b) => b.projectCount - a.projectCount); // Sort by project count (descending)
+  }
+
+  /**
+   * Calculate district statistics
+   */
+  private calculateDistrictStatistics(districtData: any[]): any {
+    const totalProjects = districtData.reduce((sum, district) => sum + district.projectCount, 0);
+    const totalBudget = districtData.reduce((sum, district) => sum + district.totalBudget, 0);
+    const totalLocalOrgs = districtData.reduce((sum, district) => sum + district.localOrgCount, 0);
+
+    // Status breakdown across all districts
+    const overallStatusBreakdown = districtData.reduce((counts, district) => {
+      counts.approved += district.statusBreakdown.approved;
+      counts.pending += district.statusBreakdown.pending;
+      counts.rejected += district.statusBreakdown.rejected;
+      return counts;
+    }, { approved: 0, pending: 0, rejected: 0 });
+
+    // Top performing districts
+    const topDistrictsByProject = districtData.slice(0, 5).map(district => ({
+      name: district.amphoeName,
+      projectCount: district.projectCount,
+      totalBudget: district.totalBudget
+    }));
+
+    const topDistrictsByBudget = districtData
+      .sort((a, b) => b.totalBudget - a.totalBudget)
+      .slice(0, 5)
+      .map(district => ({
+        name: district.amphoeName,
+        projectCount: district.projectCount,
+        totalBudget: district.totalBudget
+      }));
+
+    return {
+      totalProjects,
+      totalBudget: Math.round(totalBudget * 100) / 100,
+      totalLocalOrgs,
+      averageProjectsPerDistrict: districtData.length > 0 ? Math.round((totalProjects / districtData.length) * 100) / 100 : 0,
+      averageBudgetPerDistrict: districtData.length > 0 ? Math.round((totalBudget / districtData.length) * 100) / 100 : 0,
+      statusBreakdown: overallStatusBreakdown,
+      topDistrictsByProject,
+      topDistrictsByBudget,
+      districtsWithProjects: districtData.filter(d => d.projectCount > 0).length,
+      districtsWithoutProjects: districtData.filter(d => d.projectCount === 0).length
+    };
+  }
+
+  /**
+   * Map status name to standardized category
+   */
+  private mapStatusToCategory(statusName: string): string {
+    const statusMap = {
+      'Approved': 'approved',
+      'Verified': 'approved',
+      'Ready': 'pending',
+      'Pending': 'pending',
+      'Plan Committee': 'pending',
+      'Provincial Committee': 'pending',
+      'Revision': 'pending',
+      'Rejected': 'rejected'
+    };
+    
+    return statusMap[statusName] || 'unknown';
+  }
+
+  /**
+   * Get statistics grouped by strategy
+   */
+  private async getStrategyStatistics(allProjects: any[], strategies: any[]): Promise<any[]> {
+    const strategyStats = strategies.map(strategy => {
+      const projectsInStrategy = allProjects.filter(project => {
+        // Handle both original and revised projects
+        const projectStrategy = project.strategy || project.originalProject?.strategy;
+        return projectStrategy && projectStrategy.id === strategy.id;
+      });
+
+      // Calculate total budget for this strategy
+      const totalBudget = projectsInStrategy.reduce((sum, project) => {
+        const budgets = project.budgets || project.originalProject?.budgets || [];
+        const projectBudget = budgets.reduce((budgetSum: number, budget: any) => {
+          // Convert to number and handle string values
+          const quantity = typeof budget.quantity === 'string' ? parseFloat(budget.quantity) : (budget.quantity || 0);
+          return budgetSum + quantity;
+        }, 0);
+        return sum + projectBudget;
+      }, 0);
+
+      // Count projects by status in this strategy
+      const statusCounts = projectsInStrategy.reduce((counts, project) => {
+        // Get the latest tracking status
+        let statusName = 'Unknown';
+        
+        if (project.trackingStatus && project.trackingStatus.length > 0) {
+          // Find the latest tracking status
+          const latestTrackingStatus = project.trackingStatus.find(ts => ts.isLatest) || project.trackingStatus[0];
+          statusName = latestTrackingStatus?.statusId?.name || 'Unknown';
+        }
+        
+        // Map to standardized category
+        const category = this.mapStatusToCategory(statusName);
+        counts[category] = (counts[category] || 0) + 1;
+        
+        return counts;
+      }, {});
+
+      // Ensure all status categories are always present with 0 if no projects
+      const standardizedStatusCounts = {
+        approved: statusCounts['approved'] || 0,
+        pending: statusCounts['pending'] || 0,
+        rejected: statusCounts['rejected'] || 0
+      };
+
+      // Transform projects to include status and budget info
+      const projectsWithDetails = projectsInStrategy.map(project => {
+        // Get project budget
+        const budgets = project.budgets || project.originalProject?.budgets || [];
+        const projectBudget = budgets.reduce((sum: number, budget: any) => {
+          const quantity = typeof budget.quantity === 'string' ? parseFloat(budget.quantity) : (budget.quantity || 0);
+          return sum + quantity;
+        }, 0);
+
+        // Get project status
+        let statusName = 'Unknown';
+        let statusCategory = 'unknown';
+        
+        if (project.trackingStatus && project.trackingStatus.length > 0) {
+          const latestTrackingStatus = project.trackingStatus.find(ts => ts.isLatest) || project.trackingStatus[0];
+          statusName = latestTrackingStatus?.statusId?.name || 'Unknown';
+          statusCategory = this.mapStatusToCategory(statusName);
+        }
+
+        return {
+          id: project.id,
+          title: project.title || project.originalProject?.title,
+          objective: project.objective || project.originalProject?.objective,
+          projectYear: project.projectYear || project.originalProject?.projectYear,
+          budget: Math.round(projectBudget * 100) / 100,
+          status: statusName,
+          statusCategory: statusCategory,
+          isRevised: !!project.originalProject, // true if this is a revised project
+          createdAt: project.createdAt || project.originalProject?.createdAt
+        };
+      });
+
+      return {
+        strategyId: strategy.id,
+        strategyName: strategy.name,
+        totalProjects: projectsInStrategy.length,
+        totalBudget: Math.round(totalBudget * 100) / 100, // Round to 2 decimal places
+        approvedCount: standardizedStatusCounts.approved,
+        pendingCount: standardizedStatusCounts.pending,
+        rejectedCount: standardizedStatusCounts.rejected,
+        projects: projectsWithDetails
+      };
+    });
+
+    return strategyStats;
+  }
+
+  /**
+   * Get budget allocation by year
+   */
+  private async getBudgetByYear(allProjects: any[], budgetPlan: any): Promise<any[]> {
+    const budgetByYear: any[] = [];
+    
+    // Generate years from budget plan
+    for (let year = budgetPlan.startYear; year <= budgetPlan.endYear; year++) {
+      const projectsInYear = allProjects.filter(project => {
+        const budgets = project.budgets || project.originalProject?.budgets || [];
+        return budgets.some(budget => budget.year === year);
+      });
+
+      const totalBudget = projectsInYear.reduce((sum, project) => {
+        const budgets = project.budgets || project.originalProject?.budgets || [];
+        const projectBudget = budgets
+          .filter(budget => budget.year === year)
+          .reduce((budgetSum: number, budget: any) => {
+            const quantity = typeof budget.quantity === 'string' ? parseFloat(budget.quantity) : (budget.quantity || 0);
+            return budgetSum + quantity;
+          }, 0);
+        return sum + projectBudget;
+      }, 0);
+
+      const projects = projectsInYear.map(project => {
+        const budgets = project.budgets || project.originalProject?.budgets || [];
+        const yearBudget = budgets
+          .filter(budget => budget.year === year)
+          .reduce((sum: number, budget: any) => {
+            const quantity = typeof budget.quantity === 'string' ? parseFloat(budget.quantity) : (budget.quantity || 0);
+            return sum + quantity;
+          }, 0);
+
+        let statusName = 'Unknown';
+        if (project.trackingStatus && project.trackingStatus.length > 0) {
+          const latestTrackingStatus = project.trackingStatus.find(ts => ts.isLatest) || project.trackingStatus[0];
+          statusName = latestTrackingStatus?.statusId?.name || 'Unknown';
+        }
+
+        return {
+          id: project.id,
+          title: project.title || project.originalProject?.title,
+          budget: Math.round(yearBudget * 100) / 100,
+          status: statusName,
+          statusCategory: this.mapStatusToCategory(statusName),
+          isRevised: !!project.originalProject
+        };
+      });
+
+      budgetByYear.push({
+        year,
+        totalBudget: Math.round(totalBudget * 100) / 100,
+        projectCount: projectsInYear.length,
+        projects
+      });
+    }
+
+    return budgetByYear;
+  }
+
+  /**
+   * Get budget allocation by strategy (for treemap)
+   */
+  private async getBudgetByStrategy(allProjects: any[], strategies: any[]): Promise<any[]> {
+    return strategies.map(strategy => {
+      const projectsInStrategy = allProjects.filter(project => {
+        const projectStrategy = project.strategy || project.originalProject?.strategy;
+        return projectStrategy && projectStrategy.id === strategy.id;
+      });
+
+      const totalBudget = projectsInStrategy.reduce((sum, project) => {
+        const budgets = project.budgets || project.originalProject?.budgets || [];
+        const projectBudget = budgets.reduce((budgetSum: number, budget: any) => {
+          const quantity = typeof budget.quantity === 'string' ? parseFloat(budget.quantity) : (budget.quantity || 0);
+          return budgetSum + quantity;
+        }, 0);
+        return sum + projectBudget;
+      }, 0);
+
+      // Calculate status breakdown
+      const statusBreakdown = projectsInStrategy.reduce((counts, project) => {
+        let statusName = 'Unknown';
+        if (project.trackingStatus && project.trackingStatus.length > 0) {
+          const latestTrackingStatus = project.trackingStatus.find(ts => ts.isLatest) || project.trackingStatus[0];
+          statusName = latestTrackingStatus?.statusId?.name || 'Unknown';
+        }
+        const category = this.mapStatusToCategory(statusName);
+        counts[category] = (counts[category] || 0) + 1;
+        return counts;
+      }, {});
+
+      return {
+        strategyId: strategy.id,
+        strategyName: strategy.name,
+        totalBudget: Math.round(totalBudget * 100) / 100,
+        projectCount: projectsInStrategy.length,
+        statusBreakdown: {
+          approved: statusBreakdown['approved'] || 0,
+          pending: statusBreakdown['pending'] || 0,
+          rejected: statusBreakdown['rejected'] || 0
+        },
+        // For treemap visualization
+        size: totalBudget, // Size based on budget
+        children: projectsInStrategy.map(project => ({
+          projectId: project.id,
+          projectTitle: project.title || project.originalProject?.title,
+          budget: Math.round((project.budgets || project.originalProject?.budgets || [])
+            .reduce((sum: number, budget: any) => sum + (typeof budget.quantity === 'string' ? parseFloat(budget.quantity) : (budget.quantity || 0)), 0) * 100) / 100,
+          status: project.trackingStatus?.find(ts => ts.isLatest)?.statusId?.name || 'Unknown',
+          statusCategory: this.mapStatusToCategory(project.trackingStatus?.find(ts => ts.isLatest)?.statusId?.name || 'Unknown')
+        }))
+      };
+    }).filter(strategy => strategy.totalBudget > 0); // Only include strategies with budget
+  }
+
+  /**
+   * Get budget allocation by government agencies
+   */
+  private async getBudgetByAgencies(allProjects: any[]): Promise<any[]> {
+    // Group projects by responsible agency
+    const agencyMap = new Map();
+
+    allProjects.forEach(project => {
+      const responsibleAgency = project.responsibleAgency || project.originalProject?.responsibleAgency;
+      const originAgency = project.originAgencyId || project.originalProject?.originAgencyId;
+      
+      // Use responsible agency if available, otherwise use origin agency
+      const agency = responsibleAgency || originAgency;
+      
+      if (agency) {
+        const agencyId = agency.id;
+        
+        if (!agencyMap.has(agencyId)) {
+          agencyMap.set(agencyId, {
+            agencyId: agency.id,
+            agencyName: agency.name || agency.th_name || 'ไม่ระบุชื่อ',
+            agencyType: responsibleAgency ? 'responsible' : 'origin',
+            totalBudget: 0,
+            projectCount: 0,
+            projects: [],
+            statusBreakdown: { approved: 0, pending: 0, rejected: 0 }
+          });
+        }
+
+        const agencyData = agencyMap.get(agencyId);
+        
+        // Calculate project budget
+        const budgets = project.budgets || project.originalProject?.budgets || [];
+        const projectBudget = budgets.reduce((sum: number, budget: any) => {
+          const quantity = typeof budget.quantity === 'string' ? parseFloat(budget.quantity) : (budget.quantity || 0);
+          return sum + quantity;
+        }, 0);
+
+        // Get project status
+        let statusName = 'Unknown';
+        let statusCategory = 'unknown';
+        
+        if (project.trackingStatus && project.trackingStatus.length > 0) {
+          const latestTrackingStatus = project.trackingStatus.find(ts => ts.isLatest) || project.trackingStatus[0];
+          statusName = latestTrackingStatus?.statusId?.name || 'Unknown';
+          statusCategory = this.mapStatusToCategory(statusName);
+        }
+
+        // Update agency totals
+        agencyData.totalBudget += projectBudget;
+        agencyData.projectCount += 1;
+        agencyData.statusBreakdown[statusCategory] += 1;
+        
+        // Add project details
+        agencyData.projects.push({
+          id: project.id,
+          title: project.title || project.originalProject?.title,
+          budget: Math.round(projectBudget * 100) / 100,
+          status: statusName,
+          statusCategory: statusCategory,
+          isRevised: !!project.originalProject,
+          createdAt: project.createdAt || project.originalProject?.createdAt,
+          strategy: project.strategy || project.originalProject?.strategy
+        });
+      }
+    });
+
+    // Convert map to array and format
+    const result = Array.from(agencyMap.values()).map(agency => ({
+      agencyId: agency.agencyId,
+      agencyName: agency.agencyName,
+      agencyType: agency.agencyType,
+      totalBudget: Math.round(agency.totalBudget * 100) / 100,
+      projectCount: agency.projectCount,
+      statusBreakdown: {
+        approved: agency.statusBreakdown.approved,
+        pending: agency.statusBreakdown.pending,
+        rejected: agency.statusBreakdown.rejected
+      },
+      // For treemap visualization
+      size: agency.totalBudget,
+      children: agency.projects.map(project => ({
+        projectId: project.id,
+        projectTitle: project.title,
+        budget: project.budget,
+        status: project.status,
+        statusCategory: project.statusCategory,
+        strategy: project.strategy?.name || 'ไม่ระบุยุทธศาสตร์',
+        isRevised: project.isRevised
+      })),
+      projects: agency.projects
+    }));
+
+    // Sort by total budget (descending)
+    return result.sort((a, b) => b.totalBudget - a.totalBudget);
+  }
+
+  /**
+   * Get plan analysis for Sunburst Chart (Plan → Tactic → Strategy)
+   */
+  private async getPlanAnalysis(allProjects: any[], plans: any[], tactics: any[], strategies: any[]): Promise<any> {
+    const planMap = new Map();
+
+    // Initialize plans
+    plans.forEach(plan => {
+      planMap.set(plan.id, {
+        planId: plan.id,
+        planName: plan.name,
+        totalBudget: 0,
+        projectCount: 0,
+        tactics: new Map()
+      });
+    });
+
+    // Process projects and group by plan → tactic → strategy
+    allProjects.forEach(project => {
+      const projectPlan = project.plan || project.originalProject?.plan;
+      const projectTactic = project.tactic || project.originalProject?.tactic;
+      const projectStrategy = project.strategy || project.originalProject?.strategy;
+
+      if (projectPlan) {
+        const planData = planMap.get(projectPlan.id);
+        if (planData) {
+          // Calculate project budget
+          const budgets = project.budgets || project.originalProject?.budgets || [];
+          const projectBudget = budgets.reduce((sum: number, budget: any) => {
+            const quantity = typeof budget.quantity === 'string' ? parseFloat(budget.quantity) : (budget.quantity || 0);
+            return sum + quantity;
+          }, 0);
+
+          planData.totalBudget += projectBudget;
+          planData.projectCount += 1;
+
+          // Group by tactic
+          if (projectTactic) {
+            if (!planData.tactics.has(projectTactic.id)) {
+              planData.tactics.set(projectTactic.id, {
+                tacticId: projectTactic.id,
+                tacticName: projectTactic.name,
+                totalBudget: 0,
+                projectCount: 0,
+                strategies: new Map()
+              });
+            }
+
+            const tacticData = planData.tactics.get(projectTactic.id);
+            tacticData.totalBudget += projectBudget;
+            tacticData.projectCount += 1;
+
+            // Group by strategy
+            if (projectStrategy) {
+              if (!tacticData.strategies.has(projectStrategy.id)) {
+                tacticData.strategies.set(projectStrategy.id, {
+                  strategyId: projectStrategy.id,
+                  strategyName: projectStrategy.name,
+                  totalBudget: 0,
+                  projectCount: 0,
+                  projects: []
+                });
+              }
+
+              const strategyData = tacticData.strategies.get(projectStrategy.id);
+              strategyData.totalBudget += projectBudget;
+              strategyData.projectCount += 1;
+
+              // Add project details
+              strategyData.projects.push({
+                id: project.id,
+                title: project.title || project.originalProject?.title,
+                budget: Math.round(projectBudget * 100) / 100,
+                status: project.trackingStatus?.find(ts => ts.isLatest)?.statusId?.name || 'Unknown',
+                statusCategory: this.mapStatusToCategory(project.trackingStatus?.find(ts => ts.isLatest)?.statusId?.name || 'Unknown'),
+                isRevised: !!project.originalProject
+              });
+            }
+          }
+        }
+      }
+    });
+
+    // Convert to Sunburst Chart format - แสดงทุกแผนงานแม้ไม่มีข้อมูล
+    const result = Array.from(planMap.values()).map(plan => ({
+      planId: plan.planId,
+      planName: plan.planName,
+      totalBudget: Math.round(plan.totalBudget * 100) / 100,
+      projectCount: plan.projectCount,
+      // For Sunburst Chart
+      size: plan.totalBudget,
+      children: Array.from(plan.tactics.values()).map((tactic: any) => ({
+        tacticId: tactic.tacticId,
+        tacticName: tactic.tacticName,
+        totalBudget: Math.round(tactic.totalBudget * 100) / 100,
+        projectCount: tactic.projectCount,
+        size: tactic.totalBudget,
+        children: Array.from(tactic.strategies.values()).map((strategy: any) => ({
+          strategyId: strategy.strategyId,
+          strategyName: strategy.strategyName,
+          totalBudget: Math.round(strategy.totalBudget * 100) / 100,
+          projectCount: strategy.projectCount,
+          size: strategy.totalBudget,
+          projects: strategy.projects
+        }))
+      }))
+    }));
+
+    // Sort by total budget (descending), but keep plans with 0 budget at the end
+    return result.sort((a, b) => {
+      if (a.totalBudget === 0 && b.totalBudget === 0) return 0;
+      if (a.totalBudget === 0) return 1;
+      if (b.totalBudget === 0) return -1;
+      return b.totalBudget - a.totalBudget;
+    });
+  }
+
+  /**
+   * Get timeline analysis for projects
+   */
+  private async getTimelineAnalysis(allProjects: any[], budgetPlan: any): Promise<any> {
+    const timeline: any[] = [];
+    
+    // Create timeline entries for each year in budget plan
+    for (let year = budgetPlan.startYear; year <= budgetPlan.endYear; year++) {
+      const yearProjects = allProjects.filter(project => {
+        const projectYear = project.projectYear || project.originalProject?.projectYear;
+        return projectYear === year;
+      });
+
+      const yearBudget = yearProjects.reduce((sum, project) => {
+        const budgets = project.budgets || project.originalProject?.budgets || [];
+        return sum + budgets.reduce((budgetSum: number, budget: any) => {
+          const quantity = typeof budget.quantity === 'string' ? parseFloat(budget.quantity) : (budget.quantity || 0);
+          return budgetSum + quantity;
+        }, 0);
+      }, 0);
+
+      // Group by plan
+      const planBreakdown = new Map();
+      yearProjects.forEach(project => {
+        const projectPlan = project.plan || project.originalProject?.plan;
+        if (projectPlan) {
+          if (!planBreakdown.has(projectPlan.id)) {
+            planBreakdown.set(projectPlan.id, {
+              planName: projectPlan.name,
+              projectCount: 0,
+              budget: 0
+            });
+          }
+          const planData = planBreakdown.get(projectPlan.id);
+          planData.projectCount += 1;
+          
+          const projectBudget = (project.budgets || project.originalProject?.budgets || []).reduce((sum: number, budget: any) => {
+            const quantity = typeof budget.quantity === 'string' ? parseFloat(budget.quantity) : (budget.quantity || 0);
+            return sum + quantity;
+          }, 0);
+          planData.budget += projectBudget;
+        }
+      });
+
+      timeline.push({
+        year,
+        totalBudget: Math.round(yearBudget * 100) / 100,
+        projectCount: yearProjects.length,
+        planBreakdown: Array.from(planBreakdown.values()).map(plan => ({
+          planName: plan.planName,
+          projectCount: plan.projectCount,
+          budget: Math.round(plan.budget * 100) / 100
+        }))
+      });
+    }
+
+    return timeline;
+  }
+
+  /**
+   * Get plan comparison data
+   */
+  private async getPlanComparison(allProjects: any[], plans: any[]): Promise<any> {
+    return plans.map(plan => {
+      const planProjects = allProjects.filter(project => {
+        const projectPlan = project.plan || project.originalProject?.plan;
+        return projectPlan && projectPlan.id === plan.id;
+      });
+
+      const totalBudget = planProjects.reduce((sum, project) => {
+        const budgets = project.budgets || project.originalProject?.budgets || [];
+        return sum + budgets.reduce((budgetSum: number, budget: any) => {
+          const quantity = typeof budget.quantity === 'string' ? parseFloat(budget.quantity) : (budget.quantity || 0);
+          return budgetSum + quantity;
+        }, 0);
+      }, 0);
+
+      // Calculate status breakdown
+      const statusBreakdown = planProjects.reduce((counts, project) => {
+        let statusName = 'Unknown';
+        if (project.trackingStatus && project.trackingStatus.length > 0) {
+          const latestTrackingStatus = project.trackingStatus.find(ts => ts.isLatest) || project.trackingStatus[0];
+          statusName = latestTrackingStatus?.statusId?.name || 'Unknown';
+        }
+        const category = this.mapStatusToCategory(statusName);
+        counts[category] = (counts[category] || 0) + 1;
+        return counts;
+      }, {});
+
+      // Calculate average budget per project
+      const averageBudgetPerProject = planProjects.length > 0 ? totalBudget / planProjects.length : 0;
+
+      // Calculate completion rate (approved projects / total projects)
+      const approvedProjects = statusBreakdown['approved'] || 0;
+      const completionRate = planProjects.length > 0 ? (approvedProjects / planProjects.length) * 100 : 0;
+
+      return {
+        planId: plan.id,
+        planName: plan.name,
+        totalBudget: Math.round(totalBudget * 100) / 100,
+        projectCount: planProjects.length,
+        averageBudgetPerProject: Math.round(averageBudgetPerProject * 100) / 100,
+        completionRate: Math.round(completionRate * 100) / 100,
+        statusBreakdown: {
+          approved: statusBreakdown['approved'] || 0,
+          pending: statusBreakdown['pending'] || 0,
+          rejected: statusBreakdown['rejected'] || 0
+        },
+        // Key metrics for comparison
+        budgetEfficiency: completionRate, // Higher completion rate = better efficiency
+        projectScale: planProjects.length > 10 ? 'large' : planProjects.length > 5 ? 'medium' : planProjects.length > 0 ? 'small' : 'none'
+      };
+    }).sort((a, b) => {
+      // Sort by total budget (descending), but keep plans with 0 budget at the end
+      if (a.totalBudget === 0 && b.totalBudget === 0) return 0;
+      if (a.totalBudget === 0) return 1;
+      if (b.totalBudget === 0) return -1;
+      return b.totalBudget - a.totalBudget;
+    });
+  }
+
+  /**
+   * Get trend analysis data
+   */
+  private async getTrendAnalysis(allProjects: any[], budgetPlan: any): Promise<any> {
+    const yearlyTrend: any[] = [];
+    const monthlyTrend: any[] = [];
+    
+    // Yearly trend
+    for (let year = budgetPlan.startYear; year <= budgetPlan.endYear; year++) {
+      const projectsInYear = allProjects.filter(project => {
+        const budgets = project.budgets || project.originalProject?.budgets || [];
+        return budgets.some(budget => budget.year === year);
+      });
+
+      const totalBudget = projectsInYear.reduce((sum, project) => {
+        const budgets = project.budgets || project.originalProject?.budgets || [];
+        return sum + budgets
+          .filter(budget => budget.year === year)
+          .reduce((budgetSum: number, budget: any) => {
+            const quantity = typeof budget.quantity === 'string' ? parseFloat(budget.quantity) : (budget.quantity || 0);
+            return budgetSum + quantity;
+          }, 0);
+      }, 0);
+
+      const approvedProjects = projectsInYear.filter(project => {
+        let statusName = 'Unknown';
+        if (project.trackingStatus && project.trackingStatus.length > 0) {
+          const latestTrackingStatus = project.trackingStatus.find(ts => ts.isLatest) || project.trackingStatus[0];
+          statusName = latestTrackingStatus?.statusId?.name || 'Unknown';
+        }
+        return this.mapStatusToCategory(statusName) === 'approved';
+      }).length;
+
+      yearlyTrend.push({
+        year,
+        totalBudget: Math.round(totalBudget * 100) / 100,
+        projectCount: projectsInYear.length,
+        approvedProjects,
+        approvalRate: projectsInYear.length > 0 ? Math.round((approvedProjects / projectsInYear.length) * 100 * 100) / 100 : 0
+      });
+    }
+
+    // Monthly trend (last 12 months)
+    const currentDate = new Date();
+    for (let i = 11; i >= 0; i--) {
+      const date = new Date(currentDate.getFullYear(), currentDate.getMonth() - i, 1);
+      const year = date.getFullYear();
+      const month = date.getMonth() + 1;
+      
+      const projectsInMonth = allProjects.filter(project => {
+        const createdDate = new Date(project.createdAt || project.originalProject?.createdAt);
+        return createdDate.getFullYear() === year && createdDate.getMonth() + 1 === month;
+      });
+
+      monthlyTrend.push({
+        year,
+        month,
+        monthName: date.toLocaleString('th-TH', { month: 'long' }),
+        newProjects: projectsInMonth.length
+      });
+    }
+
+    // Calculate growth rates
+    const budgetGrowth: any[] = [];
+    const projectGrowth: any[] = [];
+    
+    for (let i = 1; i < yearlyTrend.length; i++) {
+      const prevBudget = yearlyTrend[i - 1].totalBudget;
+      const currentBudget = yearlyTrend[i].totalBudget;
+      const prevProjects = yearlyTrend[i - 1].projectCount;
+      const currentProjects = yearlyTrend[i].projectCount;
+      
+      budgetGrowth.push({
+        year: yearlyTrend[i].year,
+        growthRate: prevBudget > 0 ? Math.round(((currentBudget - prevBudget) / prevBudget) * 100 * 100) / 100 : 0
+      });
+      
+      projectGrowth.push({
+        year: yearlyTrend[i].year,
+        growthRate: prevProjects > 0 ? Math.round(((currentProjects - prevProjects) / prevProjects) * 100 * 100) / 100 : 0
+      });
+    }
+
+    return {
+      yearlyTrend,
+      monthlyTrend,
+      budgetGrowth,
+      projectGrowth,
+      summary: {
+        totalBudget: Math.round(yearlyTrend.reduce((sum, year) => sum + year.totalBudget, 0) * 100) / 100,
+        averageYearlyBudget: yearlyTrend.length > 0 ? Math.round((yearlyTrend.reduce((sum, year) => sum + year.totalBudget, 0) / yearlyTrend.length) * 100) / 100 : 0,
+        totalProjects: yearlyTrend.reduce((sum, year) => sum + year.projectCount, 0),
+        averageApprovalRate: yearlyTrend.length > 0 ? Math.round((yearlyTrend.reduce((sum, year) => sum + year.approvalRate, 0) / yearlyTrend.length) * 100) / 100 : 0
+      }
+    };
+  }
+
+  
+  async findByStatusApproved(option: {
+    userId: string;
+    countOnly?: boolean;
+    budgetPlanId?: string;
+    filterByResponsibleAgency?: boolean;
+  }): Promise<IUnifiedProjectDisplay[] | number> {
+    const { userId, countOnly, budgetPlanId, filterByResponsibleAgency } = option;
+
+    // Validate user permissions
+    const workHistory = await this.workHistoryRepo.findOne({
+      where: { user: { id: userId } },
+      relations: ['workStatus', 'role', 'governmentAgencies'],
+    });
+    if (!workHistory) return countOnly ? 0 : [];
+    if (workHistory.workStatus.name !== 'approved')
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+
+    const allowedRoles = ['user','staff', 'admin', 'super-admin', 'c-level'];
     if (!allowedRoles.includes(workHistory.role.name))
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
 
@@ -1448,9 +3272,10 @@ export class ProjectGroupsService {
       throw new NotFoundException('Budget plan not found');
 
     // Query both original and revised projects
+    const responsibleAgencyId = filterByResponsibleAgency ? workHistory.governmentAgencies?.id : undefined;
     const [originalProjects, revisedProjects] = await Promise.all([
-      this.findOriginalApprovedProjects(budgetPlanId),
-      this.findRevisedApprovedProjects(budgetPlanId),
+      this.findOriginalApprovedProjects(budgetPlanId, responsibleAgencyId),
+      this.findRevisedApprovedProjects(budgetPlanId, responsibleAgencyId),
     ]);
 
     // If count only, return total count
@@ -1553,7 +3378,7 @@ export class ProjectGroupsService {
     if (workHistory.workStatus.name !== 'approved')
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
 
-    const allowedRoles = ['staff', 'admin', 'super-admin', 'c-level'];
+    const allowedRoles = ['user','staff', 'admin', 'super-admin', 'c-level'];
     if (!allowedRoles.includes(workHistory.role.name))
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
 
@@ -1911,7 +3736,7 @@ export class ProjectGroupsService {
   private async getWorkHistory(manager: EntityManager, userId: string) {
     const workHistory = await manager.findOne(WorkHistory, {
       where: { user: { id: userId } },
-      relations: ['user', 'localAdministrativeOrganization', 'governmentAgencies'],
+      relations: ['user', 'localAdministrativeOrganization', 'governmentAgencies', 'amphoe'],
     });
     if (!workHistory) {
       throw new NotFoundException('Work history ID not found');
@@ -1939,10 +3764,10 @@ export class ProjectGroupsService {
 
   private async validateForeignKeys(manager: EntityManager, dto: CreateProjectGroupDto) {
     const [budgetPlan, strategy, tactic, plan] = await Promise.all([
-      manager.findOne(BudgetPlan, { where: { id: dto.budgetPlanId } }),
-      manager.findOne(Strategy, { where: { id: dto.strategyId } }),
-      manager.findOne(Tactic, { where: { id: dto.tacticId } }),
-      manager.findOne(Plan, { where: { id: dto.planId } }),
+      manager.findOne(BudgetPlan, { where: { id: dto.budgetPlanId } }) ,
+      manager.findOne(Strategy, { where: { id: dto.strategyId } }) ,
+      manager.findOne(Tactic, { where: { id: dto.tacticId } }) ,
+      manager.findOne(Plan, { where: { id: dto.planId } }) ,
     ]);
 
     if (!budgetPlan) throw new NotFoundException(`Budget Plan ID not found: ${dto.budgetPlanId}`);

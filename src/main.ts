@@ -20,7 +20,7 @@ async function bootstrap() {
   app.use(helmet());
   
   app.enableCors({
-    origin: ['http://localhost:5173', 'https://restrict-villages-financial-locally.trycloudflare.com'], 
+    origin: ['http://localhost:5173', 'https://watched-usage-facility-structural.trycloudflare.com'], 
     credentials: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     allowedHeaders: ['Content-Type', 'Authorization', 'Secret-Key'],

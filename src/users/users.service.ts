@@ -71,7 +71,7 @@ export class UsersService {
           workHistory: {
             amphoe: true,
             localAdministrativeOrganization: true,
-            workHistoryResponsibleAdmins: {
+            workHistoryResponsibleAmphoe: {
               amphoe: true,
             },
             governmentAgencies: true,
@@ -95,7 +95,7 @@ export class UsersService {
           workHistory: {
             amphoe: true,
             localAdministrativeOrganization: true,
-            workHistoryResponsibleAdmins: {
+            workHistoryResponsibleAmphoe: {
               amphoe: true,
             },
             governmentAgencies: true,
@@ -123,10 +123,10 @@ export class UsersService {
       const { citizenId, ...otherDetails } = updateUserDto;
       const updatePayload: Partial<UpdateUserDto> = { ...otherDetails };
 
-      if (citizenId) {
-        updatePayload['citizenId'] = await encryption(citizenId);
-        updatePayload['citizenIdHash'] = hashCitizenId(citizenId);
-      }
+      // if (citizenId) {
+      //   updatePayload['citizenId'] = await encryption(citizenId);
+      //   updatePayload['citizenIdHash'] = hashCitizenId(citizenId);
+      // }
 
       const userToUpdate = await this.userRepository.preload({
         id,

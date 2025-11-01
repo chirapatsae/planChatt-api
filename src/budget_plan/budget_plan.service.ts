@@ -102,7 +102,7 @@ export class BudgetPlanService {
   async findAll(): Promise<BudgetPlan[]> {
     try {
       return await this.budgetPlanRepository.find({
-        relations: ['createdBy'],
+        relations: ['createdBy' , 'developmentPlanRevision' ,'developmentPlanRevision.revisionType' ],
         order: { createAt: 'DESC' },
         where: { isLatest: true },
       });

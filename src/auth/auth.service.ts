@@ -87,7 +87,7 @@ export class AuthService {
         user.lastname = decoded.family_name;
         user = await this.userService.update(user.id, user);
       }
-      const isFirstLogin = user.isFirstLogin ?? true;
+      const isFirstLogin = user.isFirstLogin ? true : false;
 
       const latestWH =
         user.workHistory

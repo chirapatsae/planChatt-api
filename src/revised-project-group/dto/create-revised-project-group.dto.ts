@@ -64,7 +64,12 @@ export class CreateRevisedProjectGroupDto {
   @IsOptional()
   planId?: string;
 
-  // budgetPlan is derived from developmentPlanRevision; no direct input needed
+  @IsOptional()
+  @IsUUID()
+  originAgencyId?: string | null;
+
+  @IsOptional()
+  responsibleAgency?: string;
 
   @IsOptional()
   additionalDetail?: string;

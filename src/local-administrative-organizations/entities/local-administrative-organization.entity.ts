@@ -56,4 +56,14 @@ export class LocalAdministrativeOrganization {
     },
   )
   originAgencyProjectGroup: ProjectGroup[];
+
+  @OneToMany(
+    () => ProjectGroup,
+    (projectGroup) => projectGroup.localAdministrativeOrganization,
+    {
+      onDelete: 'CASCADE',
+      onUpdate: 'CASCADE',
+    },
+  )
+  projectGroups: ProjectGroup[];
 }

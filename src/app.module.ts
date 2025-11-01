@@ -46,6 +46,8 @@ import { GovernmentAgenciesModule } from './government-agencies/government-agenc
 import { GovernmentAgency } from './government-agencies/entities/government-agency.entity';
 import { WorkHistoryAmphoeResponsibilityModule } from './work-history-amphoe-responsibility/work-history-amphoe-responsibility.module';
 import { WorkHistoryAmphoeResponsibility } from './work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity';
+import { WorkHistoryGovernmentAgencyResponsibilityModule } from './work-history-government-agency-responsibility/work-history-government-agency-responsibility.module';
+import { WorkHistoryGovernmentAgencyResponsibility } from './work-history-government-agency-responsibility/entities/work-history-government-agency-responsibility.entity';
 import { UserActivityLogsModule } from './user-activity-logs/user-activity-logs.module';
 import { AiUsageQuotasModule } from './ai-usage-quotas/ai-usage-quotas.module';
 import { UserActivityLog } from './user-activity-logs/entities/user-activity-log.entity';
@@ -81,6 +83,9 @@ import { DevelopmentPlanRevisionModule } from './development-plan-revision/devel
 import { DevelopmentPlanRevision } from './development-plan-revision/entities/development-plan-revision.entity';
 import { RevisedProjectGroupModule } from './revised-project-group/revised-project-group.module';
 import { RevisedProjectGroup } from './revised-project-group/entities/revised-project-group.entity';
+import { ExecutiveModule } from './executive/executive.module';
+import { PlanPhaseModule } from './plan-phase/plan-phase.module';
+import { PlanPhase } from './plan-phase/entities/plan-phase.entity';
 
 @Module({
   imports: [
@@ -108,6 +113,7 @@ import { RevisedProjectGroup } from './revised-project-group/entities/revised-pr
         Plan,
         PlanTactic,
         WorkHistoryAmphoeResponsibility,
+        WorkHistoryGovernmentAgencyResponsibility,
         WorkHistory,
         Amphoe,
         LocalAdministrativeOrganization,
@@ -138,6 +144,7 @@ import { RevisedProjectGroup } from './revised-project-group/entities/revised-pr
         RevisionType,
         DevelopmentPlanRevision,
         RevisedProjectGroup,
+        PlanPhase,
       ],
       synchronize: true,
       extra: {
@@ -166,6 +173,7 @@ import { RevisedProjectGroup } from './revised-project-group/entities/revised-pr
     PositionsModule,
     GovernmentAgenciesModule,
     WorkHistoryAmphoeResponsibilityModule,
+    WorkHistoryGovernmentAgencyResponsibilityModule,
     UserActivityLogsModule,
     AiUsageQuotasModule,
     AiUsageLogsModule,
@@ -183,6 +191,8 @@ import { RevisedProjectGroup } from './revised-project-group/entities/revised-pr
     RevisionTypeModule,
     DevelopmentPlanRevisionModule,
     RevisedProjectGroupModule,
+    ExecutiveModule,
+    PlanPhaseModule,
   ],
   controllers: [AppController, AiController],
   providers: [AppService, AiService],

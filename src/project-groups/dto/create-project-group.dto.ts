@@ -72,3 +72,55 @@ export class CreateProjectGroupDto {
   isDraft?: boolean;
 
 }
+
+export class CreateDraftProjectGroupDto {
+  @IsNotEmpty()
+  title: string;
+
+  @IsOptional()
+  objective?: string;
+
+  @IsOptional()
+  goal?: string;
+
+  @IsOptional()
+  @IsNumber()
+  startLat?: number;
+
+  @IsOptional()
+  @IsNumber()
+  startLng?: number;
+
+  @IsOptional()
+  @IsNumber()
+  endLat?: number;
+
+  @IsOptional()
+  @IsNumber()
+  endLng?: number;
+
+  @IsOptional()
+  indicator?: string;
+
+  @IsOptional()
+  expected?: string;
+
+  @IsNotEmpty()
+  @IsInt()
+  projectYear: number;
+
+  @IsOptional()
+  strategyId?: string;
+
+  @IsOptional()
+  tacticId?: string;
+
+  @IsOptional()
+  planId?: string;
+
+
+  @IsOptional()
+  @IsBoolean()
+  isDraft?: boolean;
+
+}

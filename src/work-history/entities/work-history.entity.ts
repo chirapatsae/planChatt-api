@@ -25,6 +25,8 @@ import { Plan } from 'src/plan/entities/plan.entity';
 import { Status } from 'src/status/entities/status.entity';
 import { Announcement } from 'src/announcements/entities/announcement.entity';
 import { UserNotification } from 'src/user-notifications/entities/user-notification.entity';
+import { WorkHistoryGovernmentAgencyResponsibility } from 'src/work-history-government-agency-responsibility/entities/work-history-government-agency-responsibility.entity';
+import { PlanPhase } from 'src/plan-phase/entities/plan-phase.entity';
 
 @Entity({ name: 'work_history' })
 export class WorkHistory {
@@ -111,13 +113,23 @@ export class WorkHistory {
 
   @OneToMany(
     () => WorkHistoryAmphoeResponsibility,
-    (workHistoryResponsibleAdmins) => workHistoryResponsibleAdmins.workHistory,
+    (workHistoryResponsibleAmphoe) => workHistoryResponsibleAmphoe.workHistory,
     {
       onDelete: 'CASCADE',
       onUpdate: 'CASCADE',
     },
   )
-  workHistoryResponsibleAdmins: WorkHistoryAmphoeResponsibility[];
+  workHistoryResponsibleAmphoe: WorkHistoryAmphoeResponsibility[];
+
+  @OneToMany(
+    () => WorkHistoryGovernmentAgencyResponsibility,
+    (workHistoryResponsibleGovernmentAgency) => workHistoryResponsibleGovernmentAgency.workHistory,
+    {
+      onDelete: 'CASCADE',
+      onUpdate: 'CASCADE',
+    },
+  )
+  workHistoryResponsibleGovernmentAgency: WorkHistoryGovernmentAgencyResponsibility[];
 
   @OneToMany(() => BudgetPlan, (budgetPlan) => budgetPlan.createdBy, {
     onDelete: 'CASCADE',
@@ -142,12 +154,6 @@ export class WorkHistory {
     onUpdate: 'CASCADE',
   })
   creatorProjectGroup: ProjectGroup[];
-
-  @OneToMany(() => ProjectGroup, (projectGroup) => projectGroup.responsibleBy, {
-    onDelete: 'CASCADE',
-    onUpdate: 'CASCADE',
-  })
-  responsibleProjectGroup: ProjectGroup[];
 
   @OneToMany(() => Tactic, (tactic) => tactic.createdBy, {
     onDelete: 'CASCADE',
@@ -214,6 +220,12 @@ export class WorkHistory {
     },
   )
   creatorAnnoucements: Announcement[];
+
+  @OneToMany(() => PlanPhase, (planPhase) => planPhase.createdBy, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  createdPlanPhases: PlanPhase[];
 
 
 }

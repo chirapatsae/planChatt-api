@@ -1,5 +1,5 @@
 // src/ai/ai.controller.ts
-import { Controller, Post, Body, UseGuards } from '@nestjs/common';
+import { Controller, Post, Get, Body, UseGuards, Query, Req } from '@nestjs/common';
 import { AiService } from './ai.service';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 import {
@@ -86,4 +86,5 @@ export class AiController {
     const newContent = await this.aiService.regenerateField(body);
     return { newContent };
   }
+
 }

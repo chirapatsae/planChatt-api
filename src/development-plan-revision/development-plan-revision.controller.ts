@@ -40,9 +40,6 @@ export class DevelopmentPlanRevisionController {
   @Get()
   async findAll(@Query('budgetPlanId') budgetPlanId?: string) {
     if (budgetPlanId) {
-      this.logger.log(
-        `Fetching revisions for budget plan: ${budgetPlanId}`,
-      );
       return this.developmentPlanRevisionService.findByBudgetPlan(budgetPlanId);
     }
     this.logger.log('Fetching all development plan revisions');

@@ -73,7 +73,6 @@ export class RevisedProjectGroupService {
 
         const budgetPlan = developmentPlanRevision.budgetPlan;
 
-        // Set isLatest = false for all previous revised projects of the same projectGroup
         if (projectGroup) {
           await manager.update(
             RevisedProjectGroup,
@@ -82,7 +81,6 @@ export class RevisedProjectGroupService {
           );
         }
 
-        // Create revised project group (isLatest = true by default)
         const revisedProjectGroup = manager.create(RevisedProjectGroup, {
           developmentPlanRevision,
           projectGroup,
@@ -102,6 +100,8 @@ export class RevisedProjectGroupService {
           plan,
           createdBy: workHistory,
           responsibleBy: workHistory,
+          originAgencyId: dto.originAgencyId ? { id: dto.originAgencyId } as any : null,
+          responsibleAgency: dto.responsibleAgency ? { id: dto.responsibleAgency } as any : null,
           additionalDetail: dto.additionalDetail,
           isLatest: true, // Set as latest version
         });
@@ -112,7 +112,7 @@ export class RevisedProjectGroupService {
         if (developmentPlanRevision.revisionType.name === 'แก้ไข') {
           const trackingStatus = manager.create(TrackingStatus, {
             revisedProjectGroupId: savedProject,
-            statusId: { id: '09b37525-31db-49f8-92be-7c8a14392ae1' } as any,
+            statusId: { id: '96be5646-cd55-4542-ae92-b82b2935167e' } as any,
             createdBy: workHistory,
           });
           await manager.save(trackingStatus);
@@ -120,7 +120,7 @@ export class RevisedProjectGroupService {
         if (developmentPlanRevision.revisionType.name === 'เปลี่ยนแปลง') {
           const trackingStatus = manager.create(TrackingStatus, {
             revisedProjectGroupId: savedProject,
-            statusId: { id: 'ac6275f0-0491-4cfe-86e7-307ed21a62a9' } as any,
+            statusId: { id: '96be5646-cd55-4542-ae92-b82b2935167e' } as any,
             createdBy: workHistory,
           });
           await manager.save(trackingStatus);

@@ -12,7 +12,7 @@ import {
   Query,
 } from '@nestjs/common';
 import { ProjectGroupsService } from './project-groups.service';
-import { CreateProjectGroupDto } from './dto/create-project-group.dto';
+import { CreateDraftProjectGroupDto, CreateProjectGroupDto } from './dto/create-project-group.dto';
 import { BulkAssignAgencyDto, UpdateProjectGroupDto } from './dto/update-project-group.dto';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
@@ -35,7 +35,7 @@ export class ProjectGroupsController {
 
   @Post('draft')
   async createDraft(
-    @Body() dto: CreateProjectGroupDto,
+    @Body() dto: CreateDraftProjectGroupDto,
     @Req() req: Request & { user: JwtPayloadUser },
   ) {
     return this.projectGroupsService.createDraft(dto, req.user.userId);
@@ -115,7 +115,7 @@ export class ProjectGroupsController {
     });
   }
   //นำเข้าคณะกรรมการระดับจังหวัด
-  @Get('/by-status-provincial-committee')
+  @Get('/by-status-pendding-approval-coordinate')
   async findByStatusProvincialCommittee(
     @Req() req: Request & { user: JwtPayloadUser },
     @Query('countOnly') countOnly?: string,
@@ -127,7 +127,7 @@ export class ProjectGroupsController {
     });
   }
     //นำเข้าคณะกรรมการพิจารณาแผน
-    @Get('/by-status-plan-committee')
+    @Get('/by-status-pending-approval')
     async findByStatusPlanCommittee(
       @Req() req: Request & { user: JwtPayloadUser },
       @Query('countOnly') countOnly?: string,
@@ -208,12 +208,13 @@ export class ProjectGroupsController {
     @Req() req: Request & { user: JwtPayloadUser },
     @Query('countOnly') countOnly?: string,
     @Query('budgetPlanId' , ParseUUIDPipe) budgetPlanId?: string,
-
+    @Query('filterByResponsibleAgency') filterByResponsibleAgency?: string,
   ) {
     return this.projectGroupsService.findByStatusApproved({
       userId: req.user.userId,
       countOnly: countOnly === 'true' || countOnly === '1',
       budgetPlanId,
+      filterByResponsibleAgency: filterByResponsibleAgency === 'true' || filterByResponsibleAgency === '1',
     });
   }
 
@@ -230,6 +231,12 @@ export class ProjectGroupsController {
       budgetPlanId,
     });
   }
+
+  @Get('executive/strategies')
+  async findExecutiveStrategies(@Req() req: Request & { user: JwtPayloadUser }) {
+    return this.projectGroupsService.findExecutiveStrategies(req.user.userId);
+  }
+
   @Get('delete')
   async findDelete(@Req() req: Request & { user: JwtPayloadUser }) {
     return this.projectGroupsService.findDelete(req.user.userId);
@@ -279,4 +286,25 @@ export class ProjectGroupsController {
   async restore(@Param('id', ParseUUIDPipe) id: string) {
     return this.projectGroupsService.restore(id);
   }
+
+  @Get('/executive/budget')
+  async getExecutiveDashboard(@Req() req: Request & { user: JwtPayloadUser }) {
+    return this.projectGroupsService.findExecutiveDashboard(req.user.userId);
+  }
+
+  @Get('/executive/plan')
+  async getExecutivePlanAnalysis(@Req() req: Request & { user: JwtPayloadUser }) {
+    return this.projectGroupsService.findExecutivePlanAnalysis(req.user.userId);
+  }
+
+  @Get('/executive/map')
+  async getExecutiveMapData(@Req() req: Request & { user: JwtPayloadUser }) {
+    return this.projectGroupsService.findExecutiveMapData(req.user.userId);
+  }
+
+  @Get('/executive/map-district')
+  async getExecutiveMapDistrictData(@Req() req: Request & { user: JwtPayloadUser }) {
+    return this.projectGroupsService.findExecutiveMapDistrictData(req.user.userId);
+  }
+
 }

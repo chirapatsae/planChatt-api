@@ -13,6 +13,8 @@ import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.ent
 import { Strategy } from 'src/strategy/entities/strategy.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
+import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
+import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
 
 @Module({
   imports: [
@@ -28,9 +30,12 @@ import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/
       TrackingStatus,
       RevisedProjectGroup,
       DevelopmentPlanRevision,
+      Amphoe,
+      LocalAdministrativeOrganization,
     ]),
   ],
   controllers: [ProjectGroupsController],
   providers: [ProjectGroupsService],
+  exports: [ProjectGroupsService],
 })
 export class ProjectGroupsModule {}

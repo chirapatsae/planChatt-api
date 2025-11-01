@@ -18,6 +18,7 @@ import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.ent
 import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
 import { GovernmentAgency } from 'src/government-agencies/entities/government-agency.entity';
 import { Favorite } from 'src/favorite/entities/favorite.entity';
+import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
 
 @Entity('project_groups')
 export class ProjectGroup {
@@ -57,6 +58,12 @@ export class ProjectGroup {
   @Column({ default: false })
   isDraft: boolean;
 
+  @Column({ default: false })
+  isBooked: boolean;
+
+  @Column({ type: 'timestamp', nullable: true })
+  bookedAt: Date | null;
+
   @ManyToOne(() => Strategy, (strategy) => strategy.projectGroup, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',
@@ -92,18 +99,35 @@ export class ProjectGroup {
   @JoinColumn({ name: 'create_by' })
   createdBy?: WorkHistory;
 
-  @ManyToOne(
-    () => WorkHistory,
-    (workHistory) => workHistory.responsibleProjectGroup,
-  )
-  @JoinColumn({ name: 'responsible_by' })
-  responsibleBy?: WorkHistory;
-
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
   @DeleteDateColumn({ name: 'deleted_at', nullable: true })
   deletedAt?: Date;
+
+  @ManyToOne(
+    () => Amphoe,
+    (amphoe) => amphoe.projectGroups,
+    {
+      onUpdate: 'CASCADE',
+      onDelete: 'CASCADE',
+      nullable: true,
+    },
+  )
+  @JoinColumn({ name: 'amphoe_id' })
+  amphoe?: Amphoe;
+
+  @ManyToOne(
+    () => LocalAdministrativeOrganization,
+    (lao) => lao.projectGroups,
+    {
+      onUpdate: 'CASCADE',
+      onDelete: 'CASCADE',
+      nullable: true,
+    },
+  )
+  @JoinColumn({ name: 'local_administrative_organization_id' })
+  localAdministrativeOrganization?: LocalAdministrativeOrganization;
 
   @ManyToOne(
     () => LocalAdministrativeOrganization,
