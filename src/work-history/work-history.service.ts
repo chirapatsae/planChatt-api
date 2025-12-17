@@ -150,6 +150,10 @@ export class WorkHistoryService {
           'work_history.workHistoryResponsibleAmphoe',
           'responsibilities',
         )
+        .leftJoinAndSelect(
+          'work_history.workHistoryResponsibleGovernmentAgency',
+          'governmentAgenciesResponsibilities',
+        )
         .leftJoinAndSelect('work_history.role', 'role')
         .leftJoinAndSelect('work_history.createdBy', 'createdBy')
         .leftJoinAndSelect('work_history.updatedBy', 'updatedBy')
@@ -159,12 +163,97 @@ export class WorkHistoryService {
           'governmentAgencies',
         )
         .leftJoinAndSelect('responsibilities.amphoe', 'respAmphoe')
+        .leftJoinAndSelect('governmentAgenciesResponsibilities.governmentAgency', 'respGovernmentAgency')
         .where('work_history.isCurrent = :isCurrent', { isCurrent: true });
       if (workStatusName)
         query.andWhere('workStatus.name = :workStatusName', { workStatusName });
       if (roleName) query.andWhere('role.name = :roleName', { roleName });
 
       return query.getMany();
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+  
+  async findPendingWorkHistory(): Promise<number> {
+    try {
+      const count = await this.workHistoryRepository.count({
+        where: { workStatus: { name: 'pending' } },
+      });
+      return count || 0;
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * Trigger ให้ backend ส่ง notification ไปหา role "staff"
+   * ว่ามี user รออนุมัติอยู่ โดยรับ userId จาก frontend
+   */
+  async notifyStaffPending(userId: string) {
+    try {
+      // ดึงข้อมูล user สำหรับใช้แสดงผลใน notification
+      const user = await this.userRepository.findOne({
+        where: { id: userId },
+      });
+
+      if (!user) {
+        throw new NotFoundException(`User with ID ${userId} not found`);
+      }
+
+      // นับจำนวน work history ที่สถานะ pending ทั้งหมด
+      const pendingCount = await this.workHistoryRepository.count({
+        where: { workStatus: { name: 'pending' } },
+      });
+
+      // ส่ง notification ไปยัง room role "staff"
+      await this.webSocketService.broadcastNotificationToRoles({
+        roleNames: ['staff'],
+        event: 'pending-approval',
+        data: {
+          pendingCount,
+          userId,
+          userName: `${user.firstname} ${user.lastname}`,
+          message: `มีผู้ใช้รออนุมัติ ${user.firstname} ${user.lastname}`,
+        },
+      });
+
+      return true;
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  async findAllByGovernmentAgencyId(id: string , role : string): Promise<WorkHistory[]> {
+    try {
+      const query = this.workHistoryRepository.find({
+        where: { governmentAgencies: { id } , role: { name: role } , workStatus: { name: 'approved' }},
+        relations: [
+          'user',
+          // 'amphoe',
+          // 'localAdministrativeOrganization',
+          // 'workStatus',
+          // 'role',
+        ]
+      });
+      return query;
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+  async findAllByLocalAdministrativeOrganizationId(id: string , role : string): Promise<WorkHistory[]> {
+    try {
+      const query = this.workHistoryRepository.find({
+        where: { localAdministrativeOrganization: { id: id } , role: { name: role } , workStatus: { name: 'approved' }},
+        relations: [
+          'user',
+          // 'amphoe',
+          // 'localAdministrativeOrganization',
+        //   'workStatus',
+        //   'role',
+        ]
+      });
+      return query;
     } catch (error) {
       handleException(this.logger, error);
     }

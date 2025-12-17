@@ -4,7 +4,7 @@ import { PhaseType } from '../entities/plan-phase.entity';
 export class CreatePlanPhaseDto {
   @IsNotEmpty()
   @IsUUID()
-  budgetPlanId: string;
+  developmentPlanId: string;
 
   @IsNotEmpty()
   @IsDateString()
@@ -21,4 +21,8 @@ export class CreatePlanPhaseDto {
   @IsOptional()
   @IsBoolean()
   isMerged?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  isOpen?: boolean;
 }

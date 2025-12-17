@@ -9,7 +9,7 @@ import { Repository } from 'typeorm';
 import { PlanPhase, PhaseType } from './entities/plan-phase.entity';
 import { CreatePlanPhaseDto } from './dto/create-plan-phase.dto';
 import { UpdatePlanPhaseDto } from './dto/update-plan-phase.dto';
-import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
+import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { handleException } from 'src/util/handleException';
 
@@ -20,8 +20,8 @@ export class PlanPhaseService {
   constructor(
     @InjectRepository(PlanPhase)
     private readonly planPhaseRepository: Repository<PlanPhase>,
-    @InjectRepository(BudgetPlan)
-    private readonly budgetPlanRepository: Repository<BudgetPlan>,
+    @InjectRepository(DevelopmentPlan)
+    private readonly developmentPlanRepository: Repository<DevelopmentPlan>,
     @InjectRepository(WorkHistory)
     private readonly workHistoryRepository: Repository<WorkHistory>,
   ) {}
@@ -31,7 +31,7 @@ export class PlanPhaseService {
     userId: string,
   ): Promise<PlanPhase> {
     try {
-      const { budgetPlanId, openDate, closeDate, phaseType, isMerged } =
+      const { developmentPlanId, openDate, closeDate, phaseType, isMerged } =
         createPlanPhaseDto;
 
       // Validate date range
@@ -44,14 +44,14 @@ export class PlanPhaseService {
         );
       }
 
-      // Validate budget plan exists
-      const budgetPlan = await this.budgetPlanRepository.findOne({
-        where: { id: budgetPlanId },
+      // Validate development plan exists
+      const developmentPlan = await this.developmentPlanRepository.findOne({
+        where: { id: developmentPlanId },
       });
 
-      if (!budgetPlan) {
+      if (!developmentPlan) {
         throw new NotFoundException(
-          `Budget Plan with ID ${budgetPlanId} not found`,
+          `Development Plan with ID ${developmentPlanId} not found`,
         );
       }
 
@@ -64,10 +64,10 @@ export class PlanPhaseService {
         throw new NotFoundException('Work history not found for this user');
       }
 
-      // Check for overlapping phases of the same type for this budget plan
+      // Check for overlapping phases of the same type for this development plan
       const overlappingPhases = await this.planPhaseRepository.find({
         where: {
-          budgetPlan: { id: budgetPlanId },
+          developmentPlan: { id: developmentPlanId },
           phaseType: phaseType,
         },
       });
@@ -84,16 +84,28 @@ export class PlanPhaseService {
 
       if (hasOverlap) {
         throw new BadRequestException(
-          `ช่วงวันที่นี้ซ้อนกับ Phase ${phaseType} อื่นของ Budget Plan นี้`,
+          `ช่วงวันที่นี้ซ้อนกับ Phase ${phaseType} อื่นของ Development Plan นี้`,
+        );
+      }
+
+      if (createPlanPhaseDto.isOpen) {
+        await this.planPhaseRepository.update(
+          {
+            developmentPlan: { id: developmentPlanId },
+            phaseType,
+            isOpen: true,
+          },
+          { isOpen: false },
         );
       }
 
       const planPhase = this.planPhaseRepository.create({
-        budgetPlan,
+        developmentPlan,
         openDate: startDate,
         closeDate: endDate,
         phaseType,
         isMerged: isMerged ?? false,
+        isOpen: createPlanPhaseDto.isOpen ?? true,
         createdBy: workHistory,
       });
 
@@ -103,16 +115,16 @@ export class PlanPhaseService {
     }
   }
 
-  async findAll(budgetPlanId?: string): Promise<PlanPhase[]> {
+  async findAll(developmentPlanId?: string): Promise<PlanPhase[]> {
     try {
       const where: any = {};
-      if (budgetPlanId) {
-        where.budgetPlan = { id: budgetPlanId };
+      if (developmentPlanId) {
+        where.developmentPlan = { id: developmentPlanId };
       }
 
       return await this.planPhaseRepository.find({
         where,
-        relations: ['budgetPlan', 'createdBy', 'createdBy.user'],
+        relations: ['developmentPlan', 'createdBy', 'createdBy.user'],
         order: { openDate: 'ASC' },
       });
     } catch (error) {
@@ -124,7 +136,7 @@ export class PlanPhaseService {
     try {
       const planPhase = await this.planPhaseRepository.findOne({
         where: { id },
-        relations: ['budgetPlan', 'createdBy', 'createdBy.user'],
+        relations: ['developmentPlan', 'createdBy', 'createdBy.user'],
       });
 
       if (!planPhase) {
@@ -144,7 +156,7 @@ export class PlanPhaseService {
     try {
       const planPhase = await this.planPhaseRepository.findOne({
         where: { id },
-        relations: ['budgetPlan'],
+        relations: ['developmentPlan'],
       });
 
       if (!planPhase) {
@@ -167,12 +179,12 @@ export class PlanPhaseService {
 
       // Check for overlapping phases if dates or phaseType are being updated
       const phaseType = updatePlanPhaseDto.phaseType ?? planPhase.phaseType;
-      const budgetPlanId = planPhase.budgetPlan.id;
+      const developmentPlanId = planPhase.developmentPlan.id;
 
       if (updatePlanPhaseDto.openDate || updatePlanPhaseDto.closeDate || updatePlanPhaseDto.phaseType) {
         const overlappingPhases = await this.planPhaseRepository.find({
           where: {
-            budgetPlan: { id: budgetPlanId },
+            developmentPlan: { id: developmentPlanId },
             phaseType: phaseType,
           },
         });
@@ -191,24 +203,38 @@ export class PlanPhaseService {
 
         if (hasOverlap) {
           throw new BadRequestException(
-            `ช่วงวันที่นี้ซ้อนกับ Phase ${phaseType} อื่นของ Budget Plan นี้`,
+            `ช่วงวันที่นี้ซ้อนกับ Phase ${phaseType} อื่นของ Development Plan นี้`,
           );
         }
       }
 
-      // Update budget plan if budgetPlanId is provided
-      if (updatePlanPhaseDto.budgetPlanId) {
-        const budgetPlan = await this.budgetPlanRepository.findOne({
-          where: { id: updatePlanPhaseDto.budgetPlanId },
+      // Update development plan if developmentPlanId is provided
+      if (updatePlanPhaseDto.developmentPlanId) {
+        const developmentPlan = await this.developmentPlanRepository.findOne({
+          where: { id: updatePlanPhaseDto.developmentPlanId },
         });
 
-        if (!budgetPlan) {
+        if (!developmentPlan) {
           throw new NotFoundException(
-            `Budget Plan with ID ${updatePlanPhaseDto.budgetPlanId} not found`,
+            `Development Plan with ID ${updatePlanPhaseDto.developmentPlanId} not found`,
           );
         }
 
-        planPhase.budgetPlan = budgetPlan;
+        planPhase.developmentPlan = developmentPlan;
+      }
+
+      const targetDevelopmentPlanId = planPhase.developmentPlan.id;
+      const targetPhaseType = updatePlanPhaseDto.phaseType ?? planPhase.phaseType;
+
+      if (updatePlanPhaseDto.isOpen === true && !planPhase.isOpen) {
+        await this.planPhaseRepository.update(
+          {
+            developmentPlan: { id: targetDevelopmentPlanId },
+            phaseType: targetPhaseType,
+            isOpen: true,
+          },
+          { isOpen: false },
+        );
       }
 
       // Merge updates
@@ -224,8 +250,41 @@ export class PlanPhaseService {
           updatePlanPhaseDto.isMerged !== undefined
             ? updatePlanPhaseDto.isMerged
             : planPhase.isMerged,
+        isOpen:
+          updatePlanPhaseDto.isOpen !== undefined
+            ? updatePlanPhaseDto.isOpen
+            : planPhase.isOpen,
       });
 
+      return await this.planPhaseRepository.save(planPhase);
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  async updateOpenState(id: string, isOpen: boolean): Promise<PlanPhase> {
+    try {
+      const planPhase = await this.planPhaseRepository.findOne({
+        where: { id },
+        relations: ['developmentPlan'],
+      });
+
+      if (!planPhase) {
+        throw new NotFoundException(`Plan Phase with ID ${id} not found`);
+      }
+
+      if (isOpen && !planPhase.isOpen) {
+        await this.planPhaseRepository.update(
+          {
+            developmentPlan: { id: planPhase.developmentPlan.id },
+            phaseType: planPhase.phaseType,
+            isOpen: true,
+          },
+          { isOpen: false },
+        );
+      }
+
+      planPhase.isOpen = isOpen;
       return await this.planPhaseRepository.save(planPhase);
     } catch (error) {
       handleException(this.logger, error);

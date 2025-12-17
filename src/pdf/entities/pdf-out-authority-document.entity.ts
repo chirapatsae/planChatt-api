@@ -1,5 +1,5 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
-import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
+import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { User } from 'src/users/entities/user.entity';
 
 @Entity('pdf_out_authority_documents')
@@ -7,8 +7,8 @@ export class PdfOutAuthorityDocument {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'budget_plan_id' })
-  budgetPlanId: string;
+  @Column({ name: 'development_plan_id' })
+  developmentPlanId: string;
 
   @Column({ name: 'version' })
   version: number;
@@ -29,9 +29,9 @@ export class PdfOutAuthorityDocument {
   createdAt: Date;
 
   // Relations
-  @ManyToOne(() => BudgetPlan)
-  @JoinColumn({ name: 'budget_plan_id' })
-  budgetPlan: BudgetPlan;
+  @ManyToOne(() => DevelopmentPlan)
+  @JoinColumn({ name: 'development_plan_id' })
+  developmentPlan: DevelopmentPlan;
 
   @ManyToOne(() => User)
   @JoinColumn({ name: 'created_by_id' })

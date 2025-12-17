@@ -35,6 +35,7 @@ export class WorkHistoryAmphoeResponsibilityController {
     @Body() dto: CreateWorkHistoryAmphoeResponsibilityDto,
     @Request() req: Request & { user: JwtPayloadUser },
   ) {
+    console.log(dto);
     return this.workHistoryAmphoeResponsibilityService.create(
       dto,
       req.user.userId,
@@ -60,7 +61,7 @@ export class WorkHistoryAmphoeResponsibilityController {
   @Patch(':id')
   update(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: UpdateWorkHistoryAmphoeResponsibilityDto,
+    @Body() dto: TransferResponsibilityDto,
     @Request() req: Request & { user: JwtPayloadUser },
   ) {
     return this.workHistoryAmphoeResponsibilityService.update(

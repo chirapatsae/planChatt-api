@@ -18,7 +18,7 @@ import { GovernmentAgency } from 'src/government-agencies/entities/government-ag
 import { WorkStatus } from 'src/work-status/entities/work-status.entity';
 import { Role } from 'src/roles/entities/role.entity';
 import { WorkHistoryAmphoeResponsibility } from 'src/work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity';
-import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
+import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { Strategy } from 'src/strategy/entities/strategy.entity';
 import { Tactic } from 'src/tactic/entities/tactic.entity';
 import { Plan } from 'src/plan/entities/plan.entity';
@@ -131,11 +131,11 @@ export class WorkHistory {
   )
   workHistoryResponsibleGovernmentAgency: WorkHistoryGovernmentAgencyResponsibility[];
 
-  @OneToMany(() => BudgetPlan, (budgetPlan) => budgetPlan.createdBy, {
+  @OneToMany(() => DevelopmentPlan, (developmentPlan) => developmentPlan.createdBy, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',
   })
-  budgetPlan: BudgetPlan[];
+  developmentPlan: DevelopmentPlan[];
 
   @OneToMany(() => Strategy, (strategy) => strategy.createdBy, {
     onDelete: 'CASCADE',

@@ -16,6 +16,9 @@ export class WorkStatus {
   @Column()
   name: string;
 
+  @Column({ name : 'th_name' , nullable: true })
+  thName?: string;
+
   @CreateDateColumn({ name: 'create_at' })
   createdAt: Date;
 

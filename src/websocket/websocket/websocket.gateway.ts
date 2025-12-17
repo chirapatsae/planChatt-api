@@ -12,7 +12,7 @@ import { Logger } from '@nestjs/common';
 
 @WebSocketGateway({
   cors: {
-    origin: ['http://localhost:5173', 'https://9094fafecec2.ngrok-free.app'],
+    origin: ['http://localhost:5173', 'https://pb.koratpao.go.th'],
     credentials: true,
   },
   namespace: '/api/v1/notifications',
@@ -209,5 +209,31 @@ export class WebsocketGateway
       }
     }
     return clients;
+  }
+
+  // Method to notify specific user about PDF generation progress
+  notifyPdfGenerationProgress(
+    userId: string,
+    developmentPlanId: string,
+    progress: {
+      percentage: number;
+      stage: string;
+      message?: string;
+    },
+  ) {
+    this.server.to(`user-${userId}`).emit('pdf-generation-progress', {
+      userId,
+      developmentPlanId,
+      progress: {
+        percentage: progress.percentage,
+        stage: progress.stage,
+        message: progress.message,
+      },
+      timestamp: new Date().toISOString(),
+    });
+
+    this.logger.log(
+      `PDF generation progress for user ${userId}, plan ${developmentPlanId}: ${progress.percentage}% - ${progress.stage}`,
+    );
   }
 }

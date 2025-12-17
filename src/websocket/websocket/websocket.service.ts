@@ -31,6 +31,16 @@ export interface RoleNotification {
   message?: string;
 }
 
+export interface PdfGenerationProgressNotification {
+  userId: string;
+  developmentPlanId: string;
+  progress: {
+    percentage: number;
+    stage: string;
+    message?: string;
+  };
+}
+
 @Injectable()
 export class WebsocketService {
   private readonly logger = new Logger(WebsocketService.name);
@@ -169,5 +179,39 @@ export class WebsocketService {
       updatedBy,
       timestamp: new Date(),
     });
+  }
+
+  /**
+   * ส่ง notification เมื่อ PDF generation มีความคืบหน้า
+   */
+  async notifyPdfGenerationProgress(
+    notification: PdfGenerationProgressNotification,
+  ) {
+    try {
+      const { userId, developmentPlanId, progress } = notification;
+
+      this.logger.log(
+        `Sending PDF generation progress to user ${userId}, plan ${developmentPlanId}: ${progress.percentage}% - ${progress.stage}`,
+      );
+
+      // ส่ง notification ไปยัง user เฉพาะ
+      this.webSocketGateway.notifyPdfGenerationProgress(
+        userId,
+        developmentPlanId,
+        progress,
+      );
+
+      return {
+        success: true,
+        message: `PDF generation progress sent successfully to user ${userId}`,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      this.logger.error(
+        `Failed to send PDF generation progress: ${error.message}`,
+        error.stack,
+      );
+      throw error;
+    }
   }
 }

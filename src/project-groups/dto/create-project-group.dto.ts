@@ -10,7 +10,6 @@ import {
   IsBoolean,
 } from 'class-validator';
 import { CreateBudgetDto } from 'src/budget/dto/create-budget.dto';
-import { Budget } from 'src/budget/entities/budget.entity';
 
 export class CreateProjectGroupDto {
   @IsNotEmpty()
@@ -59,7 +58,11 @@ export class CreateProjectGroupDto {
 
   @IsNotEmpty()
   @IsUUID()
-  budgetPlanId: string;
+  developmentPlanId: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isBooked?: boolean;
 
   @IsOptional()
   @IsArray()
@@ -67,9 +70,6 @@ export class CreateProjectGroupDto {
   @Type(() => CreateBudgetDto)
   budget?: CreateBudgetDto[];
 
-  @IsOptional()
-  @IsBoolean()
-  isDraft?: boolean;
 
 }
 
@@ -122,5 +122,15 @@ export class CreateDraftProjectGroupDto {
   @IsOptional()
   @IsBoolean()
   isDraft?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  isBooked?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateBudgetDto)
+  budget?: CreateBudgetDto[];
 
 }

@@ -1,11 +1,12 @@
 // src/ai/ai.controller.ts
-import { Controller, Post, Get, Body, UseGuards, Query, Req } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards } from '@nestjs/common';
 import { AiService } from './ai.service';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 import {
   GenerateProjectDto,
   RegenerateFieldDto,
 } from './dto/generate-project.dto';
+import { SmartApproveRequestDto } from './dto/smart-approve.dto';
 
 @Controller({
   version: '1',
@@ -85,6 +86,11 @@ export class AiController {
   async regenerateField(@Body() body: RegenerateFieldDto) {
     const newContent = await this.aiService.regenerateField(body);
     return { newContent };
+  }
+
+  @Post('smart-approve/analyze')
+  async analyzeSmartApprove(@Body() body: SmartApproveRequestDto) {
+    return this.aiService.analyzeProjectForSmartApprove(body);
   }
 
 }

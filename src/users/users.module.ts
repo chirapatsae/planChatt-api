@@ -13,5 +13,6 @@ import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.ent
   ],
   controllers: [UsersController],
   providers: [UsersService],
+  exports: [UsersService],
 })
 export class UsersModule {}

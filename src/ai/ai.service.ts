@@ -1,13 +1,19 @@
-import { Injectable, InternalServerErrorException, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { OpenAI } from 'openai';
 import { RegenerateFieldDto } from './dto/generate-project.dto';
-import { ProjectGroupsService } from '../project-groups/project-groups.service';
+import { SmartApproveRequestDto } from './dto/smart-approve.dto';
+import {
+  SmartApproveEvaluationResponse,
+  SmartApprovePrecheckService,
+} from './smart-approve-precheck.service';
 
 @Injectable()
 export class AiService {
   private openai: OpenAI;
 
-  constructor() {
+  constructor(
+    private readonly precheckService: SmartApprovePrecheckService,
+  ) {
     this.openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
     });
@@ -140,5 +146,323 @@ export class AiService {
         'เกิดข้อผิดพลาดในการสร้างข้อมูลใหม่จาก AI',
       );
     }
+  }
+
+  async analyzeProjectForSmartApprove(
+    dto: SmartApproveRequestDto,
+  ): Promise<SmartApproveEvaluationResponse> {
+
+    const precheck = this.precheckService.evaluate(dto);
+
+    if (!precheck.shouldUseLLM) {
+      return precheck.response;
+    }
+
+    const aiResult = await this.executeLlmSmartApproveAnalysis(
+      dto,
+      precheck.response,
+    );
+
+    return this.mergePrecheckAndAi(precheck.response, aiResult);
+  }
+
+  private async executeLlmSmartApproveAnalysis(
+    dto: SmartApproveRequestDto,
+    precheck: SmartApproveEvaluationResponse,
+  ): Promise<SmartApproveEvaluationResponse> {
+    const {
+      strategyName,
+      tacticName,
+      planName,
+      project,
+      additionalContext,
+    } = dto;
+
+    const systemPrompt =
+      'คุณคือนักวิเคราะห์นโยบายและแผนขององค์การบริหารส่วนท้องถิ่น (อบจ.) มีหน้าที่ประเมินโครงการตามกรอบราชการไทยอย่างรอบคอบและเป็นมืออาชีพ กำหนดผลการประเมินในรูปแบบ JSON ตาม schema ที่กำหนดเท่านั้น';
+
+    const budgetLines = (project.budgets || [])
+      .map(
+        (budget) =>
+          `- ปีงบประมาณ ${budget.year}: ${budget.quantity.toFixed(2)} บาท`,
+      )
+      .join('\n');
+
+    const locationTextParts: string[] = [];
+    if (project.startLat !== undefined && project.startLng !== undefined) {
+      locationTextParts.push(
+        `พิกัดเริ่มต้น: (${project.startLat}, ${project.startLng})`,
+      );
+    }
+    if (project.endLat !== undefined && project.endLng !== undefined) {
+      locationTextParts.push(
+        `พิกัดสิ้นสุด: (${project.endLat}, ${project.endLng})`,
+      );
+    }
+
+    const locationText =
+      locationTextParts.length > 0
+        ? locationTextParts.join('\n')
+        : 'ไม่มีข้อมูลพิกัดที่ส่งมา';
+
+    const projectDetails = `ข้อมูลโครงการ
+- ชื่อโครงการ: ${project.title}
+- วัตถุประสงค์: ${project.objective}
+- เป้าหมาย: ${project.goal}
+- ผลที่คาดว่าจะได้รับ: ${project.expected ?? 'ไม่ระบุ'}
+- ตัวชี้วัด: ${project.indicator ?? 'ไม่ระบุ'}
+- งบประมาณ:\n${budgetLines || '- ไม่ระบุ'}
+- ข้อมูลพื้นที่:\n${locationText}`;
+
+    const referenceDetails = `บริบทการอ้างอิง
+- ยุทธศาสตร์ที่เลือก: ${strategyName}
+- กลยุทธ์ที่เลือก: ${tacticName}
+- แผนงานที่เลือก: ${planName}`;
+
+    const precheckSummary = `ผลการตรวจสอบเบื้องต้นจากระบบ (ไม่ต้องปรับซ้ำ หากเห็นว่าเหมาะสมแล้ว):
+${JSON.stringify(precheck, null, 2)}`;
+
+    const instructions = `โปรดประเมินโครงการโดยยึดตามเกณฑ์ต่อไปนี้ (เฉพาะ 3 หมวดที่ต้องประเมิน):
+
+**1. หมวด "ข้อมูลโครงการ" (projectInfo):**
+- ตรวจสอบว่าชื่อโครงการ วัตถุประสงค์ และเป้าหมาย สอดคล้องกับยุทธศาสตร์/กลยุทธ์/แผนงานที่เลือกหรือไม่
+- ตรวจสอบว่าวัตถุประสงค์และเป้าหมายสอดคล้องกับชื่อโครงการหรือไม่
+- ประเมินความชัดเจนและความครอบคลุมของเนื้อหาโครงการ
+- ประเมินว่าข้อมูลเพียงพอหรือไม่เพียงพอและสื่อความหมายหรือไม่
+- ให้สถานะ "ผ่าน" หากข้อมูลเพียงพอ สอดคล้องและชัดเจน, "ควรปรับปรุง" หากข้อมูลไม่เพียงพอ ไม่ชัดเจน หรือต้องปรับแก้, "ไม่ผ่าน" หากไม่สอดคล้องอย่างชัดเจนหรือไม่สื่อความหมาย
+
+**2. หมวด "งบประมาณ" (budget):**
+- ตรวจสอบความสมเหตุสมผลของงบประมาณเมื่อเทียบกับกิจกรรมโครงการ
+- พิจารณาว่างบประมาณเพียงพอสำหรับการดำเนินโครงการหรือไม่ (เช่น สร้างถนน 5 บาท ไม่พอ)
+- ประเมินความเหมาะสมของงบประมาณรายปี
+- ประเมินว่าข้อมูลงบประมาณเพียงพอหรือไม่เพียงพอ ไม่สื่อความหมายหรือไม่
+- ให้สถานะ "ผ่าน" หากข้อมูลเพียงพอและสมเหตุสมผล, "ควรปรับปรุง" หากข้อมูลไม่เพียงพอ ไม่สมเหตุสมผล หรือต้องปรับแก้, "ไม่ผ่าน" หากไม่สมเหตุสมผลอย่างชัดเจน
+
+**3. หมวด "ตัวชี้วัดและผลที่คาดว่าจะได้รับ" (indicators):**
+- ตรวจสอบว่าตัวชี้วัดและผลที่คาดว่าจะได้รับสอดคล้องกับเป้าหมายและวัตถุประสงค์ของโครงการหรือไม่
+- ประเมินความชัดเจนและความสามารถในการวัดผล
+- ประเมินว่าข้อมูลตัวชี้วัดและผลที่คาดว่าจะได้รับเพียงพอหรือไม่เพียงพอ ไม่สื่อความหมายหรือไม่
+- ให้สถานะ "ผ่าน" หากข้อมูลเพียงพอ สอดคล้องและชัดเจน, "ควรปรับปรุง" หากข้อมูลไม่เพียงพอ ไม่ชัดเจน หรือต้องปรับแก้, "ไม่ผ่าน" หากไม่สอดคล้องอย่างชัดเจนหรือไม่สื่อความหมาย
+
+**หมายเหตุสำคัญ:**
+- หมวด "ยุทธศาสตร์และกลยุทธ์" (strategy) และ "พิกัด" (location) ไม่ต้องประเมิน ให้ใช้ผลจาก precheck ที่ส่งมาเท่านั้น
+- ค่า status ทุกหมวดต้องอยู่ในชุด {"ผ่าน", "ควรปรับปรุง", "ไม่ผ่าน"}
+- สรุปภาพรวม (overallResult) ต้องสอดคล้องกับการให้คะแนนรายหมวด
+- ให้เหตุผลสั้นๆ และข้อเสนอแนะเป็นรายการ bullet (array)
+
+ให้พิจารณาผล precheck ที่ส่งให้ หากเห็นว่าเหมาะสมแล้ว สามารถยืนยันผลเดิมได้เลย แต่หากมีข้อสังเกตเพิ่มเติม ให้ปรับปรุงรายละเอียดให้เหมาะสม
+
+ห้ามใช้คำตอบนอกเหนือจาก JSON schema ที่กำหนด`;
+
+    const additional = additionalContext
+      ? `บริบทเพิ่มเติมจากผู้ใช้:\n${additionalContext}`
+      : '';
+
+    const userPrompt = `${projectDetails}
+
+${referenceDetails}
+
+${precheckSummary}
+
+${additional}
+
+${instructions}`.trim();
+
+    const responseSchema = {
+      name: 'SmartApproveEvaluation',
+      schema: {
+        type: 'object',
+        properties: {
+          summary: {
+            type: 'object',
+            properties: {
+              overallResult: {
+                type: 'string',
+                enum: ['ผ่าน', 'ควรปรับปรุง', 'ไม่ผ่าน'],
+              },
+              reason: { type: 'string' },
+              suggestedActions: {
+                type: 'array',
+                items: { type: 'string' },
+              },
+            },
+            required: ['overallResult', 'reason', 'suggestedActions'],
+          },
+          categories: {
+            type: 'object',
+            properties: {
+              strategy: {
+                type: 'object',
+                properties: {
+                  status: {
+                    type: 'string',
+                    enum: ['ผ่าน', 'ควรปรับปรุง', 'ไม่ผ่าน'],
+                  },
+                  details: { type: 'string' },
+                  suggestions: {
+                    type: 'array',
+                    items: { type: 'string' },
+                  },
+                },
+                required: ['status', 'details', 'suggestions'],
+              },
+              projectInfo: {
+                type: 'object',
+                properties: {
+                  status: {
+                    type: 'string',
+                    enum: ['ผ่าน', 'ควรปรับปรุง', 'ไม่ผ่าน'],
+                  },
+                  details: { type: 'string' },
+                  suggestions: {
+                    type: 'array',
+                    items: { type: 'string' },
+                  },
+                },
+                required: ['status', 'details', 'suggestions'],
+              },
+              location: {
+                type: 'object',
+                properties: {
+                  status: {
+                    type: 'string',
+                    enum: ['ผ่าน', 'ควรปรับปรุง', 'ไม่ผ่าน'],
+                  },
+                  details: { type: 'string' },
+                  suggestions: {
+                    type: 'array',
+                    items: { type: 'string' },
+                  },
+                },
+                required: ['status', 'details', 'suggestions'],
+              },
+              budget: {
+                type: 'object',
+                properties: {
+                  status: {
+                    type: 'string',
+                    enum: ['ผ่าน', 'ควรปรับปรุง', 'ไม่ผ่าน'],
+                  },
+                  details: { type: 'string' },
+                  suggestions: {
+                    type: 'array',
+                    items: { type: 'string' },
+                  },
+                },
+                required: ['status', 'details', 'suggestions'],
+              },
+              indicators: {
+                type: 'object',
+                properties: {
+                  status: {
+                    type: 'string',
+                    enum: ['ผ่าน', 'ควรปรับปรุง', 'ไม่ผ่าน'],
+                  },
+                  details: { type: 'string' },
+                  suggestions: {
+                    type: 'array',
+                    items: { type: 'string' },
+                  },
+                },
+                required: ['status', 'details', 'suggestions'],
+              },
+            },
+            required: [
+              'strategy',
+              'projectInfo',
+              'location',
+              'budget',
+              'indicators',
+            ],
+          },
+        },
+        required: ['summary', 'categories'],
+      },
+    };
+
+    try {
+      const completion = await this.openai.chat.completions.create({
+        model: 'gpt-4o',
+        temperature: 0.2,
+        max_tokens: 2000,
+        response_format: { type: 'json_schema', json_schema: responseSchema },
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+      });
+
+      const content = completion.choices[0].message?.content;
+      if (!content) {
+        throw new InternalServerErrorException(
+          'ไม่สามารถประมวลผลผลลัพธ์การประเมินโครงการได้',
+        );
+      }
+
+      return JSON.parse(content);
+    } catch (error) {
+      console.error('Error calling OpenAI API for smart approve:', error);
+      throw new InternalServerErrorException(
+        'เกิดข้อผิดพลาดในการวิเคราะห์โครงการด้วย AI',
+      );
+    }
+  }
+
+  private mergePrecheckAndAi(
+    precheck: SmartApproveEvaluationResponse,
+    aiResult: SmartApproveEvaluationResponse,
+  ): SmartApproveEvaluationResponse {
+    const mergedCategories = Object.keys(precheck.categories).reduce(
+      (acc, key) => {
+        const categoryKey =
+          key as keyof SmartApproveEvaluationResponse['categories'];
+        const precheckCat = precheck.categories[categoryKey];
+        const aiCat = aiResult.categories[categoryKey];
+
+        // หมวด strategy และ location ใช้ผลจาก precheck เท่านั้น (ไม่ใช้ AI)
+        if (categoryKey === 'strategy' || categoryKey === 'location') {
+          acc[categoryKey] = precheckCat;
+          return acc;
+        }
+
+        // หมวด projectInfo, budget, indicators ใช้ผลจาก AI โดยตรง (ไม่ merge กับ precheck)
+        if (!aiCat) {
+          acc[categoryKey] = precheckCat;
+          return acc;
+        }
+
+        // ใช้ผลจาก AI โดยตรง
+        acc[categoryKey] = {
+          status: aiCat.status,
+          details: aiCat.details,
+          suggestions: aiCat.suggestions,
+        };
+        return acc;
+      },
+      {} as SmartApproveEvaluationResponse['categories'],
+    );
+
+    const summarySuggestions = new Set<string>([
+      ...precheck.summary.suggestedActions,
+      ...aiResult.summary.suggestedActions,
+    ]);
+
+    // คำนวณ overallResult ใหม่จาก categories ที่ merge แล้ว
+    const statuses = Object.values(mergedCategories).map((c) => c.status);
+    let overallResult: 'ผ่าน' | 'ควรปรับปรุง' | 'ไม่ผ่าน' = 'ผ่าน';
+    if (statuses.includes('ไม่ผ่าน')) {
+      overallResult = 'ไม่ผ่าน';
+    } else if (statuses.includes('ควรปรับปรุง')) {
+      overallResult = 'ควรปรับปรุง';
+    }
+
+    return {
+      summary: {
+        overallResult,
+        reason: aiResult.summary.reason || precheck.summary.reason,
+        suggestedActions: Array.from(summarySuggestions),
+      },
+      categories: mergedCategories,
+    };
   }
 }

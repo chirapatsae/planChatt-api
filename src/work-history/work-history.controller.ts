@@ -34,6 +34,33 @@ export class WorkHistoryController {
     return this.workHistoryService.findAll(status, role);
   }
 
+  @Get('/pending')
+  findPendingWorkHistory() {
+    return this.workHistoryService.findPendingWorkHistory();
+  }
+
+  @Post('/notify-staff-pending')
+  notifyStaffPending(
+    @Body('userId', ParseUUIDPipe) userId: string,
+  ) {
+    return this.workHistoryService.notifyStaffPending(userId);
+  }
+
+  @Get('/by-agency/:id')
+  findAllByAgencyId(
+    @Param('id') id: string,  
+    @Query('role') role: string
+  ) {
+    return this.workHistoryService.findAllByGovernmentAgencyId(id, role);
+  }
+  @Get('/by-lao/:id')
+  findAllByLaoId(
+    @Param('id') id: string,  
+    @Query('role') role: string
+  ) {
+    return this.workHistoryService.findAllByLocalAdministrativeOrganizationId(id, role);
+  }
+
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.workHistoryService.findOne(id);

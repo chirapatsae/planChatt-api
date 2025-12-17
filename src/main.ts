@@ -20,7 +20,7 @@ async function bootstrap() {
   app.use(helmet());
   
   app.enableCors({
-    origin: ['http://localhost:5173', 'https://watched-usage-facility-structural.trycloudflare.com'], 
+    origin: ['http://localhost:5173', 'https://stand-morning-older-pichunter.trycloudflare.com'], 
     credentials: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     allowedHeaders: ['Content-Type', 'Authorization', 'Secret-Key'],

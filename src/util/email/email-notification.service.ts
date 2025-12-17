@@ -6,7 +6,7 @@ import { User } from 'src/users/entities/user.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { Repository } from 'typeorm';
 import { ProjectListData } from './dto/email.dto';
-import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
+import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 
 export type EmailType = "SendToVerify" | "SentToEdit" | "Custom";
 
@@ -15,7 +15,7 @@ export interface EmailNotificationRequest {
   to: string | string[];
   subject?: string;
   data: ProjectListData | any;
-  budgetPlan?: any;
+  developmentPlan?: any;
   workHistory?: string;
   customSubject?: string;
   customText?: string;
@@ -35,8 +35,8 @@ export class EmailNotificationService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(WorkHistory)
     private readonly workHistoryRepository: Repository<WorkHistory>,
-    @InjectRepository(BudgetPlan)
-    private readonly budgetPlanRepository: Repository<BudgetPlan>
+    @InjectRepository(DevelopmentPlan)
+    private readonly developmentPlanRepository: Repository<DevelopmentPlan>
   ) {}
 
   /**
@@ -47,7 +47,7 @@ export class EmailNotificationService {
       let subject: string;
       let text: string;
       let html: string;
-      let budgetPlan = request.budgetPlan;
+      let developmentPlan = request.developmentPlan;
       let workHistory = request.workHistory;
       let totalCount = request.totalCount;
 
@@ -55,14 +55,14 @@ export class EmailNotificationService {
         case 'SendToVerify':
           const listData = request.data as ProjectListData[];
           subject = request.customSubject || `แจ้งการนำส่งโครงการเพื่อตรวจสอบ รายการโครงการ - (${totalCount} รายการ)`;
-          text = this.emailTemplatesService.generateProjectListText(listData, budgetPlan, workHistory || '', totalCount || 0);
-          html = this.emailTemplatesService.generateProjectListHTML(listData, budgetPlan, workHistory || '', totalCount || 0);
+          text = this.emailTemplatesService.generateProjectListText(listData, developmentPlan, workHistory || '', totalCount || 0);
+          html = this.emailTemplatesService.generateProjectListHTML(listData, developmentPlan, workHistory || '', totalCount || 0);
           break;
         case 'SentToEdit':
           const editListData = request.data as ProjectListData[];
           subject = request.customSubject || `แจ้งการส่งโครงการเพื่อแก้ไข รายการโครงการ - (${totalCount} รายการ)`;
-          text = this.emailTemplatesService.generateProjectEditText(editListData, budgetPlan, workHistory || '', request.reviewerName || 'ผู้ตรวจสอบ');
-          html = this.emailTemplatesService.generateProjectEditHTML(editListData, budgetPlan, workHistory || '', request.reviewerName || 'ผู้ตรวจสอบ');
+          text = this.emailTemplatesService.generateProjectEditText(editListData, developmentPlan, workHistory || '', request.reviewerName || 'ผู้ตรวจสอบ');
+          html = this.emailTemplatesService.generateProjectEditHTML(editListData, developmentPlan, workHistory || '', request.reviewerName || 'ผู้ตรวจสอบ');
           break;
         default:
           throw new Error(`Unsupported email type: ${request.type}`);
@@ -99,13 +99,13 @@ export class EmailNotificationService {
     type: EmailType = "SendToVerify",
     reviewerName?: string
   ): Promise<{ success: boolean; messageId?: string; error?: string }> {
-    const budgetPlan = await this.budgetPlanRepository.findOne({
+    const developmentPlan = await this.developmentPlanRepository.findOne({
       where: {isLatest: true},
     });
-    if (!budgetPlan) {
+    if (!developmentPlan) {
       return {
         success: false,
-        error: 'Budget plan not found'
+        error: 'Development plan not found'
       };
     }
     const user = await this.userRepository.findOne({
@@ -158,7 +158,7 @@ export class EmailNotificationService {
       // to: emailAddresses,
       to: ["skull.death1994@gmail.com"],
       data: listData,
-      budgetPlan: budgetPlan,
+      developmentPlan: developmentPlan,
       workHistory: organizationName,
       totalCount: listData.length,
       customSubject,

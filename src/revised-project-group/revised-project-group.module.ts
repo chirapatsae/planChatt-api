@@ -5,7 +5,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { RevisedProjectGroup } from './entities/revised-project-group.entity';
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
-import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
+import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { Strategy } from 'src/strategy/entities/strategy.entity';
 import { Tactic } from 'src/tactic/entities/tactic.entity';
 import { Plan } from 'src/plan/entities/plan.entity';
@@ -18,7 +18,7 @@ import { Budget } from 'src/budget/entities/budget.entity';
       RevisedProjectGroup,
       DevelopmentPlanRevision,
       ProjectGroup,
-      BudgetPlan,
+      DevelopmentPlan,
       Strategy,
       Tactic,
       Plan,

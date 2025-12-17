@@ -104,7 +104,7 @@ export class AnnouncementsService {
 
   async findAll(): Promise<Announcement[]> {
     return this.announcementRepository.find({
-      relations: ['createdBy', 'createdBy.user', 'announcementRoles', 'announcementRoles.role'],
+      relations: ['createdBy', 'createdBy.user', 'announcementRoles', 'announcementRoles.role', 'createdBy.amphoe', 'createdBy.localAdministrativeOrganization'],
       order: { createdAt: 'DESC' },
     });
   }
@@ -199,7 +199,7 @@ export class AnnouncementsService {
 
   async getWorkHistoriesByRole(roleId: string): Promise<WorkHistory[]> {
     return this.workHistoryRepository.find({
-      where: { role: { id: roleId } },
+      where: { role: { id: roleId } , workStatus: { name: 'approved' } },
       relations: ['user', 'role'],
     });
   }

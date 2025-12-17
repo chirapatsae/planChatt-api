@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, Repository } from 'typeorm';
 import { CreateWorkHistoryAmphoeResponsibilityDto } from './dto/create-work-history-amphoe-responsibility.dto';
 import {
+  TransferResponsibilityDto,
   UpdateWorkHistoryAmphoeResponsibilityDto,
 } from './dto/update-work-history-amphoe-responsibility.dto';
 import { WorkHistoryAmphoeResponsibility } from './entities/work-history-amphoe-responsibility.entity';
@@ -31,7 +32,7 @@ export class WorkHistoryAmphoeResponsibilityService {
     private readonly amphoeRepository: Repository<Amphoe>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-  ) {}
+  ) { }
 
   async create(
     dto: CreateWorkHistoryAmphoeResponsibilityDto,
@@ -146,7 +147,7 @@ export class WorkHistoryAmphoeResponsibilityService {
 
   async update(
     id: string,
-    dto: UpdateWorkHistoryAmphoeResponsibilityDto,
+    dto: TransferResponsibilityDto,
     assignedByUserId?: string,
   ): Promise<WorkHistoryAmphoeResponsibility> {
     try {
@@ -164,25 +165,20 @@ export class WorkHistoryAmphoeResponsibilityService {
           `Approved work history not pass the conditions for user ${assignedByUserId}`,
         );
       }
-
+      const newWorkHistory = await this.workHistoryRepository.findOne({
+        where: { id: dto.newWorkHistoryId },
+      });
+      if (!newWorkHistory)
+        throw new NotFoundException(
+          'Work history you want to transfer to not found',
+        );
       // เตรียม object update
       const updatePayload: Partial<WorkHistoryAmphoeResponsibility> = {
         id,
         assignedByWorkHistory,
-        amphoe: dto.amphoeId ? ({ id: dto.amphoeId } as any) : undefined,
+        workHistory: { id: newWorkHistory.id } as WorkHistory
       };
 
-      // ถ้ามีการเปลี่ยน workHistory
-      if (dto.workHistoryId) {
-        const newWorkHistory = await this.workHistoryRepository.findOne({
-          where: { id: dto.workHistoryId },
-        });
-        if (!newWorkHistory)
-          throw new NotFoundException(
-            'Work history you want to transfer to not found',
-          );
-        updatePayload.workHistory = newWorkHistory;
-      }
 
       const responsibility =
         await this.responsibilityRepository.preload(updatePayload);

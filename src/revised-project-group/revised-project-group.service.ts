@@ -3,6 +3,7 @@ import {
   NotFoundException,
   Logger,
   BadRequestException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
@@ -11,7 +12,7 @@ import { UpdateRevisedProjectGroupDto } from './dto/update-revised-project-group
 import { RevisedProjectGroup } from './entities/revised-project-group.entity';
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
-import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
+import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { Strategy } from 'src/strategy/entities/strategy.entity';
 import { Tactic } from 'src/tactic/entities/tactic.entity';
 import { Plan } from 'src/plan/entities/plan.entity';
@@ -19,6 +20,9 @@ import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { Budget } from 'src/budget/entities/budget.entity';
 import { handleException } from 'src/util/handleException';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
+import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
+import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
+import { GovernmentAgency } from 'src/government-agencies/entities/government-agency.entity';
 
 @Injectable()
 export class RevisedProjectGroupService {
@@ -34,8 +38,8 @@ export class RevisedProjectGroupService {
     @InjectRepository(ProjectGroup)
     private readonly projectGroupRepo: Repository<ProjectGroup>,
 
-    @InjectRepository(BudgetPlan)
-    private readonly budgetPlanRepo: Repository<BudgetPlan>,
+    @InjectRepository(DevelopmentPlan)
+    private readonly developmentPlanRepo: Repository<DevelopmentPlan>,
 
     @InjectRepository(Strategy)
     private readonly strategyRepo: Repository<Strategy>,
@@ -55,6 +59,13 @@ export class RevisedProjectGroupService {
     private readonly dataSource: DataSource,
   ) { }
 
+  // ========================================
+  // CRUD Operations (Basic)
+  // ========================================
+
+  /**
+   * สร้าง RevisedProjectGroup ใหม่
+   */
   async create(
     dto: CreateRevisedProjectGroupDto,
     userId: string,
@@ -71,18 +82,69 @@ export class RevisedProjectGroupService {
           workHistory,
         ] = await this.validateForeignKeys(manager, dto, userId);
 
-        const budgetPlan = developmentPlanRevision.budgetPlan;
+        // Get developmentPlan if provided, otherwise use from developmentPlanRevision
+        let developmentPlan: DevelopmentPlan | undefined;
+        if (dto.developmentPlanId) {
+          const foundPlan = await manager.findOne(DevelopmentPlan, {
+            where: { id: dto.developmentPlanId },
+          });
+          if (!foundPlan) {
+            throw new NotFoundException(
+              `DevelopmentPlan ID not found: ${dto.developmentPlanId}`,
+            );
+          }
+          developmentPlan = foundPlan;
+        } else {
+          developmentPlan = developmentPlanRevision.developmentPlan;
+        }
 
-        if (projectGroup) {
-          await manager.update(
-            RevisedProjectGroup,
-            { projectGroup: { id: projectGroup.id }, isLatest: true },
-            { isLatest: false },
+        // Get amphoe if provided
+        const amphoe = dto.amphoeId
+          ? await manager.findOne(Amphoe, { where: { id: dto.amphoeId } })
+          : null;
+        if (dto.amphoeId && !amphoe) {
+          throw new NotFoundException(`Amphoe ID not found: ${dto.amphoeId}`);
+        }
+
+        // Get localAdministrativeOrganization if provided
+        const localAdministrativeOrganization = dto.localAdministrativeOrganizationId
+          ? await manager.findOne(LocalAdministrativeOrganization, {
+            where: { id: dto.localAdministrativeOrganizationId },
+          })
+          : null;
+        if (dto.localAdministrativeOrganizationId && !localAdministrativeOrganization) {
+          throw new NotFoundException(
+            `LocalAdministrativeOrganization ID not found: ${dto.localAdministrativeOrganizationId}`,
+          );
+        }
+
+        // Get originAgencyId if provided
+        const originAgency = dto.originAgencyId
+          ? await manager.findOne(LocalAdministrativeOrganization, {
+            where: { id: dto.originAgencyId },
+          })
+          : null;
+        if (dto.originAgencyId && !originAgency) {
+          throw new NotFoundException(
+            `OriginAgency (LocalAdministrativeOrganization) ID not found: ${dto.originAgencyId}`,
+          );
+        }
+
+        // Get responsibleAgency if provided (required field)
+        const responsibleAgency = dto.responsibleAgency
+          ? await manager.findOne(GovernmentAgency, {
+            where: { id: dto.responsibleAgency },
+          })
+          : null;
+        if (!responsibleAgency) {
+          throw new NotFoundException(
+            `ResponsibleAgency (GovernmentAgency) ID is required and not found: ${dto.responsibleAgency}`,
           );
         }
 
         const revisedProjectGroup = manager.create(RevisedProjectGroup, {
           developmentPlanRevision,
+          developmentPlan,
           projectGroup,
           title: dto.title,
           objective: dto.objective,
@@ -94,16 +156,20 @@ export class RevisedProjectGroupService {
           indicator: dto.indicator,
           expected: dto.expected,
           projectYear: dto.projectYear,
-          isDraft: dto.isDraft ?? false,
           strategy,
           tactic,
           plan,
           createdBy: workHistory,
-          responsibleBy: workHistory,
-          originAgencyId: dto.originAgencyId ? { id: dto.originAgencyId } as any : null,
-          responsibleAgency: dto.responsibleAgency ? { id: dto.responsibleAgency } as any : null,
+          originAgencyId: originAgency || undefined,
+          responsibleAgency: responsibleAgency,
+          amphoe: amphoe || undefined,
+          localAdministrativeOrganization: localAdministrativeOrganization || undefined,
           additionalDetail: dto.additionalDetail,
-          isLatest: true, // Set as latest version
+          oldAdditionDetail: dto.oldAdditionDetail,
+          isBooked: dto.isBooked ?? false,
+          bookedAt: dto.bookedAt ?? null,
+          prevProjectId: dto.prevProjectId,
+          prevProjectType: dto.prevProjectType,
         });
 
         const savedProject = await manager.save(revisedProjectGroup);
@@ -128,14 +194,14 @@ export class RevisedProjectGroupService {
 
         // Create budgets if provided
         if (dto.budget && dto.budget.length > 0) {
-          // Validate budget year is within budget plan range
+          // Validate budget year is within development plan range
           for (const budgetItem of dto.budget) {
             if (
-              budgetItem.year < budgetPlan.startYear ||
-              budgetItem.year > budgetPlan.endYear
+              budgetItem.year < developmentPlan.startYear ||
+              budgetItem.year > developmentPlan.endYear
             ) {
               throw new BadRequestException(
-                `ปีงบประมาณต้องอยู่ในช่วง พ.ศ. ${budgetPlan.startYear} - ${budgetPlan.endYear} (ปีที่ส่งมา: ${budgetItem.year})`,
+                `ปีงบประมาณต้องอยู่ในช่วง พ.ศ. ${developmentPlan.startYear} - ${developmentPlan.endYear} (ปีที่ส่งมา: ${budgetItem.year})`,
               );
             }
           }
@@ -158,6 +224,9 @@ export class RevisedProjectGroupService {
     }
   }
 
+  /**
+   * ดึง RevisedProjectGroup ทั้งหมด
+   */
   async findAll(): Promise<RevisedProjectGroup[]> {
     try {
       return await this.revisedProjectGroupRepo.find({
@@ -169,7 +238,6 @@ export class RevisedProjectGroupService {
           'tactic',
           'plan',
           'createdBy',
-          'responsibleBy',
           'budgets',
         ],
         order: { createdAt: 'DESC' },
@@ -179,6 +247,9 @@ export class RevisedProjectGroupService {
     }
   }
 
+  /**
+   * ดึง RevisedProjectGroup ตาม revision ID
+   */
   async findByRevision(revisionId: string): Promise<RevisedProjectGroup[]> {
     try {
       return await this.revisedProjectGroupRepo.find({
@@ -191,7 +262,6 @@ export class RevisedProjectGroupService {
           'tactic',
           'plan',
           'createdBy',
-          'responsibleBy',
           'budgets',
         ],
         order: { createdAt: 'DESC' },
@@ -201,6 +271,9 @@ export class RevisedProjectGroupService {
     }
   }
 
+  /**
+   * ดึง RevisedProjectGroup ตาม ID
+   */
   async findOne(id: string): Promise<RevisedProjectGroup> {
     try {
       const revisedProject = await this.revisedProjectGroupRepo.findOne({
@@ -213,7 +286,6 @@ export class RevisedProjectGroupService {
           'tactic',
           'plan',
           'createdBy',
-          'responsibleBy',
           'budgets',
           'trackingStatus',
           'trackingStatus.statusId',
@@ -235,6 +307,9 @@ export class RevisedProjectGroupService {
     }
   }
 
+  /**
+   * อัพเดท RevisedProjectGroup
+   */
   async update(
     id: string,
     dto: UpdateRevisedProjectGroupDto,
@@ -274,6 +349,123 @@ export class RevisedProjectGroupService {
 
         // budgetPlan is no longer updated directly; it follows developmentPlanRevision
 
+        // Update strategy, tactic, plan if provided
+        if (dto.strategyId !== undefined) {
+          const strategy = await manager.findOne(Strategy, {
+            where: { id: dto.strategyId },
+          });
+          if (!strategy) {
+            throw new NotFoundException(`Strategy ID not found: ${dto.strategyId}`);
+          }
+          revisedProject.strategy = strategy;
+        }
+
+        if (dto.tacticId !== undefined) {
+          const tactic = await manager.findOne(Tactic, {
+            where: { id: dto.tacticId },
+          });
+          if (!tactic) {
+            throw new NotFoundException(`Tactic ID not found: ${dto.tacticId}`);
+          }
+          revisedProject.tactic = tactic;
+        }
+
+        if (dto.planId !== undefined) {
+          const plan = await manager.findOne(Plan, {
+            where: { id: dto.planId },
+          });
+          if (!plan) {
+            throw new NotFoundException(`Plan ID not found: ${dto.planId}`);
+          }
+          revisedProject.plan = plan;
+        }
+
+        // Update responsibleAgency if provided
+        if (dto.responsibleAgency !== undefined) {
+          const responsibleAgency = await manager.findOne(GovernmentAgency, {
+            where: { id: dto.responsibleAgency },
+          });
+          if (!responsibleAgency) {
+            throw new NotFoundException(
+              `GovernmentAgency ID not found: ${dto.responsibleAgency}`,
+            );
+          }
+          revisedProject.responsibleAgency = responsibleAgency;
+        }
+
+        // Update originAgencyId if provided
+        if (dto.originAgencyId !== undefined) {
+          if (dto.originAgencyId) {
+            const originAgency = await manager.findOne(
+              LocalAdministrativeOrganization,
+              {
+                where: { id: dto.originAgencyId },
+              },
+            );
+            if (!originAgency) {
+              throw new NotFoundException(
+                `LocalAdministrativeOrganization ID not found: ${dto.originAgencyId}`,
+              );
+            }
+            revisedProject.originAgencyId = originAgency;
+          } else {
+            revisedProject.originAgencyId = null as any; // Entity has nullable: true
+          }
+        }
+
+        // Update developmentPlan if provided
+        if (dto.developmentPlanId !== undefined) {
+          if (dto.developmentPlanId) {
+            const developmentPlan = await manager.findOne(DevelopmentPlan, {
+              where: { id: dto.developmentPlanId },
+            });
+            if (!developmentPlan) {
+              throw new NotFoundException(
+                `DevelopmentPlan ID not found: ${dto.developmentPlanId}`,
+              );
+            }
+            revisedProject.developmentPlan = developmentPlan;
+          } else {
+            revisedProject.developmentPlan = undefined;
+          }
+        }
+
+        // Update amphoe if provided
+        if (dto.amphoeId !== undefined) {
+          if (dto.amphoeId) {
+            const amphoe = await manager.findOne(Amphoe, {
+              where: { id: dto.amphoeId },
+            });
+            if (!amphoe) {
+              throw new NotFoundException(`Amphoe ID not found: ${dto.amphoeId}`);
+            }
+            revisedProject.amphoe = amphoe;
+          } else {
+            revisedProject.amphoe = undefined;
+          }
+        }
+
+        // Update localAdministrativeOrganization if provided
+        if (dto.localAdministrativeOrganizationId !== undefined) {
+          if (dto.localAdministrativeOrganizationId) {
+            const localAdministrativeOrganization = await manager.findOne(
+              LocalAdministrativeOrganization,
+              {
+                where: { id: dto.localAdministrativeOrganizationId },
+              },
+            );
+            if (!localAdministrativeOrganization) {
+              throw new NotFoundException(
+                `LocalAdministrativeOrganization ID not found: ${dto.localAdministrativeOrganizationId}`,
+              );
+            }
+            revisedProject.localAdministrativeOrganization =
+              localAdministrativeOrganization;
+          } else {
+            revisedProject.localAdministrativeOrganization = undefined;
+          }
+        }
+
         // Update other fields
         Object.assign(revisedProject, {
           title: dto.title ?? revisedProject.title,
@@ -286,8 +478,10 @@ export class RevisedProjectGroupService {
           indicator: dto.indicator ?? revisedProject.indicator,
           expected: dto.expected ?? revisedProject.expected,
           projectYear: dto.projectYear ?? revisedProject.projectYear,
-          isDraft: dto.isDraft ?? revisedProject.isDraft,
           additionalDetail: dto.additionalDetail ?? revisedProject.additionalDetail,
+          oldAdditionDetail: dto.oldAdditionDetail ?? revisedProject.oldAdditionDetail,
+          isBooked: dto.isBooked ?? revisedProject.isBooked,
+          bookedAt: dto.bookedAt ?? revisedProject.bookedAt,
         });
 
         return await manager.save(revisedProject);
@@ -297,6 +491,9 @@ export class RevisedProjectGroupService {
     }
   }
 
+  /**
+   * ลบ RevisedProjectGroup แบบถาวร (hard delete)
+   */
   async remove(id: string): Promise<{ message: string }> {
     try {
       const result = await this.revisedProjectGroupRepo.delete(id);
@@ -313,6 +510,9 @@ export class RevisedProjectGroupService {
     }
   }
 
+  /**
+   * ลบ RevisedProjectGroup แบบ soft delete
+   */
   async softRemove(id: string): Promise<{ message: string }> {
     try {
       const result = await this.revisedProjectGroupRepo.softDelete(id);
@@ -329,6 +529,9 @@ export class RevisedProjectGroupService {
     }
   }
 
+  /**
+   * คืนค่า RevisedProjectGroup ที่ถูกลบแบบ soft delete
+   */
   async restore(id: string): Promise<{ message: string }> {
     try {
       const result = await this.revisedProjectGroupRepo.restore(id);
@@ -345,6 +548,10 @@ export class RevisedProjectGroupService {
     }
   }
 
+  // ========================================
+  // Query Operations (General)
+  // ========================================
+
   /**
    * ดึงโครงการทั้งหมดจาก developmentPlanRevision ตัวล่าสุด (isLatest = true)
    * สำหรับหน้าติดตามโครงการที่ถูกขอแก้ไขหรือเปลี่ยนแปลง
@@ -355,15 +562,13 @@ export class RevisedProjectGroupService {
         .createQueryBuilder('rpg')
         .leftJoinAndSelect('rpg.developmentPlanRevision', 'dpr')
         .leftJoinAndSelect('dpr.revisionType', 'rt')
-        .leftJoinAndSelect('dpr.budgetPlan', 'bp')
+        .leftJoinAndSelect('dpr.developmentPlan', 'dp')
         .leftJoinAndSelect('rpg.projectGroup', 'pg')
         .leftJoinAndSelect('rpg.strategy', 'strategy')
         .leftJoinAndSelect('rpg.tactic', 'tactic')
         .leftJoinAndSelect('rpg.plan', 'plan')
         .leftJoinAndSelect('rpg.createdBy', 'createdBy')
         .leftJoinAndSelect('createdBy.user', 'createdByUser')
-        .leftJoinAndSelect('rpg.responsibleBy', 'responsibleBy')
-        .leftJoinAndSelect('responsibleBy.user', 'responsibleByUser')
         .leftJoinAndSelect('rpg.budgets', 'budgets')
         .leftJoinAndSelect('rpg.trackingStatus', 'trackingStatus')
         .leftJoinAndSelect('trackingStatus.statusId', 'statusId')
@@ -372,52 +577,574 @@ export class RevisedProjectGroupService {
         .leftJoinAndSelect('rpg.originAgencyId', 'originAgency')
         .leftJoinAndSelect('rpg.responsibleAgency', 'responsibleAgency')
         .where('dpr.is_latest = :isLatest', { isLatest: true })
-        .orderBy('rpg.created_at', 'DESC')
+        .orderBy('dpr.created_at', 'DESC')
         .getMany();
     } catch (error) {
       handleException(this.logger, error);
     }
   }
 
-  /**
-   * คำนวณว่าเป็น "แก้ไขครั้งที่" หรือ "เปลี่ยนแปลงครั้งที่" เท่าไหร่
-   * โดยนับจำนวน revision ก่อนหน้าที่เป็น type เดียวกัน
-   */
-  private async calculateRevisionOccurrence(
-    budgetPlanId: string,
-    currentRevisionNumber: number,
-    revisionTypeName: string,
-  ): Promise<number> {
-    // ดึง revisions ทั้งหมดที่มี revisionNumber น้อยกว่า และเป็น type เดียวกัน
-    const previousRevisionsOfSameType = await this.developmentPlanRevisionRepo
-      .createQueryBuilder('dpr')
-      .leftJoin('dpr.revisionType', 'rt')
-      .where('dpr.budget_plan_id = :budgetPlanId', { budgetPlanId })
-      .andWhere('dpr.revision_number < :currentRevisionNumber', {
-        currentRevisionNumber,
-      })
-      .andWhere('rt.name = :revisionTypeName', { revisionTypeName })
-      .getCount();
+  // ========================================
+  // Tracking Operations - ประเภท "แก้ไข"
+  // ========================================
 
-    // ครั้งที่ = จำนวนครั้งก่อนหน้า + 1
-    return previousRevisionsOfSameType + 1;
+  /**
+   * ดึงโครงการประเภท "แก้ไข" ที่มีสถานะ "Pending"
+   * @param developmentPlanId - ID ของ DevelopmentPlan (optional)
+   * @param developmentPlanRevisionId - ID ของ DevelopmentPlanRevision (optional)
+   * @param countOnly - ถ้าเป็น true จะ return จำนวนโครงการแทน array (optional)
+   * @param userId - ID ของ User สำหรับ role-based filtering (optional)
+   * @returns Array of RevisedProjectGroup หรือ number (count) ตามค่า countOnly
+   */
+  async findPendingRevisionProjects(
+    developmentPlanId?: string,
+    developmentPlanRevisionId?: string,
+    countOnly?: boolean,
+    userId?: string,
+  ): Promise<RevisedProjectGroup[] | number> {
+    try {
+      const query = this.revisedProjectGroupRepo
+        .createQueryBuilder('rpg')
+        .leftJoinAndSelect('rpg.developmentPlanRevision', 'dpr')
+        .leftJoinAndSelect('dpr.revisionType', 'rt')
+        .leftJoinAndSelect('dpr.developmentPlan', 'dp')
+        .leftJoinAndSelect('rpg.projectGroup', 'pg')
+        .leftJoinAndSelect('rpg.strategy', 'strategy')
+        .leftJoinAndSelect('rpg.tactic', 'tactic')
+        .leftJoinAndSelect('rpg.plan', 'plan')
+        .leftJoinAndSelect('rpg.developmentPlan', 'developmentPlan')
+        .leftJoinAndSelect('rpg.createdBy', 'createdBy')
+        .leftJoinAndSelect('createdBy.user', 'createdByUser')
+        .leftJoinAndSelect('rpg.amphoe', 'amphoe')
+        .leftJoinAndSelect('rpg.localAdministrativeOrganization', 'localAdministrativeOrganization')
+        .leftJoinAndSelect('rpg.originAgencyId', 'originAgency')
+        .leftJoinAndSelect('rpg.responsibleAgency', 'responsibleAgency')
+        .leftJoinAndSelect('rpg.budgets', 'budgets')
+        .leftJoinAndSelect('rpg.trackingStatus', 'trackingStatus')
+        .leftJoinAndSelect('trackingStatus.statusId', 'status')
+        .leftJoinAndSelect('trackingStatus.createdBy', 'trackingStatusCreatedBy')
+        .leftJoinAndSelect('trackingStatusCreatedBy.user', 'trackingStatusCreatedByUser')
+        .where('rt.name = :revisionTypeName', { revisionTypeName: 'แก้ไข' })
+        .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+        .andWhere('status.name = :statusName', { statusName: 'Pending' })
+        .andWhere('dpr.isLatest = :isLatestRevision', { isLatestRevision: true })
+        .andWhere('dpr.isBooked = :isBooked', { isBooked: false });
+
+      // Filter by developmentPlanId if provided
+      if (developmentPlanId) {
+        query.andWhere('dp.id = :developmentPlanId', { developmentPlanId });
+      }
+
+      // Filter by developmentPlanRevisionId if provided
+      if (developmentPlanRevisionId) {
+        query.andWhere('dpr.id = :developmentPlanRevisionId', {
+          developmentPlanRevisionId,
+        });
+      }
+
+      // Role-based filtering
+      if (userId) {
+        const workHistory = await this.workHistoryRepo.findOne({
+          where: { user: { id: userId }, isCurrent: true },
+          relations: [
+            'user',
+            'role',
+            'workStatus',
+            'workHistoryResponsibleGovernmentAgency',
+            'workHistoryResponsibleGovernmentAgency.governmentAgency',
+          ],
+        });
+
+        if (workHistory) {
+          const userRole = workHistory.role.name;
+
+          if (userRole === 'admin' || userRole === 'super-admin' || userRole === 'c-level') {
+            // Admin/Super-admin/C-level: เห็นทุกโครงการ
+            // ไม่เพิ่มเงื่อนไขกรองเพิ่มเติม
+          } else if (userRole === 'staff') {
+            // Staff: เห็นเฉพาะโครงการในอำเภอที่รับผิดชอบ
+            const responsibleGovernmentAgencyIds = workHistory.workHistoryResponsibleGovernmentAgency.map(
+              (resp) => resp.governmentAgency.id
+            );
+
+            if (responsibleGovernmentAgencyIds.length > 0) {
+              query.andWhere('responsibleAgency.id IN (:...responsibleGovernmentAgencyIds)', {
+                responsibleGovernmentAgencyIds
+              });
+            } else {
+              // ถ้าไม่ได้รับผิดชอบอำเภอใดเลย ให้ไม่เห็นโครงการใด
+              query.andWhere('1 = 0'); // Always false condition
+            }
+          } else {
+            query.andWhere('1 = 0'); // Always false condition
+          }
+        }
+      }
+
+      if (countOnly) {
+        const count = await query.getCount();
+        return count;
+      }
+
+      return await query.orderBy('rpg.created_at', 'DESC').getMany();
+    } catch (error) {
+      handleException(this.logger, error);
+    }
   }
 
   /**
-   * แสดงรายละเอียดโครงการพร้อมเปรียบเทียบข้อมูลเดิม
-   * - ถ้า revisionNumber = 1 → เทียบกับ ProjectGroup (เล่มแม่)
-   * - ถ้า revisionNumber > 1 → เทียบกับ RevisedProjectGroup จาก revision ก่อนหน้า (ไม่ว่า type จะเหมือนกันหรือไม่)
+   * ดึงโครงการประเภท "แก้ไข" ที่มีสถานะ "Verified"
+   * @param developmentPlanId - ID ของ DevelopmentPlan (optional)
+   * @param developmentPlanRevisionId - ID ของ DevelopmentPlanRevision (optional)
+   * @param countOnly - ถ้าเป็น true จะ return จำนวนโครงการแทน array (optional)
+   * @returns Array of RevisedProjectGroup หรือ number (count) ตามค่า countOnly
    */
+  async findVerifyRevisionProjects(
+    developmentPlanId?: string,
+    developmentPlanRevisionId?: string,
+    countOnly?: boolean,
+  ): Promise<RevisedProjectGroup[] | number> {
+    try {
+      const query = this.revisedProjectGroupRepo
+        .createQueryBuilder('rpg')
+        .leftJoinAndSelect('rpg.developmentPlanRevision', 'dpr')
+        .leftJoinAndSelect('dpr.revisionType', 'rt')
+        .leftJoinAndSelect('dpr.developmentPlan', 'dp')
+        .leftJoinAndSelect('rpg.projectGroup', 'pg')
+        .leftJoinAndSelect('rpg.strategy', 'strategy')
+        .leftJoinAndSelect('rpg.tactic', 'tactic')
+        .leftJoinAndSelect('rpg.plan', 'plan')
+        .leftJoinAndSelect('rpg.developmentPlan', 'developmentPlan')
+        .leftJoinAndSelect('rpg.createdBy', 'createdBy')
+        .leftJoinAndSelect('createdBy.user', 'createdByUser')
+        .leftJoinAndSelect('rpg.amphoe', 'amphoe')
+        .leftJoinAndSelect('rpg.localAdministrativeOrganization', 'localAdministrativeOrganization')
+        .leftJoinAndSelect('rpg.originAgencyId', 'originAgency')
+        .leftJoinAndSelect('rpg.responsibleAgency', 'responsibleAgency')
+        .leftJoinAndSelect('rpg.budgets', 'budgets')
+        .leftJoinAndSelect('rpg.trackingStatus', 'trackingStatus')
+        .leftJoinAndSelect('trackingStatus.statusId', 'status')
+        .leftJoinAndSelect('trackingStatus.createdBy', 'trackingStatusCreatedBy')
+        .leftJoinAndSelect('trackingStatusCreatedBy.user', 'trackingStatusCreatedByUser')
+        .where('rt.name = :revisionTypeName', { revisionTypeName: 'แก้ไข' })
+        .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+        .andWhere('status.name = :statusName', { statusName: 'Verified' })
+        .andWhere('dpr.isLatest = :isLatestRevision', { isLatestRevision: true })
+        .andWhere('dpr.isBooked = :isBooked', { isBooked: false });
+
+
+      // Filter by developmentPlanId if provided
+      if (developmentPlanId) {
+        query.andWhere('dp.id = :developmentPlanId', { developmentPlanId });
+      }
+
+      // Filter by developmentPlanRevisionId if provided
+      if (developmentPlanRevisionId) {
+        query.andWhere('dpr.id = :developmentPlanRevisionId', {
+          developmentPlanRevisionId,
+        });
+      }
+
+      if (countOnly) {
+        const count = await query.getCount();
+        return count;
+      }
+
+      return await query.orderBy('rpg.created_at', 'DESC').getMany();
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * ดึงโครงการประเภท "แก้ไข" ที่มีสถานะ "Pending Approval"
+   * @param developmentPlanId - ID ของ DevelopmentPlan (optional)
+   * @param developmentPlanRevisionId - ID ของ DevelopmentPlanRevision (optional)
+   * @param countOnly - ถ้าเป็น true จะ return จำนวนโครงการแทน array (optional)
+   * @returns Array of RevisedProjectGroup หรือ number (count) ตามค่า countOnly
+   */
+  async findVerifyPendingApprovalProjects(
+    developmentPlanId?: string,
+    developmentPlanRevisionId?: string,
+    countOnly?: boolean,
+  ): Promise<RevisedProjectGroup[] | number> {
+    try {
+      const query = this.revisedProjectGroupRepo
+        .createQueryBuilder('rpg')
+        .leftJoinAndSelect('rpg.developmentPlanRevision', 'dpr')
+        .leftJoinAndSelect('dpr.revisionType', 'rt')
+        .leftJoinAndSelect('dpr.developmentPlan', 'dp')
+        .leftJoinAndSelect('rpg.projectGroup', 'pg')
+        .leftJoinAndSelect('rpg.strategy', 'strategy')
+        .leftJoinAndSelect('rpg.tactic', 'tactic')
+        .leftJoinAndSelect('rpg.plan', 'plan')
+        .leftJoinAndSelect('rpg.developmentPlan', 'developmentPlan')
+        .leftJoinAndSelect('rpg.createdBy', 'createdBy')
+        .leftJoinAndSelect('createdBy.user', 'createdByUser')
+        .leftJoinAndSelect('rpg.amphoe', 'amphoe')
+        .leftJoinAndSelect('rpg.localAdministrativeOrganization', 'localAdministrativeOrganization')
+        .leftJoinAndSelect('rpg.originAgencyId', 'originAgency')
+        .leftJoinAndSelect('rpg.responsibleAgency', 'responsibleAgency')
+        .leftJoinAndSelect('rpg.budgets', 'budgets')
+        .leftJoinAndSelect('rpg.trackingStatus', 'trackingStatus')
+        .leftJoinAndSelect('trackingStatus.statusId', 'status')
+        .leftJoinAndSelect('trackingStatus.createdBy', 'trackingStatusCreatedBy')
+        .leftJoinAndSelect('trackingStatusCreatedBy.user', 'trackingStatusCreatedByUser')
+        .where('rt.name = :revisionTypeName', { revisionTypeName: 'แก้ไข' })
+        .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+        .andWhere('status.name = :statusName', { statusName: 'Pending_Approval' })
+        .andWhere('dpr.isLatest = :isLatestRevision', { isLatestRevision: true })
+        .andWhere('dpr.isBooked = :isBooked', { isBooked: false });
+
+      // Filter by developmentPlanId if provided
+      if (developmentPlanId) {
+        query.andWhere('dp.id = :developmentPlanId', { developmentPlanId });
+      }
+
+      // Filter by developmentPlanRevisionId if provided
+      if (developmentPlanRevisionId) {
+        query.andWhere('dpr.id = :developmentPlanRevisionId', {
+          developmentPlanRevisionId,
+        });
+      }
+
+      if (countOnly) {
+        const count = await query.getCount();
+        return count;
+      }
+
+      return await query.orderBy('rpg.created_at', 'DESC').getMany();
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * ดึงโครงการประเภท "แก้ไข" ที่มีสถานะ "Approved"
+   * @param developmentPlanId - ID ของ DevelopmentPlan (optional)
+   * @param developmentPlanRevisionId - ID ของ DevelopmentPlanRevision (optional)
+   * @param countOnly - ถ้าเป็น true จะ return จำนวนโครงการแทน array (optional)
+   * @returns Array of RevisedProjectGroup หรือ number (count) ตามค่า countOnly
+   */
+  async findApprovedProjects(
+    developmentPlanId?: string,
+    developmentPlanRevisionId?: string,
+    countOnly?: boolean,
+  ): Promise<RevisedProjectGroup[] | number> {
+    try {
+      const query = this.revisedProjectGroupRepo
+        .createQueryBuilder('rpg')
+        .leftJoinAndSelect('rpg.developmentPlanRevision', 'dpr')
+        .leftJoinAndSelect('dpr.revisionType', 'rt')
+        .leftJoinAndSelect('dpr.developmentPlan', 'dp')
+        .leftJoinAndSelect('rpg.projectGroup', 'pg')
+        .leftJoinAndSelect('rpg.strategy', 'strategy')
+        .leftJoinAndSelect('rpg.tactic', 'tactic')
+        .leftJoinAndSelect('rpg.plan', 'plan')
+        .leftJoinAndSelect('rpg.developmentPlan', 'developmentPlan')
+        .leftJoinAndSelect('rpg.createdBy', 'createdBy')
+        .leftJoinAndSelect('createdBy.user', 'createdByUser')
+        .leftJoinAndSelect('rpg.amphoe', 'amphoe')
+        .leftJoinAndSelect('rpg.localAdministrativeOrganization', 'localAdministrativeOrganization')
+        .leftJoinAndSelect('rpg.originAgencyId', 'originAgency')
+        .leftJoinAndSelect('rpg.responsibleAgency', 'responsibleAgency')
+        .leftJoinAndSelect('rpg.budgets', 'budgets')
+        .leftJoinAndSelect('rpg.trackingStatus', 'trackingStatus')
+        .leftJoinAndSelect('trackingStatus.statusId', 'status')
+        .leftJoinAndSelect('trackingStatus.createdBy', 'trackingStatusCreatedBy')
+        .leftJoinAndSelect('trackingStatusCreatedBy.user', 'trackingStatusCreatedByUser')
+        .where('rt.name = :revisionTypeName', { revisionTypeName: 'แก้ไข' })
+        .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+        .andWhere('status.name = :statusName', { statusName: 'Approved' })
+        .andWhere('dpr.isLatest = :isLatestRevision', { isLatestRevision: true })
+        .andWhere('dpr.isBooked = :isBooked', { isBooked: false });
+
+      // Filter by developmentPlanId if provided
+      if (developmentPlanId) {
+        query.andWhere('dp.id = :developmentPlanId', { developmentPlanId });
+      }
+
+      // Filter by developmentPlanRevisionId if provided
+      if (developmentPlanRevisionId) {
+        query.andWhere('dpr.id = :developmentPlanRevisionId', {
+          developmentPlanRevisionId,
+        });
+      }
+
+      if (countOnly) {
+        const count = await query.getCount();
+        return count;
+      }
+
+      return await query.orderBy('rpg.created_at', 'DESC').getMany();
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  // ========================================
+  // Tracking Operations - ประเภท "เปลี่ยนแปลง"
+  // ========================================
+
+  /**
+   * ดึงโครงการประเภท "เปลี่ยนแปลง" ที่มีสถานะ "Pending"
+   * @param developmentPlanId - ID ของ DevelopmentPlan (optional)
+   * @param developmentPlanRevisionId - ID ของ DevelopmentPlanRevision (optional)
+   * @param countOnly - ถ้าเป็น true จะ return จำนวนโครงการแทน array (optional)
+   * @returns Array of RevisedProjectGroup หรือ number (count) ตามค่า countOnly
+   */
+  async findPendingSupplementProjects(
+    developmentPlanId?: string,
+    developmentPlanRevisionId?: string,
+    countOnly?: boolean,
+  ): Promise<RevisedProjectGroup[] | number> {
+    try {
+      const query = this.revisedProjectGroupRepo
+        .createQueryBuilder('rpg')
+        .leftJoinAndSelect('rpg.developmentPlanRevision', 'dpr')
+        .leftJoinAndSelect('dpr.revisionType', 'rt')
+        .leftJoinAndSelect('dpr.developmentPlan', 'dp')
+        .leftJoinAndSelect('rpg.projectGroup', 'pg')
+        .leftJoinAndSelect('rpg.strategy', 'strategy')
+        .leftJoinAndSelect('rpg.tactic', 'tactic')
+        .leftJoinAndSelect('rpg.plan', 'plan')
+        .leftJoinAndSelect('rpg.developmentPlan', 'developmentPlan')
+        .leftJoinAndSelect('rpg.createdBy', 'createdBy')
+        .leftJoinAndSelect('createdBy.user', 'createdByUser')
+        .leftJoinAndSelect('rpg.amphoe', 'amphoe')
+        .leftJoinAndSelect('rpg.localAdministrativeOrganization', 'localAdministrativeOrganization')
+        .leftJoinAndSelect('rpg.originAgencyId', 'originAgency')
+        .leftJoinAndSelect('rpg.responsibleAgency', 'responsibleAgency')
+        .leftJoinAndSelect('rpg.budgets', 'budgets')
+        .leftJoinAndSelect('rpg.trackingStatus', 'trackingStatus')
+        .leftJoinAndSelect('trackingStatus.statusId', 'status')
+        .leftJoinAndSelect('trackingStatus.createdBy', 'trackingStatusCreatedBy')
+        .leftJoinAndSelect('trackingStatusCreatedBy.user', 'trackingStatusCreatedByUser')
+        .where('rt.name = :revisionTypeName', { revisionTypeName: 'เปลี่ยนแปลง' })
+        .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+        .andWhere('status.name = :statusName', { statusName: 'Pending' })
+        .andWhere('dpr.isLatest = :isLatestRevision', { isLatestRevision: true })
+        .andWhere('dpr.isBooked = :isBooked', { isBooked: false });
+
+      // Filter by developmentPlanId if provided
+      if (developmentPlanId) {
+        query.andWhere('dp.id = :developmentPlanId', { developmentPlanId });
+      }
+
+      // Filter by developmentPlanRevisionId if provided
+      if (developmentPlanRevisionId) {
+        query.andWhere('dpr.id = :developmentPlanRevisionId', {
+          developmentPlanRevisionId,
+        });
+      }
+
+      if (countOnly) {
+        const count = await query.getCount();
+        return count;
+      }
+
+      return await query.orderBy('rpg.created_at', 'DESC').getMany();
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * ดึงโครงการประเภท "เปลี่ยนแปลง" ที่มีสถานะ "Verified"
+   * @param developmentPlanId - ID ของ DevelopmentPlan (optional)
+   * @param developmentPlanRevisionId - ID ของ DevelopmentPlanRevision (optional)
+   * @param countOnly - ถ้าเป็น true จะ return จำนวนโครงการแทน array (optional)
+   * @returns Array of RevisedProjectGroup หรือ number (count) ตามค่า countOnly
+   */
+  async findVerifySupplementProjects(
+    developmentPlanId?: string,
+    developmentPlanRevisionId?: string,
+    countOnly?: boolean,
+  ): Promise<RevisedProjectGroup[] | number> {
+    try {
+      const query = this.revisedProjectGroupRepo
+        .createQueryBuilder('rpg')
+        .leftJoinAndSelect('rpg.developmentPlanRevision', 'dpr')
+        .leftJoinAndSelect('dpr.revisionType', 'rt')
+        .leftJoinAndSelect('dpr.developmentPlan', 'dp')
+        .leftJoinAndSelect('rpg.projectGroup', 'pg')
+        .leftJoinAndSelect('rpg.strategy', 'strategy')
+        .leftJoinAndSelect('rpg.tactic', 'tactic')
+        .leftJoinAndSelect('rpg.plan', 'plan')
+        .leftJoinAndSelect('rpg.developmentPlan', 'developmentPlan')
+        .leftJoinAndSelect('rpg.createdBy', 'createdBy')
+        .leftJoinAndSelect('createdBy.user', 'createdByUser')
+        .leftJoinAndSelect('rpg.amphoe', 'amphoe')
+        .leftJoinAndSelect('rpg.localAdministrativeOrganization', 'localAdministrativeOrganization')
+        .leftJoinAndSelect('rpg.originAgencyId', 'originAgency')
+        .leftJoinAndSelect('rpg.responsibleAgency', 'responsibleAgency')
+        .leftJoinAndSelect('rpg.budgets', 'budgets')
+        .leftJoinAndSelect('rpg.trackingStatus', 'trackingStatus')
+        .leftJoinAndSelect('trackingStatus.statusId', 'status')
+        .leftJoinAndSelect('trackingStatus.createdBy', 'trackingStatusCreatedBy')
+        .leftJoinAndSelect('trackingStatusCreatedBy.user', 'trackingStatusCreatedByUser')
+        .where('rt.name = :revisionTypeName', { revisionTypeName: 'เปลี่ยนแปลง' })
+        .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+        .andWhere('status.name = :statusName', { statusName: 'Verified' })
+        .andWhere('dpr.isLatest = :isLatestRevision', { isLatestRevision: true })
+        .andWhere('dpr.isBooked = :isBooked', { isBooked: false });
+
+      // Filter by developmentPlanId if provided
+      if (developmentPlanId) {
+        query.andWhere('dp.id = :developmentPlanId', { developmentPlanId });
+      }
+
+      // Filter by developmentPlanRevisionId if provided
+      if (developmentPlanRevisionId) {
+        query.andWhere('dpr.id = :developmentPlanRevisionId', {
+          developmentPlanRevisionId,
+        });
+      }
+
+      if (countOnly) {
+        const count = await query.getCount();
+        return count;
+      }
+
+      return await query.orderBy('rpg.created_at', 'DESC').getMany();
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * ดึงโครงการประเภท "เปลี่ยนแปลง" ที่มีสถานะ "Pending Approval"
+   * @param developmentPlanId - ID ของ DevelopmentPlan (optional)
+   * @param developmentPlanRevisionId - ID ของ DevelopmentPlanRevision (optional)
+   * @param countOnly - ถ้าเป็น true จะ return จำนวนโครงการแทน array (optional)
+   * @returns Array of RevisedProjectGroup หรือ number (count) ตามค่า countOnly
+   */
+  async findVerifyPendingApprovalSupplementProjects(
+    developmentPlanId?: string,
+    developmentPlanRevisionId?: string,
+    countOnly?: boolean,
+  ): Promise<RevisedProjectGroup[] | number> {
+    try {
+      const query = this.revisedProjectGroupRepo
+        .createQueryBuilder('rpg')
+        .leftJoinAndSelect('rpg.developmentPlanRevision', 'dpr')
+        .leftJoinAndSelect('dpr.revisionType', 'rt')
+        .leftJoinAndSelect('dpr.developmentPlan', 'dp')
+        .leftJoinAndSelect('rpg.projectGroup', 'pg')
+        .leftJoinAndSelect('rpg.strategy', 'strategy')
+        .leftJoinAndSelect('rpg.tactic', 'tactic')
+        .leftJoinAndSelect('rpg.plan', 'plan')
+        .leftJoinAndSelect('rpg.developmentPlan', 'developmentPlan')
+        .leftJoinAndSelect('rpg.createdBy', 'createdBy')
+        .leftJoinAndSelect('createdBy.user', 'createdByUser')
+        .leftJoinAndSelect('rpg.amphoe', 'amphoe')
+        .leftJoinAndSelect('rpg.localAdministrativeOrganization', 'localAdministrativeOrganization')
+        .leftJoinAndSelect('rpg.originAgencyId', 'originAgency')
+        .leftJoinAndSelect('rpg.responsibleAgency', 'responsibleAgency')
+        .leftJoinAndSelect('rpg.budgets', 'budgets')
+        .leftJoinAndSelect('rpg.trackingStatus', 'trackingStatus')
+        .leftJoinAndSelect('trackingStatus.statusId', 'status')
+        .leftJoinAndSelect('trackingStatus.createdBy', 'trackingStatusCreatedBy')
+        .leftJoinAndSelect('trackingStatusCreatedBy.user', 'trackingStatusCreatedByUser')
+        .where('rt.name = :revisionTypeName', { revisionTypeName: 'เปลี่ยนแปลง' })
+        .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+        .andWhere('status.name = :statusName', { statusName: 'Pending_Approval' })
+        .andWhere('dpr.isLatest = :isLatestRevision', { isLatestRevision: true })
+        .andWhere('dpr.isBooked = :isBooked', { isBooked: false });
+
+      // Filter by developmentPlanId if provided
+      if (developmentPlanId) {
+        query.andWhere('dp.id = :developmentPlanId', { developmentPlanId });
+      }
+
+      // Filter by developmentPlanRevisionId if provided
+      if (developmentPlanRevisionId) {
+        query.andWhere('dpr.id = :developmentPlanRevisionId', {
+          developmentPlanRevisionId,
+        });
+      }
+
+      if (countOnly) {
+        const count = await query.getCount();
+        return count;
+      }
+
+      return await query.orderBy('rpg.created_at', 'DESC').getMany();
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * ดึงโครงการประเภท "เปลี่ยนแปลง" ที่มีสถานะ "Approved"
+   * @param developmentPlanId - ID ของ DevelopmentPlan (optional)
+   * @param developmentPlanRevisionId - ID ของ DevelopmentPlanRevision (optional)
+   * @param countOnly - ถ้าเป็น true จะ return จำนวนโครงการแทน array (optional)
+   * @returns Array of RevisedProjectGroup หรือ number (count) ตามค่า countOnly
+   */
+  async findApprovedSupplementProjects(
+    developmentPlanId?: string,
+    developmentPlanRevisionId?: string,
+    countOnly?: boolean,
+  ): Promise<RevisedProjectGroup[] | number> {
+    try {
+      const query = this.revisedProjectGroupRepo
+        .createQueryBuilder('rpg')
+        .leftJoinAndSelect('rpg.developmentPlanRevision', 'dpr')
+        .leftJoinAndSelect('dpr.revisionType', 'rt')
+        .leftJoinAndSelect('dpr.developmentPlan', 'dp')
+        .leftJoinAndSelect('rpg.projectGroup', 'pg')
+        .leftJoinAndSelect('rpg.strategy', 'strategy')
+        .leftJoinAndSelect('rpg.tactic', 'tactic')
+        .leftJoinAndSelect('rpg.plan', 'plan')
+        .leftJoinAndSelect('rpg.developmentPlan', 'developmentPlan')
+        .leftJoinAndSelect('rpg.createdBy', 'createdBy')
+        .leftJoinAndSelect('createdBy.user', 'createdByUser')
+        .leftJoinAndSelect('rpg.amphoe', 'amphoe')
+        .leftJoinAndSelect('rpg.localAdministrativeOrganization', 'localAdministrativeOrganization')
+        .leftJoinAndSelect('rpg.originAgencyId', 'originAgency')
+        .leftJoinAndSelect('rpg.responsibleAgency', 'responsibleAgency')
+        .leftJoinAndSelect('rpg.budgets', 'budgets')
+        .leftJoinAndSelect('rpg.trackingStatus', 'trackingStatus')
+        .leftJoinAndSelect('trackingStatus.statusId', 'status')
+        .leftJoinAndSelect('trackingStatus.createdBy', 'trackingStatusCreatedBy')
+        .leftJoinAndSelect('trackingStatusCreatedBy.user', 'trackingStatusCreatedByUser')
+        .where('rt.name = :revisionTypeName', { revisionTypeName: 'เปลี่ยนแปลง' })
+        .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+        .andWhere('status.name = :statusName', { statusName: 'Approved' })
+        .andWhere('dpr.isLatest = :isLatestRevision', { isLatestRevision: true })
+        .andWhere('dpr.isBooked = :isBooked', { isBooked: false });
+
+      // Filter by developmentPlanId if provided
+      if (developmentPlanId) {
+        query.andWhere('dp.id = :developmentPlanId', { developmentPlanId });
+      }
+
+      // Filter by developmentPlanRevisionId if provided
+      if (developmentPlanRevisionId) {
+        query.andWhere('dpr.id = :developmentPlanRevisionId', {
+          developmentPlanRevisionId,
+        });
+      }
+
+      if (countOnly) {
+        const count = await query.getCount();
+        return count;
+      }
+
+      return await query.orderBy('rpg.created_at', 'DESC').getMany();
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  // ========================================
+  // Comparison Operations
+  // ========================================
+
   async findProjectComparison(id: string): Promise<{
     current: RevisedProjectGroup;
     previous: ProjectGroup | RevisedProjectGroup | null;
-    comparisonType: 'original' | 'revised' | 'new';
-    revisionInfo: {
-      revisionNumber: number;
-      revisionTypeName: string;
-      occurrence: number; // แก้ไขครั้งที่ X หรือ เปลี่ยนแปลงครั้งที่ X
-      displayName: string; // "แผนพัฒนาแก้ไขครั้งที่ 1"
-    };
   }> {
     try {
       // ดึงข้อมูลโครงการปัจจุบัน
@@ -426,15 +1153,14 @@ export class RevisedProjectGroupService {
         relations: [
           'developmentPlanRevision',
           'developmentPlanRevision.revisionType',
-          'developmentPlanRevision.budgetPlan',
+          'developmentPlanRevision.developmentPlan',
+          'developmentPlan',
           'projectGroup',
           'strategy',
           'tactic',
           'plan',
           'createdBy',
           'createdBy.user',
-          'responsibleBy',
-          'responsibleBy.user',
           'budgets',
           'trackingStatus',
           'trackingStatus.statusId',
@@ -452,112 +1178,74 @@ export class RevisedProjectGroupService {
       }
 
       let previous: ProjectGroup | RevisedProjectGroup | null = null;
-      let comparisonType: 'original' | 'revised' | 'new' = 'new';
-
-      const currentRevisionNumber =
-        current.developmentPlanRevision.revisionNumber;
-      const revisionTypeName = current.developmentPlanRevision.revisionType.name;
-      const budgetPlanId = current.developmentPlanRevision.budgetPlan.id;
-
-      // คำนวณว่าเป็นครั้งที่เท่าไหร่ (แก้ไขครั้งที่ X หรือ เปลี่ยนแปลงครั้งที่ X)
-      const occurrence = await this.calculateRevisionOccurrence(
-        budgetPlanId,
-        currentRevisionNumber,
-        revisionTypeName,
-      );
-
-      // สร้าง displayName
-      const displayName = `แผนพัฒนา${revisionTypeName}ครั้งที่ ${occurrence}`;
-
-      // ถ้ามี projectGroupId = เป็นการแก้ไข/เปลี่ยนแปลงโครงการเดิม
-      if (current.projectGroup) {
-        // ถ้า revisionNumber = 1 → เทียบกับเล่มแม่ (ProjectGroup)
-        if (currentRevisionNumber === 1) {
-          previous = await this.projectGroupRepo.findOne({
-            where: { id: current.projectGroup.id },
-            relations: [
-              'budgetPlan',
-              'strategy',
-              'tactic',
-              'plan',
-              'createdBy',
-              'createdBy.user',
-              'responsibleBy',
-              'responsibleBy.user',
-              'budgets',
-              'trackingStatus',
-              'trackingStatus.statusId',
-              'trackingStatus.createdBy',
-              'trackingStatus.createdBy.user',
-              'originAgencyId',
-              'responsibleAgency',
-            ],
-          });
-          comparisonType = 'original';
-        }
-        // ถ้า revisionNumber > 1 → เทียบกับ RevisedProjectGroup จาก revision ก่อนหน้า (revisionNumber - 1)
-        else if (currentRevisionNumber > 1) {
-          // ค้นหา revision ก่อนหน้า (revisionNumber - 1) ของโครงการเดิม
-          const previousRevision = await this.developmentPlanRevisionRepo.findOne(
-            {
-              where: {
-                budgetPlan: {
-                  id: budgetPlanId,
-                },
-                revisionNumber: currentRevisionNumber - 1,
-              },
-            },
-          );
-
-          if (previousRevision) {
-            // ค้นหา RevisedProjectGroup ที่เชื่อมกับ revision ก่อนหน้า และ projectGroup เดียวกัน
-            previous = await this.revisedProjectGroupRepo.findOne({
-              where: {
-                developmentPlanRevision: { id: previousRevision.id },
-                projectGroup: { id: current.projectGroup.id },
-              },
-              relations: [
-                'developmentPlanRevision',
-                'developmentPlanRevision.revisionType',
-                'developmentPlanRevision.budgetPlan',
-                'projectGroup',
-                'strategy',
-                'tactic',
-                'plan',
-                'createdBy',
-                'createdBy.user',
-                'responsibleBy',
-                'responsibleBy.user',
-                'budgets',
-                'trackingStatus',
-                'trackingStatus.statusId',
-                'trackingStatus.createdBy',
-                'trackingStatus.createdBy.user',
-                'originAgencyId',
-                'responsibleAgency',
-              ],
-            });
-          }
-          comparisonType = 'revised';
-        }
+      if (current.prevProjectType === "original") {
+        previous = await this.projectGroupRepo.findOne({
+          where: {
+            id: current.prevProjectId
+          },
+          relations: [
+            'developmentPlan',
+            'strategy',
+            'tactic',
+            'plan',
+            'createdBy',
+            'createdBy.user',
+            'budgets',
+            'trackingStatus',
+            'trackingStatus.statusId',
+            'trackingStatus.createdBy',
+            'trackingStatus.createdBy.user',
+            'originAgencyId',
+            'responsibleAgency',
+          ]
+        })
+      } else if (current.prevProjectType === "revised") {
+        previous = await this.revisedProjectGroupRepo.findOne({
+          where: {
+            id: current.prevProjectId
+          },
+          relations: [
+            'developmentPlanRevision',
+            'developmentPlanRevision.revisionType',
+            'developmentPlanRevision.developmentPlan',
+            'developmentPlan',
+            'projectGroup',
+            'strategy',
+            'tactic',
+            'plan',
+            'createdBy',
+            'createdBy.user',
+            'budgets',
+            'trackingStatus',
+            'trackingStatus.statusId',
+            'trackingStatus.createdBy',
+            'trackingStatus.createdBy.user',
+            'originAgencyId',
+            'responsibleAgency',
+          ]
+        })
+      } else {
+        throw new NotFoundException(
+          `Previous project type not found: ${current.prevProjectType}`,
+        );
       }
 
       return {
         current,
         previous,
-        comparisonType,
-        revisionInfo: {
-          revisionNumber: currentRevisionNumber,
-          revisionTypeName,
-          occurrence,
-          displayName,
-        },
       };
     } catch (error) {
       handleException(this.logger, error);
     }
   }
 
+  // ========================================
+  // Private Helper Methods
+  // ========================================
+
+  /**
+   * Validate และดึง foreign key entities
+   */
   private async validateForeignKeys(
     manager,
     dto: CreateRevisedProjectGroupDto,
@@ -581,7 +1269,7 @@ export class RevisedProjectGroupService {
     ] = await Promise.all([
       manager.findOne(DevelopmentPlanRevision, {
         where: { id: dto.developmentPlanRevisionId },
-        relations: ['budgetPlan', 'revisionType'],
+        relations: ['developmentPlan', 'revisionType'],
       }),
       dto.projectGroupId
         ? manager.findOne(ProjectGroup, { where: { id: dto.projectGroupId } })
@@ -606,14 +1294,14 @@ export class RevisedProjectGroupService {
       );
     }
     // budgetPlan is obtained from developmentPlanRevision
-    if (dto.strategyId && !strategy) {
-      throw new NotFoundException(`Strategy ID not found: ${dto.strategyId}`);
+    if (!strategy) {
+      throw new NotFoundException(`Strategy ID is required and not found: ${dto.strategyId}`);
     }
-    if (dto.tacticId && !tactic) {
-      throw new NotFoundException(`Tactic ID not found: ${dto.tacticId}`);
+    if (!tactic) {
+      throw new NotFoundException(`Tactic ID is required and not found: ${dto.tacticId}`);
     }
-    if (dto.planId && !plan) {
-      throw new NotFoundException(`Plan ID not found: ${dto.planId}`);
+    if (!plan) {
+      throw new NotFoundException(`Plan ID is required and not found: ${dto.planId}`);
     }
 
     const workHistory = await manager.findOne(WorkHistory, {
@@ -631,5 +1319,25 @@ export class RevisedProjectGroupService {
       plan,
       workHistory,
     ];
+  }
+
+  /**
+   * คำนวณว่าเป็น "แก้ไขครั้งที่" หรือ "เปลี่ยนแปลงครั้งที่" เท่าไหร่
+   * โดยนับจำนวน revision ไม่จำเป็นต้อง type เดียวกัน
+   */
+  private async calculateRevisionOccurrence(
+    developmentPlanId: string,
+    currentRevisionNumber: number,
+  ): Promise<DevelopmentPlanRevision[]> {
+    // ดึง revisions ทั้งหมดที่มี revisionNumber น้อยกว่า (ไม่จำกัด type)
+    const previousRevisions = await this.developmentPlanRevisionRepo
+      .createQueryBuilder('dpr')
+      .where('dpr.development_plan_id = :developmentPlanId', { developmentPlanId })
+      .andWhere('dpr.revision_number < :currentRevisionNumber', {
+        currentRevisionNumber,
+      }).getMany();
+
+    // ครั้งที่ = จำนวนครั้งก่อนหน้า + 1
+    return previousRevisions;
   }
 }

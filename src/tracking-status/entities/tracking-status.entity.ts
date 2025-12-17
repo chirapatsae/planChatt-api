@@ -2,6 +2,7 @@ import { Exclude } from 'class-transformer';
 import { Comment } from 'src/comments/entities/comment.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
+import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
 import { Status } from 'src/status/entities/status.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import {
@@ -75,6 +76,18 @@ export class TrackingStatus {
   )
   @JoinColumn({ name: 'revised_project_group_id' })
   revisedProjectGroupId: RevisedProjectGroup | null;
+
+  @ManyToOne(
+    () => SupplementProjectGroup,
+    (supplementProjectGroup) => supplementProjectGroup.trackingStatus,
+    {
+      onDelete: 'CASCADE',
+      onUpdate: 'CASCADE',
+      nullable: true,
+    },
+  )
+  @JoinColumn({ name: 'supplement_project_group_id' })
+  supplementProjectGroupId: SupplementProjectGroup | null;
 
   @ManyToOne(() => Status, (status) => status.trackingStatus, {
     onDelete: 'CASCADE',

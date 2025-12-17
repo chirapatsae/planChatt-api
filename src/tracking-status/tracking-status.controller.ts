@@ -37,6 +37,15 @@ export class TrackingStatusController {
     return this.trackingStatusService.create(dto, req.user.userId);
   }
 
+  @Post('create-by-revised-project-group')
+  createByRevisedProjectGroup(
+    @Body() dto: CreateTrackingStatusDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    this.logger.log('Request to create tracking status by revised project group');
+    return this.trackingStatusService.createByRevisedProjectGroup(dto, req.user.userId);
+  }
+
   @Post('bulk')
   createMany(
     @Body() dtos: CreateTrackingStatusDto[],
@@ -45,12 +54,43 @@ export class TrackingStatusController {
     return this.trackingStatusService.createMany(dtos, req.user.userId);
   }
 
+  @Post('bulk/revised-project-group')
+  createManyRevisedProjectGroup(
+    @Body() dtos: CreateTrackingStatusDto[],
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    return this.trackingStatusService.createManyRevisedProjectGroup(dtos, req.user.userId);
+  }
+
 
   @Get()
   findAll() {
     this.logger.log('Request to fetch all tracking statuses');
     return this.trackingStatusService.findAll();
   }
+
+  @Post('rollback/:projectGroupId')
+  rollbackStatus(
+    @Param('projectGroupId', ParseUUIDPipe) projectGroupId: string,
+    @Body() body: {
+      isResponsibleClear?: boolean
+      isBookedClear?: boolean
+    },
+  ) {
+    // รองรับทั้ง shouldClearResponsible (จากหน้าบ้าน) และ isResponsibleClear (backward compatibility)
+    this.logger.log(`Request to rollback tracking status for project group: ${projectGroupId}`)
+    return this.trackingStatusService.rollbackStatus(projectGroupId, body.isResponsibleClear , body.isBookedClear);
+  }
+
+
+  @Post('rollback/revised-project-group/:revisionProjectGroupId')
+  rollbackStatusRevisedProjectGroup(
+    @Param('revisionProjectGroupId', ParseUUIDPipe) revisionProjectGroupId: string,
+  ) {
+    this.logger.log(`Request to rollback tracking status for project group: ${revisionProjectGroupId}`);
+    return this.trackingStatusService.rollbackRevisionProjectGroupStatus(revisionProjectGroupId);
+  }
+
 
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string) {

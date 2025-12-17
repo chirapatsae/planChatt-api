@@ -3,6 +3,7 @@ import {
   IsNotEmpty,
   IsNumber,
   IsOptional,
+  IsString,
   IsUUID,
   ValidateNested,
 } from 'class-validator';
@@ -32,7 +33,11 @@ export class CreateTrackingStatusDto {
   @IsOptional()
   @ValidateNested({ each: true })
   @Type(() => CreateComments)
-  comments?: CreateComments[]
+  comments?: CreateComments[];
+
+  @IsOptional()
+  @IsString()
+  oldAdditionDetail?: string;
 }
 
 export class CreateComments {

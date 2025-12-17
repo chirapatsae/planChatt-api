@@ -3,18 +3,26 @@ import { DevelopmentPlanRevisionService } from './development-plan-revision.serv
 import { DevelopmentPlanRevisionController } from './development-plan-revision.controller';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DevelopmentPlanRevision } from './entities/development-plan-revision.entity';
-import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
+import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { RevisionType } from 'src/revision-type/entities/revision-type.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
+import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
+import { UsersModule } from 'src/users/users.module';
+import { PdfModule } from 'src/pdf/pdf.module';
+import { WebsocketModule } from 'src/websocket/websocket.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       DevelopmentPlanRevision,
-      BudgetPlan,
+      DevelopmentPlan,
       RevisionType,
       WorkHistory,
+      RevisedProjectGroup,
     ]),
+    UsersModule,
+    PdfModule,
+    WebsocketModule,
   ],
   controllers: [DevelopmentPlanRevisionController],
   providers: [DevelopmentPlanRevisionService],

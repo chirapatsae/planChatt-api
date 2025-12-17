@@ -13,7 +13,7 @@ import { DataSource, EntityManager, IsNull, Not, Repository } from 'typeorm';
 import { ProjectGroup } from './entities/project-group.entity';
 import { CreateDraftProjectGroupDto, CreateProjectGroupDto } from './dto/create-project-group.dto';
 import { BulkAssignAgencyDto, UpdateProjectGroupDto } from './dto/update-project-group.dto';
-import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
+import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
 import { Budget } from 'src/budget/entities/budget.entity';
 import { Tactic } from 'src/tactic/entities/tactic.entity';
@@ -32,6 +32,7 @@ import {
   UnifiedProjectMapper,
 } from './dto/unified-project-display.dto';
 import { IProjectVersionsResponse } from './dto/project-versions.dto';
+import { PdfOutAuthorityDocument } from 'src/pdf/entities/pdf-out-authority-document.entity';
 
 @Injectable()
 export class ProjectGroupsService {
@@ -44,8 +45,8 @@ export class ProjectGroupsService {
     @InjectRepository(WorkHistory)
     private readonly workHistoryRepo: Repository<WorkHistory>,
 
-    @InjectRepository(BudgetPlan)
-    private readonly budgetPlanRepo: Repository<BudgetPlan>,
+    @InjectRepository(DevelopmentPlan)
+    private readonly developmentPlanRepo: Repository<DevelopmentPlan>,
 
     @InjectRepository(TrackingStatus)
     private readonly trackingStatusRepo: Repository<TrackingStatus>,
@@ -77,6 +78,9 @@ export class ProjectGroupsService {
     @InjectRepository(LocalAdministrativeOrganization)
     private readonly localAdministrativeOrgRepo: Repository<LocalAdministrativeOrganization>,
 
+    @InjectRepository(PdfOutAuthorityDocument)
+    private readonly pdfOutAuthorityRepo: Repository<PdfOutAuthorityDocument>,
+
     private readonly dataSource: DataSource,
   ) { }
 
@@ -85,7 +89,7 @@ export class ProjectGroupsService {
       return await this.dataSource.transaction(async (manager) => {
         const workHistory = await this.getWorkHistory(manager, userId);
         await this.ensureNoDuplicateTitle(manager, dto.title, workHistory.id, undefined);
-        const [budgetPlan, strategy, tactic, plan] = await this.validateForeignKeys(manager, dto);
+        const [developmentPlan, strategy, tactic, plan] = await this.validateForeignKeys(manager, dto);
         const agencyData = this.getAgencyData(workHistory);
 
         const group = manager.create(ProjectGroup, {
@@ -99,13 +103,14 @@ export class ProjectGroupsService {
           indicator: dto.indicator,
           expected: dto.expected,
           projectYear: dto.projectYear,
+          isBooked: dto.isBooked ?? false,
           strategy,
           tactic,
           plan,
-          budgetPlan,
+          developmentPlan,
           createdBy: workHistory,
-          amphoe : {id : workHistory.amphoe.id},
-          localAdministrativeOrganization : {id : workHistory.localAdministrativeOrganization.id},
+          amphoe: { id: workHistory.amphoe.id },
+          localAdministrativeOrganization: { id: workHistory.localAdministrativeOrganization.id },
           ...agencyData,
         });
 
@@ -122,11 +127,12 @@ export class ProjectGroupsService {
         if (!Array.isArray(dto.budget) || dto.budget.length === 0) {
           throw new BadRequestException('งบประมาณไม่ถูกต้องหรือไม่มีข้อมูล');
         }
-        // Validate budget year is within budget plan range
+        const projectYear = new Date().getMonth() + 1 >= 10 ? new Date().getFullYear() + 544 : new Date().getFullYear() + 543
+        // Validate budget year is within development plan range
         for (const budgetItem of dto.budget) {
-          if (budgetItem.year < (budgetPlan as BudgetPlan).startYear || budgetItem.year > (budgetPlan as BudgetPlan).endYear) {
+          if (budgetItem.year < (developmentPlan as DevelopmentPlan).startYear || budgetItem.year > (developmentPlan as DevelopmentPlan).endYear || budgetItem.year < projectYear) {
             throw new BadRequestException(
-              `ปีงบประมาณต้องอยู่ในช่วง พ.ศ. ${(budgetPlan as BudgetPlan).startYear} - ${(budgetPlan as BudgetPlan).endYear} (ปีที่ส่งมา: ${budgetItem.year})`
+              `ปีงบประมาณต้องอยู่ในช่วง พ.ศ. ${(developmentPlan as DevelopmentPlan).startYear} - ${(developmentPlan as DevelopmentPlan).endYear} (ปีที่ส่งมา: ${budgetItem.year})`
             );
           }
         }
@@ -155,7 +161,7 @@ export class ProjectGroupsService {
       const savedDraft = await this.dataSource.transaction(async (manager) => {
         const workHistory = await this.getWorkHistory(manager, userId);
         await this.ensureNoDuplicateTitle(manager, dto.title, workHistory.id, undefined);
-        // Validate only strategy, tactic, plan for draft (skip budgetPlan validation)
+        // Validate only strategy, tactic, plan for draft (skip developmentPlan validation)
         const [strategy, tactic, plan] = await Promise.all([
           dto.strategyId ? manager.findOne(Strategy, { where: { id: dto.strategyId } }) : null,
           dto.tacticId ? manager.findOne(Tactic, { where: { id: dto.tacticId } }) : null,
@@ -165,14 +171,15 @@ export class ProjectGroupsService {
         if (dto.strategyId && !strategy) throw new NotFoundException(`Strategy ID not found: ${dto.strategyId}`);
         if (dto.tacticId && !tactic) throw new NotFoundException(`Tactic ID not found: ${dto.tacticId}`);
         if (dto.planId && !plan) throw new NotFoundException(`Plan ID not found: ${dto.planId}`);
-        
+
         const agencyData = this.getAgencyData(workHistory);
 
-        let projectGroupData : any = {
+        let projectGroupData: any = {
           title: dto.title,
           projectYear: dto.projectYear,
           createdBy: workHistory,
           isDraft: true,
+          isBooked: dto.isBooked ?? false,
           objective: dto.objective || '',
           goal: dto.goal || '',
           startLat: dto.startLat ?? null,
@@ -193,6 +200,27 @@ export class ProjectGroupsService {
           projectGroupData,
         );
         const savedGroupResult = await manager.save(group);
+
+        if (Array.isArray(dto.budget) && dto.budget.length > 0) {
+          const projectYear = new Date().getMonth() + 1 >= 10 ? new Date().getFullYear() + 544 : new Date().getFullYear() + 543;
+
+          for (const budgetItem of dto.budget) {
+            if (budgetItem.year < projectYear) {
+              throw new BadRequestException(
+                `ปีงบประมาณต้องไม่น้อยกว่าปีปัจจุบัน พ.ศ. ${projectYear} (ปีที่ส่งมา: ${budgetItem.year})`
+              );
+            }
+          }
+
+          const budgets = dto.budget.map((item) =>
+            manager.create(Budget, {
+              projectGroupId: { id: savedGroupResult.id },
+              year: item.year,
+              quantity: item.quantity,
+            })
+          );
+          await manager.save(budgets);
+        }
 
         return savedGroupResult;
       });
@@ -222,7 +250,7 @@ export class ProjectGroupsService {
 
         const workHistory = await this.getWorkHistory(manager, userId);
         await this.ensureNoDuplicateTitle(manager, dto.title, workHistory.id, id);
-        const [budgetPlan, strategy, tactic, plan] = await this.validateForeignKeys(manager, dto);
+        const [developmentPlan, strategy, tactic, plan] = await this.validateForeignKeys(manager, dto);
         const agencyData = this.getAgencyData(workHistory);
 
         // อัพเดท project group data
@@ -237,12 +265,13 @@ export class ProjectGroupsService {
           indicator: dto.indicator,
           expected: dto.expected,
           projectYear: dto.projectYear,
+          isBooked: dto.isBooked ?? false,
           strategy,
           tactic,
           plan,
-          budgetPlan,
-          amphoe : {id : workHistory.amphoe.id},
-          localAdministrativeOrganization : {id : workHistory.localAdministrativeOrganization.id},
+          developmentPlan,
+          amphoe: { id: workHistory.amphoe.id },
+          localAdministrativeOrganization: { id: workHistory.localAdministrativeOrganization.id },
           isDraft: false,
           ...agencyData,
         };
@@ -264,9 +293,9 @@ export class ProjectGroupsService {
         if (dto.budget && dto.budget.length > 0) {
           // Validate budget year is within budget plan range
           for (const budgetItem of dto.budget) {
-            if (budgetItem.year < (budgetPlan as BudgetPlan).startYear || budgetItem.year > (budgetPlan as BudgetPlan).endYear) {
+            if (budgetItem.year < (developmentPlan as DevelopmentPlan).startYear || budgetItem.year > (developmentPlan as DevelopmentPlan).endYear) {
               throw new BadRequestException(
-                `ปีงบประมาณต้องอยู่ในช่วง พ.ศ. ${(budgetPlan as BudgetPlan).startYear} - ${(budgetPlan as BudgetPlan).endYear} (ปีที่ส่งมา: ${budgetItem.year})`
+                `ปีงบประมาณต้องอยู่ในช่วง พ.ศ. ${(developmentPlan as DevelopmentPlan).startYear} - ${(developmentPlan as DevelopmentPlan).endYear} (ปีที่ส่งมา: ${budgetItem.year})`
               );
             }
           }
@@ -288,7 +317,7 @@ export class ProjectGroupsService {
     }
   }
 
-  async updateDraft(id: string, dto: CreateProjectGroupDto, userId: string) {
+  async updateDraft(id: string, dto: CreateDraftProjectGroupDto, userId: string) {
     try {
       await this.dataSource.transaction(async (manager) => {
         // ตรวจสอบว่า draft มีอยู่จริงและเป็นของ user นี้
@@ -307,7 +336,16 @@ export class ProjectGroupsService {
 
         const workHistory = await this.getWorkHistory(manager, userId);
         await this.ensureNoDuplicateTitle(manager, dto.title, workHistory.id, id);
-        const [budgetPlan, strategy, tactic, plan] = await this.validateForeignKeys(manager, dto);
+        // Validate only strategy, tactic, plan for draft (skip developmentPlan validation)
+        const [strategy, tactic, plan] = await Promise.all([
+          dto.strategyId ? manager.findOne(Strategy, { where: { id: dto.strategyId } }) : null,
+          dto.tacticId ? manager.findOne(Tactic, { where: { id: dto.tacticId } }) : null,
+          dto.planId ? manager.findOne(Plan, { where: { id: dto.planId } }) : null,
+        ]);
+
+        if (dto.strategyId && !strategy) throw new NotFoundException(`Strategy ID not found: ${dto.strategyId}`);
+        if (dto.tacticId && !tactic) throw new NotFoundException(`Tactic ID not found: ${dto.tacticId}`);
+        if (dto.planId && !plan) throw new NotFoundException(`Plan ID not found: ${dto.planId}`);
 
         // อัพเดท project group data
         const projectGroupData: any = {
@@ -321,10 +359,10 @@ export class ProjectGroupsService {
           indicator: dto.indicator || '',
           expected: dto.expected || '',
           projectYear: dto.projectYear,
+          isBooked: dto.isBooked ?? false,
           strategy,
           tactic,
           plan,
-          budgetPlan,
           isDraft: true,
         };
 
@@ -334,12 +372,13 @@ export class ProjectGroupsService {
         await manager.delete(Budget, { projectGroupId: { id } });
 
         // Create new budgets if provided
-        if (dto.budget && dto.budget.length > 0) {
-          // Validate budget year is within budget plan range
+        if (Array.isArray(dto.budget) && dto.budget.length > 0) {
+          const projectYear = new Date().getMonth() + 1 >= 10 ? new Date().getFullYear() + 544 : new Date().getFullYear() + 543;
+
           for (const budgetItem of dto.budget) {
-            if (budgetItem.year < (budgetPlan as BudgetPlan).startYear || budgetItem.year > (budgetPlan as BudgetPlan).endYear) {
+            if (budgetItem.year < projectYear) {
               throw new BadRequestException(
-                `ปีงบประมาณต้องอยู่ในช่วง พ.ศ. ${(budgetPlan as BudgetPlan).startYear} - ${(budgetPlan as BudgetPlan).endYear} (ปีที่ส่งมา: ${budgetItem.year})`
+                `ปีงบประมาณต้องไม่น้อยกว่าปีปัจจุบัน พ.ศ. ${projectYear} (ปีที่ส่งมา: ${budgetItem.year})`
               );
             }
           }
@@ -431,7 +470,7 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('projectGroup.strategy', 'strategy')
       .leftJoinAndSelect('projectGroup.tactic', 'tactic')
       .leftJoinAndSelect('projectGroup.plan', 'plan')
-      .leftJoinAndSelect('projectGroup.budgetPlan', 'budgetPlan')
+      .leftJoinAndSelect('projectGroup.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('projectGroup.budgets', 'budgets')
       .leftJoinAndSelect('projectGroup.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
@@ -466,14 +505,14 @@ export class ProjectGroupsService {
           query.andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
             .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
             .andWhere('status.name = :statusName', { statusName: 'Pending' })
-            .andWhere('budgetPlan.isLatest = :budgetPlanIsLatest', { budgetPlanIsLatest: true })
+            .andWhere('developmentPlan.isLatest = :developmentPlanIsLatest', { developmentPlanIsLatest: true })
           break;
         case 'edit':
           query.andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
             .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
             .andWhere('status.name = :statusName', { statusName: 'Revision' })
             .andWhere('projectGroup.createdBy.id = :workHistoryId', { workHistoryId: workHistory.id })
-            .andWhere('budgetPlan.isLatest = :budgetPlanIsLatest', { budgetPlanIsLatest: true });
+            .andWhere('developmentPlan.isLatest = :developmentPlanIsLatest', { developmentPlanIsLatest: true });
           break;
       }
     }
@@ -618,8 +657,15 @@ export class ProjectGroupsService {
   async findByStatusPendingCoordinate(options: {
     userId: string;
     countOnly?: boolean;
+    developmentPlanId?: string;
   }) {
-    const { userId, countOnly } = options;
+    const { userId, countOnly, developmentPlanId } = options;
+
+    const developmentPlan = await this.developmentPlanRepo.findOne({
+      where: { id: developmentPlanId }
+    });
+    if (!developmentPlan) throw new NotFoundException('Development plan not found');
+
     const workHistory = await this.workHistoryRepo.findOne({
       where: { user: { id: userId }, isCurrent: true },
       relations: [
@@ -645,7 +691,7 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('projectGroup.strategy', 'strategy')
       .leftJoinAndSelect('projectGroup.tactic', 'tactic')
       .leftJoinAndSelect('projectGroup.plan', 'plan')
-      .leftJoinAndSelect('projectGroup.budgetPlan', 'budgetPlan')
+      .leftJoinAndSelect('projectGroup.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('projectGroup.budgets', 'budgets')
       .leftJoinAndSelect('projectGroup.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
@@ -657,19 +703,21 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('workHistory.workStatus', 'workStatus')
       .leftJoinAndSelect('projectGroup.responsibleAgency', 'responsibleAgency')
       .leftJoinAndSelect('projectGroup.originAgencyId', 'originAgencyId')
-      .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
+      .leftJoinAndSelect('projectGroup.amphoe', 'projectAmphoe')
+      .leftJoinAndSelect('projectGroup.localAdministrativeOrganization', 'localAdministrativeOrganizationProject')
       .leftJoinAndSelect('projectGroup.favorites', 'favorites')
       .leftJoinAndSelect('favorites.userId', 'userId')
       .andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+      .andWhere('projectGroup.isBooked = :isBooked', { isBooked: false })
       .andWhere('status.name = :statusName', { statusName: 'Pending' })
       .andWhere('projectGroup.originAgencyId IS NOT NULL')
       .andWhere('projectGroup.responsibleAgency IS NULL')
-      .andWhere('budgetPlan.isLatest = :budgetPlanIsLatest', { budgetPlanIsLatest: true });
+      .andWhere('developmentPlan.id = :developmentPlanId', { developmentPlanId: developmentPlan.id });
 
-       // Role-based filtering
+    // Role-based filtering
     const userRole = workHistory.role.name;
-    
+
     if (userRole === 'admin' || userRole === 'super-admin' || userRole === 'c-level') {
       // Admin/Super-admin/C-level: เห็นทุกโครงการ
       // ไม่เพิ่มเงื่อนไขกรองเพิ่มเติม
@@ -678,18 +726,17 @@ export class ProjectGroupsService {
       const responsibleAmphoeIds = workHistory.workHistoryResponsibleAmphoe.map(
         (resp) => resp.amphoe.id
       );
-      
       if (responsibleAmphoeIds.length > 0) {
-        query.andWhere('amphoe.id IN (:...responsibleAmphoeIds)', { 
-          responsibleAmphoeIds 
+        query.andWhere('amphoe.id IN (:...responsibleAmphoeIds)', {
+          responsibleAmphoeIds
         });
       } else {
         // ถ้าไม่ได้รับผิดชอบอำเภอใดเลย ให้ไม่เห็นโครงการใด
         query.andWhere('1 = 0'); // Always false condition
       }
     } else {
-        // ถ้าไม่มีหน่วยงาน ให้ไม่เห็นโครงการใด
-        query.andWhere('1 = 0'); // Always false condition
+      // ถ้าไม่มีหน่วยงาน ให้ไม่เห็นโครงการใด
+      query.andWhere('1 = 0'); // Always false condition
     }
 
 
@@ -704,11 +751,17 @@ export class ProjectGroupsService {
 
     return projects;
   }
+
   async findByStatusPendingAgency(options: {
     userId: string;
     countOnly?: boolean;
+    developmentPlanId?: string;
   }) {
-    const { userId, countOnly } = options;
+    const { userId, countOnly, developmentPlanId } = options;
+    const developmentPlan = await this.developmentPlanRepo.findOne({
+      where: { id: developmentPlanId }
+    });
+    if (!developmentPlan) throw new NotFoundException('Development plan not found');
     const workHistory = await this.workHistoryRepo.findOne({
       where: { user: { id: userId }, isCurrent: true },
       relations: [
@@ -734,7 +787,7 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('projectGroup.strategy', 'strategy')
       .leftJoinAndSelect('projectGroup.tactic', 'tactic')
       .leftJoinAndSelect('projectGroup.plan', 'plan')
-      .leftJoinAndSelect('projectGroup.budgetPlan', 'budgetPlan')
+      .leftJoinAndSelect('projectGroup.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('projectGroup.budgets', 'budgets')
       .leftJoinAndSelect('projectGroup.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
@@ -756,11 +809,11 @@ export class ProjectGroupsService {
       .andWhere('status.name = :statusName', { statusName: 'Pending' })
       .andWhere('projectGroup.originAgencyId IS NULL')
       .andWhere('projectGroup.responsibleAgency IS NOT NULL')
-      .andWhere('budgetPlan.isLatest = :budgetPlanIsLatest', { budgetPlanIsLatest: true });
+      .andWhere('developmentPlan.id = :developmentPlanId', { developmentPlanId: developmentPlan.id });
 
     // Role-based filtering
     const userRole = workHistory.role.name;
-    
+
     if (userRole === 'admin' || userRole === 'super-admin' || userRole === 'c-level') {
       // Admin/Super-admin/C-level: เห็นทุกโครงการ
       // ไม่เพิ่มเงื่อนไขกรองเพิ่มเติม
@@ -769,17 +822,17 @@ export class ProjectGroupsService {
       const responsibleGovernmentAgencyIds = workHistory.workHistoryResponsibleGovernmentAgency.map(
         (resp) => resp.governmentAgency.id
       );
-      
+
       if (responsibleGovernmentAgencyIds.length > 0) {
-        query.andWhere('responsibleAgency.id IN (:...responsibleGovernmentAgencyIds)', { 
-          responsibleGovernmentAgencyIds 
+        query.andWhere('responsibleAgency.id IN (:...responsibleGovernmentAgencyIds)', {
+          responsibleGovernmentAgencyIds
         });
       } else {
         // ถ้าไม่ได้รับผิดชอบอำเภอใดเลย ให้ไม่เห็นโครงการใด
         query.andWhere('1 = 0'); // Always false condition
       }
     } else {
-        query.andWhere('1 = 0'); // Always false condition
+      query.andWhere('1 = 0'); // Always false condition
     }
 
     if (countOnly) {
@@ -796,8 +849,14 @@ export class ProjectGroupsService {
   async findByStatusProvincialCommittee(options: {
     userId: string;
     countOnly?: boolean;
+    developmentPlanId?: string;
   }) {
-    const { userId, countOnly } = options;
+    const { userId, countOnly, developmentPlanId } = options;
+
+    const developmentPlan = await this.developmentPlanRepo.findOne({
+      where: { id: developmentPlanId }
+    });
+    if (!developmentPlan) throw new NotFoundException('Development plan not found');
     const workHistory = await this.workHistoryRepo.findOne({
       where: { user: { id: userId }, isCurrent: true },
       relations: [
@@ -823,7 +882,7 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('projectGroup.strategy', 'strategy')
       .leftJoinAndSelect('projectGroup.tactic', 'tactic')
       .leftJoinAndSelect('projectGroup.plan', 'plan')
-      .leftJoinAndSelect('projectGroup.budgetPlan', 'budgetPlan')
+      .leftJoinAndSelect('projectGroup.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('projectGroup.budgets', 'budgets')
       .leftJoinAndSelect('projectGroup.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
@@ -842,7 +901,8 @@ export class ProjectGroupsService {
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
       .andWhere('status.name = :statusName', { statusName: 'Pending_Approval' })
       .andWhere('projectGroup.originAgencyId IS NOT NULL')
-      .andWhere('budgetPlan.isLatest = :budgetPlanIsLatest', { budgetPlanIsLatest: true });
+      .andWhere('projectGroup.isBooked = :isBooked', { isBooked: false })
+      .andWhere('developmentPlan.id = :developmentPlanId', { developmentPlanId: developmentPlan.id });
 
     if (countOnly) {
       const count = await query.getCount();
@@ -858,8 +918,13 @@ export class ProjectGroupsService {
   async findByStatusPlanCommittee(options: {
     userId: string;
     countOnly?: boolean;
+    developmentPlanId?: string;
   }) {
-    const { userId, countOnly } = options;
+    const { userId, countOnly, developmentPlanId } = options;
+    const developmentPlan = await this.developmentPlanRepo.findOne({
+      where: { id: developmentPlanId }
+    });
+    if (!developmentPlan) throw new NotFoundException('Development plan not found');
     const workHistory = await this.workHistoryRepo.findOne({
       where: { user: { id: userId }, isCurrent: true },
       relations: [
@@ -885,7 +950,7 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('projectGroup.strategy', 'strategy')
       .leftJoinAndSelect('projectGroup.tactic', 'tactic')
       .leftJoinAndSelect('projectGroup.plan', 'plan')
-      .leftJoinAndSelect('projectGroup.budgetPlan', 'budgetPlan')
+      .leftJoinAndSelect('projectGroup.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('projectGroup.budgets', 'budgets')
       .leftJoinAndSelect('projectGroup.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
@@ -902,11 +967,11 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('favorites.userId', 'userId')
       .andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+      .andWhere('projectGroup.isBooked = :isBooked', { isBooked: false })
       .andWhere('status.name = :statusName', { statusName: 'Pending_Approval' })
       .andWhere('projectGroup.originAgencyId IS  NULL')
       .andWhere('projectGroup.responsibleAgency IS NOT NULL')
-      .andWhere('budgetPlan.isLatest = :budgetPlanIsLatest', { budgetPlanIsLatest: true });
-
+      .andWhere('developmentPlan.id = :developmentPlanId', { developmentPlanId: developmentPlan.id });
     if (countOnly) {
       const count = await query.getCount();
       return count;
@@ -921,8 +986,13 @@ export class ProjectGroupsService {
   async findByStatusVerifiedAgency(options: {
     userId: string;
     countOnly?: boolean;
+    developmentPlanId?: string;
   }) {
-    const { userId, countOnly } = options;
+    const { userId, countOnly, developmentPlanId } = options;
+    const developmentPlan = await this.developmentPlanRepo.findOne({
+      where: { id: developmentPlanId }
+    });
+    if (!developmentPlan) throw new NotFoundException('Development plan not found');
     const workHistory = await this.workHistoryRepo.findOne({
       where: { user: { id: userId }, isCurrent: true },
       relations: [
@@ -948,7 +1018,7 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('projectGroup.strategy', 'strategy')
       .leftJoinAndSelect('projectGroup.tactic', 'tactic')
       .leftJoinAndSelect('projectGroup.plan', 'plan')
-      .leftJoinAndSelect('projectGroup.budgetPlan', 'budgetPlan')
+      .leftJoinAndSelect('projectGroup.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('projectGroup.budgets', 'budgets')
       .leftJoinAndSelect('projectGroup.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
@@ -968,8 +1038,7 @@ export class ProjectGroupsService {
       .andWhere('status.name = :statusName', { statusName: 'Verified' })
       .andWhere('projectGroup.originAgencyId IS  NULL')
       .andWhere('projectGroup.responsibleAgency IS NOT NULL')
-      .andWhere('budgetPlan.isLatest = :budgetPlanIsLatest', { budgetPlanIsLatest: true });
-
+      .andWhere('developmentPlan.id = :developmentPlanId', { developmentPlanId: developmentPlan.id });
     if (countOnly) {
       const count = await query.getCount();
       return count;
@@ -984,8 +1053,13 @@ export class ProjectGroupsService {
   async findProjectsByStatusInAuthority(options: {
     userId: string;
     countOnly?: boolean;
+    developmentPlanId?: string;
   }) {
-    const { userId, countOnly } = options;
+    const { userId, countOnly, developmentPlanId } = options;
+    const developmentPlan = await this.developmentPlanRepo.findOne({
+      where: { id: developmentPlanId }
+    });
+    if (!developmentPlan) throw new NotFoundException('Development plan not found');
     const workHistory = await this.workHistoryRepo.findOne({
       where: { user: { id: userId }, isCurrent: true },
       relations: [
@@ -1011,7 +1085,7 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('projectGroup.strategy', 'strategy')
       .leftJoinAndSelect('projectGroup.tactic', 'tactic')
       .leftJoinAndSelect('projectGroup.plan', 'plan')
-      .leftJoinAndSelect('projectGroup.budgetPlan', 'budgetPlan')
+      .leftJoinAndSelect('projectGroup.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('projectGroup.budgets', 'budgets')
       .leftJoinAndSelect('projectGroup.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
@@ -1030,9 +1104,7 @@ export class ProjectGroupsService {
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
       .andWhere('status.name = :statusName', { statusName: 'Verified' })
       .andWhere('projectGroup.originAgencyId IS NOT NULL')
-      .andWhere('budgetPlan.isLatest = :budgetPlanIsLatest', { budgetPlanIsLatest: true });
-
-
+      .andWhere('developmentPlan.id = :developmentPlanId', { developmentPlanId: developmentPlan.id });
 
     if (countOnly) {
       const count = await query.getCount();
@@ -1048,8 +1120,13 @@ export class ProjectGroupsService {
   async findProjectsByStatusInAuthorityOut(options: {
     userId: string;
     countOnly?: boolean;
+    developmentPlanId?: string;
   }) {
-    const { userId, countOnly } = options;
+    const { userId, countOnly, developmentPlanId } = options;
+    const developmentPlan = await this.developmentPlanRepo.findOne({
+      where: { id: developmentPlanId }
+    });
+    if (!developmentPlan) throw new NotFoundException('Development plan not found');
     const workHistory = await this.workHistoryRepo.findOne({
       where: { user: { id: userId }, isCurrent: true },
       relations: [
@@ -1075,7 +1152,7 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('projectGroup.strategy', 'strategy')
       .leftJoinAndSelect('projectGroup.tactic', 'tactic')
       .leftJoinAndSelect('projectGroup.plan', 'plan')
-      .leftJoinAndSelect('projectGroup.budgetPlan', 'budgetPlan')
+      .leftJoinAndSelect('projectGroup.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('projectGroup.budgets', 'budgets')
       .leftJoinAndSelect('projectGroup.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
@@ -1095,11 +1172,11 @@ export class ProjectGroupsService {
       .andWhere('status.name = :statusName', { statusName: 'Rejected' })
       .andWhere('projectGroup.originAgencyId IS NOT NULL')
       .andWhere('projectGroup.responsibleAgency IS NULL')
-      .andWhere('budgetPlan.isLatest = :budgetPlanIsLatest', { budgetPlanIsLatest: true });
-
-
+      .andWhere('developmentPlan.isBooked = :isBooked', { isBooked: false })
+      .andWhere('developmentPlan.id = :developmentPlanId', { developmentPlanId: developmentPlan.id });
 
     if (countOnly) {
+      query.andWhere('projectGroup.isBooked = :isBooked', { isBooked: false })
       const count = await query.getCount();
       return count;
     }
@@ -1107,14 +1184,20 @@ export class ProjectGroupsService {
     const projects = await query
       .orderBy('projectGroup.createdAt', 'DESC')
       .getMany();
-
     return projects;
+
   }
+
   async findByStatusApprovedCoordinate(option: {
     userId: string;
     countOnly?: boolean;
+    developmentPlanId?: string;
   }) {
-    const { userId, countOnly } = option;
+    const { userId, countOnly, developmentPlanId } = option;
+    const developmentPlan = await this.developmentPlanRepo.findOne({
+      where: { id: developmentPlanId }
+    });
+    if (!developmentPlan) throw new NotFoundException('Development plan not found');
     const workHistory = await this.workHistoryRepo.findOne({
       where: { user: { id: userId } },
       relations: ['workStatus'],
@@ -1131,7 +1214,7 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('projectGroup.strategy', 'strategy')
       .leftJoinAndSelect('projectGroup.tactic', 'tactic')
       .leftJoinAndSelect('projectGroup.plan', 'plan')
-      .leftJoinAndSelect('projectGroup.budgetPlan', 'budgetPlan')
+      .leftJoinAndSelect('projectGroup.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('projectGroup.budgets', 'budgets')
       .leftJoinAndSelect('projectGroup.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
@@ -1151,7 +1234,9 @@ export class ProjectGroupsService {
       .andWhere('status.name = :statusName', { statusName: 'Approved' })
       .andWhere('projectGroup.originAgencyId IS NOT NULL')
       .andWhere('projectGroup.responsibleAgency IS NOT NULL')
-      .andWhere('budgetPlan.isLatest = :budgetPlanIsLatest', { budgetPlanIsLatest: true });
+      .andWhere('projectGroup.isBooked = :isBooked', { isBooked: false })
+      .andWhere('developmentPlan.id = :developmentPlanId', { developmentPlanId: developmentPlan.id });
+
 
     if (countOnly) {
       const count = await query.getCount();
@@ -1168,13 +1253,20 @@ export class ProjectGroupsService {
   async findByStatusApprovedAgency(option: {
     userId: string;
     countOnly?: boolean;
+    developmentPlanId?: string;
   }) {
-    const { userId, countOnly } = option;
+    const { userId, countOnly, developmentPlanId } = option;
+    const developmentPlan = await this.developmentPlanRepo.findOne({
+      where: { id: developmentPlanId }
+    });
+    if (!developmentPlan) throw new NotFoundException('Development plan not found');
+
     const workHistory = await this.workHistoryRepo.findOne({
       where: { user: { id: userId } },
       relations: ['workStatus'],
     });
     if (!workHistory) return countOnly ? 0 : [];
+
     if (workHistory.workStatus.name !== "approved")
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
     const query = this.projectGroupRepo
@@ -1186,7 +1278,7 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('projectGroup.strategy', 'strategy')
       .leftJoinAndSelect('projectGroup.tactic', 'tactic')
       .leftJoinAndSelect('projectGroup.plan', 'plan')
-      .leftJoinAndSelect('projectGroup.budgetPlan', 'budgetPlan')
+      .leftJoinAndSelect('projectGroup.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('projectGroup.budgets', 'budgets')
       .leftJoinAndSelect('projectGroup.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
@@ -1206,8 +1298,8 @@ export class ProjectGroupsService {
       .andWhere('status.name = :statusName', { statusName: 'Approved' })
       .andWhere('projectGroup.originAgencyId IS NULL')
       .andWhere('projectGroup.responsibleAgency IS NOT NULL')
-      .andWhere('budgetPlan.isLatest = :budgetPlanIsLatest', { budgetPlanIsLatest: true });
-
+      .andWhere('projectGroup.isBooked = :isBooked', { isBooked: false })
+      .andWhere('developmentPlan.id = :developmentPlanId', { developmentPlanId: developmentPlan.id });
     if (countOnly) {
       const count = await query.getCount();
       return count;
@@ -1224,19 +1316,19 @@ export class ProjectGroupsService {
    * Query original projects (ProjectGroup) ที่ไม่มี active revision และ status = Approved
    */
   private async findOriginalApprovedProjects(
-    budgetPlanId: string,
+    developmentPlanId: string,
     responsibleAgencyId?: string,
   ): Promise<ProjectGroup[]> {
     const query = this.projectGroupRepo
       .createQueryBuilder('projectGroup')
       .leftJoinAndSelect('projectGroup.createdBy', 'createdBy')
       .leftJoinAndSelect('createdBy.user', 'createdByUser')
-      .leftJoinAndSelect('createdBy.amphoe', 'amphoe')
-      .leftJoinAndSelect('createdBy.localAdministrativeOrganization', 'localAdministrativeOrganization')
       .leftJoinAndSelect('projectGroup.strategy', 'strategy')
       .leftJoinAndSelect('projectGroup.tactic', 'tactic')
       .leftJoinAndSelect('projectGroup.plan', 'plan')
-      .leftJoinAndSelect('projectGroup.budgetPlan', 'budgetPlan')
+      .leftJoinAndSelect('projectGroup.amphoe', 'projectGroupAmphoe')
+      .leftJoinAndSelect('projectGroup.localAdministrativeOrganization', 'projectGroupLocalAdministrativeOrganization')
+      .leftJoinAndSelect('projectGroup.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('projectGroup.budgets', 'budgets')
       .leftJoinAndSelect('projectGroup.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
@@ -1265,9 +1357,9 @@ export class ProjectGroupsService {
       .andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
       .andWhere('status.name = :statusName', { statusName: 'Approved' })
-      // .andWhere('projectGroup.originAgencyId IS NULL')
-      // .andWhere('projectGroup.responsibleAgency IS NOT NULL')
-      .andWhere('budgetPlan.id = :budgetPlanId', { budgetPlanId })
+      .andWhere('projectGroup.responsibleAgency IS NOT NULL')
+      .andWhere('projectGroup.isBooked = :isBooked', { isBooked: true })
+      .andWhere('developmentPlan.id = :developmentPlanId', { developmentPlanId })
       // ไม่มี active revision
       .andWhere('activeRevision.id IS NULL');
 
@@ -1283,18 +1375,21 @@ export class ProjectGroupsService {
    * Query revised projects (RevisedProjectGroup) ที่เป็น latest version และ status = Approved
    */
   private async findRevisedApprovedProjects(
-    budgetPlanId: string,
+    developmentPlanId: string,
     responsibleAgencyId?: string,
   ): Promise<RevisedProjectGroup[]> {
     const query = this.revisedProjectGroupRepo
       .createQueryBuilder('revisedProject')
       .leftJoinAndSelect('revisedProject.developmentPlanRevision', 'developmentPlanRevision')
-      .leftJoinAndSelect('developmentPlanRevision.budgetPlan', 'budgetPlan')
+      .leftJoinAndSelect('developmentPlanRevision.developmentPlan', 'developmentPlan')
+      .leftJoinAndSelect('revisedProject.developmentPlan', 'revisedDevelopmentPlan')
       .leftJoinAndSelect('revisedProject.projectGroup', 'originalProject')
       .leftJoinAndSelect('revisedProject.createdBy', 'createdBy')
       .leftJoinAndSelect('createdBy.user', 'createdByUser')
       .leftJoinAndSelect('createdBy.amphoe', 'amphoe')
       .leftJoinAndSelect('createdBy.localAdministrativeOrganization', 'localAdministrativeOrganization')
+      .leftJoinAndSelect('revisedProject.amphoe', 'revisedAmphoe')
+      .leftJoinAndSelect('revisedProject.localAdministrativeOrganization', 'revisedLocalAdministrativeOrganization')
       .leftJoinAndSelect('revisedProject.strategy', 'strategy')
       .leftJoinAndSelect('revisedProject.tactic', 'tactic')
       .leftJoinAndSelect('revisedProject.plan', 'plan')
@@ -1310,11 +1405,15 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('revisedProject.responsibleAgency', 'responsibleAgency')
       .leftJoinAndSelect('revisedProject.originAgencyId', 'originAgencyId')
       .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
-      .andWhere('revisedProject.isDraft = :isDraft', { isDraft: false })
       .andWhere('developmentPlanRevision.isLatest = :isLatest', { isLatest: true })
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
       .andWhere('status.name = :statusName', { statusName: 'Approved' })
-      .andWhere('budgetPlan.id = :budgetPlanId', { budgetPlanId });
+      .andWhere('revisedProject.responsibleAgency IS NOT NULL')
+      .andWhere('developmentPlan.id = :developmentPlanId', { developmentPlanId })
+      // Revised Project จะสร้างได้ก็ต่อเมื่อ Original Project ผ่านการอนุมัติและเข้าเล่มแล้ว
+      // ดังนั้นต้องตรวจสอบว่า original project มี isBooked = true
+      // ถ้าไม่มี original project ก็อนุญาต (กรณี standalone revised project)
+      .andWhere('(originalProject.id IS NULL OR originalProject.isBooked = :isBooked)', { isBooked: true });
 
     // Filter by responsible agency if provided
     if (responsibleAgencyId) {
@@ -1324,12 +1423,14 @@ export class ProjectGroupsService {
     return await query.getMany();
   }
 
+
   /**
    * หาโครงการต้นฉบับ (ProjectGroup) ที่ไม่มี active revision
    * กรองเฉพาะ status = "Approved"
    */
   private async findOriginalLatestProjects(
-    budgetPlanId: string,
+    developmentPlanId: string,
+    status?: string,
   ): Promise<ProjectGroup[]> {
     const query = this.projectGroupRepo
       .createQueryBuilder('projectGroup')
@@ -1340,7 +1441,7 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('projectGroup.strategy', 'strategy')
       .leftJoinAndSelect('projectGroup.tactic', 'tactic')
       .leftJoinAndSelect('projectGroup.plan', 'plan')
-      .leftJoinAndSelect('projectGroup.budgetPlan', 'budgetPlan')
+      .leftJoinAndSelect('projectGroup.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('projectGroup.budgets', 'budgets')
       .leftJoinAndSelect('projectGroup.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
@@ -1353,6 +1454,8 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('projectGroup.responsibleAgency', 'responsibleAgency')
       .leftJoinAndSelect('projectGroup.originAgencyId', 'originAgencyId')
       .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
+      .leftJoinAndSelect('projectGroup.amphoe', 'projectAmphoe')
+      .leftJoinAndSelect('projectGroup.localAdministrativeOrganization', 'projectLocalAdministrativeOrganization')
       .leftJoinAndSelect('projectGroup.favorites', 'favorites')
       .leftJoinAndSelect('favorites.userId', 'userId')
       // Left join เพื่อหา revised projects
@@ -1368,8 +1471,13 @@ export class ProjectGroupsService {
       )
       .andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-      .andWhere('status.name = :statusName', { statusName: 'Approved' })
-      .andWhere('budgetPlan.id = :budgetPlanId', { budgetPlanId })
+      .andWhere('developmentPlan.id = :developmentPlanId', { developmentPlanId });
+
+    if (status) {
+      query.andWhere('status.name = :statusName', { statusName: status });
+    }
+
+    query
       // ไม่มี active revision
       .andWhere('activeRevision.id IS NULL');
 
@@ -1378,22 +1486,25 @@ export class ProjectGroupsService {
 
   /**
    * หาโครงการฉบับแก้ไข (RevisedProjectGroup) ที่เป็น version ล่าสุด
-   * ใช้ revisedProject.isLatest แทน developmentPlanRevision.isLatest
+   * ใช้ developmentPlanRevision.isLatest เพื่อหา latest revision
    * ไม่กรองสถานะ - แสดงทุกสถานะ
    */
   private async findRevisedLatestProjects(
-    budgetPlanId: string,
+    developmentPlanId: string,
+    status?: string,
   ): Promise<RevisedProjectGroup[]> {
     const query = this.revisedProjectGroupRepo
       .createQueryBuilder('revisedProject')
       .leftJoinAndSelect('revisedProject.developmentPlanRevision', 'developmentPlanRevision')
-      .leftJoinAndSelect('developmentPlanRevision.budgetPlan', 'budgetPlan')
       .leftJoinAndSelect('developmentPlanRevision.revisionType', 'revisionType')
+      .leftJoinAndSelect('revisedProject.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('revisedProject.projectGroup', 'originalProject')
       .leftJoinAndSelect('revisedProject.createdBy', 'createdBy')
       .leftJoinAndSelect('createdBy.user', 'createdByUser')
       .leftJoinAndSelect('createdBy.amphoe', 'amphoe')
       .leftJoinAndSelect('createdBy.localAdministrativeOrganization', 'localAdministrativeOrganization')
+      .leftJoinAndSelect('revisedProject.amphoe', 'revisedAmphoe')
+      .leftJoinAndSelect('revisedProject.localAdministrativeOrganization', 'revisedLocalAdministrativeOrganization')
       .leftJoinAndSelect('revisedProject.strategy', 'strategy')
       .leftJoinAndSelect('revisedProject.tactic', 'tactic')
       .leftJoinAndSelect('revisedProject.plan', 'plan')
@@ -1409,11 +1520,12 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('revisedProject.responsibleAgency', 'responsibleAgency')
       .leftJoinAndSelect('revisedProject.originAgencyId', 'originAgencyId')
       .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
-      .andWhere('revisedProject.isDraft = :isDraft', { isDraft: false })
-      .andWhere('revisedProject.isLatest = :isLatest', { isLatest: true })
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-      // ไม่กรองสถานะ - เอาทุกสถานะ
-      .andWhere('budgetPlan.id = :budgetPlanId', { budgetPlanId });
+      .andWhere('developmentPlan.id = :developmentPlanId', { developmentPlanId });
+
+    if (status) {
+      query.andWhere('status.name = :statusName', { statusName: status });
+    }
 
     return await query.getMany();
   }
@@ -1426,9 +1538,10 @@ export class ProjectGroupsService {
   async findLatestAllProjects(option: {
     userId: string;
     countOnly?: boolean;
-    budgetPlanId?: string;
+    developmentPlanId?: string;
+    status?: string;
   }): Promise<IUnifiedProjectDisplay[] | number> {
-    const { userId, countOnly, budgetPlanId } = option;
+    const { userId, countOnly, developmentPlanId, status } = option;
 
     // Validate user permissions
     const workHistory = await this.workHistoryRepo.findOne({
@@ -1440,25 +1553,290 @@ export class ProjectGroupsService {
     if (workHistory.workStatus.name !== 'approved')
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
 
-    const allowedRoles = ['user','staff', 'admin', 'super-admin', 'c-level'];
+    const allowedRoles = ['user', 'staff', 'admin', 'super-admin', 'c-level'];
     if (!allowedRoles.includes(workHistory.role.name))
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
 
-    // Validate budget plan
-    if (!budgetPlanId) {
-      throw new BadRequestException('Budget plan ID is required');
+    // Validate development plan
+    if (!developmentPlanId) {
+      throw new BadRequestException('Development plan ID is required');
     }
 
-    const budgetPlan = await this.budgetPlanRepo.findOne({
-      where: { id: budgetPlanId },
+    const developmentPlan = await this.developmentPlanRepo.findOne({
+      where: { id: developmentPlanId },
     });
-    if (!budgetPlan)
-      throw new NotFoundException('Budget plan not found');
+    if (!developmentPlan)
+      throw new NotFoundException('Development plan not found');
+    // ดึง revision ล่าสุดของแต่ละ ProjectGroup
+    const latestRevised = await this.findLatestRevisedProjects(developmentPlanId);
 
-    // Query both original and revised projects (without status filter)
+    // ดึง original ที่ไม่เคยถูก revise
+    const original = await this.findOriginalWithoutRevision(developmentPlanId);
+
+    if (countOnly) return latestRevised.length + original.length;
+
+    const unified = [
+      ...latestRevised.map((x) =>
+        UnifiedProjectMapper.fromRevisedProjectGroup(x)
+      ),
+      ...original.map((x) =>
+        UnifiedProjectMapper.fromProjectGroup(x)
+      ),
+    ];
+
+    return unified;
+  }
+
+  async findLatestAllProjectsApproved(option: {
+    userId: string;
+    countOnly?: boolean;
+    developmentPlanId?: string;
+  }): Promise<IUnifiedProjectDisplay[] | number> {
+    const { userId, countOnly, developmentPlanId } = option;
+
+    // Validate user permissions
+    const workHistory = await this.workHistoryRepo.findOne({
+      where: { user: { id: userId } },
+      relations: ['workStatus', 'role'],
+    });
+
+    if (!workHistory) return countOnly ? 0 : [];
+    if (workHistory.workStatus.name !== 'approved')
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+
+    const allowedRoles = ['user', 'staff', 'admin', 'super-admin', 'c-level'];
+    if (!allowedRoles.includes(workHistory.role.name))
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+
+    // Validate development plan
+    if (!developmentPlanId) {
+      throw new BadRequestException('Development plan ID is required');
+    }
+
+    const developmentPlan = await this.developmentPlanRepo.findOne({
+      where: { id: developmentPlanId },
+    });
+    if (!developmentPlan)
+      throw new NotFoundException('Development plan not found');
+    // ดึง revision ล่าสุดของแต่ละ ProjectGroup
+    const latestRevised = await this.findLatestRevisedProjects(developmentPlanId, 'Approved', true);
+
+    // ดึง original ที่ไม่เคยถูก revise
+    const original = await this.findOriginalWithoutRevision(developmentPlanId, 'Approved', true);
+
+    if (countOnly) return latestRevised.length + original.length;
+
+    const unified = [
+      ...latestRevised.map((x) =>
+        UnifiedProjectMapper.fromRevisedProjectGroup(x)
+      ),
+      ...original.map((x) =>
+        UnifiedProjectMapper.fromProjectGroup(x)
+      ),
+    ];
+
+    return unified;
+  }
+
+  async findOutAuthorityByPdf(options: { id: string, userId: string }): Promise<ProjectGroup[]> {
+    const { id, userId } = options;
+
+    // Find PDF document by id
+    const pdf = await this.pdfOutAuthorityRepo.findOne({ where: { id } });
+    if (!pdf) throw new NotFoundException('PDF document not found');
+
+    // Get project IDs from snapshot
+    const projectIds = pdf.projectIdsSnapshot || [];
+    if (projectIds.length === 0) return [];
+
+    // Validate user access
+    const workHistory = await this.workHistoryRepo.findOne({
+      where: { user: { id: userId }, isCurrent: true },
+      relations: [
+        'user',
+        'role',
+        'localAdministrativeOrganization',
+        'governmentAgencies',
+        'workStatus',
+        'workHistoryResponsibleAmphoe',
+        'workHistoryResponsibleAmphoe.amphoe',
+      ],
+    });
+    if (!workHistory) throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+    if (workHistory.workStatus.name !== "approved")
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+
+    // Query projects by IDs from snapshot
+    const projects = await this.projectGroupRepo
+      .createQueryBuilder('projectGroup')
+      .leftJoinAndSelect('projectGroup.createdBy', 'createdBy')
+      .leftJoinAndSelect('createdBy.user', 'createdByUser')
+      .leftJoinAndSelect('createdBy.amphoe', 'amphoe')
+      .leftJoinAndSelect('createdBy.localAdministrativeOrganization', 'localAdministrativeOrganization')
+      .leftJoinAndSelect('projectGroup.strategy', 'strategy')
+      .leftJoinAndSelect('projectGroup.tactic', 'tactic')
+      .leftJoinAndSelect('projectGroup.plan', 'plan')
+      .leftJoinAndSelect('projectGroup.developmentPlan', 'developmentPlan')
+      .leftJoinAndSelect('projectGroup.budgets', 'budgets')
+      .leftJoinAndSelect('projectGroup.trackingStatus', 'trackingStatus')
+      .leftJoinAndSelect('trackingStatus.statusId', 'status')
+      .leftJoinAndSelect('trackingStatus.comments', 'comments')
+      .leftJoinAndSelect('trackingStatus.createdBy', 'workHistory')
+      .leftJoinAndSelect('workHistory.user', 'user')
+      .leftJoinAndSelect('workHistory.localAdministrativeOrganization', 'localAdministrativeOrganizationWorkHistory')
+      .leftJoinAndSelect('workHistory.governmentAgencies', 'governmentAgencies')
+      .leftJoinAndSelect('workHistory.workStatus', 'workStatus')
+      .leftJoinAndSelect('projectGroup.responsibleAgency', 'responsibleAgency')
+      .leftJoinAndSelect('projectGroup.originAgencyId', 'originAgencyId')
+      .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
+      .leftJoinAndSelect('projectGroup.favorites', 'favorites')
+      .leftJoinAndSelect('favorites.userId', 'userId')
+      .where('projectGroup.id IN (:...projectIds)', { projectIds })
+      .orderBy('projectGroup.createdAt', 'DESC')
+      .getMany();
+
+    return projects;
+  }
+
+  private async findLatestRevisedProjects(
+    developmentPlanId: string,
+    status?: string,
+    isBooked?: boolean,
+  ): Promise<RevisedProjectGroup[]> {
+    // subquery เลือก revision ล่าสุดของแต่ละ projectGroup
+    // 1. SubQuery: หา revisionNumber สูงสุด ของแต่ละ Project Group ID ภายใต้แผนนี้
+    const maxRevisionSubQuery = this.revisedProjectGroupRepo
+      .createQueryBuilder('rp_sub')
+      .select('rp_sub.project_group_id', 'projectGroupId')
+      .addSelect('MAX(dpr_sub.revisionNumber)', 'maxRevision')
+      .leftJoin('rp_sub.developmentPlanRevision', 'dpr_sub')
+      .where('rp_sub.development_plan_id = :planId', { planId: developmentPlanId })
+      .groupBy('rp_sub.project_group_id');
+
+    // 2. Main Query
+    const query = this.revisedProjectGroupRepo
+      .createQueryBuilder('revisedProject')
+      .leftJoinAndSelect('revisedProject.developmentPlanRevision', 'developmentPlanRevision')
+      .leftJoinAndSelect('developmentPlanRevision.revisionType', 'revisionType')
+      .leftJoinAndSelect('revisedProject.developmentPlan', 'developmentPlan')
+      .leftJoinAndSelect('revisedProject.projectGroup', 'originalProject')
+      .leftJoinAndSelect('revisedProject.createdBy', 'createdBy')
+      .leftJoinAndSelect('createdBy.user', 'createdByUser')
+      .leftJoinAndSelect('createdBy.amphoe', 'amphoe')
+      .leftJoinAndSelect('createdBy.localAdministrativeOrganization', 'localAdministrativeOrganization')
+      .leftJoinAndSelect('revisedProject.amphoe', 'revisedAmphoe')
+      .leftJoinAndSelect('revisedProject.localAdministrativeOrganization', 'revisedLocalAdministrativeOrganization')
+      .leftJoinAndSelect('revisedProject.strategy', 'strategy')
+      .leftJoinAndSelect('revisedProject.tactic', 'tactic')
+      .leftJoinAndSelect('revisedProject.plan', 'plan')
+      .leftJoinAndSelect('revisedProject.budgets', 'budgets')
+      .leftJoinAndSelect('revisedProject.trackingStatus', 'trackingStatus')
+      .leftJoinAndSelect('trackingStatus.statusId', 'status')
+      .leftJoinAndSelect('trackingStatus.comments', 'comments')
+      .leftJoinAndSelect('trackingStatus.createdBy', 'workHistory')
+      .leftJoinAndSelect('workHistory.user', 'user')
+      .leftJoinAndSelect('workHistory.localAdministrativeOrganization', 'localAdministrativeOrganizationWorkHistory')
+      .leftJoinAndSelect('workHistory.governmentAgencies', 'governmentAgencies')
+      .leftJoinAndSelect('workHistory.workStatus', 'workStatus')
+      .leftJoinAndSelect('revisedProject.responsibleAgency', 'responsibleAgency')
+      .leftJoinAndSelect('revisedProject.originAgencyId', 'originAgencyId')
+      .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
+
+      // ** KEY LOGIC: Inner Join กับ SubQuery เพื่อกรองเอาเฉพาะตัวล่าสุด **
+      .innerJoin(
+        '(' + maxRevisionSubQuery.getQuery() + ')',
+        'max_rev_table',
+        '"revisedProject"."project_group_id" = max_rev_table."projectGroupId" AND "developmentPlanRevision"."revision_number" = max_rev_table."maxRevision"'
+      )
+      .setParameters(maxRevisionSubQuery.getParameters())
+
+      .andWhere('revisedProject.development_plan_id = :developmentPlanId', { developmentPlanId })
+      .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true });
+
+    if (status) {
+      query.andWhere('status.name = :statusName', { statusName: status });
+    }
+
+    return await query.getMany();
+  }
+
+
+  private async findOriginalWithoutRevision(
+    developmentPlanId: string,
+    status?: string,
+    isBooked?: boolean,
+  ): Promise<ProjectGroup[]> {
+    const queryBuilder = this.projectGroupRepo
+      .createQueryBuilder('pg')
+      .leftJoin(RevisedProjectGroup, 'rp', 'rp.project_group_id = pg.id')
+      .leftJoin(DevelopmentPlanRevision, 'rev', 'rev.id = rp.development_plan_revision_id')
+      .leftJoinAndSelect('pg.strategy', 'strategy')
+      .leftJoinAndSelect('pg.tactic', 'tactic')
+      .leftJoinAndSelect('pg.plan', 'plan')
+      .leftJoinAndSelect('pg.developmentPlan', 'developmentPlan')
+      .leftJoinAndSelect('pg.createdBy', 'createdBy')
+      .leftJoinAndSelect('pg.originAgencyId', 'originAgencyId')
+      .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
+      .leftJoinAndSelect('pg.responsibleAgency', 'responsibleAgency')
+      .leftJoinAndSelect('pg.amphoe', 'amphoe')
+      .leftJoinAndSelect('pg.localAdministrativeOrganization', 'localAdministrativeOrganization')
+      .leftJoinAndSelect('pg.budgets', 'budgets')
+      .leftJoinAndSelect('pg.favorites', 'favorites')
+      .leftJoinAndSelect('pg.trackingStatus', 'trackingStatus')
+      .leftJoinAndSelect('trackingStatus.statusId', 'status')
+      .where('pg.development_plan_id = :developmentPlanId', { developmentPlanId })
+      .andWhere('rev.id IS NULL')   // ไม่มี revision
+      .andWhere('pg.isDraft = false')
+      .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+      .andWhere('status.name = :statusName', { statusName: 'Approved' })
+      .andWhere('pg.isBooked = :isBooked', { isBooked: true });
+
+    return await queryBuilder.getMany();
+  }
+
+
+  /**
+ * หาโครงการล่าสุดทั้งหมด (กรองสถานะ = Approved)
+ * ถ้าโครงการมีลูก → เอาลูกล่าสุดมา
+ * ถ้าโครงการไม่มีลูก → เอาแม่มา
+ */
+  async findLatestAllApprovedProjects(option: {
+    userId: string;
+    countOnly?: boolean;
+    developmentPlanId?: string;
+    status?: string;
+  }): Promise<any[] | number> {
+    const { userId, countOnly, developmentPlanId, status = 'Approved' } = option;
+
+    // Validate user permissions
+    const workHistory = await this.workHistoryRepo.findOne({
+      where: { user: { id: userId } },
+      relations: ['workStatus', 'role'],
+    });
+
+    if (!workHistory) return countOnly ? 0 : [];
+    if (workHistory.workStatus.name !== 'approved')
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+
+    const allowedRoles = ['user', 'staff', 'admin', 'super-admin', 'c-level'];
+    if (!allowedRoles.includes(workHistory.role.name))
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+
+    // Validate development plan
+    if (!developmentPlanId) {
+      throw new BadRequestException('Development plan ID is required');
+    }
+
+    const developmentPlan = await this.developmentPlanRepo.findOne({
+      where: { id: developmentPlanId },
+    });
+    if (!developmentPlan)
+      throw new NotFoundException('Development plan not found');
+
+    // Query both original and revised projects (with status filter)
     const [originalProjects, revisedProjects] = await Promise.all([
-      this.findOriginalLatestProjects(budgetPlanId),
-      this.findRevisedLatestProjects(budgetPlanId),
+      this.findOriginalLatestProjects(developmentPlanId, status),
+      this.findRevisedLatestProjects(developmentPlanId, status),
     ]);
 
     // If count only, return total count
@@ -1466,11 +1844,34 @@ export class ProjectGroupsService {
       return originalProjects.length + revisedProjects.length;
     }
 
+    // กรองตามคอนเซ็ปต์: ถ้าแม่มีลูก → เอาแค่ลูก, ถ้าแม่ไม่มีลูก → เอาแม่
+    // กรอง revisedProjects ให้เหลือแค่ลูกล่าสุดของแต่ละแม่ (กรณีมีลูกหลายตัว)
+    const latestRevisedByParent = new Map<string, RevisedProjectGroup>();
+    revisedProjects.forEach((revised) => {
+      if (!revised.projectGroup?.id) return;
+      const parentId = revised.projectGroup.id;
+      const existing = latestRevisedByParent.get(parentId);
+      if (!existing || revised.createdAt > existing.createdAt) {
+        latestRevisedByParent.set(parentId, revised);
+      }
+    });
+    const latestRevisedProjects = Array.from(latestRevisedByParent.values());
+
+    // สร้าง Set ของ projectGroup.id ที่มีลูก (revised projects)
+    const parentIdsWithChildren = new Set(
+      latestRevisedProjects.map((revised) => revised.projectGroup!.id),
+    );
+
+    // กรอง originalProjects ให้เหลือแค่แม่ที่ไม่มีลูก
+    const parentsWithoutChildren = originalProjects.filter(
+      (project) => !parentIdsWithChildren.has(project.id),
+    );
+
     // Map to unified format
-    const unifiedOriginals = originalProjects.map((project) =>
+    const unifiedOriginals = parentsWithoutChildren.map((project) =>
       UnifiedProjectMapper.fromProjectGroup(project),
     );
-    const unifiedRevised = revisedProjects.map((project) =>
+    const unifiedRevised = latestRevisedProjects.map((project) =>
       UnifiedProjectMapper.fromRevisedProjectGroup(project),
     );
 
@@ -1499,28 +1900,28 @@ export class ProjectGroupsService {
       where: { deletedAt: IsNull() }
     });
 
-    // Find budget plan - ตรวจสอบทั้ง budget plan และ development plan revision
-    let budgetPlan = await this.budgetPlanRepo.findOne({
+    // Find development plan - ตรวจสอบทั้ง development plan และ development plan revision
+    let developmentPlan = await this.developmentPlanRepo.findOne({
       where: { isLatest: true }
     });
-    
+
     let isUsingMainPlan = true;
-    if (!budgetPlan || budgetPlan.id === null) {
+    if (!developmentPlan || developmentPlan.id === null) {
       const developmentPlanRevision = await this.developmentPlanRevisionRepo.findOne({
         where: { isLatest: true },
-        relations: ['budgetPlan']
+        relations: ['developmentPlan']
       });
       if (!developmentPlanRevision) {
         throw new NotFoundException('Development plan revision not found');
       }
-      budgetPlan = developmentPlanRevision.budgetPlan;
+      developmentPlan = developmentPlanRevision.developmentPlan;
       isUsingMainPlan = false;
     }
 
     // Query all projects
     const [originalProjects, revisedProjects] = await Promise.all([
-      this.findOriginalLatestProjects(budgetPlan.id),
-      this.findRevisedLatestProjects(budgetPlan.id),
+      this.findOriginalLatestProjects(developmentPlan.id),
+      this.findRevisedLatestProjects(developmentPlan.id),
     ]);
     const allProjects = [...originalProjects, ...revisedProjects];
 
@@ -1528,7 +1929,7 @@ export class ProjectGroupsService {
     const strategyStats = await this.getStrategyStatistics(allProjects, strategies);
 
     // Get budget allocation by year
-    const budgetByYear = await this.getBudgetByYear(allProjects, budgetPlan);
+    const budgetByYear = await this.getBudgetByYear(allProjects, developmentPlan);
 
     // Get budget allocation by strategy (for treemap)
     const budgetByStrategy = await this.getBudgetByStrategy(allProjects, strategies);
@@ -1539,15 +1940,15 @@ export class ProjectGroupsService {
     // Calculate project counts by standardized categories
     const projectCounts = allProjects.reduce((counts, project) => {
       let statusName = 'Unknown';
-      
+
       if (project.trackingStatus && project.trackingStatus.length > 0) {
         const latestTrackingStatus = project.trackingStatus.find(ts => ts.isLatest) || project.trackingStatus[0];
         statusName = latestTrackingStatus?.statusId?.name || 'Unknown';
       }
-      
+
       const category = this.mapStatusToCategory(statusName);
       counts[category] = (counts[category] || 0) + 1;
-      
+
       return counts;
     }, {});
 
@@ -1566,14 +1967,14 @@ export class ProjectGroupsService {
     return {
       // Plan information
       planInfo: {
-        budgetPlanId: budgetPlan.id,
-        budgetPlanName: budgetPlan.name,
-        startYear: budgetPlan.startYear,
-        endYear: budgetPlan.endYear,
+        developmentPlanId: developmentPlan.id,
+        developmentPlanName: developmentPlan.name,
+        startYear: developmentPlan.startYear,
+        endYear: developmentPlan.endYear,
         isUsingMainPlan,
         planType: isUsingMainPlan ? 'main' : 'revision'
       },
-      
+
       // Project counts
       projectCounts: {
         approved: standardizedProjectCounts.approved,
@@ -1581,25 +1982,25 @@ export class ProjectGroupsService {
         rejected: standardizedProjectCounts.rejected,
         total: totalProjects
       },
-      
+
       // Approval rate
       approvalRate: Math.round(approvalRate * 100) / 100,
-      
+
       // Strategy statistics with projects
       strategyStatistics: strategyStats,
-      
+
       // Budget allocation by year (for waterfall chart)
       budgetByYear: budgetByYear,
-      
+
       // Budget allocation by strategy (for treemap)
       budgetByStrategy: budgetByStrategy,
-      
+
       // Budget allocation by government agencies
       budgetByAgencies: budgetByAgencies,
-      
+
       // Trend analysis data
-      trendAnalysis: await this.getTrendAnalysis(allProjects, budgetPlan),
-      
+      trendAnalysis: await this.getTrendAnalysis(allProjects, developmentPlan),
+
       // All projects
       projects: allProjects,
       length: allProjects.length
@@ -1620,21 +2021,21 @@ export class ProjectGroupsService {
     if (!allowedRoles.includes(workHistory.role.name))
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
 
-    // Find budget plan
-    let budgetPlan = await this.budgetPlanRepo.findOne({
+    // Find development plan
+    let developmentPlan = await this.developmentPlanRepo.findOne({
       where: { isLatest: true }
     });
-    
+
     let isUsingMainPlan = true;
-    if (!budgetPlan || budgetPlan.id === null) {
+    if (!developmentPlan || developmentPlan.id === null) {
       const developmentPlanRevision = await this.developmentPlanRevisionRepo.findOne({
         where: { isLatest: true },
-        relations: ['budgetPlan']
+        relations: ['developmentPlan']
       });
       if (!developmentPlanRevision) {
         throw new NotFoundException('Development plan revision not found');
       }
-      budgetPlan = developmentPlanRevision.budgetPlan;
+      developmentPlan = developmentPlanRevision.developmentPlan;
       isUsingMainPlan = false;
     }
 
@@ -1654,8 +2055,8 @@ export class ProjectGroupsService {
 
     // Query all projects (original + revised) - ใช้เหมือนบรรทัด 1465-1470
     const [originalProjects, revisedProjects] = await Promise.all([
-      this.findOriginalLatestProjects(budgetPlan.id),
-      this.findRevisedLatestProjects(budgetPlan.id),
+      this.findOriginalLatestProjects(developmentPlan.id),
+      this.findRevisedLatestProjects(developmentPlan.id),
     ]);
     const allProjects = [...originalProjects, ...revisedProjects];
 
@@ -1668,10 +2069,10 @@ export class ProjectGroupsService {
     return {
       // Plan information
       planInfo: {
-        budgetPlanId: budgetPlan.id,
-        budgetPlanName: budgetPlan.name,
-        startYear: budgetPlan.startYear,
-        endYear: budgetPlan.endYear,
+        developmentPlanId: developmentPlan.id,
+        developmentPlanName: developmentPlan.name,
+        startYear: developmentPlan.startYear,
+        endYear: developmentPlan.endYear,
         isUsingMainPlan,
         planType: isUsingMainPlan ? 'main' : 'revision'
       },
@@ -1703,28 +2104,28 @@ export class ProjectGroupsService {
     if (!allowedRoles.includes(workHistory.role.name))
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
 
-    // Find budget plan
-    let budgetPlan = await this.budgetPlanRepo.findOne({
+    // Find development plan
+    let developmentPlan = await this.developmentPlanRepo.findOne({
       where: { isLatest: true }
     });
-    
+
     let isUsingMainPlan = true;
-    if (!budgetPlan || budgetPlan.id === null) {
+    if (!developmentPlan || developmentPlan.id === null) {
       const developmentPlanRevision = await this.developmentPlanRevisionRepo.findOne({
         where: { isLatest: true },
-        relations: ['budgetPlan']
+        relations: ['developmentPlan']
       });
       if (!developmentPlanRevision) {
         throw new NotFoundException('Development plan revision not found');
       }
-      budgetPlan = developmentPlanRevision.budgetPlan;
+      developmentPlan = developmentPlanRevision.developmentPlan;
       isUsingMainPlan = false;
     }
 
     // Query all projects with location data
     const [originalProjects, revisedProjects] = await Promise.all([
-      this.findOriginalLatestProjects(budgetPlan.id),
-      this.findRevisedLatestProjects(budgetPlan.id),
+      this.findOriginalLatestProjects(developmentPlan.id),
+      this.findRevisedLatestProjects(developmentPlan.id),
     ]);
     const allProjects = [...originalProjects, ...revisedProjects];
 
@@ -1745,10 +2146,10 @@ export class ProjectGroupsService {
     return {
       // Plan information
       planInfo: {
-        budgetPlanId: budgetPlan.id,
-        budgetPlanName: budgetPlan.name,
-        startYear: budgetPlan.startYear,
-        endYear: budgetPlan.endYear,
+        developmentPlanId: developmentPlan.id,
+        developmentPlanName: developmentPlan.name,
+        startYear: developmentPlan.startYear,
+        endYear: developmentPlan.endYear,
         isUsingMainPlan,
         planType: isUsingMainPlan ? 'main' : 'revision'
       },
@@ -1797,21 +2198,21 @@ export class ProjectGroupsService {
     if (!allowedRoles.includes(workHistory.role.name))
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
 
-    // Find budget plan
-    let budgetPlan = await this.budgetPlanRepo.findOne({
+    // Find development plan
+    let developmentPlan = await this.developmentPlanRepo.findOne({
       where: { isLatest: true }
     });
-    
+
     let isUsingMainPlan = true;
-    if (!budgetPlan || budgetPlan.id === null) {
+    if (!developmentPlan || developmentPlan.id === null) {
       const developmentPlanRevision = await this.developmentPlanRevisionRepo.findOne({
         where: { isLatest: true },
-        relations: ['budgetPlan']
+        relations: ['developmentPlan']
       });
       if (!developmentPlanRevision) {
         throw new NotFoundException('Development plan revision not found');
       }
-      budgetPlan = developmentPlanRevision.budgetPlan;
+      developmentPlan = developmentPlanRevision.developmentPlan;
       isUsingMainPlan = false;
     }
 
@@ -1824,16 +2225,16 @@ export class ProjectGroupsService {
 
     // Query all projects
     const [originalProjects, revisedProjects] = await Promise.all([
-      this.findOriginalLatestProjects(budgetPlan.id),
-      this.findRevisedLatestProjects(budgetPlan.id),
+      this.findOriginalLatestProjects(developmentPlan.id),
+      this.findRevisedLatestProjects(developmentPlan.id),
     ]);
     const allProjects = [...originalProjects, ...revisedProjects];
 
     // Get plan analysis data
     const planAnalysis = await this.getPlanAnalysis(allProjects, plans, tactics, strategies);
-    
+
     // Get timeline analysis
-    const timelineAnalysis = await this.getTimelineAnalysis(allProjects, budgetPlan);
+    const timelineAnalysis = await this.getTimelineAnalysis(allProjects, developmentPlan);
 
     // Get plan comparison data
     const planComparison = await this.getPlanComparison(allProjects, plans);
@@ -1841,23 +2242,23 @@ export class ProjectGroupsService {
     return {
       // Plan information
       planInfo: {
-        budgetPlanId: budgetPlan.id,
-        budgetPlanName: budgetPlan.name,
-        startYear: budgetPlan.startYear,
-        endYear: budgetPlan.endYear,
+        developmentPlanId: developmentPlan.id,
+        developmentPlanName: developmentPlan.name,
+        startYear: developmentPlan.startYear,
+        endYear: developmentPlan.endYear,
         isUsingMainPlan,
         planType: isUsingMainPlan ? 'main' : 'revision'
       },
-      
+
       // Plan hierarchy analysis (Sunburst Chart)
       planHierarchy: planAnalysis,
-      
+
       // Timeline analysis
       timelineAnalysis: timelineAnalysis,
-      
+
       // Plan comparison
       planComparison: planComparison,
-      
+
       // All projects for reference
       projects: allProjects,
       length: allProjects.length
@@ -1882,28 +2283,28 @@ export class ProjectGroupsService {
       where: { deletedAt: IsNull() }
     });
 
-    // Find budget plan - ตรวจสอบทั้ง budget plan และ development plan revision
-    let budgetPlan = await this.budgetPlanRepo.findOne({
+    // Find development plan - ตรวจสอบทั้ง development plan และ development plan revision
+    let developmentPlan = await this.developmentPlanRepo.findOne({
       where: { isLatest: true }
     });
-    
+
     let isUsingMainPlan = true;
-    if (!budgetPlan || budgetPlan.id === null) {
+    if (!developmentPlan || developmentPlan.id === null) {
       const developmentPlanRevision = await this.developmentPlanRevisionRepo.findOne({
         where: { isLatest: true },
-        relations: ['budgetPlan']
+        relations: ['developmentPlan']
       });
       if (!developmentPlanRevision) {
         throw new NotFoundException('Development plan revision not found');
       }
-      budgetPlan = developmentPlanRevision.budgetPlan;
+      developmentPlan = developmentPlanRevision.developmentPlan;
       isUsingMainPlan = false;
     }
 
     // Query all projects
     const [originalProjects, revisedProjects] = await Promise.all([
-      this.findOriginalLatestProjects(budgetPlan.id),
-      this.findRevisedLatestProjects(budgetPlan.id),
+      this.findOriginalLatestProjects(developmentPlan.id),
+      this.findRevisedLatestProjects(developmentPlan.id),
     ]);
     const allProjects = [...originalProjects, ...revisedProjects];
 
@@ -1913,15 +2314,15 @@ export class ProjectGroupsService {
     // Calculate project counts by standardized categories
     const projectCounts = allProjects.reduce((counts, project) => {
       let statusName = 'Unknown';
-      
+
       if (project.trackingStatus && project.trackingStatus.length > 0) {
         const latestTrackingStatus = project.trackingStatus.find(ts => ts.isLatest) || project.trackingStatus[0];
         statusName = latestTrackingStatus?.statusId?.name || 'Unknown';
       }
-      
+
       const category = this.mapStatusToCategory(statusName);
       counts[category] = (counts[category] || 0) + 1;
-      
+
       return counts;
     }, {});
 
@@ -1940,14 +2341,14 @@ export class ProjectGroupsService {
     return {
       // Plan information
       planInfo: {
-        budgetPlanId: budgetPlan.id,
-        budgetPlanName: budgetPlan.name,
-        startYear: budgetPlan.startYear,
-        endYear: budgetPlan.endYear,
+        developmentPlanId: developmentPlan.id,
+        developmentPlanName: developmentPlan.name,
+        startYear: developmentPlan.startYear,
+        endYear: developmentPlan.endYear,
         isUsingMainPlan,
         planType: isUsingMainPlan ? 'main' : 'revision'
       },
-      
+
       // Project counts
       projectCounts: {
         approved: standardizedProjectCounts.approved,
@@ -1955,13 +2356,13 @@ export class ProjectGroupsService {
         rejected: standardizedProjectCounts.rejected,
         total: totalProjects
       },
-      
+
       // Approval rate
       approvalRate: Math.round(approvalRate * 100) / 100,
-      
+
       // Strategy statistics
       strategyStatistics: strategyStats,
-      
+
       // All projects
       projects: allProjects,
       length: allProjects.length
@@ -1977,9 +2378,9 @@ export class ProjectGroupsService {
       .filter(project => {
         // Filter projects that have location data
         const hasStartLocation = (project.startLat !== null && project.startLng !== null) ||
-                                 (project.originalProject?.startLat !== null && project.originalProject?.startLng !== null);
+          (project.originalProject?.startLat !== null && project.originalProject?.startLng !== null);
         const hasEndLocation = (project.endLat !== null && project.endLng !== null) ||
-                               (project.originalProject?.endLat !== null && project.originalProject?.endLng !== null);
+          (project.originalProject?.endLat !== null && project.originalProject?.endLng !== null);
         return hasStartLocation || hasEndLocation;
       })
       .map(project => {
@@ -1988,7 +2389,7 @@ export class ProjectGroupsService {
         const startLng = project.startLng || project.originalProject?.startLng;
         const endLat = project.endLat || project.originalProject?.endLat;
         const endLng = project.endLng || project.originalProject?.endLng;
-        
+
         const strategy = project.strategy || project.originalProject?.strategy;
         const plan = project.plan || project.originalProject?.plan;
         const originAgency = project.originAgencyId || project.originalProject?.originAgencyId;
@@ -2040,14 +2441,14 @@ export class ProjectGroupsService {
           goal: goal,
           indicator: indicator,
           expected: expected,
-          
+
           // Location data
           startLocation: startLat && startLng ? {
             latitude: parseFloat(startLat.toString()),
             longitude: parseFloat(startLng.toString()),
             type: 'start'
           } : null,
-          
+
           endLocation: endLat && endLng ? {
             latitude: parseFloat(endLat.toString()),
             longitude: parseFloat(endLng.toString()),
@@ -2068,19 +2469,19 @@ export class ProjectGroupsService {
           budgetByYear: budgetByYear,
           status: statusName,
           statusCategory: statusCategory,
-          
+
           // Strategy, Tactic & Plan
           strategy: strategy ? {
             id: strategy.id,
             name: strategy.name,
             color: this.getStrategyColor(strategy.id)
           } : null,
-          
+
           tactic: tactic ? {
             id: tactic.id,
             name: tactic.name
           } : null,
-          
+
           plan: plan ? {
             id: plan.id,
             name: plan.name
@@ -2117,7 +2518,7 @@ export class ProjectGroupsService {
 
     markers.forEach(marker => {
       const amphoeName = marker.originAgency?.amphoe || 'ไม่ระบุอำเภอ';
-      
+
       if (!amphoeMap.has(amphoeName)) {
         amphoeMap.set(amphoeName, {
           amphoeName: amphoeName,
@@ -2138,7 +2539,7 @@ export class ProjectGroupsService {
     return Array.from(amphoeMap.values()).map(amphoe => {
       const latSum = amphoe.markers.reduce((sum: number, m: any) => sum + m.location.latitude, 0);
       const lngSum = amphoe.markers.reduce((sum: number, m: any) => sum + m.location.longitude, 0);
-      
+
       return {
         amphoeName: amphoe.amphoeName,
         projectCount: amphoe.projectCount,
@@ -2207,7 +2608,7 @@ export class ProjectGroupsService {
     for (let i = 0; i < strategyId.length; i++) {
       hash = strategyId.charCodeAt(i) + ((hash << 5) - hash);
     }
-    
+
     return colors[Math.abs(hash) % colors.length];
   }
 
@@ -2217,30 +2618,30 @@ export class ProjectGroupsService {
   private transformToDistrictStructure(amphoes: any[], localOrgs: any[], allProjects: any[]): any[] {
     // แสดงทุกอำเภอแม้ไม่มีโครงการ (array เปล่า) และ sort ตาม id
     const sortedAmphoes = [...amphoes].sort((a, b) => a.id.localeCompare(b.id));
-    
+
     return sortedAmphoes.map(amphoe => {
       // Get LAOs for this amphoe (แสดงทุกอปทแม้ไม่มีโครงการ) และ sort ตาม id
       const amphoeLAOs = localOrgs
         .filter(lao => lao.amphoe?.id === amphoe.id)
         .sort((a, b) => a.id.localeCompare(b.id));
-      
+
       // Transform LAOs with their projects (แสดงทุกอปทแม้ไม่มีโครงการ)
       const localOrganizations = amphoeLAOs.map(lao => {
         // Find projects for this LAO
         const laoProjects = allProjects.filter(project => {
           const originAgency = project.originAgencyId || project.originalProject?.originAgencyId;
           const responsibleAgency = project.responsibleAgency || project.originalProject?.responsibleAgency;
-          
+
           // กรณีปกติ: มี originAgency
           if (originAgency && originAgency.id === lao.id) {
             return true;
           }
-          
+
           // กรณีพิเศษ: ไม่มี originAgency แต่มี responsibleAgency ให้กำหนดเป็นอปท 3001027
           if (!originAgency && responsibleAgency && lao.id === '3001027') {
             return true;
           }
-          
+
           return false;
         });
 
@@ -2293,27 +2694,27 @@ export class ProjectGroupsService {
             indicator: project.indicator || project.originalProject?.indicator,
             expected: project.expected || project.originalProject?.expected,
             projectYear: project.projectYear || project.originalProject?.projectYear,
-            
+
             // Budget
             budget: Math.round(totalBudget * 100) / 100,
             budgetByYear: budgetByYear,
-            
+
             // Status
             status: statusName,
             statusCategory: statusCategory,
-            
+
             // Strategy & Plan
             strategy: strategy ? {
               id: strategy.id,
               name: strategy.name,
               color: this.getStrategyColor(strategy.id)
             } : null,
-            
+
             tactic: tactic ? {
               id: tactic.id,
               name: tactic.name
             } : null,
-            
+
             plan: plan ? {
               id: plan.id,
               name: plan.name
@@ -2342,7 +2743,7 @@ export class ProjectGroupsService {
         // Calculate LAO statistics
         const laoProjectCount = transformedProjects.length;
         const laoTotalBudget = transformedProjects.reduce((sum, project) => sum + project.budget, 0);
-        
+
         const laoStatusBreakdown = transformedProjects.reduce((counts, project) => {
           counts[project.statusCategory] = (counts[project.statusCategory] || 0) + 1;
           return counts;
@@ -2368,19 +2769,19 @@ export class ProjectGroupsService {
       const projectsWithoutLAO = allProjects.filter(project => {
         const originAgency = project.originAgencyId || project.originalProject?.originAgencyId;
         const responsibleAgency = project.responsibleAgency || project.originalProject?.responsibleAgency;
-        
+
         // กรณีปกติ: มี originAgency แต่ไม่มี LAO record
-        if (originAgency && 
-            originAgency.amphoe?.id === amphoe.id && 
-            !amphoeLAOs.some(lao => lao.id === originAgency.id)) {
+        if (originAgency &&
+          originAgency.amphoe?.id === amphoe.id &&
+          !amphoeLAOs.some(lao => lao.id === originAgency.id)) {
           return true;
         }
-        
+
         // กรณีพิเศษ: ไม่มี originAgency แต่มี responsibleAgency (จะไปอยู่ในอปท 3001027)
         if (!originAgency && responsibleAgency) {
           return false; // ไม่ต้องเพิ่มในส่วนนี้ เพราะจะไปอยู่ในอปท 3001027 อยู่แล้ว
         }
-        
+
         return false;
       });
 
@@ -2389,7 +2790,7 @@ export class ProjectGroupsService {
         const projectsByAgency = projectsWithoutLAO.reduce((groups: any, project: any) => {
           const originAgency = project.originAgencyId || project.originalProject?.originAgencyId;
           const responsibleAgency = project.responsibleAgency || project.originalProject?.responsibleAgency;
-          
+
           // กรณีปกติ: มี originAgency
           if (originAgency) {
             const agencyId = originAgency.id;
@@ -2406,7 +2807,7 @@ export class ProjectGroupsService {
             // ไม่ต้องเพิ่มในส่วนนี้ เพราะโครงการเหล่านี้จะไปอยู่ในอปท 3001027 อยู่แล้ว
             // ผ่านเงื่อนไขใน filter ด้านบน
           }
-          
+
           return groups;
         }, {});
 
@@ -2414,7 +2815,7 @@ export class ProjectGroupsService {
         Object.values(projectsByAgency).forEach((group: any) => {
           const agency = group.agency;
           const agencyProjects = group.projects;
-          
+
           const transformedProjects = agencyProjects.map(project => {
             // Same transformation logic as above
             const strategy = project.strategy || project.originalProject?.strategy;
@@ -2444,22 +2845,22 @@ export class ProjectGroupsService {
               indicator: project.indicator || project.originalProject?.indicator,
               expected: project.expected || project.originalProject?.expected,
               projectYear: project.projectYear || project.originalProject?.projectYear,
-              
+
               budget: Math.round(totalBudget * 100) / 100,
               status: statusName,
               statusCategory: statusCategory,
-              
+
               strategy: strategy ? {
                 id: strategy.id,
                 name: strategy.name,
                 color: this.getStrategyColor(strategy.id)
               } : null,
-              
+
               tactic: tactic ? {
                 id: tactic.id,
                 name: tactic.name
               } : null,
-              
+
               plan: plan ? {
                 id: plan.id,
                 name: plan.name
@@ -2485,7 +2886,7 @@ export class ProjectGroupsService {
 
           const laoProjectCount = transformedProjects.length;
           const laoTotalBudget = transformedProjects.reduce((sum, project) => sum + project.budget, 0);
-          
+
           const laoStatusBreakdown = transformedProjects.reduce((counts, project) => {
             counts[project.statusCategory] = (counts[project.statusCategory] || 0) + 1;
             return counts;
@@ -2513,7 +2914,7 @@ export class ProjectGroupsService {
       // Calculate amphoe statistics
       const amphoeProjectCount = localOrganizations.reduce((sum, org) => sum + org.projectCount, 0);
       const amphoeTotalBudget = localOrganizations.reduce((sum, org) => sum + org.totalBudget, 0);
-      
+
       const amphoeStatusBreakdown = localOrganizations.reduce((counts, org) => {
         counts.approved += org.statusBreakdown.approved;
         counts.pending += org.statusBreakdown.pending;
@@ -2593,7 +2994,7 @@ export class ProjectGroupsService {
       'Revision': 'pending',
       'Rejected': 'rejected'
     };
-    
+
     return statusMap[statusName] || 'unknown';
   }
 
@@ -2623,17 +3024,17 @@ export class ProjectGroupsService {
       const statusCounts = projectsInStrategy.reduce((counts, project) => {
         // Get the latest tracking status
         let statusName = 'Unknown';
-        
+
         if (project.trackingStatus && project.trackingStatus.length > 0) {
           // Find the latest tracking status
           const latestTrackingStatus = project.trackingStatus.find(ts => ts.isLatest) || project.trackingStatus[0];
           statusName = latestTrackingStatus?.statusId?.name || 'Unknown';
         }
-        
+
         // Map to standardized category
         const category = this.mapStatusToCategory(statusName);
         counts[category] = (counts[category] || 0) + 1;
-        
+
         return counts;
       }, {});
 
@@ -2656,7 +3057,7 @@ export class ProjectGroupsService {
         // Get project status
         let statusName = 'Unknown';
         let statusCategory = 'unknown';
-        
+
         if (project.trackingStatus && project.trackingStatus.length > 0) {
           const latestTrackingStatus = project.trackingStatus.find(ts => ts.isLatest) || project.trackingStatus[0];
           statusName = latestTrackingStatus?.statusId?.name || 'Unknown';
@@ -2694,11 +3095,11 @@ export class ProjectGroupsService {
   /**
    * Get budget allocation by year
    */
-  private async getBudgetByYear(allProjects: any[], budgetPlan: any): Promise<any[]> {
+  private async getBudgetByYear(allProjects: any[], developmentPlan: any): Promise<any[]> {
     const budgetByYear: any[] = [];
-    
-    // Generate years from budget plan
-    for (let year = budgetPlan.startYear; year <= budgetPlan.endYear; year++) {
+
+    // Generate years from development plan
+    for (let year = developmentPlan.startYear; year <= developmentPlan.endYear; year++) {
       const projectsInYear = allProjects.filter(project => {
         const budgets = project.budgets || project.originalProject?.budgets || [];
         return budgets.some(budget => budget.year === year);
@@ -2816,13 +3217,13 @@ export class ProjectGroupsService {
     allProjects.forEach(project => {
       const responsibleAgency = project.responsibleAgency || project.originalProject?.responsibleAgency;
       const originAgency = project.originAgencyId || project.originalProject?.originAgencyId;
-      
+
       // Use responsible agency if available, otherwise use origin agency
       const agency = responsibleAgency || originAgency;
-      
+
       if (agency) {
         const agencyId = agency.id;
-        
+
         if (!agencyMap.has(agencyId)) {
           agencyMap.set(agencyId, {
             agencyId: agency.id,
@@ -2836,7 +3237,7 @@ export class ProjectGroupsService {
         }
 
         const agencyData = agencyMap.get(agencyId);
-        
+
         // Calculate project budget
         const budgets = project.budgets || project.originalProject?.budgets || [];
         const projectBudget = budgets.reduce((sum: number, budget: any) => {
@@ -2847,7 +3248,7 @@ export class ProjectGroupsService {
         // Get project status
         let statusName = 'Unknown';
         let statusCategory = 'unknown';
-        
+
         if (project.trackingStatus && project.trackingStatus.length > 0) {
           const latestTrackingStatus = project.trackingStatus.find(ts => ts.isLatest) || project.trackingStatus[0];
           statusName = latestTrackingStatus?.statusId?.name || 'Unknown';
@@ -2858,7 +3259,7 @@ export class ProjectGroupsService {
         agencyData.totalBudget += projectBudget;
         agencyData.projectCount += 1;
         agencyData.statusBreakdown[statusCategory] += 1;
-        
+
         // Add project details
         agencyData.projects.push({
           id: project.id,
@@ -3023,11 +3424,11 @@ export class ProjectGroupsService {
   /**
    * Get timeline analysis for projects
    */
-  private async getTimelineAnalysis(allProjects: any[], budgetPlan: any): Promise<any> {
+  private async getTimelineAnalysis(allProjects: any[], developmentPlan: any): Promise<any> {
     const timeline: any[] = [];
-    
-    // Create timeline entries for each year in budget plan
-    for (let year = budgetPlan.startYear; year <= budgetPlan.endYear; year++) {
+
+    // Create timeline entries for each year in development plan
+    for (let year = developmentPlan.startYear; year <= developmentPlan.endYear; year++) {
       const yearProjects = allProjects.filter(project => {
         const projectYear = project.projectYear || project.originalProject?.projectYear;
         return projectYear === year;
@@ -3055,7 +3456,7 @@ export class ProjectGroupsService {
           }
           const planData = planBreakdown.get(projectPlan.id);
           planData.projectCount += 1;
-          
+
           const projectBudget = (project.budgets || project.originalProject?.budgets || []).reduce((sum: number, budget: any) => {
             const quantity = typeof budget.quantity === 'string' ? parseFloat(budget.quantity) : (budget.quantity || 0);
             return sum + quantity;
@@ -3144,12 +3545,12 @@ export class ProjectGroupsService {
   /**
    * Get trend analysis data
    */
-  private async getTrendAnalysis(allProjects: any[], budgetPlan: any): Promise<any> {
+  private async getTrendAnalysis(allProjects: any[], developmentPlan: any): Promise<any> {
     const yearlyTrend: any[] = [];
     const monthlyTrend: any[] = [];
-    
+
     // Yearly trend
-    for (let year = budgetPlan.startYear; year <= budgetPlan.endYear; year++) {
+    for (let year = developmentPlan.startYear; year <= developmentPlan.endYear; year++) {
       const projectsInYear = allProjects.filter(project => {
         const budgets = project.budgets || project.originalProject?.budgets || [];
         return budgets.some(budget => budget.year === year);
@@ -3189,7 +3590,7 @@ export class ProjectGroupsService {
       const date = new Date(currentDate.getFullYear(), currentDate.getMonth() - i, 1);
       const year = date.getFullYear();
       const month = date.getMonth() + 1;
-      
+
       const projectsInMonth = allProjects.filter(project => {
         const createdDate = new Date(project.createdAt || project.originalProject?.createdAt);
         return createdDate.getFullYear() === year && createdDate.getMonth() + 1 === month;
@@ -3206,18 +3607,18 @@ export class ProjectGroupsService {
     // Calculate growth rates
     const budgetGrowth: any[] = [];
     const projectGrowth: any[] = [];
-    
+
     for (let i = 1; i < yearlyTrend.length; i++) {
       const prevBudget = yearlyTrend[i - 1].totalBudget;
       const currentBudget = yearlyTrend[i].totalBudget;
       const prevProjects = yearlyTrend[i - 1].projectCount;
       const currentProjects = yearlyTrend[i].projectCount;
-      
+
       budgetGrowth.push({
         year: yearlyTrend[i].year,
         growthRate: prevBudget > 0 ? Math.round(((currentBudget - prevBudget) / prevBudget) * 100 * 100) / 100 : 0
       });
-      
+
       projectGrowth.push({
         year: yearlyTrend[i].year,
         growthRate: prevProjects > 0 ? Math.round(((currentProjects - prevProjects) / prevProjects) * 100 * 100) / 100 : 0
@@ -3238,14 +3639,14 @@ export class ProjectGroupsService {
     };
   }
 
-  
+
   async findByStatusApproved(option: {
     userId: string;
     countOnly?: boolean;
-    budgetPlanId?: string;
+    developmentPlanId?: string;
     filterByResponsibleAgency?: boolean;
   }): Promise<IUnifiedProjectDisplay[] | number> {
-    const { userId, countOnly, budgetPlanId, filterByResponsibleAgency } = option;
+    const { userId, countOnly, developmentPlanId, filterByResponsibleAgency } = option;
 
     // Validate user permissions
     const workHistory = await this.workHistoryRepo.findOne({
@@ -3256,26 +3657,26 @@ export class ProjectGroupsService {
     if (workHistory.workStatus.name !== 'approved')
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
 
-    const allowedRoles = ['user','staff', 'admin', 'super-admin', 'c-level'];
+    const allowedRoles = ['user', 'staff', 'admin', 'super-admin', 'c-level'];
     if (!allowedRoles.includes(workHistory.role.name))
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
 
-    // Validate budget plan
-    if (!budgetPlanId) {
-      throw new BadRequestException('Budget plan ID is required');
+    // Validate development plan
+    if (!developmentPlanId) {
+      throw new BadRequestException('Development plan ID is required');
     }
 
-    const budgetPlan = await this.budgetPlanRepo.findOne({
-      where: { id: budgetPlanId },
+    const developmentPlan = await this.developmentPlanRepo.findOne({
+      where: { id: developmentPlanId },
     });
-    if (!budgetPlan)
-      throw new NotFoundException('Budget plan not found');
+    if (!developmentPlan)
+      throw new NotFoundException('Development plan not found');
 
     // Query both original and revised projects
-    const responsibleAgencyId = filterByResponsibleAgency ? workHistory.governmentAgencies?.id : undefined;
+    const responsibleAgencyId = filterByResponsibleAgency ? workHistory.governmentAgencies?.id : "";
     const [originalProjects, revisedProjects] = await Promise.all([
-      this.findOriginalApprovedProjects(budgetPlanId, responsibleAgencyId),
-      this.findRevisedApprovedProjects(budgetPlanId, responsibleAgencyId),
+      this.findOriginalApprovedProjects(developmentPlanId, responsibleAgencyId),
+      this.findRevisedApprovedProjects(developmentPlanId, responsibleAgencyId),
     ]);
 
     // If count only, return total count
@@ -3366,7 +3767,7 @@ export class ProjectGroupsService {
   async findAllVersions(
     projectId: string,
     userId: string,
-  ): Promise<IProjectVersionsResponse> {
+  ): Promise<any> {
     // Validate user permissions
     const workHistory = await this.workHistoryRepo.findOne({
       where: { user: { id: userId } },
@@ -3378,7 +3779,7 @@ export class ProjectGroupsService {
     if (workHistory.workStatus.name !== 'approved')
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
 
-    const allowedRoles = ['user','staff', 'admin', 'super-admin', 'c-level'];
+    const allowedRoles = ['user', 'staff', 'admin', 'super-admin', 'c-level'];
     if (!allowedRoles.includes(workHistory.role.name))
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
 
@@ -3393,7 +3794,7 @@ export class ProjectGroupsService {
         'strategy',
         'tactic',
         'plan',
-        'budgetPlan',
+        'developmentPlan',
         'budgets',
         'trackingStatus',
         'trackingStatus.statusId',
@@ -3407,59 +3808,14 @@ export class ProjectGroupsService {
       ],
     });
 
-    let projectGroupId = projectId;
-
-    // If not found as ProjectGroup, try to find as RevisedProjectGroup
-    if (!originalProject) {
-      const revisedProject = await this.revisedProjectGroupRepo.findOne({
-        where: { id: projectId },
-        relations: ['projectGroup'],
-      });
-
-      if (!revisedProject) {
-        throw new NotFoundException(`Project with ID ${projectId} not found`);
-      }
-
-      // If this revised project has a parent, use the parent's ID
-      if (revisedProject.projectGroup) {
-        projectGroupId = revisedProject.projectGroup.id;
-        originalProject = await this.projectGroupRepo.findOne({
-          where: { id: projectGroupId },
-          relations: [
-            'createdBy',
-            'createdBy.user',
-            'createdBy.amphoe',
-            'createdBy.localAdministrativeOrganization',
-            'strategy',
-            'tactic',
-            'plan',
-            'budgetPlan',
-            'budgets',
-            'trackingStatus',
-            'trackingStatus.statusId',
-            'trackingStatus.comments',
-            'trackingStatus.createdBy',
-            'trackingStatus.createdBy.user',
-            'responsibleAgency',
-            'originAgencyId',
-            'favorites',
-            'favorites.userId',
-          ],
-        });
-      }
-      // If no parent (new project), originalProject stays null
-    }
-
-    // Find all revisions of this project (all versions, not just latest)
-    const whereCondition = originalProject
-      ? { projectGroup: { id: projectGroupId } }
-      : { projectGroup: IsNull() };
-
     const allRevisions = await this.revisedProjectGroupRepo.find({
-      where: whereCondition,
+      where: {
+        projectGroup: { id: originalProject?.id },
+        trackingStatus: { isLatest: true },
+      },
       relations: [
         'developmentPlanRevision',
-        'developmentPlanRevision.budgetPlan',
+        'developmentPlanRevision.developmentPlan',
         'developmentPlanRevision.revisionType',
         'projectGroup',
         'createdBy',
@@ -3485,35 +3841,21 @@ export class ProjectGroupsService {
       },
     });
 
-    // Filter to get only latest tracking status for each revision
-    const revisionsWithLatestStatus = allRevisions.map((revision) => {
-      return {
-        ...revision,
-        trackingStatus: revision.trackingStatus?.filter((ts) => ts.isLatest),
-      };
-    });
-
     // Map to unified format
     const unifiedOriginal = originalProject
       ? UnifiedProjectMapper.fromProjectGroup(originalProject)
       : null;
 
-    const unifiedRevisions = revisionsWithLatestStatus.map((revision) =>
+    const unifiedRevisions = allRevisions.map((revision) =>
       UnifiedProjectMapper.fromRevisedProjectGroup(revision),
     );
 
-    // Sort revisions by revisionNumber
-    unifiedRevisions.sort((a, b) => {
-      const aNum = a.revisionNumber ?? 0;
-      const bNum = b.revisionNumber ?? 0;
-      return aNum - bNum;
-    });
 
     // Add comparison data to each revision
     for (let i = 0; i < unifiedRevisions.length; i++) {
       const current = unifiedRevisions[i];
       let previous: IUnifiedProjectDisplay | null = null;
-      let comparedWith: 'original' | 'previous-revision' | null = null;
+      let comparedWith: 'original' | 'revised' | null = null;
 
       if (i === 0) {
         // First revision: compare with original project
@@ -3522,7 +3864,7 @@ export class ProjectGroupsService {
       } else {
         // Subsequent revisions: compare with previous revision
         previous = unifiedRevisions[i - 1];
-        comparedWith = 'previous-revision';
+        comparedWith = 'revised';
       }
 
       // Calculate changed fields
@@ -3545,7 +3887,7 @@ export class ProjectGroupsService {
       const latest = unifiedRevisions[unifiedRevisions.length - 1];
       latestVersion = {
         id: latest.id,
-        revisionNumber: latest.revisionNumber,
+        revisionNumber: latest.developmentPlanRevision?.revisionNumber,
         isOriginal: false,
       };
     } else if (originalProject) {
@@ -3560,6 +3902,7 @@ export class ProjectGroupsService {
       revisions: unifiedRevisions,
       totalVersions,
       latestVersion,
+
     };
   }
 
@@ -3597,7 +3940,7 @@ export class ProjectGroupsService {
     try {
       const projectGroup = await this.projectGroupRepo.findOne({
         where: { id },
-        relations: ['createdBy', 'createdBy.user', 'createdBy.amphoe', 'createdBy.localAdministrativeOrganization', 'strategy', 'tactic', 'plan', 'budgetPlan', 'budgets', 'trackingStatus', 'trackingStatus.comments', 'trackingStatus.statusId', 'trackingStatus.createdBy', 'trackingStatus.createdBy.user', 'trackingStatus.createdBy.localAdministrativeOrganization', 'trackingStatus.createdBy.governmentAgencies', 'trackingStatus.createdBy.workStatus', 'trackingStatus.createdBy.workStatus', 'responsibleAgency', 'originAgencyId'],
+        relations: ['createdBy', 'createdBy.user', 'createdBy.amphoe', 'createdBy.localAdministrativeOrganization', 'strategy', 'tactic', 'plan', 'developmentPlan', 'budgets', 'trackingStatus', 'trackingStatus.comments', 'trackingStatus.statusId', 'trackingStatus.createdBy', 'trackingStatus.createdBy.user', 'trackingStatus.createdBy.localAdministrativeOrganization', 'trackingStatus.createdBy.governmentAgencies', 'trackingStatus.createdBy.workStatus', 'trackingStatus.createdBy.workStatus', 'responsibleAgency', 'originAgencyId'],
       });
 
       if (!projectGroup) {
@@ -3682,6 +4025,7 @@ export class ProjectGroupsService {
         endLng: dto.endLng ?? null,
         indicator: dto.indicator,
         expected: dto.expected,
+        isBooked: dto.isBooked,
         strategy,
         tactic,
         plan,
@@ -3763,19 +4107,19 @@ export class ProjectGroupsService {
   }
 
   private async validateForeignKeys(manager: EntityManager, dto: CreateProjectGroupDto) {
-    const [budgetPlan, strategy, tactic, plan] = await Promise.all([
-      manager.findOne(BudgetPlan, { where: { id: dto.budgetPlanId } }) ,
-      manager.findOne(Strategy, { where: { id: dto.strategyId } }) ,
-      manager.findOne(Tactic, { where: { id: dto.tacticId } }) ,
-      manager.findOne(Plan, { where: { id: dto.planId } }) ,
+    const [developmentPlan, strategy, tactic, plan] = await Promise.all([
+      manager.findOne(DevelopmentPlan, { where: { id: dto.developmentPlanId } }),
+      manager.findOne(Strategy, { where: { id: dto.strategyId } }),
+      manager.findOne(Tactic, { where: { id: dto.tacticId } }),
+      manager.findOne(Plan, { where: { id: dto.planId } }),
     ]);
 
-    if (!budgetPlan) throw new NotFoundException(`Budget Plan ID not found: ${dto.budgetPlanId}`);
+    if (!developmentPlan) throw new NotFoundException(`Development Plan ID not found: ${dto.developmentPlanId}`);
     if (!strategy) throw new NotFoundException(`Strategy ID not found: ${dto.strategyId}`);
     if (!tactic) throw new NotFoundException(`Tactic ID not found: ${dto.tacticId}`);
     if (!plan) throw new NotFoundException(`Plan ID not found: ${dto.planId}`);
 
-    return [budgetPlan, strategy, tactic, plan];
+    return [developmentPlan, strategy, tactic, plan];
   }
 
   private getAgencyData(workHistory: any) {

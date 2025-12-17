@@ -1,6 +1,8 @@
 import { InternalServerErrorException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { AiService } from './ai.service';
+import { SmartApprovePrecheckService } from './smart-approve-precheck.service';
+import { SmartApproveReferenceService } from './smart-approve-reference.service';
 import { RegenerateFieldDto } from './dto/generate-project.dto';
 
 const mockOpenAI = {
@@ -44,10 +46,36 @@ beforeAll(() => {
 describe('AiService', () => {
   let service: AiService;
 
+  const mockPrecheckService = {
+    evaluate: jest.fn().mockReturnValue({
+      response: {
+        summary: {
+          overallResult: 'ผ่าน',
+          reason: '',
+          suggestedActions: [],
+        },
+        categories: {
+          strategy: { status: 'ผ่าน', details: '', suggestions: [] },
+          projectInfo: { status: 'ผ่าน', details: '', suggestions: [] },
+          location: { status: 'ผ่าน', details: '', suggestions: [] },
+          budget: { status: 'ผ่าน', details: '', suggestions: [] },
+          indicators: { status: 'ผ่าน', details: '', suggestions: [] },
+        },
+      },
+      shouldUseLLM: true,
+    }),
+  } as unknown as SmartApprovePrecheckService;
+
+  const mockReferenceService = {} as SmartApproveReferenceService;
+
   beforeEach(async () => {
     jest.clearAllMocks();
     const module: TestingModule = await Test.createTestingModule({
-      providers: [AiService],
+      providers: [
+        AiService,
+        { provide: SmartApprovePrecheckService, useValue: mockPrecheckService },
+        { provide: SmartApproveReferenceService, useValue: mockReferenceService },
+      ],
     }).compile();
     service = module.get<AiService>(AiService);
   });

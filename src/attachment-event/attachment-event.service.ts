@@ -159,8 +159,18 @@ export class AttachmentEventService {
         throw new NotFoundException(`File ${attachment.filename} not found on disk`);
       }
 
+      // Encode filename properly for Content-Disposition header
+      // Remove or replace invalid header characters
+      const sanitizedFilename = attachment.originalName
+        .replace(/[\r\n]/g, '') // Remove newlines and carriage returns
+        .replace(/[^\x20-\x7E]/g, '_'); // Replace non-ASCII characters with underscore
+      
+      // Use RFC 5987 encoding for non-ASCII characters
+      const encodedFilename = encodeURIComponent(attachment.originalName);
+      const contentDisposition = `attachment; filename="${sanitizedFilename}"; filename*=UTF-8''${encodedFilename}`;
+
       // Set response headers
-      res.setHeader('Content-Disposition', `attachment; filename="${attachment.originalName}"`);
+      res.setHeader('Content-Disposition', contentDisposition);
       res.setHeader('Content-Type', attachment.mimetype);
 
       // Create read stream and pipe to response

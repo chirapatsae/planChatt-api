@@ -14,6 +14,7 @@ import {
 import { PlanPhaseService } from './plan-phase.service';
 import { CreatePlanPhaseDto } from './dto/create-plan-phase.dto';
 import { UpdatePlanPhaseDto } from './dto/update-plan-phase.dto';
+import { UpdatePlanPhaseOpenStateDto } from './dto/update-plan-phase-open-state.dto';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { Request } from 'express';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
@@ -36,9 +37,9 @@ export class PlanPhaseController {
   }
 
   @Get()
-  findAll(@Query('budgetPlanId') budgetPlanId?: string) {
+  findAll(@Query('developmentPlanId') developmentPlanId?: string) {
     this.logger.log('Fetching all plan phases');
-    return this.planPhaseService.findAll(budgetPlanId);
+    return this.planPhaseService.findAll(developmentPlanId);
   }
 
   @Get(':id')
@@ -54,6 +55,15 @@ export class PlanPhaseController {
   ) {
     this.logger.log(`Updating plan phase with id: ${id}`);
     return this.planPhaseService.update(id, updatePlanPhaseDto);
+  }
+
+  @Patch(':id/open-state')
+  updateOpenState(
+    @Param('id') id: string,
+    @Body() openStateDto: UpdatePlanPhaseOpenStateDto,
+  ) {
+    this.logger.log(`Updating open state for plan phase with id: ${id}`);
+    return this.planPhaseService.updateOpenState(id, openStateDto.isOpen);
   }
 
   @Delete(':id')

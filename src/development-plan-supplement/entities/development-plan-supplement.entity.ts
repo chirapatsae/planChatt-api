@@ -1,0 +1,61 @@
+import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
+import { WorkHistory } from 'src/work-history/entities/work-history.entity';
+import {
+  Column,
+  CreateDateColumn,
+  DeleteDateColumn,
+  Entity,
+  JoinColumn,
+  ManyToOne,
+  OneToMany,
+  PrimaryGeneratedColumn,
+} from 'typeorm';
+import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
+
+@Entity('development_plan_supplement')
+export class DevelopmentPlanSupplement {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  @ManyToOne(() => DevelopmentPlan, { onDelete: 'CASCADE', onUpdate: 'CASCADE' })
+  @JoinColumn({ name: 'development_plan_id' })
+  developmentPlan: DevelopmentPlan;
+
+  @Column({ name: 'supplement_number', type: 'int' })
+  supplementNumber: number;
+
+  @Column({ type: 'text', nullable: true })
+  description: string;
+
+  @Column({ name: 'is_latest', default: false })
+  isLatest: boolean;
+
+  @Column({ name: 'is_booked', default: false })
+  isBooked: boolean;
+
+  @Column({ name: 'is_open', default: false })
+  isOpen: boolean;
+
+  @Column({ name: 'start_date', type: 'timestamp', nullable: true })
+  startDate: Date | null;
+
+  @Column({ name: 'end_date', type: 'timestamp', nullable: true })
+  endDate: Date | null;
+
+  @CreateDateColumn({ name: 'created_at' })
+  createdAt: Date;
+
+  @DeleteDateColumn({ name: 'deleted_at', nullable: true })
+  deletedAt?: Date;
+
+  @ManyToOne(() => WorkHistory, { onDelete: 'CASCADE', onUpdate: 'CASCADE' })
+  @JoinColumn({ name: 'created_by' })
+  createdBy: WorkHistory;
+
+  @OneToMany(() => SupplementProjectGroup, (supplementProjectGroup) => supplementProjectGroup.developmentPlanSupplement, {
+    onUpdate: 'CASCADE',
+    onDelete: 'CASCADE',
+  })
+  supplementProjectGroups: SupplementProjectGroup[];
+}
+

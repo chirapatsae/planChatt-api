@@ -60,6 +60,8 @@ export class EventsService {
         .createQueryBuilder('event')
         .leftJoinAndSelect('event.createdBy', 'createdBy')
         .leftJoinAndSelect('createdBy.user', 'user')
+        .leftJoinAndSelect('createdBy.amphoe', 'amphoe')
+        .leftJoinAndSelect('createdBy.localAdministrativeOrganization', 'localAdministrativeOrganization')
         .orderBy('event.createdAt', 'DESC');
 
       // Apply search filter
@@ -269,6 +271,8 @@ export class EventsService {
       updatedAt: event.updatedAt,
       createdBy: event.createdBy ? {
         id: event.createdBy.id,
+        amphoe: event.createdBy.amphoe || undefined,
+        localAdministrativeOrganization: event.createdBy.localAdministrativeOrganization || undefined,
         user: event.createdBy.user ? {
           firstname: event.createdBy.user.firstname,
           lastname: event.createdBy.user.lastname,

@@ -1,5 +1,5 @@
 import { Budget } from 'src/budget/entities/budget.entity';
-import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
+import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import {
   Column,
@@ -19,6 +19,7 @@ import { LocalAdministrativeOrganization } from 'src/local-administrative-organi
 import { GovernmentAgency } from 'src/government-agencies/entities/government-agency.entity';
 import { Favorite } from 'src/favorite/entities/favorite.entity';
 import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
+import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 
 @Entity('project_groups')
 export class ProjectGroup {
@@ -85,12 +86,12 @@ export class ProjectGroup {
   @JoinColumn({ name: 'plan_id' })
   plan: Plan;
 
-  @ManyToOne(() => BudgetPlan, (budgetPlan) => budgetPlan.projectGroup, {
+  @ManyToOne(() => DevelopmentPlan, (developmentPlan) => developmentPlan.projectGroup, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',
   })
-  @JoinColumn({ name: 'budget_plan_id' })
-  budgetPlan: BudgetPlan;
+  @JoinColumn({ name: 'development_plan_id' })
+  developmentPlan: DevelopmentPlan;
 
   @ManyToOne(
     () => WorkHistory,
@@ -169,4 +170,10 @@ export class ProjectGroup {
     onDelete: 'CASCADE',
   })
   favorites: Favorite[];
+
+  @OneToMany(() => RevisedProjectGroup, (revised) => revised.projectGroup, {
+    onUpdate: 'CASCADE',
+    onDelete: 'CASCADE',
+  })
+  revisedProjectGroups: RevisedProjectGroup[];
 }

@@ -22,7 +22,7 @@ export class AuthService {
     private readonly userRepository: Repository<User>,
     private readonly userService: UsersService,
     private jwtService: JwtService,
-  ) {}
+  ) { }
 
   async handleOAuthLogin(
     idToken: string,
@@ -34,9 +34,7 @@ export class AuthService {
       if (!decoded?.sub || decoded.iss !== 'https://imauth.bora.dopa.go.th') {
         throw new UnauthorizedException('Invalid id_token');
       }
-      this.logger.log('>>> decoded', decoded);
       const hashedCid = hashCitizenId(decoded.pid);
-      this.logger.log('>>> hashedCid', hashedCid);
       let user = await this.userRepository.findOne({
         where: { citizenIdHash: hashedCid },
         relations: [
@@ -47,10 +45,8 @@ export class AuthService {
           'workHistory.role',
         ],
       });
-      this.logger.log('>>> user', user);
       // ถ้า user ไม่พบ สร้างใหม่
       if (!user || !user.id) {
-        this.logger.log('>>> user not found, creating new user');
         const newUserDto: CreateUserDto = {
           citizenId: decoded.pid,    // เก็บ plain หรือ encrypt ไว้ก็ได้ ถ้าอยากถอดคืน
           citizenIdHash: hashedCid,  // เก็บ hash สำหรับ unique check
@@ -61,7 +57,7 @@ export class AuthService {
         try {
           user = await this.userService.create(newUserDto, hashedCid);
         } catch (error) {
-          if (error.code === '23505') { // PostgreSQL unique constraint violation
+          if (error.code === '23505') {
             user = await this.userRepository.findOne({
               where: { citizenIdHash: hashedCid },
               relations: [
@@ -72,7 +68,6 @@ export class AuthService {
                 'workHistory.role',
               ],
             });
-            
             if (!user) {
               throw new InternalServerErrorException('Failed to create or find user after duplicate constraint violation');
             }
@@ -81,14 +76,12 @@ export class AuthService {
           }
         }
       } else {
-        this.logger.log('>>> user found', user);
         user.prefix = decoded.title;
         user.firstname = decoded.given_name;
         user.lastname = decoded.family_name;
         user = await this.userService.update(user.id, user);
       }
       const isFirstLogin = user.isFirstLogin ? true : false;
-
       const latestWH =
         user.workHistory
           ?.filter((wh) => wh.workStatus.name === 'approved')
@@ -115,23 +108,25 @@ export class AuthService {
         expiresIn: '30d',
       });
 
+      console.log('user', user);
+      console.log('accessToken', accessToken);
       return {
         isFirstLogin,
         accessToken,
         user: {
           id: user.id,
-          workHistoryId: latestWH.id ?? null, // 👈 ใช้ ??
+          workHistoryId: latestWH.id ?? null,
           prefix: user.prefix,
           firstname: user.firstname,
           lastname: user.lastname,
           email: user.email ?? '',
           phone: user.phone ?? '',
-          amphoeId: latestWH.amphoe?.id ?? '', // 👈 ใช้ ?. และ ??
-          amphoeName: latestWH.amphoe?.name ?? '', // 👈 ใช้ ?. และ ??
+          amphoeId: latestWH.amphoe?.id ?? '',
+          amphoeName: latestWH.amphoe?.name ?? '',
           localAdministrativeOrganizationId:
-            latestWH.localAdministrativeOrganization?.id ?? '', // 👈 ใช้ ?. และ ??
+            latestWH.localAdministrativeOrganization?.id ?? '',
           localAdministrativeOrganizationName:
-            latestWH.localAdministrativeOrganization?.name ?? '', // 👈 ใช้ ?. และ ??
+            latestWH.localAdministrativeOrganization?.name ?? '',
           divisionId,
           divisionName,
           role: latestWH.role?.name ?? 'user',

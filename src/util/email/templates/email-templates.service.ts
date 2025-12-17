@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ProjectListData } from '../dto/email.dto';
-import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
+import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 
 
 @Injectable()
@@ -10,7 +10,7 @@ export class EmailTemplatesService {
   /**
    * สร้าง HTML template สำหรับรายการโครงการ
    */
-  generateProjectListHTML(projects: ProjectListData[], budgetPlan: BudgetPlan, workHistory: string, totalCount: number): string {
+  generateProjectListHTML(projects: ProjectListData[], developmentPlan: DevelopmentPlan, workHistory: string, totalCount: number): string {
 
     return `
     <!DOCTYPE html>
@@ -33,7 +33,7 @@ export class EmailTemplatesService {
         
         <div style="background-color: #f8f9fa; padding: 25px; border-radius: 8px; margin: 25px 0; border-left: 4px solid #28a745;">
           <p style="margin: 0; color: #333; font-size: 16px; line-height: 1.8;">
-            คุณได้นำส่งโครงการของ <strong>${workHistory}</strong> จำนวน <strong>${totalCount}</strong> รายการ เรียบร้อยแล้ว ตาม${budgetPlan.name} <strong>${budgetPlan.startYear} - ${budgetPlan.endYear}</strong>
+            คุณได้นำส่งโครงการของ <strong>${workHistory}</strong> จำนวน <strong>${totalCount}</strong> รายการ เรียบร้อยแล้ว ตาม${developmentPlan.name} <strong>${developmentPlan.startYear} - ${developmentPlan.endYear}</strong>
           </p>
         </div>
 
@@ -83,7 +83,7 @@ export class EmailTemplatesService {
   /**
    * สร้าง HTML template แนวราชการสำหรับการส่งกลับแก้ไข
    */
-  generateProjectEditHTML(projects: ProjectListData[], budgetPlan: BudgetPlan, workHistory: string, reviewerName: string): string {
+  generateProjectEditHTML(projects: ProjectListData[], developmentPlan: DevelopmentPlan, workHistory: string, reviewerName: string): string {
     return `
     <!DOCTYPE html>
     <html>
@@ -103,7 +103,7 @@ export class EmailTemplatesService {
             เรียน ผู้รับผิดชอบโครงการ
           </p>
           <p style="margin: 20px 0 20px 0; font-size: 18px; text-indent: 50px;">
-            ตามที่ได้มีการตรวจสอบโครงการ <strong> ${projects[0].title} </strong> และผู้ตรวจสอบได้ส่งกลับโครงการของ <strong>${workHistory}</strong> ตาม${budgetPlan.name} <strong>${budgetPlan.startYear} - ${budgetPlan.endYear}</strong> แล้วนั้น  ขอให้ดำเนินการแก้ไขโครงการให้แล้วเสร็จ โดยรายละเอียดจะแสดงที่ระบบ ผู้ตรวจสอบคือ <strong>${reviewerName}</strong>
+            ตามที่ได้มีการตรวจสอบโครงการ <strong> ${projects[0].title} </strong> และผู้ตรวจสอบได้ส่งกลับโครงการของ <strong>${workHistory}</strong> ตาม${developmentPlan.name} <strong>${developmentPlan.startYear} - ${developmentPlan.endYear}</strong> แล้วนั้น  ขอให้ดำเนินการแก้ไขโครงการให้แล้วเสร็จ โดยรายละเอียดจะแสดงที่ระบบ ผู้ตรวจสอบคือ <strong>${reviewerName}</strong>
           </p>
           <p style="margin: 20px 0 20px 0; font-size: 18px; text-indent: 50px;">
             จึงเรียนมาเพื่อทราบและดำเนินการแก้ไขตามที่กำหนด
@@ -120,7 +120,7 @@ export class EmailTemplatesService {
   /**
    * สร้าง Text template แนวราชการสำหรับการส่งกลับแก้ไข
    */
-  generateProjectEditText(projects: ProjectListData[], budgetPlan: BudgetPlan, workHistory: string, reviewerName: string): string {
+  generateProjectEditText(projects: ProjectListData[], developmentPlan: DevelopmentPlan, workHistory: string, reviewerName: string): string {
     return `
 แจ้งการส่งโครงการเพื่อแก้ไข
 ระบบจัดการโครงการ ธนาคารโครงการภาครัฐ
@@ -128,7 +128,7 @@ export class EmailTemplatesService {
 
 เรียน ผู้รับผิดชอบโครงการ
 
-ตามที่ได้มีการตรวจสอบและส่งกลับโครงการ ${projects[0].title}ของ ${workHistory} ตาม${budgetPlan.name} ${budgetPlan.startYear} - ${budgetPlan.endYear} แล้วนั้น
+ตามที่ได้มีการตรวจสอบและส่งกลับโครงการ ${projects[0].title}ของ ${workHistory} ตาม${developmentPlan.name} ${developmentPlan.startYear} - ${developmentPlan.endYear} แล้วนั้น
 
 ขอให้ดำเนินการแก้ไขโครงการตามรายการดังต่อไปนี้ โดยผู้ตรวจสอบคือ ${reviewerName}
 
@@ -149,12 +149,12 @@ ${projects.map((project, index) => `${index + 1}. ${project.title} (ผู้เ
   /**
    * สร้าง Text template สำหรับรายการโครงการ
    */
-  generateProjectListText(projects: ProjectListData[], budgetPlan: BudgetPlan, workHistory: string, totalCount: number): string {
+  generateProjectListText(projects: ProjectListData[], developmentPlan: DevelopmentPlan, workHistory: string, totalCount: number): string {
     return `
 🏛️ Project Bank System - ระบบจัดการโครงการ ธนาคารโครงการภาครัฐ
 ═══════════════════════════════════════════════════════════
 
-คุณได้นำส่งโครงการของ ${workHistory} จำนวน ${totalCount} รายการ เรียบร้อยแล้ว ตาม${budgetPlan.name} ${budgetPlan.startYear} - ${budgetPlan.endYear}
+คุณได้นำส่งโครงการของ ${workHistory} จำนวน ${totalCount} รายการ เรียบร้อยแล้ว ตาม${developmentPlan.name} ${developmentPlan.startYear} - ${developmentPlan.endYear}
 
 📋 โครงการ
 ═══════════════════════════════════════════════════════════

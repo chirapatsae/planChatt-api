@@ -9,8 +9,10 @@ import { Plan } from 'src/plan/entities/plan.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
 import { GovernmentAgency } from 'src/government-agencies/entities/government-agency.entity';
-import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
+import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { Favorite } from 'src/favorite/entities/favorite.entity';
+import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
+import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
 
 /**
  * Interface สำหรับแสดงโครงการแบบ unified
@@ -28,44 +30,44 @@ export interface IUnifiedProjectDisplay {
   indicator: string;
   expected: string;
   projectYear: number;
-  isDraft: boolean;
+  isDraft?: boolean; // Only for original projects, not revised
+  isBooked: boolean;
+  bookedAt: Date | null;
   createdAt: Date;
-  
+
   // Type แยกว่ามาจากไหน
   projectType: 'original' | 'revised';
-  
+
   // ถ้าเป็น revised จะมี reference กลับไปหาโครงการแม่
   originalProjectId?: string;
-  
-  // Version Information (สำหรับ revised projects)
-  revisionNumber?: number;        // เลข revision (1, 2, 3, ...)
-  revisionTypeName?: string;      // ชื่อประเภท ("แก้ไข" หรือ "เปลี่ยนแปลง")
-  revisionDisplayName?: string;   // ชื่อแสดงผล (เช่น "Revision #2 - แก้ไข")
-  
-  // Comparison with previous version (สำหรับ versions endpoint)
+  projectGroup?: { id: string | undefined } | null;
+  developmentPlanRevision?: DevelopmentPlanRevision;
+  prevProjectId?: string;
+  prevProjectType?: string;
+
   changes?: {
-    comparedWith: 'original' | 'previous-revision' | null;  // เทียบกับอะไร
+    comparedWith: 'original' | 'revised' | null;  // เทียบกับอะไร
     changedFields: string[];  // รายการ field ที่เปลี่ยน เช่น ["title", "objective", "budgets"]
   };
-  
+
   // Relations
   strategy?: Strategy;
   tactic?: Tactic;
   plan?: Plan;
-  budgetPlan?: BudgetPlan;
+  developmentPlan?: DevelopmentPlan;
   createdBy?: WorkHistory;
   responsibleBy?: WorkHistory;
   originAgencyId?: LocalAdministrativeOrganization;
   responsibleAgency?: GovernmentAgency;
+  amphoe?: Amphoe;
+  localAdministrativeOrganization?: LocalAdministrativeOrganization;
   budgets?: Budget[];
   trackingStatus?: TrackingStatus[];
   favorites?: Favorite[];
-  
+
   // Additional fields for revised projects
   additionalDetail?: string | null;
-  
-  // Original entities (for internal use if needed)
-  _originalEntity?: ProjectGroup | RevisedProjectGroup;
+  oldAdditionDetail?: string | null;
 }
 
 /**
@@ -88,20 +90,23 @@ export class UnifiedProjectMapper {
       indicator: project.indicator,
       expected: project.expected,
       projectYear: project.projectYear,
-      isDraft: project.isDraft,
       createdAt: project.createdAt,
       projectType: 'original',
       strategy: project.strategy,
       tactic: project.tactic,
       plan: project.plan,
-      budgetPlan: project.budgetPlan,
+      developmentPlan: project.developmentPlan,
       createdBy: project.createdBy,
       originAgencyId: project.originAgencyId,
       responsibleAgency: project.responsibleAgency,
       budgets: project.budgets,
       trackingStatus: project.trackingStatus,
       favorites: project.favorites,
-      _originalEntity: project,
+      isDraft: project.isDraft,
+      isBooked: project.isBooked,
+      bookedAt: project.bookedAt,
+      amphoe: project.amphoe,
+      localAdministrativeOrganization: project.localAdministrativeOrganization,
     };
   }
 
@@ -111,16 +116,6 @@ export class UnifiedProjectMapper {
   static fromRevisedProjectGroup(
     revisedProject: RevisedProjectGroup,
   ): IUnifiedProjectDisplay {
-    const revision = revisedProject.developmentPlanRevision;
-    const revisionNumber = revision?.revisionNumber;
-    const revisionTypeName = revision?.revisionType?.name;
-    
-    // สร้าง display name (เช่น "Revision #2 - แก้ไข")
-    let revisionDisplayName: string | undefined;
-    if (revisionNumber !== undefined && revisionTypeName) {
-      revisionDisplayName = `Revision #${revisionNumber} - ${revisionTypeName}`;
-    }
-
     return {
       id: revisedProject.id,
       title: revisedProject.title,
@@ -133,27 +128,30 @@ export class UnifiedProjectMapper {
       indicator: revisedProject.indicator,
       expected: revisedProject.expected,
       projectYear: revisedProject.projectYear,
-      isDraft: revisedProject.isDraft,
       createdAt: revisedProject.createdAt,
       projectType: 'revised',
-      originalProjectId: revisedProject.projectGroup?.id,
-      
+      projectGroup: revisedProject.projectGroup ? { id: revisedProject.projectGroup.id } : null,
+
       // Version Information
-      revisionNumber,
-      revisionTypeName,
-      revisionDisplayName,
-      
+      developmentPlanRevision: revisedProject.developmentPlanRevision,
+      prevProjectId: revisedProject.prevProjectId,
+      prevProjectType: revisedProject.prevProjectType,
+
       strategy: revisedProject.strategy,
       tactic: revisedProject.tactic,
       plan: revisedProject.plan,
-      budgetPlan: revisedProject.developmentPlanRevision?.budgetPlan,
+      developmentPlan: revisedProject.developmentPlan ?? revisedProject.developmentPlanRevision?.developmentPlan,
       createdBy: revisedProject.createdBy,
       originAgencyId: revisedProject.originAgencyId,
       responsibleAgency: revisedProject.responsibleAgency,
+      amphoe: revisedProject.amphoe,
+      localAdministrativeOrganization: revisedProject.localAdministrativeOrganization,
       budgets: revisedProject.budgets,
       trackingStatus: revisedProject.trackingStatus,
+      isBooked: revisedProject.isBooked,
+      bookedAt: revisedProject.bookedAt,
       additionalDetail: revisedProject.additionalDetail,
-      _originalEntity: revisedProject,
+      oldAdditionDetail: revisedProject.oldAdditionDetail,
     };
   }
 

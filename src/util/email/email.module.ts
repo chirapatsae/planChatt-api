@@ -6,10 +6,10 @@ import { EmailNotificationService } from './email-notification.service';
 import { EmailController } from './email.controller';
 import { User } from 'src/users/entities/user.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
-import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
+import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User, WorkHistory, BudgetPlan])],
+  imports: [TypeOrmModule.forFeature([User, WorkHistory, DevelopmentPlan])],
   providers: [EmailService, EmailTemplatesService, EmailNotificationService],
   controllers: [EmailController],
   exports: [EmailService, EmailTemplatesService, EmailNotificationService],

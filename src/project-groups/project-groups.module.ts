@@ -8,13 +8,14 @@ import { User } from 'src/users/entities/user.entity';
 import { Budget } from 'src/budget/entities/budget.entity';
 import { Tactic } from 'src/tactic/entities/tactic.entity';
 import { Plan } from 'src/plan/entities/plan.entity';
-import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
+import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
 import { Strategy } from 'src/strategy/entities/strategy.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
 import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
 import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
+import { PdfOutAuthorityDocument } from 'src/pdf/entities/pdf-out-authority-document.entity';
 
 @Module({
   imports: [
@@ -26,12 +27,13 @@ import { LocalAdministrativeOrganization } from 'src/local-administrative-organi
       Strategy,
       Tactic,
       Plan,
-      BudgetPlan,
+      DevelopmentPlan,
       TrackingStatus,
       RevisedProjectGroup,
       DevelopmentPlanRevision,
       Amphoe,
       LocalAdministrativeOrganization,
+      PdfOutAuthorityDocument,
     ]),
   ],
   controllers: [ProjectGroupsController],

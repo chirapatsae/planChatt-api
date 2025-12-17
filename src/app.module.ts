@@ -15,8 +15,8 @@ import { StatusModule } from './status/status.module';
 import { Status } from './status/entities/status.entity';
 import { TrackingStatusModule } from './tracking-status/tracking-status.module';
 import { TrackingStatus } from './tracking-status/entities/tracking-status.entity';
-import { BudgetPlanModule } from './budget_plan/budget_plan.module';
-import { BudgetPlan } from './budget_plan/entities/budget_plan.entity';
+import { DevelopmentPlanModule } from './development-plan/development-plan.module';
+import { DevelopmentPlan } from './development-plan/entities/development-plan.entity';
 import { ProjectGroupsModule } from './project-groups/project-groups.module';
 import { ProjectGroup } from './project-groups/entities/project-group.entity';
 import { BudgetModule } from './budget/budget.module';
@@ -33,8 +33,6 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { BullModule } from '@nestjs/bull';
 import { CommentsModule } from './comments/comments.module';
 import { Comment } from './comments/entities/comment.entity';
-import { AiController } from './ai/ai.controller';
-import { AiService } from './ai/ai.service';
 import { AiModule } from './ai/ai.module';
 import { RolesModule } from './roles/roles.module';
 import { Role } from './roles/entities/role.entity';
@@ -72,10 +70,14 @@ import { AttachmentEventModule } from './attachment-event/attachment-event.modul
 import { AttachmentEvent } from './attachment-event/entities/attachment-event.entity';
 import { FavoriteModule } from './favorite/favorite.module';
 import { Favorite } from './favorite/entities/favorite.entity';
-import { PdfDraftDocument } from './pdf/entities/pdf-draft-document.entity';
-import { PdfApprovedDocument } from './pdf/entities/pdf-approved-document.entity';
-import { PdfInAuthorityDocument } from './pdf/entities/pdf-in-authority-document.entity';
+import { PdfDevelopmentPlanDraftAgencyDocument } from './pdf/entities/pdf-development-plan-draft-agency-document.entity';
+import { PdfRevisionEditDraftDocument } from './pdf/entities/pdf-revision-edit-draft-document.entity';
+import { PdfRevisionChangeDraftDocument } from './pdf/entities/pdf-revision-change-draft-document.entity';
+import { PdfDevelopmentPlanApprovedDocument } from './pdf/entities/pdf-development-plan-approved-document.entity';
+import { PdfDevelopmentPlanDraftCoordinateDocument } from './pdf/entities/pdf-development-plan-draft-coordinate-document.entity';
 import { PdfOutAuthorityDocument } from './pdf/entities/pdf-out-authority-document.entity';
+import { PdfRevisionChangeApprovedDocument } from './pdf/entities/pdf-revision-change-approved-document.entity';
+import { PdfRevisionEditApprovedDocument } from './pdf/entities/pdf-revision-edit-approved-document.entity';
 import { EmailModule } from './util/email/email.module';
 import { RevisionTypeModule } from './revision-type/revision-type.module';
 import { RevisionType } from './revision-type/entities/revision-type.entity';
@@ -83,6 +85,10 @@ import { DevelopmentPlanRevisionModule } from './development-plan-revision/devel
 import { DevelopmentPlanRevision } from './development-plan-revision/entities/development-plan-revision.entity';
 import { RevisedProjectGroupModule } from './revised-project-group/revised-project-group.module';
 import { RevisedProjectGroup } from './revised-project-group/entities/revised-project-group.entity';
+import { DevelopmentPlanSupplementModule } from './development-plan-supplement/development-plan-supplement.module';
+import { DevelopmentPlanSupplement } from './development-plan-supplement/entities/development-plan-supplement.entity';
+import { SupplementProjectGroupModule } from './supplement-project-group/supplement-project-group.module';
+import { SupplementProjectGroup } from './supplement-project-group/entities/supplement-project-group.entity';
 import { ExecutiveModule } from './executive/executive.module';
 import { PlanPhaseModule } from './plan-phase/plan-phase.module';
 import { PlanPhase } from './plan-phase/entities/plan-phase.entity';
@@ -119,7 +125,7 @@ import { PlanPhase } from './plan-phase/entities/plan-phase.entity';
         LocalAdministrativeOrganization,
         Status,
         TrackingStatus,
-        BudgetPlan,
+        DevelopmentPlan,
         ProjectGroup,
         Budget,
         Comment,
@@ -137,13 +143,19 @@ import { PlanPhase } from './plan-phase/entities/plan-phase.entity';
         Event,
         AttachmentEvent,
         Favorite,
-        PdfDraftDocument,
-        PdfApprovedDocument,
-        PdfInAuthorityDocument,
+        PdfDevelopmentPlanApprovedDocument,
+        PdfRevisionEditDraftDocument,
+        PdfRevisionChangeDraftDocument,
+        PdfDevelopmentPlanDraftAgencyDocument,
+        PdfDevelopmentPlanDraftCoordinateDocument,
         PdfOutAuthorityDocument,
+        PdfRevisionEditApprovedDocument,
+        PdfRevisionChangeApprovedDocument,
         RevisionType,
         DevelopmentPlanRevision,
         RevisedProjectGroup,
+        DevelopmentPlanSupplement,
+        SupplementProjectGroup,
         PlanPhase,
       ],
       synchronize: true,
@@ -158,7 +170,7 @@ import { PlanPhase } from './plan-phase/entities/plan-phase.entity';
     LocalAdministrativeOrganizationsModule,
     StatusModule,
     TrackingStatusModule,
-    BudgetPlanModule,
+    DevelopmentPlanModule,
     ProjectGroupsModule,
     BudgetModule,
     AuthModule,
@@ -191,10 +203,12 @@ import { PlanPhase } from './plan-phase/entities/plan-phase.entity';
     RevisionTypeModule,
     DevelopmentPlanRevisionModule,
     RevisedProjectGroupModule,
+    DevelopmentPlanSupplementModule,
+    SupplementProjectGroupModule,
     ExecutiveModule,
     PlanPhaseModule,
   ],
-  controllers: [AppController, AiController],
-  providers: [AppService, AiService],
+  controllers: [AppController],
+  providers: [AppService],
 })
 export class AppModule {}

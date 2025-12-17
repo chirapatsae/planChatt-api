@@ -18,7 +18,9 @@ import { Plan } from 'src/plan/entities/plan.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
 import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
 import { GovernmentAgency } from 'src/government-agencies/entities/government-agency.entity';
-// Removed BudgetPlan and Favorite imports because they are not used here
+import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
+import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
+import { PrevProjectType } from '../dto/create-revised-project-group.dto';
 
 @Entity('revised_project_groups')
 export class RevisedProjectGroup {
@@ -32,7 +34,15 @@ export class RevisedProjectGroup {
   @JoinColumn({ name: 'development_plan_revision_id' })
   developmentPlanRevision: DevelopmentPlanRevision;
 
-  @ManyToOne(() => ProjectGroup, {
+  @ManyToOne(() => DevelopmentPlan, (developmentPlan) => developmentPlan.projectGroup, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+    nullable: true,
+  })
+  @JoinColumn({ name: 'development_plan_id' })
+  developmentPlan?: DevelopmentPlan;
+
+  @ManyToOne(() => ProjectGroup, (projectGroup) => projectGroup.revisedProjectGroups, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',
     nullable: true,
@@ -71,10 +81,10 @@ export class RevisedProjectGroup {
   projectYear: number;
 
   @Column({ default: false })
-  isDraft: boolean;
+  isBooked: boolean;
 
-  @Column({ name: 'is_latest', default: true })
-  isLatest: boolean;
+  @Column({ type: 'timestamp', nullable: true })
+  bookedAt: Date | null;
 
   @ManyToOne(() => Strategy, (strategy) => strategy.projectGroup, {
     onDelete: 'CASCADE',
@@ -109,6 +119,28 @@ export class RevisedProjectGroup {
 
   @DeleteDateColumn({ name: 'deleted_at', nullable: true })
   deletedAt?: Date;
+
+  @ManyToOne(
+    () => Amphoe,
+    {
+      onUpdate: 'CASCADE',
+      onDelete: 'CASCADE',
+      nullable: true,
+    },
+  )
+  @JoinColumn({ name: 'amphoe_id' })
+  amphoe?: Amphoe;
+
+  @ManyToOne(
+    () => LocalAdministrativeOrganization,
+    {
+      onUpdate: 'CASCADE',
+      onDelete: 'CASCADE',
+      nullable: true,
+    },
+  )
+  @JoinColumn({ name: 'local_administrative_organization_id' })
+  localAdministrativeOrganization?: LocalAdministrativeOrganization;
 
   @ManyToOne(
     () => LocalAdministrativeOrganization,
@@ -148,4 +180,18 @@ export class RevisedProjectGroup {
   // Free-form additional detail field for extra description
   @Column('text', { nullable: true })
   additionalDetail: string | null;
+
+  @Column('text', { nullable: true })
+  oldAdditionDetail: string | null;
+
+  @Column({ name: 'prev_project_id', nullable: true })
+  prevProjectId: string;
+
+  @Column({
+    name: 'prev_project_type',
+    type: 'enum',
+    enum: PrevProjectType,
+    nullable: true,
+  })
+  prevProjectType: PrevProjectType;
 }

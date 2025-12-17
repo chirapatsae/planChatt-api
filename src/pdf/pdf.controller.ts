@@ -1,7 +1,6 @@
-import { Controller, Post, Body, Res, Get, Req, UseGuards, Param } from '@nestjs/common';
+import { Controller, Post, Body, Res, Get, Req, UseGuards, Param, Query } from '@nestjs/common';
 import { PdfService } from './pdf.service';
 import { Response, Request } from 'express';
-import * as fs from 'fs';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 
@@ -13,26 +12,31 @@ import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 export class PdfController {
   constructor(private readonly pdfService: PdfService) {}
 
-  @Post('generate')
-  async generatePdf(@Body() body: any, @Res() res: Response) {
-    const pdfBuffer = await this.pdfService.generateProjectReport(
-      body.projects,
-    );
-
-    res.set({
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': 'attachment; filename=project-report.pdf',
-    });
-
-    res.end(pdfBuffer);
-  }
+  // ============================================
+  // Basic PDF Generation Endpoints
+  // ============================================
 
   @Post('generate-custom')
   async generateCustomPdf(@Body() body: any, @Res() res: Response) {
-    const { projects, selectedColumns } = body;
+    const { projectSnapShot, selectedColumns, developmentPlanId, type } = body;
+    
+    if (!projectSnapShot || !Array.isArray(projectSnapShot) || projectSnapShot.length === 0) {
+      res.status(400).json({ message: 'projectSnapShot is required and must be a non-empty array' });
+      return;
+    }
+
+    // Query projects from IDs
+    const projects = await this.pdfService.findProjectsByIds(projectSnapShot);
+    
+    if (projects.length === 0) {
+      res.status(404).json({ message: 'No projects found for the provided IDs' });
+      return;
+    }
+
     const pdfBuffer = await this.pdfService.generateProjectReportWithColumns(
       projects,
-      selectedColumns || ['index', 'title', 'objective', 'target', 'budget', 'kpi', 'expectedResult', 'mainAgency']
+      selectedColumns || ['index', 'title', 'objective', 'target', 'budget', 'kpi', 'expectedResult', 'mainAgency'],
+      { developmentPlanId, reportType: type }
     );
 
     res.set({
@@ -43,37 +47,68 @@ export class PdfController {
     res.end(pdfBuffer);
   }
 
-  // Draft development plan endpoints (database-backed)
-  @Post('draft/generate')
+  @Post('generate-custom-out-authority')
+  async generateCustomPdfOutAuthority(@Body() body: any, @Res() res: Response) {
+    const { selectedColumns, developmentPlanId } = body;
+    
+    // Query projects from development plan IDs for out-authority
+    const projects = await this.pdfService.findProjectsForOutAuthority(developmentPlanId);
+    
+    if (projects.length === 0) {
+      res.status(404).json({ message: 'No projects found for the provided IDs' });
+      return;
+    }
+
+    const pdfBuffer = await this.pdfService.generateProjectReportWithColumns(
+      projects,
+      selectedColumns || ['index', 'title', 'objective', 'target', 'budget', 'kpi', 'expectedResult', 'mainAgency'],
+      { developmentPlanId, reportType: 'outAuthority' }
+    );
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': 'attachment; filename=custom-project-report.pdf',
+    });
+
+    res.end(pdfBuffer);
+  }
+
+  // ============================================
+  // Draft PDF Endpoints (สำหรับร่างแผนพัฒนาของส่วนราชการ)
+  // ============================================
+
+  @Post('draft/agency/development-plan/generate')
   async generateDraft(@Body() body: any, @Req() req: Request & { user: JwtPayloadUser }) {
-    const projects: any[] = body?.projects || [];
-    const projectIdsSnapshot = projects.map((p) => p.id);
-    const createdById = req.user?.userId; // Assuming user info is in request from auth guard
+    const { developmentPlanId } = body;
+    const createdById = req.user?.userId;
     
     if (!createdById) {
       throw new Error('User ID not found in request');
     }
 
-    const pdfBuffer = await this.pdfService.generateProjectReport(projects);
-    const saved = await this.pdfService.saveDraftPdfAndMeta({
-      pdfBuffer,
-      projectIdsSnapshot,
+    if (!developmentPlanId) {
+      throw new Error('developmentPlanId is required');
+    }
+
+    // Query โครงการที่มี status: Verified, Pending_Approval, Approved
+    const result = await this.pdfService.generateDraftAgencyFromStatus({
+      developmentPlanId,
       createdById,
     });
-    return saved;
+
+    return result;
   }
 
-
-  @Get('draft/latest/meta')
-  async getLatestDraftMeta() {
-    return this.pdfService.getLatestDraftMeta();
+  @Get('draft/agency/:developmentPlanId/latest/meta')
+  async getLatestDraftAgencyMetaForPlan(@Param('developmentPlanId') developmentPlanId: string) {
+    return this.pdfService.getLatestDraftAgencyMetaForPlan(developmentPlanId);
   }
 
-  @Get('draft/latest/stream')
-  async streamLatestDraft(@Res() res: Response) {
-    const latest = await this.pdfService.readLatestDraftFile();
+  @Get('draft/agency/:developmentPlanId/latest/stream')
+  async streamLatestDraftAgencyForPlan(@Param('developmentPlanId') developmentPlanId: string, @Res() res: Response) {
+    const latest = await this.pdfService.readLatestDraftAgencyFileForPlan(developmentPlanId);
     if (!latest) {
-      res.status(404).json({ message: 'Draft PDF not found' });
+      res.status(404).json({ message: 'Draft PDF not found for this development plan' });
       return;
     }
     res.setHeader('Content-Type', 'application/pdf');
@@ -82,14 +117,18 @@ export class PdfController {
     stream.on('error', () => res.end());
   }
 
-  @Get('draft/versions')
-  async getAllDraftVersions() {
-    return this.pdfService.getAllDraftVersions();
+  @Get('draft/agency/:developmentPlanId/latest/versions')
+  async getAllDraftAgencyVersions(@Param('developmentPlanId') developmentPlanId: string) {
+    return this.pdfService.getAllDraftAgencyVersions(developmentPlanId);
   }
 
-  @Get('draft/:version/stream')
-  async streamDraftByVersion(@Param('version') version: number, @Res() res: Response) {
-    const draft = await this.pdfService.readDraftFileByVersion(version);
+  @Get('draft/agency/:developmentPlanId/:version/stream')
+  async streamDraftAgencyByVersion(
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Param('version') version: number,
+    @Res() res: Response
+  ) {
+    const draft = await this.pdfService.readDraftAgencyFileByVersion(developmentPlanId, version);
     if (!draft) {
       res.status(404).json({ message: 'Draft PDF version not found' });
       return;
@@ -100,47 +139,328 @@ export class PdfController {
     stream.on('error', () => res.end());
   }
 
-  // Approved PDF endpoints (สำหรับโครงการที่อนุมัติแล้ว)
-  @Post('approved/generate')
-  async generateApproved(@Body() body: any, @Req() req: Request) {
-    const projects: any[] = body?.projects || [];
-    const projectIdsSnapshot = projects.map((p) => p.id);
-    const createdById = (req as any).user?.userId;
+  // ============================================
+  // Draft Coordinate PDF Endpoints (สำหรับร่างแผนประสานแผน)
+  // ============================================
+
+  @Post('draft/coordinate/development-plan/generate')
+  async generateDraftCoordinate(@Body() body: any, @Req() req: Request & { user: JwtPayloadUser }) {
+    const { developmentPlanId } = body;
+    const createdById = req.user?.userId;
     
     if (!createdById) {
       throw new Error('User ID not found in request');
     }
 
-    const pdfBuffer = await this.pdfService.generateProjectReport(projects);
-    const saved = await this.pdfService.saveApprovedPdfAndMeta({
-      pdfBuffer,
-      projectIdsSnapshot,
+    if (!developmentPlanId) {
+      throw new Error('developmentPlanId is required');
+    }
+
+    // Query โครงการที่มี status: Verified สำหรับ draft coordinate
+    const result = await this.pdfService.generateInAuthorityFromStatus({
+      developmentPlanId,
       createdById,
     });
-    return saved;
+
+    return result;
   }
 
-  @Get('approved/latest/meta')
-  async getLatestApprovedMeta() {
-    return this.pdfService.getLatestApprovedMeta();
+  @Get('draft/coordinate/:developmentPlanId/latest/meta')
+  async getLatestDraftCoordinateMetaForPlan(@Param('developmentPlanId') developmentPlanId: string) {
+    return this.pdfService.getLatestInAuthorityMetaForPlan(developmentPlanId);
   }
 
-  @Get('approved/versions')
-  async getAllApprovedVersions() {
-    return this.pdfService.getAllApprovedVersions();
-  }
-
-  @Get('approved/latest/stream')
-  async streamLatestApproved(@Res() res: Response) {
-    const latest = await this.pdfService.readLatestApprovedFile();
+  @Get('draft/coordinate/:developmentPlanId/latest/stream')
+  async streamLatestDraftCoordinateForPlan(@Param('developmentPlanId') developmentPlanId: string, @Res() res: Response) {
+    const latest = await this.pdfService.readLatestInAuthorityFileForPlan(developmentPlanId);
     if (!latest) {
-      res.status(404).json({ message: 'Approved PDF not found' });
+      res.status(404).json({ message: 'Draft Coordinate PDF not found for this development plan' });
       return;
     }
     res.setHeader('Content-Type', 'application/pdf');
     const stream = latest.stream;
     stream.pipe(res);
     stream.on('error', () => res.end());
+  }
+
+  @Get('draft/coordinate/:developmentPlanId/latest/versions')
+  async getAllDraftCoordinateVersions(@Param('developmentPlanId') developmentPlanId: string) {
+    return this.pdfService.getAllInAuthorityVersionsForPlan(developmentPlanId);
+  }
+
+  @Get('draft/coordinate/:developmentPlanId/:version/stream')
+  async streamDraftCoordinateByVersion(
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Param('version') version: number,
+    @Res() res: Response
+  ) {
+    const draftCoordinate = await this.pdfService.readInAuthorityFileByVersionForPlan(developmentPlanId, version);
+    if (!draftCoordinate) {
+      res.status(404).json({ message: 'Draft Coordinate PDF version not found' });
+      return;
+    }
+    res.setHeader('Content-Type', 'application/pdf');
+    const stream = draftCoordinate.stream;
+    stream.pipe(res);
+    stream.on('error', () => res.end());
+  }
+
+    // ============================================
+  // Out Authority PDF Endpoints (สำหรับโครงการนอกอำนาจ)
+  // ============================================
+
+  @Post('out-authority/development-plan/generate')
+  async generateOutAuthority(@Body() body: any, @Req() req: Request & { user: JwtPayloadUser }) {
+    const { developmentPlanId } = body;
+    const createdById = req.user?.userId;
+    
+    if (!createdById) {
+      throw new Error('User ID not found in request');
+    }
+
+    if (!developmentPlanId) {
+      throw new Error('developmentPlanId is required');
+    }
+
+    // Query โครงการที่มี status: Rejected สำหรับ out-authority
+    const result = await this.pdfService.generateOutAuthorityFromStatus({
+      developmentPlanId,
+      createdById,
+    });
+
+    return result;
+  }
+
+  @Get('out-authority/:developmentPlanId/latest/meta')
+  async getLatestOutAuthorityMetaForPlan(@Param('developmentPlanId') developmentPlanId: string) {
+    return this.pdfService.getLatestOutAuthorityMetaForPlan(developmentPlanId);
+  }
+
+  @Get('out-authority/:developmentPlanId/latest/stream')
+  async streamLatestOutAuthorityForPlan(@Param('developmentPlanId') developmentPlanId: string, @Res() res: Response) {
+    const latest = await this.pdfService.readLatestOutAuthorityFileForPlan(developmentPlanId);
+    if (!latest) {
+      res.status(404).json({ message: 'Out Authority PDF not found for this development plan' });
+      return;
+    }
+    res.setHeader('Content-Type', 'application/pdf');
+    const stream = latest.stream;
+    stream.pipe(res);
+    stream.on('error', () => res.end());
+  }
+
+  @Get('out-authority/:developmentPlanId/latest/versions')
+  async getAllOutAuthorityVersions(@Param('developmentPlanId') developmentPlanId: string) {
+    return this.pdfService.getAllOutAuthorityVersionsForPlan(developmentPlanId);
+  }
+
+  @Get('out-authority/:developmentPlanId/:version/stream')
+  async streamOutAuthorityByVersion(
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Param('version') version: number,
+    @Res() res: Response
+  ) {
+    const outAuthority = await this.pdfService.readOutAuthorityFileByVersionForPlan(developmentPlanId, version);
+    if (!outAuthority) {
+      res.status(404).json({ message: 'Out Authority PDF version not found' });
+      return;
+    }
+    res.setHeader('Content-Type', 'application/pdf');
+    const stream = outAuthority.stream;
+    stream.pipe(res);
+    stream.on('error', () => res.end());
+  }
+
+  // ============================================
+  // Revision Edit Draft PDF Endpoints (สำหรับเล่มร่างแก้ไข)
+  // ============================================
+
+  @Post('revision-edit-draft/development-plan-revision/generate')
+  async generateRevisionEditDraft(@Body() body: any, @Req() req: Request & { user: JwtPayloadUser }) {
+    const { developmentPlanId, developmentPlanRevisionId } = body;
+    const createdById = req.user?.userId;
+    
+    if (!createdById) {
+      throw new Error('User ID not found in request');
+    }
+
+    if (!developmentPlanId) {
+      throw new Error('developmentPlanId is required');
+    }
+
+    if (!developmentPlanRevisionId) {
+      throw new Error('developmentPlanRevisionId is required');
+    }
+
+    // Query โครงการที่มี status: Pending_Approval, Approved และ revisionType = 'แก้ไข'
+    const result = await this.pdfService.generateRevisionEditDraftFromStatus({
+      developmentPlanId,
+      developmentPlanRevisionId,
+      createdById,
+    });
+
+    return result;
+  }
+
+  @Get('revision-edit-draft/:developmentPlanId/:developmentPlanRevisionId/latest/meta')
+  async getLatestRevisionEditDraftMeta(
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Param('developmentPlanRevisionId') developmentPlanRevisionId: string
+  ) {
+    return this.pdfService.getLatestRevisionEditDraftMeta(developmentPlanId, developmentPlanRevisionId);
+  }
+
+  @Get('revision-edit-draft/:developmentPlanId/:developmentPlanRevisionId/latest/stream')
+  async streamLatestRevisionEditDraft(
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Param('developmentPlanRevisionId') developmentPlanRevisionId: string,
+    @Res() res: Response
+  ) {
+    const latest = await this.pdfService.readLatestRevisionEditDraftFile(developmentPlanId, developmentPlanRevisionId);
+    if (!latest) {
+      res.status(404).json({ message: 'Revision Edit Draft PDF not found' });
+      return;
+    }
+    res.setHeader('Content-Type', 'application/pdf');
+    const stream = latest.stream;
+    stream.pipe(res);
+    stream.on('error', () => res.end());
+  }
+
+  @Get('revision-edit-draft/:developmentPlanId/:developmentPlanRevisionId/latest/versions')
+  async getAllRevisionEditDraftVersions(
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Param('developmentPlanRevisionId') developmentPlanRevisionId: string
+  ) {
+    return this.pdfService.getAllRevisionEditDraftVersions(developmentPlanId, developmentPlanRevisionId);
+  }
+
+  @Get('revision-edit-draft/:developmentPlanId/:developmentPlanRevisionId/:version/stream')
+  async streamRevisionEditDraftByVersion(
+    @Param('version') version: number,
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Param('developmentPlanRevisionId') developmentPlanRevisionId: string,
+    @Res() res: Response
+  ) {
+    const draft = await this.pdfService.readRevisionEditDraftFileByVersion(version, developmentPlanId, developmentPlanRevisionId);
+    if (!draft) {
+      res.status(404).json({ message: 'Revision Edit Draft PDF version not found' });
+      return;
+    }
+    res.setHeader('Content-Type', 'application/pdf');
+    const stream = draft.stream;
+    stream.pipe(res);
+    stream.on('error', () => res.end());
+  }
+
+  // ============================================
+  // Revision Change Draft PDF Endpoints (สำหรับเล่มร่างเปลี่ยนแปลง)
+  // ============================================
+
+  @Post('revision-change-draft/development-plan-revision/generate')
+  async generateRevisionChangeDraft(@Body() body: any, @Req() req: Request & { user: JwtPayloadUser }) {
+    const { developmentPlanId, developmentPlanRevisionId } = body;
+    const createdById = req.user?.userId;
+    
+    if (!createdById) {
+      throw new Error('User ID not found in request');
+    }
+
+    if (!developmentPlanId) {
+      throw new Error('developmentPlanId is required');
+    }
+
+    if (!developmentPlanRevisionId) {
+      throw new Error('developmentPlanRevisionId is required');
+    }
+
+    // Query โครงการที่มี status: Pending_Approval, Approved และ revisionType = 'เปลี่ยนแปลง'
+    const result = await this.pdfService.generateRevisionChangeDraftFromStatus({
+      developmentPlanId,
+      developmentPlanRevisionId,
+      createdById,
+    });
+
+    return result;
+  }
+
+  @Get('revision-change-draft/:developmentPlanId/:developmentPlanRevisionId/latest/meta')
+  async getLatestRevisionChangeDraftMeta(
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Param('developmentPlanRevisionId') developmentPlanRevisionId: string
+  ) {
+    return this.pdfService.getLatestRevisionChangeDraftMeta(developmentPlanId, developmentPlanRevisionId);
+  }
+
+  @Get('revision-change-draft/:developmentPlanId/:developmentPlanRevisionId/latest/stream')
+  async streamLatestRevisionChangeDraft(
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Param('developmentPlanRevisionId') developmentPlanRevisionId: string,
+    @Res() res: Response
+  ) {
+    const latest = await this.pdfService.readLatestRevisionChangeDraftFile(developmentPlanId, developmentPlanRevisionId);
+    if (!latest) {
+      res.status(404).json({ message: 'Revision Change Draft PDF not found' });
+      return;
+    }
+    res.setHeader('Content-Type', 'application/pdf');
+    const stream = latest.stream;
+    stream.pipe(res);
+    stream.on('error', () => res.end());
+  }
+
+  @Get('revision-change-draft/:developmentPlanId/:developmentPlanRevisionId/latest/versions')
+  async getAllRevisionChangeDraftVersions(
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Param('developmentPlanRevisionId') developmentPlanRevisionId: string
+  ) {
+    return this.pdfService.getAllRevisionChangeDraftVersions(developmentPlanId, developmentPlanRevisionId);
+  }
+
+  @Get('revision-change-draft/:developmentPlanId/:developmentPlanRevisionId/:version/stream')
+  async streamRevisionChangeDraftByVersion(
+    @Param('version') version: number,
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Param('developmentPlanRevisionId') developmentPlanRevisionId: string,
+    @Res() res: Response
+  ) {
+    const draft = await this.pdfService.readRevisionChangeDraftFileByVersion(version, developmentPlanId, developmentPlanRevisionId);
+    if (!draft) {
+      res.status(404).json({ message: 'Revision Change Draft PDF version not found' });
+      return;
+    }
+    res.setHeader('Content-Type', 'application/pdf');
+    const stream = draft.stream;
+    stream.pipe(res);
+    stream.on('error', () => res.end());
+  }
+
+  // ============================================
+  // Approved PDF Endpoints (สำหรับโครงการที่อนุมัติแล้ว)
+  // ============================================
+
+
+  @Get('approved/:developmentPlanId/latest/meta')
+  async getLatestApprovedMetaForPlan(@Param('developmentPlanId') developmentPlanId: string) {
+    return this.pdfService.getLatestApprovedMetaForPlan(developmentPlanId);
+  }
+
+  @Get('approved/:developmentPlanId/latest/stream')
+  async streamLatestApprovedForPlan(@Param('developmentPlanId') developmentPlanId: string, @Res() res: Response) {
+    const latest = await this.pdfService.readLatestApprovedFileForPlan(developmentPlanId);
+    if (!latest) {
+      res.status(404).json({ message: 'Approved PDF not found for this development plan' });
+      return;
+    }
+    res.setHeader('Content-Type', 'application/pdf');
+    const stream = latest.stream;
+    stream.pipe(res);
+    stream.on('error', () => res.end());
+  }
+
+  @Get('approved/versions')
+  async getAllApprovedVersions() {
+    return this.pdfService.getAllApprovedVersions();
   }
 
   @Get('approved/:version/stream')
@@ -156,41 +476,20 @@ export class PdfController {
     stream.on('error', () => res.end());
   }
 
-  // In Authority PDF endpoints (สำหรับโครงการที่อยู่ในอำนาจ)
-  @Post('in-authority/generate')
-  async generateInAuthority(@Body() body: any, @Req() req: Request) {
-    const projects: any[] = body?.projects || [];
-    const projectIdsSnapshot = projects.map((p) => p.id);
-    const createdById = (req as any).user?.userId;
-    
-    if (!createdById) {
-      throw new Error('User ID not found in request');
-    }
+  // ============================================
+  // Revision Edit Approved PDF Endpoints (สำหรับเล่มอนุมัติแก้ไข)
+  // ============================================
 
-    const pdfBuffer = await this.pdfService.generateProjectReport(projects);
-    const saved = await this.pdfService.saveInAuthorityPdfAndMeta({
-      pdfBuffer,
-      projectIdsSnapshot,
-      createdById,
-    });
-    return saved;
+  @Get('revision-edit-approved/:revisionId/latest/meta')
+  async getLatestApprovedMetaForEditRevision(@Param('revisionId') revisionId: string) {
+    return this.pdfService.getLatestApprovedMetaForEditRevision(revisionId);
   }
 
-  @Get('in-authority/latest/meta')
-  async getLatestInAuthorityMeta() {
-    return this.pdfService.getLatestInAuthorityMeta();
-  }
-
-  @Get('in-authority/versions')
-  async getAllInAuthorityVersions() {
-    return this.pdfService.getAllInAuthorityVersions();
-  }
-
-  @Get('in-authority/latest/stream')
-  async streamLatestInAuthority(@Res() res: Response) {
-    const latest = await this.pdfService.readLatestInAuthorityFile();
+  @Get('revision-edit-approved/:revisionId/latest/stream')
+  async streamLatestApprovedForEditRevision(@Param('revisionId') revisionId: string, @Res() res: Response) {
+    const latest = await this.pdfService.readLatestApprovedFileForEditRevision(revisionId);
     if (!latest) {
-      res.status(404).json({ message: 'In Authority PDF not found' });
+      res.status(404).json({ message: 'Approved PDF not found for this development plan revision' });
       return;
     }
     res.setHeader('Content-Type', 'application/pdf');
@@ -199,54 +498,20 @@ export class PdfController {
     stream.on('error', () => res.end());
   }
 
-  @Get('in-authority/:version/stream')
-  async streamInAuthorityByVersion(@Param('version') version: number, @Res() res: Response) {
-    const inAuthority = await this.pdfService.readInAuthorityFileByVersion(version);
-    if (!inAuthority) {
-      res.status(404).json({ message: 'In Authority PDF version not found' });
-      return;
-    }
-    res.setHeader('Content-Type', 'application/pdf');
-    const stream = inAuthority.stream;
-    stream.pipe(res);
-    stream.on('error', () => res.end());
+    // ============================================
+  // Revision Change Approved PDF Endpoints (สำหรับเล่มอนุมัติเปลี่ยนแปลง)
+  // ============================================
+
+  @Get('revision-change-approved/:revisionId/latest/meta')
+  async getLatestApprovedMetaForChangeRevision(@Param('revisionId') revisionId: string) {
+    return this.pdfService.getLatestApprovedMetaForChangeRevision(revisionId);
   }
 
-  // Out Authority PDF endpoints (สำหรับโครงการนอกอำนาจ)
-  @Post('out-authority/generate')
-  async generateOutAuthority(@Body() body: any, @Req() req: Request) {
-    const projects: any[] = body?.projects || [];
-    const projectIdsSnapshot = projects.map((p) => p.id);
-    const createdById = (req as any).user?.userId;
-    
-    if (!createdById) {
-      throw new Error('User ID not found in request');
-    }
-
-    const pdfBuffer = await this.pdfService.generateProjectReport(projects);
-    const saved = await this.pdfService.saveOutAuthorityPdfAndMeta({
-      pdfBuffer,
-      projectIdsSnapshot,
-      createdById,
-    });
-    return saved;
-  }
-
-  @Get('out-authority/latest/meta')
-  async getLatestOutAuthorityMeta() {
-    return this.pdfService.getLatestOutAuthorityMeta();
-  }
-
-  @Get('out-authority/versions')
-  async getAllOutAuthorityVersions() {
-    return this.pdfService.getAllOutAuthorityVersions();
-  }
-
-  @Get('out-authority/latest/stream')
-  async streamLatestOutAuthority(@Res() res: Response) {
-    const latest = await this.pdfService.readLatestOutAuthorityFile();
+  @Get('revision-change-approved/:revisionId/latest/stream')
+  async streamLatestApprovedForChangeRevision(@Param('revisionId') revisionId: string, @Res() res: Response) {
+    const latest = await this.pdfService.readLatestApprovedFileForChangeRevision(revisionId);
     if (!latest) {
-      res.status(404).json({ message: 'Out Authority PDF not found' });
+      res.status(404).json({ message: 'Approved PDF not found for this development plan revision' });
       return;
     }
     res.setHeader('Content-Type', 'application/pdf');
@@ -255,16 +520,5 @@ export class PdfController {
     stream.on('error', () => res.end());
   }
 
-  @Get('out-authority/:version/stream')
-  async streamOutAuthorityByVersion(@Param('version') version: number, @Res() res: Response) {
-    const outAuthority = await this.pdfService.readOutAuthorityFileByVersion(version);
-    if (!outAuthority) {
-      res.status(404).json({ message: 'Out Authority PDF version not found' });
-      return;
-    }
-    res.setHeader('Content-Type', 'application/pdf');
-    const stream = outAuthority.stream;
-    stream.pipe(res);
-    stream.on('error', () => res.end());
-  }
+
 }
