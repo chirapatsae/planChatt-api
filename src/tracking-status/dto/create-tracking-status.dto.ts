@@ -8,14 +8,6 @@ import {
   ValidateNested,
 } from 'class-validator';
 
-export class CreateCommentInput {
-  @IsNotEmpty()
-  detail: string;
-
-  @IsNumber()
-  step: number;
-}
-
 export class CreateTrackingStatusDto {
   @IsUUID()
   @IsNotEmpty()
@@ -26,9 +18,7 @@ export class CreateTrackingStatusDto {
   statusId: string;
 
   @IsOptional()
-  @ValidateNested({ each: true })
-  @Type(() => CreateCommentInput)
-  comment?: CreateCommentInput[];
+  comment?: string;
 
   @IsOptional()
   @ValidateNested({ each: true })

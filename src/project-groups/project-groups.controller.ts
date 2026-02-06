@@ -224,6 +224,33 @@ export class ProjectGroupsController {
     });
   }
 
+  // --- Find Latest All (เฉพาะ role user ตาม agency/localOrg ) ---
+  @Get('/latest-all-by-agency')
+  async findLatestAllProjectsByAgency(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('countOnly') countOnly?: string,
+    @Query('developmentPlanId', new ParseUUIDPipe({ optional: true })) developmentPlanId?: string,
+  ) {
+    return this.projectGroupsService.findLatestAllProjectsByUserAllPlans({
+      userId: req.user.userId,
+      countOnly: countOnly === 'true' || countOnly === '1',
+      developmentPlanId,
+    });
+  }
+  // --- Find Latest All ---
+  @Get('/latest-all-status')
+  async findLatestAllProjectsStatus(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('countOnly') countOnly?: string,
+    @Query('developmentPlanId', new ParseUUIDPipe({ optional: true })) developmentPlanId?: string,
+  ) {
+    return this.projectGroupsService.findLatestAllProjectsStatus({
+      userId: req.user.userId,
+      countOnly: countOnly === 'true' || countOnly === '1',
+      developmentPlanId,
+    });
+  }
+
   @Get('/latest-all-approved')
   async findLatestAllProjectsApproved(
     @Req() req: Request & { user: JwtPayloadUser },
@@ -286,8 +313,12 @@ export class ProjectGroupsController {
   }
 
   @Get(':id')
-  async findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.projectGroupsService.findOne(id);
+  async findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+     
+    return this.projectGroupsService.findOne(id , req.user.userId);
   }
 
   // ===================================================================

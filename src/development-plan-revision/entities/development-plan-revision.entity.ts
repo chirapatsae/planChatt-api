@@ -60,6 +60,10 @@ export class DevelopmentPlanRevision {
   @JoinColumn({ name: 'created_by' })
   createdBy: WorkHistory;
 
+  @ManyToOne(() => WorkHistory, { onDelete: 'CASCADE', onUpdate: 'CASCADE', nullable: true })
+  @JoinColumn({ name: 'deleted_by' })
+  deletedBy?: WorkHistory | null;
+
   @OneToMany(() => PdfRevisionEditDraftDocument, 
   (pdfRevisionEditDraftDocument) => pdfRevisionEditDraftDocument.developmentPlanRevision)
   pdfRevisionEditDraftDocuments: PdfRevisionEditDraftDocument[];

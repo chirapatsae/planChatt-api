@@ -9,11 +9,13 @@ import {
   Logger,
   Patch,
   Delete,
+  Res,
+  ForbiddenException,
 } from '@nestjs/common';
 import { DevelopmentPlanService } from './development-plan.service';
 import { CreateDevelopmentPlanDto } from './dto/create-development-plan.dto';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 import { UpdateDevelopmentPlanDto } from './dto/update-development-plan.dto';
 import { CreateDevelopmentPlanWithPhaseDto } from './dto/create-development-plan-with-phase.dto';
@@ -70,6 +72,30 @@ export class DevelopmentPlanController {
     return this.developmentPlanService.generateApprovedBookForPlan(id, userId);
   }
 
+  @Post(':id/book-preview')
+  async previewApprovedBookForPlan(
+    @Param('id') id: string,
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Res() res: Response,
+  ) {
+    const userId = req.user?.userId;
+    this.logger.log(
+      `Generate approved book PREVIEW for development plan ${id} by user ${userId}`,
+    );
+    const pdfBuffer =
+      await this.developmentPlanService.generateApprovedBookPreviewForPlan(
+        id,
+        userId,
+      );
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': 'inline; filename=development-plan-approved-preview.pdf',
+    });
+
+    res.end(pdfBuffer);
+  }
+
   @Get(':id')
   async findOne(@Param('id') id: string) {
     this.logger.log(`Fetching development plan with id: ${id}`);
@@ -117,6 +143,21 @@ export class DevelopmentPlanController {
     const userId = req.user?.userId;
     this.logger.log(`Deleting development plan ${id} by user ${userId}`);
     return this.developmentPlanService.softRemove(id, userId, deleteDevelopmentPlanDto.citizenIdSuffix);
+  }
+
+  @Post('check-citizen-suffix')
+  async checkCitizenSuffix(
+    @Body() deleteDevelopmentPlanDto: DeleteDevelopmentPlanDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    const userId = req.user?.userId;
+
+
+    this.logger.log(`Checking citizen ID suffix for user ${userId}`);
+    return this.developmentPlanService.checkCitizenIdSuffix(
+      userId,
+      deleteDevelopmentPlanDto.citizenIdSuffix,
+    );
   }
 
   @Patch(':id/restore')

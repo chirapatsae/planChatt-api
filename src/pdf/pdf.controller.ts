@@ -15,6 +15,21 @@ export class PdfController {
   // ============================================
   // Basic PDF Generation Endpoints
   // ============================================
+  @Post('generate')
+  async generatePdf(@Body() body: any, @Res() res: Response) {
+    const pdfBuffer = await this.pdfService.generateProjectDetailsOnly(
+      body.projects,
+      body.selectedColumns,
+      { developmentPlanId: body.developmentPlanId, reportType: body.type },
+    );
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': 'attachment; filename=project-report.pdf',
+    });
+
+    res.end(pdfBuffer);
+  }
 
   @Post('generate-custom')
   async generateCustomPdf(@Body() body: any, @Res() res: Response) {
@@ -300,6 +315,54 @@ export class PdfController {
     });
 
     return result;
+  }
+
+  @Post('generate-revision-details-only')
+  async generateRevisionDetailsOnly(@Body() body: any, @Res() res: Response) {
+    const { ids, selectedColumns } = body;
+    
+    if (!ids) {
+      res.status(400).json({ message: 'ids is required' });
+      return;
+    }
+    
+    if (!Array.isArray(ids)) {
+      res.status(400).json({ message: 'ids must be an array' });
+      return;
+    }
+    
+    if (ids.length === 0) {
+      res.status(400).json({ message: 'ids must not be empty' });
+      return;
+    }
+
+    // Query revised projects from IDs
+    const revisedProjects = await this.pdfService.findRevisedProjectsByIds(ids);
+    
+    if (revisedProjects.length === 0) {
+      res.status(404).json({ message: 'No revised projects found for the provided IDs' });
+      return;
+    }
+
+    // Get developmentPlanRevisionId from first project
+    const developmentPlanRevisionId = revisedProjects[0]?.developmentPlanRevision?.id;
+    if (!developmentPlanRevisionId) {
+      res.status(400).json({ message: 'Invalid revised projects: missing developmentPlanRevisionId' });
+      return;
+    }
+
+    const pdfBuffer = await this.pdfService.generateRevisionEditDetailsOnly(
+      developmentPlanRevisionId,
+      selectedColumns || ['index', 'title', 'objective', 'target', 'budget', 'kpi', 'expectedResult', 'mainAgency'],
+      revisedProjects,
+    );
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': 'attachment; filename=revision-details-only.pdf',
+    });
+
+    res.end(pdfBuffer);
   }
 
   @Get('revision-edit-draft/:developmentPlanId/:developmentPlanRevisionId/latest/meta')

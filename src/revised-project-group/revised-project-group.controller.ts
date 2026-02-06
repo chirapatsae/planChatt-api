@@ -1,3 +1,4 @@
+import { UnifiedProjectMapper } from 'src/project-groups/dto/unified-project-display.dto';
 import {
   Controller,
   Get,
@@ -59,6 +60,33 @@ export class RevisedProjectGroupController {
     }
     this.logger.log('Fetching all revised project groups');
     return this.revisedProjectGroupService.findAll();
+  }
+
+  /**
+   * ดึง RevisedProjectGroup ที่เป็น revision ล่าสุดของแต่ละ ProjectGroup
+   * แสดงเฉพาะจากตาราง revised-project-group (ไม่รวม original projects)
+   * @param developmentPlanId - ID ของ DevelopmentPlan (required)
+   * @param revisionId - (optional) ID ของ DevelopmentPlanRevision
+   * @param countOnly - (optional) ถ้าเป็น true จะ return จำนวนโครงการแทน array
+   */
+  @Get('latest-only')
+  async findLatestRevisedProjectsOnly(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('developmentPlanId') developmentPlanId?: string,
+    @Query('revisionId') revisionId?: string,
+    @Query('countOnly') countOnly?: string,
+  ) {
+    const shouldCount = countOnly === 'true' || countOnly === '1';
+    const userId = req.user?.userId;
+    this.logger.log(
+      `Fetching ${shouldCount ? 'count of ' : ''}latest revised project groups only - developmentPlanId: ${developmentPlanId}, revisionId: ${revisionId}, userId: ${userId}`,
+    );
+    return this.revisedProjectGroupService.findLatestRevisedProjectsOnly({
+      userId,
+      developmentPlanId,
+      revisionId,
+      countOnly: shouldCount,
+    });
   }
 
   /**
@@ -186,6 +214,39 @@ export class RevisedProjectGroupController {
     
     return result;
   }
+
+    /**
+   * ดึงโครงการประเภท "แก้ไข" ที่มีสถานะ "Revision "
+   * @param developmentPlanId - ID ของ DevelopmentPlan (optional)
+   * @param developmentPlanRevisionId - ID ของ DevelopmentPlanRevision (optional)
+   * @param countOnly - ถ้าเป็น true จะ return จำนวนโครงการแทน array (optional)
+   */
+    @Get('tracking/edit/revision')
+    async findRevisionProjects(
+      @Req() req: Request & { user: JwtPayloadUser },
+      @Query('developmentPlanId' , ParseUUIDPipe) developmentPlanId?: string,
+      @Query('developmentPlanRevisionId' , ParseUUIDPipe) developmentPlanRevisionId?: string,
+      @Query('countOnly') countOnly?: string,
+    ) {
+      const shouldCount = countOnly === 'true';
+      const userId = req.user?.userId;
+      this.logger.log(
+        `Fetching ${shouldCount ? 'count of ' : ''}revised revision projects - developmentPlanId: ${developmentPlanId}, developmentPlanRevisionId: ${developmentPlanRevisionId}, userId: ${userId}`,
+      );
+      
+      const result = await this.revisedProjectGroupService.findRevisionProjects(
+        developmentPlanId,
+        developmentPlanRevisionId,
+        shouldCount,
+        userId,
+      );
+
+      if (shouldCount) {
+        return { count: result as number };
+      }
+
+      return UnifiedProjectMapper.mapMany(result as any[]);
+    }
 
   /**
    * ดึงโครงการประเภท "แก้ไข" ที่มีสถานะ "Pending Approval"

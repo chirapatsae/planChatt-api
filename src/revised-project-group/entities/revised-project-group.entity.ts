@@ -21,6 +21,8 @@ import { GovernmentAgency } from 'src/government-agencies/entities/government-ag
 import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
 import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { PrevProjectType } from '../dto/create-revised-project-group.dto';
+import { AttachmentRevisedProjectGroup } from 'src/attachment-revised-project-groups/entities/attachment-revised-project-group.entity';
+import { Favorite } from 'src/favorite/entities/favorite.entity';
 
 @Entity('revised_project_groups')
 export class RevisedProjectGroup {
@@ -194,4 +196,20 @@ export class RevisedProjectGroup {
     nullable: true,
   })
   prevProjectType: PrevProjectType;
+
+  @OneToMany(
+    () => AttachmentRevisedProjectGroup,
+    (attachment) => attachment.revisedProjectGroup,
+    {
+      onUpdate: 'CASCADE',
+      onDelete: 'CASCADE',
+    },
+  )
+  attachments: AttachmentRevisedProjectGroup[];
+
+  @OneToMany(() => Favorite, (favorite) => favorite.revisionProjectGroupId, {
+    onUpdate: 'CASCADE',
+    onDelete: 'CASCADE',
+  })
+  favorites: Favorite[];
 }

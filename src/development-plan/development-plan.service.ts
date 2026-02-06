@@ -55,7 +55,7 @@ export class DevelopmentPlanService {
     private readonly projectGroupsService: ProjectGroupsService,
     private readonly websocketService: WebsocketService,
     private readonly usersService: UsersService,
-  ) {}
+  ) { }
 
   async create(dto: CreateDevelopmentPlanDto, userId: string): Promise<DevelopmentPlan> {
     try {
@@ -151,7 +151,7 @@ export class DevelopmentPlanService {
           throw new BadRequestException(`รูปแบบวันที่ปิดไม่ถูกต้อง (รายการที่ ${index + 1})`);
         }
 
-        if (openDate >= closeDate) {
+        if (openDate > closeDate) {
           throw new BadRequestException(`วันที่เปิดต้องน้อยกว่าวันที่ปิด (รายการที่ ${index + 1})`);
         }
 
@@ -243,7 +243,7 @@ export class DevelopmentPlanService {
             closeDate: phase.closeDate,
             phaseType: phase.phaseType,
             isMerged: phase.isMerged,
-             isOpen: phase.isOpen,
+            isOpen: phase.isOpen,
             createdBy: workHistory,
           }),
         );
@@ -369,7 +369,7 @@ export class DevelopmentPlanService {
         let updatedPlanPhases: PlanPhase[] = [];
 
         if (planPhases !== undefined) {
-        const parsedPlanPhases = planPhases.map((planPhaseDto, index) => {
+          const parsedPlanPhases = planPhases.map((planPhaseDto, index) => {
             const openDate = planPhaseDto.openDate
               ? new Date(planPhaseDto.openDate)
               : undefined;
@@ -389,7 +389,7 @@ export class DevelopmentPlanService {
               );
             }
 
-            if (openDate >= closeDate) {
+            if (openDate > closeDate) {
               throw new BadRequestException(
                 `วันที่เปิดต้องน้อยกว่าวันที่ปิด (รายการที่ ${index + 1})`,
               );
@@ -401,20 +401,20 @@ export class DevelopmentPlanService {
               closeDate,
               phaseType: planPhaseDto.phaseType as PhaseType,
               isMerged: planPhaseDto.isMerged ?? false,
-            isOpen: planPhaseDto.isOpen,
+              isOpen: planPhaseDto.isOpen,
             };
           });
 
-        const phaseTypeOpenHandled = new Set<string>();
-        parsedPlanPhases.forEach((phase) => {
-          if (phase.isOpen) {
-            if (phaseTypeOpenHandled.has(phase.phaseType)) {
-              phase.isOpen = false;
-            } else {
-              phaseTypeOpenHandled.add(phase.phaseType);
+          const phaseTypeOpenHandled = new Set<string>();
+          parsedPlanPhases.forEach((phase) => {
+            if (phase.isOpen) {
+              if (phaseTypeOpenHandled.has(phase.phaseType)) {
+                phase.isOpen = false;
+              } else {
+                phaseTypeOpenHandled.add(phase.phaseType);
+              }
             }
-          }
-        });
+          });
 
           const phasesByType = new Map<
             string,
@@ -627,7 +627,7 @@ export class DevelopmentPlanService {
       const pdfBuffer = await this.pdfService.generateProjectReportWithColumns(
         allProjects,
         ['index', 'title', 'objective', 'target', 'budget', 'kpi', 'expectedResult', 'mainAgency'],
-        {developmentPlanId},
+        { developmentPlanId },
       );
 
       // Send progress: PDF generated (70%)
@@ -643,9 +643,9 @@ export class DevelopmentPlanService {
 
       // Separate original and revised project IDs
       const originalProjectIds: string[] = [];
-      
+
       allProjects.forEach((p) => {
-          originalProjectIds.push(p.id);
+        originalProjectIds.push(p.id);
       });
 
       const allProjectIds = [...originalProjectIds];
@@ -697,6 +697,97 @@ export class DevelopmentPlanService {
     }
   }
 
+  async generateApprovedBookPreviewForPlan(
+    developmentPlanId: string,
+    userId: string,
+  ): Promise<Buffer> {
+    try {
+      this.logger.log(
+        `Generating approved book PREVIEW for development plan ${developmentPlanId} by user ${userId}`,
+      );
+
+      const plan = await this.developmentPlanRepository.findOne({
+        where: { id: developmentPlanId },
+      });
+      if (!plan) {
+        throw new NotFoundException(
+          `Development Plan with ID ${developmentPlanId} not found`,
+        );
+      }
+
+      const originalProjects = await this.projectGroupRepository
+        .createQueryBuilder('projectGroup')
+        .leftJoinAndSelect('projectGroup.createdBy', 'createdBy')
+        .leftJoinAndSelect('createdBy.user', 'createdByUser')
+        .leftJoinAndSelect('createdBy.amphoe', 'amphoe')
+        .leftJoinAndSelect(
+          'createdBy.localAdministrativeOrganization',
+          'localAdministrativeOrganization',
+        )
+        .leftJoinAndSelect('projectGroup.strategy', 'strategy')
+        .leftJoinAndSelect('projectGroup.tactic', 'tactic')
+        .leftJoinAndSelect('projectGroup.plan', 'plan')
+        .leftJoinAndSelect('projectGroup.developmentPlan', 'developmentPlan')
+        .leftJoinAndSelect('projectGroup.budgets', 'budgets')
+        .leftJoinAndSelect('projectGroup.trackingStatus', 'trackingStatus')
+        .leftJoinAndSelect('trackingStatus.statusId', 'status')
+        .leftJoinAndSelect('trackingStatus.comments', 'comments')
+        .leftJoinAndSelect('trackingStatus.createdBy', 'workHistory')
+        .leftJoinAndSelect('workHistory.user', 'user')
+        .leftJoinAndSelect(
+          'workHistory.localAdministrativeOrganization',
+          'localAdministrativeOrganizationWorkHistory',
+        )
+        .leftJoinAndSelect('workHistory.governmentAgencies', 'governmentAgencies')
+        .leftJoinAndSelect('workHistory.workStatus', 'workStatus')
+        .leftJoinAndSelect('projectGroup.responsibleAgency', 'responsibleAgency')
+        .leftJoinAndSelect('projectGroup.originAgencyId', 'originAgencyId')
+        .leftJoinAndSelect(
+          'projectGroup.revisedProjectGroups',
+          'revisedProjectGroups',
+        )
+        .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
+        .where('projectGroup.developmentPlan.id = :developmentPlanId', {
+          developmentPlanId,
+        })
+        .andWhere('projectGroup.responsibleAgency IS NOT NULL')
+        .andWhere('projectGroup.isBooked = :isBooked', { isBooked: false })
+        .andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
+        .andWhere('projectGroup.deletedAt IS NULL')
+        .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+        .andWhere('status.name = :statusName', { statusName: 'Approved' })
+        .andWhere('revisedProjectGroups.id IS NULL')
+        .getMany();
+
+      const allProjects = [
+        ...originalProjects.map((p) => UnifiedProjectMapper.fromProjectGroup(p)),
+      ];
+
+      this.logger.log(
+        `Prepared ${allProjects.length} approved projects for preview of development plan ${developmentPlanId}`,
+      );
+
+      const pdfBuffer = await this.pdfService.generateProjectReportWithColumns(
+        allProjects,
+        [
+          'index',
+          'title',
+          'objective',
+          'target',
+          'budget',
+          'kpi',
+          'expectedResult',
+          'mainAgency',
+        ],
+        { developmentPlanId },
+      );
+
+      return pdfBuffer;
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
   async updateLatestStatus(
     id: string,
     dto: UpdateDevelopmentPlanLatestStatusDto,
@@ -735,12 +826,12 @@ export class DevelopmentPlanService {
 
   async findAll(): Promise<DevelopmentPlan[]> {
     try {
-      const dv =  await this.developmentPlanRepository.find({
-        relations: ['createdBy' , 'developmentPlanRevision' ,'developmentPlanRevision.revisionType'  , 'planPhases'],
+      const dv = await this.developmentPlanRepository.find({
+        relations: ['createdBy', 'developmentPlanRevision', 'developmentPlanRevision.revisionType', 'planPhases'],
         order: { createAt: 'DESC' },
         where: { isLatest: true },
       });
-      return dv;
+      return dv || [];
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -757,7 +848,15 @@ export class DevelopmentPlanService {
           'planPhases',
           'developmentPlanSupplements',
         ],
-        where: { deletedAt: IsNull() },
+        where: {
+          deletedAt: IsNull(),
+          developmentPlanRevision: {
+            deletedAt: IsNull()
+          },
+          developmentPlanSupplements: {
+            deletedAt: IsNull()
+          },
+        },
         order: {
           createAt: 'DESC',
           developmentPlanRevision: {
@@ -768,7 +867,7 @@ export class DevelopmentPlanService {
           },
         },
       });
-      
+
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -777,7 +876,7 @@ export class DevelopmentPlanService {
   async findOne(id: string): Promise<DevelopmentPlan> {
     try {
       const developmentPlan = await this.developmentPlanRepository.findOne({
-        where: { id  , isLatest: true},
+        where: { id, isLatest: true },
         relations: ['projectGroup', 'workHistory'],
       });
 
@@ -863,7 +962,7 @@ export class DevelopmentPlanService {
     try {
       // Get user to verify citizen ID
       const user = await this.usersService.findOne(userId);
-      
+
       if (!user || !user.citizenId) {
         throw new NotFoundException('User not found or citizen ID is missing');
       }
@@ -885,14 +984,60 @@ export class DevelopmentPlanService {
         throw new NotFoundException(`DevelopmentPlan with ID ${id} not found`);
       }
 
-      // Perform soft delete
-      const result = await this.developmentPlanRepository.softDelete(id);
-      if (result.affected === 0) {
-        throw new NotFoundException(`DevelopmentPlan with ID ${id} not found`);
+      // Get workHistory for deletedBy
+      const workHistory = await this.workHistoryRepository.findOne({
+        where: { user: { id: userId }, workStatus: { name: 'approved' } },
+      });
+      if (workHistory) {
+        developmentPlan.deletedBy = workHistory;
       }
-      
+
+      // ถ้าที่ลบเป็น isLatest ให้ตั้งอันก่อนหน้า (เรียงจาก createAt) เป็น isLatest และตั้งตัวที่ลบเป็น false
+      if (developmentPlan.isLatest) {
+        const previousPlan = await this.developmentPlanRepository.findOne({
+          where: { id: Not(id) },
+          order: { createAt: 'DESC' },
+        });
+        if (previousPlan) {
+          await this.developmentPlanRepository.update(
+            { id: previousPlan.id },
+            { isLatest: true },
+          );
+        }
+        developmentPlan.isLatest = false;
+      }
+
+      await this.developmentPlanRepository.save(developmentPlan);
+      await this.developmentPlanRepository.softRemove(developmentPlan);
+
       this.logger.log(`Development plan ${id} soft-deleted by user ${userId}`);
       return { message: `DevelopmentPlan with ID ${id} has been soft-removed.` };
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  async checkCitizenIdSuffix(
+    userId: string,
+    citizenIdSuffix: string,
+  ): Promise<{ valid: boolean }> {
+    try {
+      const user = await this.usersService.findOne(userId);
+      if (user.workHistory[0].role.name !== 'admin' && user.workHistory[0].role.name !== 'super_admin' && user.workHistory[0].role.name !== 'staff') {
+        throw new UnauthorizedException('คุณไม่มีสิทธิ์ใช้งานฟังก์ชันนี้');
+      }
+
+      if (!user || !user.citizenId) {
+        throw new NotFoundException('ไม่พบผู้ใช้งานหรือไม่มีข้อมูลเลขบัตรประชาชน');
+      }
+
+      const userCitizenIdSuffix = user.citizenId.slice(-6);
+
+      if (userCitizenIdSuffix !== citizenIdSuffix) {
+        throw new UnauthorizedException('เลข 6 หลักท้ายของบัตรประชาชนไม่ถูกต้อง');
+      }
+
+      return { valid: true };
     } catch (error) {
       handleException(this.logger, error);
     }

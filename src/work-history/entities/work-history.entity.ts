@@ -19,6 +19,7 @@ import { WorkStatus } from 'src/work-status/entities/work-status.entity';
 import { Role } from 'src/roles/entities/role.entity';
 import { WorkHistoryAmphoeResponsibility } from 'src/work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity';
 import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
+import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
 import { Strategy } from 'src/strategy/entities/strategy.entity';
 import { Tactic } from 'src/tactic/entities/tactic.entity';
 import { Plan } from 'src/plan/entities/plan.entity';
@@ -136,6 +137,18 @@ export class WorkHistory {
     onUpdate: 'CASCADE',
   })
   developmentPlan: DevelopmentPlan[];
+
+  @OneToMany(() => DevelopmentPlan, (developmentPlan) => developmentPlan.deletedBy, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  deletorDevelopmentPlan: DevelopmentPlan[];
+
+  @OneToMany(() => DevelopmentPlanRevision, (revision) => revision.deletedBy, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  deletorDevelopmentPlanRevision: DevelopmentPlanRevision[];
 
   @OneToMany(() => Strategy, (strategy) => strategy.createdBy, {
     onDelete: 'CASCADE',

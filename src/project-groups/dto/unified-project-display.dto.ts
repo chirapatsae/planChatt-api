@@ -13,6 +13,8 @@ import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.
 import { Favorite } from 'src/favorite/entities/favorite.entity';
 import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
+import { AttachmentProjectGroup } from 'src/attachment-project-groups/entities/attachment-project-group.entity';
+import { AttachmentRevisedProjectGroup } from 'src/attachment-revised-project-groups/entities/attachment-revised-project-group.entity';
 
 /**
  * Interface สำหรับแสดงโครงการแบบ unified
@@ -34,7 +36,7 @@ export interface IUnifiedProjectDisplay {
   isBooked: boolean;
   bookedAt: Date | null;
   createdAt: Date;
-
+  attachments?: (AttachmentProjectGroup | AttachmentRevisedProjectGroup)[];
   // Type แยกว่ามาจากไหน
   projectType: 'original' | 'revised';
 
@@ -107,6 +109,7 @@ export class UnifiedProjectMapper {
       bookedAt: project.bookedAt,
       amphoe: project.amphoe,
       localAdministrativeOrganization: project.localAdministrativeOrganization,
+      attachments: project.attachments,
     };
   }
 
@@ -129,6 +132,7 @@ export class UnifiedProjectMapper {
       expected: revisedProject.expected,
       projectYear: revisedProject.projectYear,
       createdAt: revisedProject.createdAt,
+      attachments: revisedProject.attachments,
       projectType: 'revised',
       projectGroup: revisedProject.projectGroup ? { id: revisedProject.projectGroup.id } : null,
 
@@ -148,6 +152,7 @@ export class UnifiedProjectMapper {
       localAdministrativeOrganization: revisedProject.localAdministrativeOrganization,
       budgets: revisedProject.budgets,
       trackingStatus: revisedProject.trackingStatus,
+      favorites: revisedProject.favorites,
       isBooked: revisedProject.isBooked,
       bookedAt: revisedProject.bookedAt,
       additionalDetail: revisedProject.additionalDetail,

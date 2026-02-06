@@ -29,7 +29,7 @@ export class PdfOutAuthorityDocument {
   createdAt: Date;
 
   // Relations
-  @ManyToOne(() => DevelopmentPlan)
+  @ManyToOne(() => DevelopmentPlan, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'development_plan_id' })
   developmentPlan: DevelopmentPlan;
 

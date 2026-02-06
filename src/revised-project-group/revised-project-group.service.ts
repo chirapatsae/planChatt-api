@@ -23,6 +23,7 @@ import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.ent
 import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
 import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
 import { GovernmentAgency } from 'src/government-agencies/entities/government-agency.entity';
+import { UnifiedProjectMapper, IUnifiedProjectDisplay } from 'src/project-groups/dto/unified-project-display.dto';
 
 @Injectable()
 export class RevisedProjectGroupService {
@@ -272,25 +273,69 @@ export class RevisedProjectGroupService {
   }
 
   /**
-   * ดึง RevisedProjectGroup ตาม ID
+   * ดึง RevisedProjectGroup ตาม ID (internal use)
    */
-  async findOne(id: string): Promise<RevisedProjectGroup> {
+  private async findOneEntity(id: string): Promise<RevisedProjectGroup> {
+    const revisedProject = await this.revisedProjectGroupRepo.findOne({
+      where: { id },
+      relations: [
+        'developmentPlanRevision',
+        'developmentPlan',
+        'projectGroup',
+        'strategy',
+        'tactic',
+        'plan',
+        'createdBy',
+        'budgets',
+        'trackingStatus',
+        'trackingStatus.statusId',
+        'trackingStatus.createdBy',
+        'trackingStatus.createdBy.user',
+        'attachments',
+      ],
+    });
+
+    if (!revisedProject) {
+      this.logger.warn(`RevisedProjectGroup not found: ${id}`);
+      throw new NotFoundException(
+        `RevisedProjectGroup with id ${id} not found`,
+      );
+    }
+
+    return revisedProject;
+  }
+
+  /**
+   * ดึง RevisedProjectGroup ตาม ID (return unified format)
+   */
+  async findOne(id: string): Promise<IUnifiedProjectDisplay> {
     try {
       const revisedProject = await this.revisedProjectGroupRepo.findOne({
         where: { id },
         relations: [
           'developmentPlanRevision',
+          'developmentPlan',
           'projectGroup',
-          // budgetPlan is derived via developmentPlanRevision
           'strategy',
           'tactic',
           'plan',
           'createdBy',
+          'createdBy.user',
+          'createdBy.amphoe',
+          'createdBy.localAdministrativeOrganization',
           'budgets',
           'trackingStatus',
           'trackingStatus.statusId',
           'trackingStatus.createdBy',
           'trackingStatus.createdBy.user',
+          'attachments',
+          'favorites',
+          'favorites.userId',
+          'amphoe',
+          'localAdministrativeOrganization',
+          'originAgencyId',
+          'originAgencyId.amphoe',
+          'responsibleAgency',
         ],
       });
 
@@ -301,7 +346,7 @@ export class RevisedProjectGroupService {
         );
       }
 
-      return revisedProject;
+      return UnifiedProjectMapper.fromRevisedProjectGroup(revisedProject);
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -315,13 +360,16 @@ export class RevisedProjectGroupService {
     dto: UpdateRevisedProjectGroupDto,
   ): Promise<RevisedProjectGroup> {
     try {
-      const revisedProject = await this.findOne(id);
+      const revisedProject = await this.findOneEntity(id);
 
       return await this.dataSource.transaction(async (manager) => {
         // Update foreign keys if provided
         if (dto.developmentPlanRevisionId) {
           const revision = await manager.findOne(DevelopmentPlanRevision, {
             where: { id: dto.developmentPlanRevisionId },
+            relations: [
+              'developmentPlan',
+            ],
           });
           if (!revision) {
             throw new NotFoundException(
@@ -330,24 +378,6 @@ export class RevisedProjectGroupService {
           }
           revisedProject.developmentPlanRevision = revision;
         }
-
-        if (dto.projectGroupId !== undefined) {
-          if (dto.projectGroupId) {
-            const projectGroup = await manager.findOne(ProjectGroup, {
-              where: { id: dto.projectGroupId },
-            });
-            if (!projectGroup) {
-              throw new NotFoundException(
-                `ProjectGroup not found: ${dto.projectGroupId}`,
-              );
-            }
-            revisedProject.projectGroup = projectGroup;
-          } else {
-            revisedProject.projectGroup = null;
-          }
-        }
-
-        // budgetPlan is no longer updated directly; it follows developmentPlanRevision
 
         // Update strategy, tactic, plan if provided
         if (dto.strategyId !== undefined) {
@@ -380,92 +410,6 @@ export class RevisedProjectGroupService {
           revisedProject.plan = plan;
         }
 
-        // Update responsibleAgency if provided
-        if (dto.responsibleAgency !== undefined) {
-          const responsibleAgency = await manager.findOne(GovernmentAgency, {
-            where: { id: dto.responsibleAgency },
-          });
-          if (!responsibleAgency) {
-            throw new NotFoundException(
-              `GovernmentAgency ID not found: ${dto.responsibleAgency}`,
-            );
-          }
-          revisedProject.responsibleAgency = responsibleAgency;
-        }
-
-        // Update originAgencyId if provided
-        if (dto.originAgencyId !== undefined) {
-          if (dto.originAgencyId) {
-            const originAgency = await manager.findOne(
-              LocalAdministrativeOrganization,
-              {
-                where: { id: dto.originAgencyId },
-              },
-            );
-            if (!originAgency) {
-              throw new NotFoundException(
-                `LocalAdministrativeOrganization ID not found: ${dto.originAgencyId}`,
-              );
-            }
-            revisedProject.originAgencyId = originAgency;
-          } else {
-            revisedProject.originAgencyId = null as any; // Entity has nullable: true
-          }
-        }
-
-        // Update developmentPlan if provided
-        if (dto.developmentPlanId !== undefined) {
-          if (dto.developmentPlanId) {
-            const developmentPlan = await manager.findOne(DevelopmentPlan, {
-              where: { id: dto.developmentPlanId },
-            });
-            if (!developmentPlan) {
-              throw new NotFoundException(
-                `DevelopmentPlan ID not found: ${dto.developmentPlanId}`,
-              );
-            }
-            revisedProject.developmentPlan = developmentPlan;
-          } else {
-            revisedProject.developmentPlan = undefined;
-          }
-        }
-
-        // Update amphoe if provided
-        if (dto.amphoeId !== undefined) {
-          if (dto.amphoeId) {
-            const amphoe = await manager.findOne(Amphoe, {
-              where: { id: dto.amphoeId },
-            });
-            if (!amphoe) {
-              throw new NotFoundException(`Amphoe ID not found: ${dto.amphoeId}`);
-            }
-            revisedProject.amphoe = amphoe;
-          } else {
-            revisedProject.amphoe = undefined;
-          }
-        }
-
-        // Update localAdministrativeOrganization if provided
-        if (dto.localAdministrativeOrganizationId !== undefined) {
-          if (dto.localAdministrativeOrganizationId) {
-            const localAdministrativeOrganization = await manager.findOne(
-              LocalAdministrativeOrganization,
-              {
-                where: { id: dto.localAdministrativeOrganizationId },
-              },
-            );
-            if (!localAdministrativeOrganization) {
-              throw new NotFoundException(
-                `LocalAdministrativeOrganization ID not found: ${dto.localAdministrativeOrganizationId}`,
-              );
-            }
-            revisedProject.localAdministrativeOrganization =
-              localAdministrativeOrganization;
-          } else {
-            revisedProject.localAdministrativeOrganization = undefined;
-          }
-        }
-
         // Update other fields
         Object.assign(revisedProject, {
           title: dto.title ?? revisedProject.title,
@@ -483,6 +427,47 @@ export class RevisedProjectGroupService {
           isBooked: dto.isBooked ?? revisedProject.isBooked,
           bookedAt: dto.bookedAt ?? revisedProject.bookedAt,
         });
+
+        // Update budgets (replace all) if provided
+        if (dto.budget) {
+          const developmentPlan = revisedProject.developmentPlanRevision?.developmentPlan;
+
+          for (const budgetItem of dto.budget) {
+            if (
+              budgetItem.year < developmentPlan?.startYear ||
+              budgetItem.year > developmentPlan?.endYear
+            ) {
+              throw new BadRequestException(
+                `ปีงบประมาณต้องอยู่ในช่วง พ.ศ. ${developmentPlan?.startYear} - ${developmentPlan?.endYear} (ปีที่ส่งมา: ${budgetItem.year})`,
+              );
+            }
+          }
+
+          if (dto.budget.length > 0) {
+            for (const budgetDto of dto.budget) {
+              const existingBudget = await manager.findOne(Budget, {
+                where: {
+                  revisedProjectGroupId: { id: revisedProject.id },
+                  year: budgetDto.year,
+                },
+              });
+
+              if (existingBudget) {
+                // Update existing budget
+                existingBudget.quantity = budgetDto.quantity;
+                await manager.save(Budget, existingBudget);
+              } else {
+                // Create new budget if not found
+                const newBudget = manager.create(Budget, {
+                  year: budgetDto.year,
+                  quantity: budgetDto.quantity,
+                  revisedProjectGroupId: revisedProject,
+                });
+                await manager.save(Budget, newBudget);
+              }
+            }
+          }
+        }
 
         return await manager.save(revisedProject);
       });
@@ -615,6 +600,9 @@ export class RevisedProjectGroupService {
         .leftJoinAndSelect('rpg.developmentPlan', 'developmentPlan')
         .leftJoinAndSelect('rpg.createdBy', 'createdBy')
         .leftJoinAndSelect('createdBy.user', 'createdByUser')
+        .leftJoinAndSelect('createdBy.amphoe', 'amphoeCreatedBy')
+        .leftJoinAndSelect('createdBy.localAdministrativeOrganization', 'localAdministrativeOrganizationCreatedBy')
+        .leftJoinAndSelect('createdBy.governmentAgencies', 'agencyCreatedBy')
         .leftJoinAndSelect('rpg.amphoe', 'amphoe')
         .leftJoinAndSelect('rpg.localAdministrativeOrganization', 'localAdministrativeOrganization')
         .leftJoinAndSelect('rpg.originAgencyId', 'originAgency')
@@ -756,6 +744,96 @@ export class RevisedProjectGroupService {
     }
   }
 
+  /**
+   * ดึงโครงการประเภท "แก้ไข" ที่มีสถานะ "Verified"
+   * @param developmentPlanId - ID ของ DevelopmentPlan (optional)
+   * @param developmentPlanRevisionId - ID ของ DevelopmentPlanRevision (optional)
+   * @param countOnly - ถ้าเป็น true จะ return จำนวนโครงการแทน array (optional)
+   * @returns Array of RevisedProjectGroup หรือ number (count) ตามค่า countOnly
+   */
+  async findRevisionProjects(
+    developmentPlanId?: string,
+    developmentPlanRevisionId?: string,
+    countOnly?: boolean,
+    userId?: string,
+  ): Promise<RevisedProjectGroup[] | number> {
+    try {
+      const workHistory = await this.workHistoryRepo.findOne({
+        where: { user: { id: userId }, isCurrent: true },
+        relations: [
+          'user',
+          'role',
+          'workStatus',
+          'localAdministrativeOrganization',
+          'governmentAgencies',
+        ],
+      });
+      if (!workHistory) throw new NotFoundException('ไม่พบข้อมูลผู้ใช้งาน');
+      const userRole = workHistory.role.name;
+      if (userRole !== 'user' && userRole !== 'admin' && userRole !== 'super-admin' && userRole !== 'c-level') {
+        throw new UnauthorizedException('คุณไม่มีสิทธิในการเข้าถึงข้อมูล');
+      }
+      if (workHistory.localAdministrativeOrganization?.id !== '3001027') return []
+
+      const query = this.revisedProjectGroupRepo
+        .createQueryBuilder('rpg')
+        .leftJoinAndSelect('rpg.developmentPlanRevision', 'dpr')
+        .leftJoinAndSelect('dpr.revisionType', 'rt')
+        .leftJoinAndSelect('dpr.developmentPlan', 'dp')
+        .leftJoinAndSelect('rpg.projectGroup', 'pg')
+        .leftJoinAndSelect('rpg.strategy', 'strategy')
+        .leftJoinAndSelect('rpg.tactic', 'tactic')
+        .leftJoinAndSelect('rpg.plan', 'plan')
+        .leftJoinAndSelect('rpg.developmentPlan', 'developmentPlan')
+        .leftJoinAndSelect('rpg.createdBy', 'createdBy')
+        .leftJoinAndSelect('createdBy.user', 'createdByUser')
+        .leftJoinAndSelect('rpg.amphoe', 'amphoe')
+        .leftJoinAndSelect('rpg.localAdministrativeOrganization', 'localAdministrativeOrganization')
+        .leftJoinAndSelect('rpg.originAgencyId', 'originAgency')
+        .leftJoinAndSelect('rpg.responsibleAgency', 'responsibleAgency')
+        .leftJoinAndSelect('rpg.budgets', 'budgets')
+        .leftJoinAndSelect('rpg.trackingStatus', 'trackingStatus')
+        .leftJoinAndSelect('rpg.attachments', 'attachments')
+        .leftJoinAndSelect('trackingStatus.statusId', 'status')
+        .leftJoinAndSelect('trackingStatus.createdBy', 'trackingStatusCreatedBy')
+        .leftJoinAndSelect('trackingStatusCreatedBy.amphoe', 'trackingStatusCreatedByAmphoe')
+        .leftJoinAndSelect('trackingStatusCreatedBy.localAdministrativeOrganization', 'trackingStatusCreatedByLocalAdministrativeOrganization')
+        .leftJoinAndSelect('trackingStatusCreatedBy.user', 'trackingStatusCreatedByUser')
+        .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+        .andWhere('rt.name = :revisionTypeName', { revisionTypeName: 'แก้ไข' })
+        .andWhere('status.name = :statusName', { statusName: 'Revision' })
+        .andWhere('dpr.isLatest = :isLatestRevision', { isLatestRevision: true })
+        .andWhere('dpr.isBooked = :isBooked', { isBooked: false });
+
+
+      // Filter by developmentPlanId if provided
+      if (developmentPlanId) {
+        query.andWhere('dp.id = :developmentPlanId', { developmentPlanId });
+      }
+
+      // Filter by developmentPlanRevisionId if provided
+      if (developmentPlanRevisionId) {
+        query.andWhere('dpr.id = :developmentPlanRevisionId', {
+          developmentPlanRevisionId,
+        });
+      }
+
+      if (userRole === 'user') {
+        const agencyId = workHistory.governmentAgencies?.id;
+        if (!agencyId) return countOnly ? 0 : [];
+        query.andWhere('responsibleAgency.id = :agencyId', { agencyId });
+      }
+
+      if (countOnly) {
+        const count = await query.getCount();
+        return count;
+      }
+
+      return await query.orderBy('rpg.created_at', 'DESC').getMany();
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
   /**
    * ดึงโครงการประเภท "แก้ไข" ที่มีสถานะ "Pending Approval"
    * @param developmentPlanId - ID ของ DevelopmentPlan (optional)
@@ -1168,6 +1246,7 @@ export class RevisedProjectGroupService {
           'trackingStatus.createdBy.user',
           'originAgencyId',
           'responsibleAgency',
+          'attachments'
         ],
       });
 
@@ -1197,6 +1276,7 @@ export class RevisedProjectGroupService {
             'trackingStatus.createdBy.user',
             'originAgencyId',
             'responsibleAgency',
+
           ]
         })
       } else if (current.prevProjectType === "revised") {
@@ -1234,6 +1314,123 @@ export class RevisedProjectGroupService {
         current,
         previous,
       };
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * ดึง RevisedProjectGroup ที่เป็น revision ล่าสุดของแต่ละ ProjectGroup
+   * แสดงเฉพาะจากตาราง revised-project-group (ไม่รวม original projects)
+   */
+  async findLatestRevisedProjectsOnly(options: {
+    userId: string;
+    countOnly?: boolean;
+    developmentPlanId?: string;
+    revisionId?: string;
+  }): Promise<RevisedProjectGroup[] | number> {
+    try {
+      const { userId, countOnly, developmentPlanId, revisionId } = options;
+
+      // Validate user permissions
+      const workHistory = await this.workHistoryRepo.findOne({
+        where: { user: { id: userId }, isCurrent: true },
+        relations: ['workStatus', 'role', 'localAdministrativeOrganization', 'governmentAgencies'],
+      });
+
+      if (!workHistory) return countOnly ? 0 : [];
+      if (workHistory.workStatus.name !== 'approved')
+        throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+
+      const allowedRoles = ['user', 'staff', 'admin', 'super-admin', 'c-level'];
+      if (!allowedRoles.includes(workHistory.role.name))
+        throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+
+      // Validate development plan
+      if (!developmentPlanId) {
+        throw new BadRequestException('Development plan ID is required');
+      }
+
+      const developmentPlan = await this.developmentPlanRepo.findOne({
+        where: { id: developmentPlanId },
+      });
+      if (!developmentPlan)
+        throw new NotFoundException('Development plan not found');
+
+      // SubQuery: หา revisionNumber สูงสุด ของแต่ละ Project Group ID ภายใต้แผนนี้
+      const maxRevisionSubQuery = this.revisedProjectGroupRepo
+        .createQueryBuilder('rp_sub')
+        .select('rp_sub.project_group_id', 'projectGroupId')
+        .addSelect('MAX(dpr_sub.revisionNumber)', 'maxRevision')
+        .leftJoin('rp_sub.developmentPlanRevision', 'dpr_sub')
+        .where('rp_sub.development_plan_id = :planId', { planId: developmentPlanId })
+        .groupBy('rp_sub.project_group_id');
+
+      // Main Query: ดึง revised projects ที่เป็น revision ล่าสุด
+      const query = this.revisedProjectGroupRepo
+        .createQueryBuilder('revisedProject')
+        .leftJoinAndSelect('revisedProject.developmentPlanRevision', 'developmentPlanRevision')
+        .leftJoinAndSelect('developmentPlanRevision.revisionType', 'revisionType')
+        .leftJoinAndSelect('revisedProject.developmentPlan', 'developmentPlan')
+        .leftJoinAndSelect('revisedProject.projectGroup', 'originalProject')
+        .leftJoinAndSelect('revisedProject.createdBy', 'createdBy')
+        .leftJoinAndSelect('createdBy.user', 'createdByUser')
+        .leftJoinAndSelect('createdBy.amphoe', 'amphoe')
+        .leftJoinAndSelect('createdBy.localAdministrativeOrganization', 'localAdministrativeOrganization')
+        .leftJoinAndSelect('revisedProject.amphoe', 'revisedAmphoe')
+        .leftJoinAndSelect('revisedProject.localAdministrativeOrganization', 'revisedLocalAdministrativeOrganization')
+        .leftJoinAndSelect('revisedProject.strategy', 'strategy')
+        .leftJoinAndSelect('revisedProject.tactic', 'tactic')
+        .leftJoinAndSelect('revisedProject.plan', 'plan')
+        .leftJoinAndSelect('revisedProject.budgets', 'budgets')
+        .leftJoinAndSelect('revisedProject.trackingStatus', 'trackingStatus')
+        .leftJoinAndSelect('trackingStatus.statusId', 'status')
+        .leftJoinAndSelect('trackingStatus.createdBy', 'workHistory')
+        .leftJoinAndSelect('workHistory.user', 'user')
+        .leftJoinAndSelect('workHistory.localAdministrativeOrganization', 'localAdministrativeOrganizationWorkHistory')
+        .leftJoinAndSelect('workHistory.governmentAgencies', 'governmentAgencies')
+        .leftJoinAndSelect('workHistory.workStatus', 'workStatus')
+        .leftJoinAndSelect('revisedProject.responsibleAgency', 'responsibleAgency')
+        .leftJoinAndSelect('revisedProject.originAgencyId', 'originAgencyId')
+        .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
+        .innerJoin(
+          '(' + maxRevisionSubQuery.getQuery() + ')',
+          'max_rev_table',
+          '"revisedProject"."project_group_id" = max_rev_table."projectGroupId" AND "developmentPlanRevision"."revision_number" = max_rev_table."maxRevision"'
+        )
+        .setParameters(maxRevisionSubQuery.getParameters())
+        .andWhere('revisedProject.development_plan_id = :developmentPlanId', { developmentPlanId })
+        .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true });
+
+      // Filter by revisionId if provided
+      if (revisionId) {
+        query.andWhere('developmentPlanRevision.id = :revisionId', { revisionId });
+      }
+
+      // Role-based filtering
+      if (workHistory.role.name === 'user') {
+        if (workHistory.governmentAgencies) {
+          query.andWhere('responsibleAgency.id = :agencyId', {
+            agencyId: workHistory.governmentAgencies.id,
+          });
+        }
+        //  else {
+        //   query.andWhere('originAgencyId.id = :agencyId', {
+        //     agencyId: workHistory.localAdministrativeOrganization.id,
+        //   });
+        // }
+      }
+
+      if (countOnly) {
+        const count = await query.getCount();
+        return count;
+      }
+
+      const projects = await query
+        .orderBy('revisedProject.createdAt', 'DESC')
+        .getMany();
+
+      return projects;
     } catch (error) {
       handleException(this.logger, error);
     }

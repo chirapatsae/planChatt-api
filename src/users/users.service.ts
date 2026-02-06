@@ -99,6 +99,7 @@ export class UsersService {
               amphoe: true,
             },
             governmentAgencies: true,
+            role: true,
           },
           aiUsageQuota: true,
         },

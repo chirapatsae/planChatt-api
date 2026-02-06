@@ -47,6 +47,13 @@ export class DevelopmentPlan {
   @JoinColumn({ name: 'created_by' })
   createdBy: WorkHistory;
 
+  @ManyToOne(() => WorkHistory, (workHistory) => workHistory.deletorDevelopmentPlan, {
+    onUpdate: 'CASCADE',
+    onDelete: 'CASCADE',
+  })
+  @JoinColumn({ name: 'deleted_by' })
+  deletedBy?: WorkHistory | null;
+
   @OneToMany(() => ProjectGroup, (projectGroup) => projectGroup.developmentPlan, {
     onUpdate: 'CASCADE',
     onDelete: 'CASCADE',

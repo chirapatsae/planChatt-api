@@ -347,6 +347,7 @@ export class TrackingStatusService {
           revisedProjectGroupId: revisedProjectGroup,
           statusId: status,
           isLatest: true,
+          comment : dto.comment,
         });
         const savedTracking = await manager.save(TrackingStatus, tracking);
 
@@ -412,11 +413,11 @@ export class TrackingStatusService {
         await manager.save(TrackingStatus, latestTrackingStatus);
 
         // ถ้า isResponsibleClear เป็น true ให้ลบ responsibleAgency
-        if (isResponsibleClear) {
+        if (isResponsibleClear && isResponsibleClear === true) {
           projectGroup.responsibleAgency = null as any;
         }
 
-        if (isBookedClear) {
+        if (isBookedClear && isBookedClear === true) {
           projectGroup.isBooked = false;
           projectGroup.bookedAt = null as any;
         }

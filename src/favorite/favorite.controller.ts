@@ -39,12 +39,12 @@ export class FavoriteController {
     return await this.favoriteService.findByUserId(userId);
   }
 
-  @Delete('/project/:projectGroupId')
+  @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  async removeByUserAndProject(
-    @Param('projectGroupId') projectGroupId: string,
+  async remove(
+    @Param('id') id: string,
     @Req() req: Request & { user: JwtPayloadUser },
   ): Promise<void> {
-    return await this.favoriteService.removeByUserAndProject(req.user.userId, projectGroupId);
+    return await this.favoriteService.remove(id, req.user.userId);
   }
 }

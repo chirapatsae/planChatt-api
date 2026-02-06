@@ -1,7 +1,11 @@
-import { IsUUID, IsNotEmpty } from 'class-validator';
+import { IsUUID, IsNotEmpty, IsString } from 'class-validator';
 
 export class CreateFavoriteDto {
   @IsUUID()
   @IsNotEmpty()
-  projectGroupId: string;
+  projectId: string;
+
+  @IsString()
+  @IsNotEmpty()
+  projectType : string
 }

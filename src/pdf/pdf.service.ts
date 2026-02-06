@@ -1,7 +1,7 @@
 // ===================================================================
 // 📦 1. Imports
 // ===================================================================
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import PdfPrinter = require('pdfmake');
@@ -49,6 +49,9 @@ import {
   createRevisionEditGroupCoverPageDocDefinition,
   createRevisionEditGroupDetailDocDefinition
 } from './report-revision-edit-detail.part';
+import {
+  createRevisionEditGroupDetailDocDefinitionUser
+} from './report-revision-edit-detail-user.part';
 import { createRevisionEditSummaryPartDocDefinition } from './report-revision-edit-summary.part';
 
 type GenerateReportOptions = {
@@ -445,6 +448,31 @@ export class PdfService {
     return projectIds.map(id => projectMap.get(id)).filter(p => p !== undefined);
   }
 
+  async findRevisedProjectsByIds(projectRevisionIds: string[]): Promise<RevisedProjectGroup[]> {
+    if (!projectRevisionIds || projectRevisionIds.length === 0) return [];
+
+    return await this.revisedProjectGroupRepo.createQueryBuilder('revisedProject')
+      .leftJoinAndSelect('revisedProject.developmentPlanRevision', 'developmentPlanRevision')
+      .leftJoinAndSelect('developmentPlanRevision.developmentPlan', 'developmentPlan')
+      .leftJoinAndSelect('developmentPlanRevision.revisionType', 'revisionType')
+      .leftJoinAndSelect('revisedProject.projectGroup', 'projectGroup')
+      .leftJoinAndSelect('revisedProject.strategy', 'strategy')
+      .leftJoinAndSelect('revisedProject.tactic', 'tactic')
+      .leftJoinAndSelect('revisedProject.plan', 'plan')
+      .leftJoinAndSelect('revisedProject.budgets', 'budgets')
+      .leftJoinAndSelect('revisedProject.responsibleAgency', 'responsibleAgency')
+      .leftJoinAndSelect('revisedProject.originAgencyId', 'originAgencyId')
+      .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
+      .leftJoinAndSelect('revisedProject.trackingStatus', 'trackingStatus')
+      .leftJoinAndSelect('trackingStatus.statusId', 'status')
+      .leftJoinAndSelect('revisedProject.createdBy', 'createdBy')
+      .leftJoinAndSelect('createdBy.user', 'createdByUser')
+      .leftJoinAndSelect('createdBy.amphoe', 'amphoe')
+      .leftJoinAndSelect('createdBy.localAdministrativeOrganization', 'localAdministrativeOrganization')
+      .where('revisedProject.id IN (:...ids)', { ids: projectRevisionIds })
+      .getMany();
+  }
+
   private async findProjectsForDraftAgency(developmentPlanId: string): Promise<any[]> {
     const projects = await this.projectGroupRepo.createQueryBuilder('projectGroup')
       .leftJoinAndSelect('projectGroup.createdBy', 'createdBy')
@@ -702,6 +730,79 @@ export class PdfService {
       const coverPagePdf = await PDFDocument.load(coverPageBuffer);
       pageOffset += coverPagePdf.getPageCount();
 
+      for (const group of subGroups) {
+        const { groupKey, projects: groupProjectsValue } = group;
+        const [, tacticName, planName] = groupKey.split('||');
+        const detailDoc = createGroupDetailDocDefinition({
+          developmentPlanName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
+          pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+          reportType, strategyName, tacticName, planName, pageOffset,
+        });
+
+        if (detailDoc) {
+          const detailBuffer = await this.createPdfBuffer(detailDoc, fonts);
+          pdfBuffers.push(detailBuffer);
+          const detailPdf = await PDFDocument.load(detailBuffer);
+          pageOffset += detailPdf.getPageCount();
+        }
+      }
+    }
+
+    if (pdfBuffers.length === 0) throw new Error('No PDF documents could be generated');
+    return this.mergePdfBuffers(pdfBuffers);
+  }
+
+  async generateProjectDetailsOnly(
+    projects: any[],
+    selectedColumns?: string[],
+    options?: GenerateReportOptions,
+  ): Promise<Buffer> {
+    const developmentPlanId = options?.developmentPlanId;
+    const reportType = options?.reportType ?? 'default';
+
+    const dp = developmentPlanId
+      ? await this.developmentPlanRepo.findOne({ where: { id: developmentPlanId } })
+      : await this.developmentPlanRepo.findOneBy({ isLatest: true });
+    if (!dp) throw new Error('DevelopmentPlan not found');
+    const developmentPlanName = dp?.name ?? 'ไม่พบแผนพัฒนาจังหวัด';
+
+    const columnMap: Record<string, { text: string; key: string }> = {
+      index: { text: 'ที่', key: 'index' },
+      title: { text: 'โครงการ', key: 'title' },
+      objective: { text: 'วัตถุประสงค์', key: 'objective' },
+      target: { text: 'เป้าหมาย \n(ผลผลิตของโครงการ)', key: 'target' },
+      budget: { text: 'งบประมาณ (บาท)', key: 'budget' },
+      kpi: { text: 'ตัวชี้วัด (KPI)', key: 'kpi' },
+      expectedResult: { text: 'ผลที่คาดว่าจะได้รับ', key: 'expectedResult' },
+      mainAgency: { text: 'หน่วยงาน\nรับผิดชอบหลัก', key: 'mainAgency' },
+      amphoe: { text: 'อำเภอ', key: 'amphoe' },
+      coordinates: { text: 'พิกัดทาง \nภูมิศาสตร์', key: 'coordinates' },
+    };
+
+    const defaultColumns = ['index', 'title', 'objective', 'target', 'budget', 'kpi', 'expectedResult', 'mainAgency'];
+    const columnsToUse = selectedColumns || defaultColumns;
+    const availableColumns = columnsToUse.filter(col => columnMap[col] && col !== 'amphoe' && col !== 'coordinates');
+    
+    const fonts = this.getPdfFonts();
+    const years = Array.from({ length: dp.endYear - dp.startYear + 1 }, (_, index) => dp.startYear + index);
+    const { groupedProjects } = this.prepareReportAggregations(projects, years);
+
+    const pageMargins: [number, number, number, number] = [15, 60, 15, 40];
+    const pageOrientation: 'portrait' | 'landscape' = 'landscape';
+
+    const pdfBuffers: Buffer[] = [];
+    let pageOffset = 0;
+
+    // จัดกลุ่มตาม strategy
+    const strategyGroups = new Map<string, Array<{ groupKey: string, projects: any[] }>>();
+    for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
+      const [strategyName] = groupKey.split('||');
+      if (!strategyGroups.has(strategyName)) strategyGroups.set(strategyName, []);
+      strategyGroups.get(strategyName)!.push({ groupKey, projects: groupProjectsValue });
+    }
+
+    // สร้างรายละเอียดโครงการเรียงลำดับตาม strategy, tactic, plan
+    for (const [strategyName, subGroups] of strategyGroups.entries()) {
       for (const group of subGroups) {
         const { groupKey, projects: groupProjectsValue } = group;
         const [, tacticName, planName] = groupKey.split('||');
@@ -1229,6 +1330,111 @@ export class PdfService {
       pageOffset += coverPagePdf.getPageCount();
 
       const detailDoc = createRevisionEditGroupDetailDocDefinition({
+        developmentPlanRevisionName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
+        pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+        reportType: 'inAuthority', strategyName, tacticName, planName, pageOffset,
+      });
+
+      if (detailDoc) {
+        const detailBuffer = await this.createPdfBuffer(detailDoc, fonts);
+        pdfBuffers.push(detailBuffer);
+        const detailPdf = await PDFDocument.load(detailBuffer);
+        pageOffset += detailPdf.getPageCount();
+      }
+    }
+
+    if (pdfBuffers.length === 0) throw new Error('No PDF documents could be generated');
+    return this.mergePdfBuffers(pdfBuffers);
+  }
+
+  async generateRevisionEditDetailsOnly(
+    developmentPlanRevisionId: string,
+    selectedColumns?: string[],
+    existingProjects?: RevisedProjectGroup[]
+  ): Promise<Buffer> {
+    const developmentPlanRevision = await this.developmentPlanRevisionRepo.findOne({
+      where: { id: developmentPlanRevisionId },
+      relations: ['developmentPlan', 'revisionType'],
+    });
+    if (!developmentPlanRevision) throw new Error(`DevelopmentPlanRevision with ID ${developmentPlanRevisionId} not found`);
+
+    const developmentPlanId = developmentPlanRevision.developmentPlan.id;
+    const dp = await this.developmentPlanRepo.findOne({ where: { id: developmentPlanId } });
+    if (!dp) throw new Error('DevelopmentPlan not found');
+
+    const revisionTypeName = developmentPlanRevision.description || 'ไม่ระบุ';
+    const developmentPlanRevisionName = `${dp.name} ${revisionTypeName}`;
+
+    let revisedProjects: RevisedProjectGroup[] = [];
+
+    if (existingProjects) {
+        revisedProjects = existingProjects;
+    } else {
+        revisedProjects = await this.revisedProjectGroupRepo.createQueryBuilder('revisedProject')
+            .leftJoinAndSelect('revisedProject.developmentPlanRevision', 'developmentPlanRevision')
+            .leftJoinAndSelect('developmentPlanRevision.developmentPlan', 'developmentPlan')
+            .leftJoinAndSelect('developmentPlanRevision.revisionType', 'revisionType')
+            .leftJoinAndSelect('revisedProject.projectGroup', 'projectGroup')
+            .leftJoinAndSelect('revisedProject.strategy', 'strategy')
+            .leftJoinAndSelect('revisedProject.tactic', 'tactic')
+            .leftJoinAndSelect('revisedProject.plan', 'plan')
+            .leftJoinAndSelect('revisedProject.budgets', 'budgets')
+            .leftJoinAndSelect('revisedProject.responsibleAgency', 'responsibleAgency')
+            .leftJoinAndSelect('revisedProject.originAgencyId', 'originAgencyId')
+            .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
+            .leftJoinAndSelect('revisedProject.trackingStatus', 'trackingStatus')
+            .leftJoinAndSelect('trackingStatus.statusId', 'status')
+            .where('developmentPlanRevision.id = :developmentPlanRevisionId', { developmentPlanRevisionId })
+            .andWhere('revisionType.name = :revisionTypeName', { revisionTypeName: 'แก้ไข' })
+            .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+            .andWhere('status.name IN (:...statusNames)', { statusNames: ['Pending_Approval', 'Approved'] })
+            .getMany();
+    }
+
+    if (revisedProjects.length === 0) throw new Error('No projects found with status Pending_Approval or Approved');
+
+    const projectsWithComparison = await Promise.all(
+      revisedProjects.map(async (current) => this.findProjectComparisonForRevisionEdit(current, developmentPlanId))
+    );
+
+    const defaultColumns = ['index', 'title', 'objective', 'target', 'budget', 'kpi', 'expectedResult', 'mainAgency'];
+    const columnsToUse = selectedColumns || defaultColumns;
+
+    const columnMap: Record<string, { text: string; key: string }> = {
+      index: { text: 'ที่', key: 'index' },
+      title: { text: 'โครงการ', key: 'title' },
+      objective: { text: 'วัตถุประสงค์', key: 'objective' },
+      target: { text: 'เป้าหมาย \n(ผลผลิตของโครงการ)', key: 'target' },
+      budget: { text: 'งบประมาณ (บาท)', key: 'budget' },
+      kpi: { text: 'ตัวชี้วัด (KPI)', key: 'kpi' },
+      expectedResult: { text: 'ผลที่คาดว่าจะได้รับ', key: 'expectedResult' },
+      mainAgency: { text: 'หน่วยงาน\nรับผิดชอบหลัก', key: 'mainAgency' },
+      amphoe: { text: 'อำเภอ', key: 'amphoe' },
+      coordinates: { text: 'พิกัดทาง \nภูมิศาสตร์', key: 'coordinates' },
+    };
+
+    const availableColumns = columnsToUse.filter(col => columnMap[col]);
+    const fonts = this.getPdfFonts();
+    const years = Array.from({ length: dp.endYear - dp.startYear + 1 }, (_, index) => dp.startYear + index);
+    const pageMargins: [number, number, number, number] = [15, 60, 15, 40];
+    const pageOrientation = 'landscape';
+
+    const groupedProjects = new Map<string, typeof projectsWithComparison>();
+    for (const project of projectsWithComparison) {
+      const current = project.current;
+      const groupKey = `${current.strategy?.name || '-'}||${current.tactic?.name || '-'}||${current.plan?.name || '-'}`;
+      if (!groupedProjects.has(groupKey)) groupedProjects.set(groupKey, []);
+      groupedProjects.get(groupKey)!.push(project);
+    }
+
+    const pdfBuffers: Buffer[] = [];
+    let pageOffset = 0;
+
+    // สร้างเฉพาะ detail pages (ไม่สร้าง summary และ cover page)
+    for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
+      const [strategyName, tacticName, planName] = groupKey.split('||');
+      
+      const detailDoc = createRevisionEditGroupDetailDocDefinitionUser({
         developmentPlanRevisionName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
         pageMargins, pageOrientation, newWord: this.newWord.bind(this),
         reportType: 'inAuthority', strategyName, tacticName, planName, pageOffset,
@@ -1790,7 +1996,7 @@ export class PdfService {
       .andWhere('status.name = :statusName', { statusName: 'Approved' })
       .getMany();
 
-    if (revisedProjects.length === 0) throw new Error('No projects found with status Approved');
+    if (revisedProjects.length === 0) throw new BadRequestException('ไม่พบโครงการที่มีสถานะอนุมัติ');
 
     const projectsWithComparison = await Promise.all(
       revisedProjects.map(async (current) => this.findProjectComparisonForRevisionEdit(current, developmentPlanId))

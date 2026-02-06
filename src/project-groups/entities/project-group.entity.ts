@@ -1,6 +1,7 @@
 import { Budget } from 'src/budget/entities/budget.entity';
 import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
+import { AttachmentProjectGroup } from 'src/attachment-project-groups/entities/attachment-project-group.entity';
 import {
   Column,
   CreateDateColumn,
@@ -37,13 +38,13 @@ export class ProjectGroup {
 
   @Column('decimal', { precision: 10, scale: 7, nullable: true })
   startLat: number | null;
-  
+
   @Column('decimal', { precision: 10, scale: 7, nullable: true })
   startLng: number | null;
-  
+
   @Column('decimal', { precision: 10, scale: 7, nullable: true })
   endLat: number | null;
-  
+
   @Column('decimal', { precision: 10, scale: 7, nullable: true })
   endLng: number | null;
 
@@ -96,6 +97,9 @@ export class ProjectGroup {
   @ManyToOne(
     () => WorkHistory,
     (workHistory) => workHistory.creatorProjectGroup,
+    {
+      onDelete: 'CASCADE',
+    }
   )
   @JoinColumn({ name: 'create_by' })
   createdBy?: WorkHistory;
@@ -148,7 +152,7 @@ export class ProjectGroup {
     {
       onUpdate: 'CASCADE',
       onDelete: 'CASCADE',
-    }, 
+    },
   )
   @JoinColumn({ name: 'responsible_agency_id' })
   responsibleAgency: GovernmentAgency;
@@ -176,4 +180,13 @@ export class ProjectGroup {
     onDelete: 'CASCADE',
   })
   revisedProjectGroups: RevisedProjectGroup[];
+
+  @OneToMany(
+    () => AttachmentProjectGroup,
+    (attachment) => attachment.projectGroup, {
+    onUpdate: 'CASCADE',
+    onDelete: 'CASCADE',
+  }
+  )
+  attachments: AttachmentProjectGroup[];
 }

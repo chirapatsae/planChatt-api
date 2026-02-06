@@ -4,9 +4,10 @@ import {
   Logger,
   BadRequestException,
   UnauthorizedException,
+  HttpException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, Not } from 'typeorm';
 import { CreateDevelopmentPlanRevisionDto } from './dto/create-development-plan-revision.dto';
 import { UpdateDevelopmentPlanRevisionDto } from './dto/update-development-plan-revision.dto';
 import { DevelopmentPlanRevision } from './entities/development-plan-revision.entity';
@@ -306,19 +307,48 @@ export class DevelopmentPlanRevisionService {
         throw new UnauthorizedException('Citizen ID suffix does not match');
       }
 
-      const revision = await this.revisionRepository.findOne({ where: { id } });
+      const revision = await this.revisionRepository.findOne({
+        where: { id },
+        relations: ['developmentPlan', 'revisionType'],
+      });
       if (!revision) {
         throw new NotFoundException(
           `DevelopmentPlanRevision with ID ${id} not found`,
         );
       }
 
-      const result = await this.revisionRepository.softDelete(id);
-      if (result.affected === 0) {
-        throw new NotFoundException(
-          `DevelopmentPlanRevision with ID ${id} not found`,
-        );
+      // ถ้าที่ลบเป็น isLatest ให้ตั้งอันก่อนหน้า (จัดกลุ่ม revisionType เดียวกัน เรียงตามวันที่ เอาอันที่ล่าสุด) เป็น isLatest
+      // ถ้าไม่ใช่ isLatest ไม่ต้อง set อะไร
+      if (revision.isLatest) {
+        const previousRevision = await this.revisionRepository.findOne({
+          where: {
+            id: Not(id),
+            developmentPlan: { id: revision.developmentPlan.id },
+            revisionType: { id: revision.revisionType.id },
+          },
+          order: { createdAt: 'DESC' },
+        });
+        if (previousRevision) {
+          await this.revisionRepository.update(
+            { id: previousRevision.id },
+            { isLatest: true },
+          );
+        }
+        revision.isLatest = false;
       }
+
+      // Set deletedBy (ผู้ลบ)
+      const workHistory = await this.workHistoryRepository.findOne({
+        where: { user: { id: userId }, workStatus: { name: 'approved' } },
+      });
+      if (workHistory) {
+        revision.deletedBy = workHistory;
+      }
+
+      await this.revisionRepository.save(revision);
+      await this.revisionRepository.softRemove(revision);
+
+      this.logger.log(`Development plan revision ${id} soft-deleted by user ${userId}`);
       return {
         message: `DevelopmentPlanRevision with ID ${id} has been soft-removed.`,
       };
@@ -530,6 +560,28 @@ export class DevelopmentPlanRevisionService {
 
       return saved;
     } catch (error) {
+      // Send error notification via websocket before throwing
+      try {
+        let errorMessage = 'เกิดข้อผิดพลาดในการสร้างเล่ม PDF';
+        if (error instanceof HttpException) {
+          const response = error.getResponse();
+          errorMessage = typeof response === 'string' ? response : (response as any)?.message || errorMessage;
+        } else if (error instanceof Error) {
+          errorMessage = error.message || errorMessage;
+        }
+        
+        await this.websocketService.notifyPdfGenerationProgress({
+          userId,
+          developmentPlanId: developmentPlanRevisionId,
+          progress: {
+            percentage: 0,
+            stage: 'error',
+            message: errorMessage,
+          },
+        });
+      } catch (wsError) {
+        this.logger.error('Failed to send error notification via websocket', wsError);
+      }
       handleException(this.logger, error);
     }
   }

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, Logger, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CreateFavoriteDto } from './dto/create-favorite.dto';
@@ -16,23 +16,47 @@ export class FavoriteService {
   async create(createFavoriteDto: CreateFavoriteDto, userId: string): Promise<Favorite> {
     try {
       // Check if favorite already exists
-      const existingFavorite = await this.favoriteRepo.findOne({
-        where: {
-          projectGroupId: { id: createFavoriteDto.projectGroupId },
+      let existingFavorite: Favorite | null;
+      
+      if (createFavoriteDto.projectType === 'original') {
+        existingFavorite = await this.favoriteRepo.findOne({
+          where: {
+            projectGroupId: { id: createFavoriteDto.projectId },
+            userId: { id: userId },
+          },
+        });
+
+        if (existingFavorite) {
+          throw new ConflictException('Favorite already exists for this project');
+        }
+
+        const favorite = this.favoriteRepo.create({
+          projectGroupId: { id: createFavoriteDto.projectId },
           userId: { id: userId },
-        },
-      });
-
-      if (existingFavorite) {
-        throw new ConflictException('This project is already in favorites');
+        });
+        return await this.favoriteRepo.save(favorite);
       }
+      else if (createFavoriteDto.projectType === 'revised') {
+        existingFavorite = await this.favoriteRepo.findOne({
+          where: {
+            revisionProjectGroupId: { id: createFavoriteDto.projectId },
+            userId: { id: userId },
+          },
+        });
 
-      const favorite = this.favoriteRepo.create({
-        projectGroupId: { id: createFavoriteDto.projectGroupId },
-        userId: { id: userId },
-      });
+        if (existingFavorite) {
+          throw new ConflictException('Favorite already exists for this project');
+        }
 
-      return await this.favoriteRepo.save(favorite);
+        const favorite = this.favoriteRepo.create({
+          revisionProjectGroupId: { id: createFavoriteDto.projectId },
+          userId: { id: userId },
+        });
+        return await this.favoriteRepo.save(favorite);
+      }
+      else {
+        throw new BadRequestException('Invalid project type');
+      }
     } catch (error) {
       this.logger.error(`Error creating favorite: ${error.message}`, error.stack);
       throw error;
@@ -44,7 +68,7 @@ export class FavoriteService {
     try {
       return await this.favoriteRepo.find({
         where: { userId: { id: userId } },
-        relations: ['projectGroupId', 'userId'],
+        relations: ['projectGroupId', 'revisionProjectGroupId', 'userId'],
         order: { id: 'DESC' },
       });
     } catch (error) {
@@ -55,17 +79,17 @@ export class FavoriteService {
 
 
 
-  async removeByUserAndProject(userId: string, projectGroupId: string): Promise<void> {
+  async remove(id: string, userId: string): Promise<void> {
     try {
       const favorite = await this.favoriteRepo.findOne({
         where: {
-          projectGroupId: { id: projectGroupId },
+          id,
           userId: { id: userId },
         },
       });
       
       if (!favorite) {
-        throw new NotFoundException('Favorite not found for this user and project');
+        throw new NotFoundException('Favorite not found');
       }
       
       await this.favoriteRepo.remove(favorite);

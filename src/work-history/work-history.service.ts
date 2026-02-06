@@ -178,7 +178,7 @@ export class WorkHistoryService {
   async findPendingWorkHistory(): Promise<number> {
     try {
       const count = await this.workHistoryRepository.count({
-        where: { workStatus: { name: 'pending' } },
+        where: { workStatus: { name: 'pending' }  , isCurrent: true },
       });
       return count || 0;
     } catch (error) {

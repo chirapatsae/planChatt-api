@@ -92,6 +92,10 @@ import { SupplementProjectGroup } from './supplement-project-group/entities/supp
 import { ExecutiveModule } from './executive/executive.module';
 import { PlanPhaseModule } from './plan-phase/plan-phase.module';
 import { PlanPhase } from './plan-phase/entities/plan-phase.entity';
+import { AttachmentProjectGroupsModule } from './attachment-project-groups/attachment-project-groups.module';
+import { AttachmentProjectGroup } from './attachment-project-groups/entities/attachment-project-group.entity';
+import { AttachmentRevisedProjectGroupsModule } from './attachment-revised-project-groups/attachment-revised-project-groups.module';
+import { AttachmentRevisedProjectGroup } from './attachment-revised-project-groups/entities/attachment-revised-project-group.entity';
 
 @Module({
   imports: [
@@ -157,6 +161,8 @@ import { PlanPhase } from './plan-phase/entities/plan-phase.entity';
         DevelopmentPlanSupplement,
         SupplementProjectGroup,
         PlanPhase,
+        AttachmentProjectGroup,
+        AttachmentRevisedProjectGroup,
       ],
       synchronize: true,
       extra: {
@@ -207,6 +213,8 @@ import { PlanPhase } from './plan-phase/entities/plan-phase.entity';
     SupplementProjectGroupModule,
     ExecutiveModule,
     PlanPhaseModule,
+    AttachmentProjectGroupsModule,
+    AttachmentRevisedProjectGroupsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

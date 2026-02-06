@@ -11,9 +11,9 @@ import * as dotenv from 'dotenv';
 // Load environment variables at module level
 dotenv.config();
 
-const algorithm = process.env.ALGORITHM || 'aes-256-cbc';
-const secretKey = process.env.SECRET_KEY || 'mt+U7ek9bey+dxPBxMgqW2T+x+7e8esrCvL+PIu/1l4AGvw0PYuBHjB2SFJCWECx';
-const salt = process.env.SALT || 'Tok8kiF8idki';
+const algorithm = process.env.ALGORITHM || ''
+const secretKey = process.env.SECRET_KEY || ''
+const salt = process.env.SALT || ''
 
 // Validate that required environment variables are set
 if (!secretKey) {
