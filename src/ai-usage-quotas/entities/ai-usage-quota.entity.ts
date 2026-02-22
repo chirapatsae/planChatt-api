@@ -5,22 +5,25 @@ import { Column, CreateDateColumn, Entity, OneToOne, PrimaryGeneratedColumn, Upd
 @Entity('ai_usage_quotas')
 export class AiUsageQuota {
     @PrimaryGeneratedColumn('uuid')
-    id : string;
+    id: string;
 
-    @Column({name : 'period_start'})
-    periodStart : Date;
+    @Column({ name: 'period_start' })
+    periodStart: Date;
 
-    @Column({name : 'period_end'})
-    periodEnd : Date;
+    @Column({ name: 'period_end' })
+    periodEnd: Date;
 
-    @Column({name : 'quota_limit'})
-    quotaLimit : number;
+    @Column({ name: 'quota_limit', type: 'decimal', precision: 12, scale: 4, default: 0 })
+    quotaLimit: number;
 
-    @Column({name : 'quota_used', default: 0})
-    quotaUsed : number;
+    @Column({ name: 'quota_used', type: 'decimal', precision: 12, scale: 4, default: 0 })
+    quotaUsed: number;
 
-    @Column({name : 'remaining_quota', default: 0})
-    remainingQuota : number;
+    @Column({ name: 'remaining_quota', type: 'decimal', precision: 12, scale: 4, default: 0 })
+    remainingQuota: number;
+
+    @Column({ name: 'is_auto_renew', default: true })
+    isAutoRenew: boolean;
 
     @CreateDateColumn({ name: 'created_at' })
     createdAt: Date;
@@ -33,8 +36,8 @@ export class AiUsageQuota {
 
     @OneToOne(() => User, (user) => user.aiUsageQuota)
     @JoinColumn({ name: 'user_id' })
-    user : User;
+    user: User;
 
-    @OneToMany(() => AiUsageLog , (aiUsageLog) => aiUsageLog.aiUsageQuota)
-    aiUsageLogs : AiUsageLog[]
+    @OneToMany(() => AiUsageLog, (aiUsageLog) => aiUsageLog.aiUsageQuota)
+    aiUsageLogs: AiUsageLog[]
 }

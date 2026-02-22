@@ -9,7 +9,14 @@ import {
   ParseUUIDPipe,
   UseGuards,
   Query,
+  UseInterceptors,
+  UploadedFile,
+  ParseFilePipe,
+  MaxFileSizeValidator,
+  FileTypeValidator,
+  BadRequestException,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -21,7 +28,7 @@ import { JwtAuthGuard } from 'src/auth/auth.guard';
 })
 // @UseGuards(JwtAuthGuard)
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(private readonly usersService: UsersService) { }
 
   @Post()
   create(@Body() createUserDto: CreateUserDto) {
@@ -59,5 +66,28 @@ export class UsersController {
   @Patch(':id/restore')
   restore(@Param('id', ParseUUIDPipe) id: string) {
     return this.usersService.restore(id);
+  }
+
+  @Patch(':id/profile-image')
+  @UseInterceptors(FileInterceptor('image'))
+  async uploadProfileImage(
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }), // 5MB limit
+          new FileTypeValidator({ fileType: /(jpg|jpeg|png|webp)$/ }), // Format validation
+        ],
+        exceptionFactory: (errors) => {
+          return new BadRequestException('Validation failed. Make sure it is an image (jpg/jpeg/png/webp) and under 5MB.');
+        },
+      }),
+    )
+    file: Express.Multer.File,
+  ) {
+    if (!file) {
+      throw new BadRequestException('Image file is required');
+    }
+    return this.usersService.uploadProfileImage(id, file);
   }
 }

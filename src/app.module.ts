@@ -219,4 +219,4 @@ import { AttachmentRevisedProjectGroup } from './attachment-revised-project-grou
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule {}
+export class AppModule { }

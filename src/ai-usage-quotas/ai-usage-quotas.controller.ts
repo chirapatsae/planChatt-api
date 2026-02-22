@@ -11,6 +11,7 @@ import {
   ParseUUIDPipe,
   Query,
   Req,
+  ForbiddenException,
 } from '@nestjs/common';
 import { CreateAiUsageQuotaDto } from './dto/create-ai-usage-quota.dto';
 import { UpdateAiUsageQuotaDto } from './dto/update-ai-usage-quota.dto';
@@ -26,7 +27,7 @@ import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 export class AiUsageQuotasController {
   private readonly logger = new Logger(AiUsageQuotasController.name);
 
-  constructor(private readonly aiUsageQuotasService: AiUsageQuotasService) {}
+  constructor(private readonly aiUsageQuotasService: AiUsageQuotasService) { }
 
   @Post()
   create(
@@ -51,7 +52,7 @@ export class AiUsageQuotasController {
 
   @Patch(':id')
   update(
-    @Param('id', ParseUUIDPipe) id: string, 
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateAiUsageQuotaDto
   ) {
     this.logger.log(`Request to update AI usage quota with ID: ${id}`);
@@ -83,5 +84,34 @@ export class AiUsageQuotasController {
   restore(@Param('id', ParseUUIDPipe) id: string) {
     this.logger.log(`Request to restore AI usage quota with ID: ${id}`);
     return this.aiUsageQuotasService.restore(id);
+  }
+
+  @Patch(':userId/toggle-auto-renew')
+  toggleAutoRenew(
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    if (req.user.role !== 'super-admin') {
+      throw new ForbiddenException(
+        'Only super-admin can toggle auto-renew settings.',
+      );
+    }
+    this.logger.log(
+      `Request by ${req.user.userId} to toggle auto-renew for target user: ${userId}`,
+    );
+    return this.aiUsageQuotasService.toggleAutoRenew(userId);
+  }
+
+  @Post('backfill')
+  backfill(@Req() req: Request & { user: JwtPayloadUser }) {
+    if (req.user.role !== 'admin') {
+      throw new ForbiddenException(
+        'Only admin can backfill quotas.',
+      );
+    }
+    this.logger.log(
+      `Request by ${req.user.userId} to backfill quotas.`,
+    );
+    return this.aiUsageQuotasService.backfillQuotas();
   }
 }

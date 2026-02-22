@@ -7,7 +7,7 @@ import { User } from 'src/users/entities/user.entity';
 import { PassportModule } from '@nestjs/passport';
 import { JwtStrategy } from './jwt.strategy';
 import { JwtModule } from '@nestjs/jwt';
-import { UsersService } from 'src/users/users.service';
+import { UsersModule } from 'src/users/users.module';
 
 @Module({
   imports: [
@@ -17,8 +17,9 @@ import { UsersService } from 'src/users/users.service';
       signOptions: { expiresIn: '1d' },
     }),
     TypeOrmModule.forFeature([WorkHistory, User]),
+    UsersModule,
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, UsersService],
+  providers: [AuthService, JwtStrategy],
 })
-export class AuthModule {}
+export class AuthModule { }

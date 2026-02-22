@@ -1551,6 +1551,96 @@ export class ProjectGroupsService {
   }
 
   /**
+ * หาโครงการล่าสุดทั้งหมด (ไม่กรองสถานะ)
+ * ถ้าโครงการมีลูก → เอาลูกล่าสุดมา
+ * ถ้าโครงการไม่มีลูก → เอาแม่มา
+ */
+  async findLatestProjects(option: {
+    userId: string;
+    countOnly?: boolean;
+    developmentPlanId?: string;
+    status?: string;
+  }): Promise<IUnifiedProjectDisplay[] | number> {
+    const { userId, countOnly, developmentPlanId, status } = option;
+
+    // Validate user permissions
+    const workHistory = await this.workHistoryRepo.findOne({
+      where: { user: { id: userId } },
+      relations: ['workStatus', 'role', 'localAdministrativeOrganization', 'governmentAgencies'],
+    });
+
+    if (!workHistory) return countOnly ? 0 : [];
+    if (workHistory.workStatus.name !== 'approved')
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+
+    const allowedRoles = ['user', 'staff', 'admin', 'super-admin', 'c-level'];
+    if (!allowedRoles.includes(workHistory.role.name))
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+
+    // Validate development plan
+    if (!developmentPlanId) {
+      throw new BadRequestException('Development plan ID is required');
+    }
+
+    const developmentPlan = await this.developmentPlanRepo.findOne({
+      where: { id: developmentPlanId },
+    });
+    if (!developmentPlan)
+      throw new NotFoundException('Development plan not found');
+
+    // ดึง revision ล่าสุดของแต่ละ ProjectGroup
+    let latestRevised = await this.findLatestRevisedProjectsAllStatus(developmentPlanId);
+
+    // ดึง original ที่ไม่เคยถูก revise
+    let original = await this.findOriginalWithoutRevisionAllStatus(developmentPlanId);
+
+    // จำกัดการมองเห็นตามบทบาท
+    if (workHistory.role.name === 'user') {
+      const laoId = workHistory.localAdministrativeOrganization?.id;
+
+      if (!laoId) {
+        throw new UnauthorizedException('ไม่พบหน่วยงานของผู้ใช้');
+      }
+
+      if (laoId === '3001027') {
+        const agencyId = workHistory.governmentAgencies?.id;
+        if (!agencyId) {
+          throw new UnauthorizedException('ไม่พบหน่วยงานของผู้ใช้');
+        }
+
+        const filterByAgency = (project: { id?: string; responsibleAgency?: { id?: string } | null }) => {
+          const projectAgencyId = project.responsibleAgency?.id;
+          // Convert both to string for comparison to handle type mismatches
+          const projectAgencyIdStr = String(projectAgencyId);
+          const agencyIdStr = String(agencyId);
+          const matches = projectAgencyIdStr === agencyIdStr;
+          return matches;
+        };
+
+        latestRevised = latestRevised.filter(filterByAgency);
+        original = original.filter(filterByAgency);
+
+      } else {
+        latestRevised = [];
+        original = [];
+      }
+    }
+
+    if (countOnly) return latestRevised.length + original.length;
+
+    const unified = [
+      ...latestRevised.map((x) =>
+        UnifiedProjectMapper.fromRevisedProjectGroup(x)
+      ),
+      ...original.map((x) =>
+        UnifiedProjectMapper.fromProjectGroup(x)
+      ),
+    ];
+
+    return unified;
+  }
+
+  /**
    * หาโครงการล่าสุดทั้งหมด (ไม่กรองสถานะ)
    * ถ้าโครงการมีลูก → เอาลูกล่าสุดมา
    * ถ้าโครงการไม่มีลูก → เอาแม่มา
@@ -1587,6 +1677,7 @@ export class ProjectGroupsService {
     });
     if (!developmentPlan)
       throw new NotFoundException('Development plan not found');
+
     // ดึง revision ล่าสุดของแต่ละ ProjectGroup
     let latestRevised = await this.findLatestRevisedProjects(developmentPlanId);
 
@@ -1607,43 +1698,18 @@ export class ProjectGroupsService {
           throw new UnauthorizedException('ไม่พบหน่วยงานของผู้ใช้');
         }
 
-        // Debug: Log before filtering
-        this.logger.debug(`Filtering projects by agencyId: ${agencyId}`);
-        this.logger.debug(`WorkHistory governmentAgencies: ${JSON.stringify(workHistory.governmentAgencies)}`);
-        this.logger.debug(`Before filter - latestRevised: ${latestRevised.length}, original: ${original.length}`);
-
-        // Debug: Log all projects before filtering
-        this.logger.debug('=== LatestRevised Projects ===');
-        latestRevised.forEach((project, index) => {
-          this.logger.debug(`Project ${index + 1}: id=${project.id}, responsibleAgency=${JSON.stringify(project.responsibleAgency)}`);
-        });
-        this.logger.debug('=== Original Projects ===');
-        original.forEach((project, index) => {
-          this.logger.debug(`Project ${index + 1}: id=${project.id}, responsibleAgency=${JSON.stringify(project.responsibleAgency)}`);
-        });
-
         const filterByAgency = (project: { id?: string; responsibleAgency?: { id?: string } | null }) => {
           const projectAgencyId = project.responsibleAgency?.id;
           // Convert both to string for comparison to handle type mismatches
           const projectAgencyIdStr = String(projectAgencyId);
           const agencyIdStr = String(agencyId);
           const matches = projectAgencyIdStr === agencyIdStr;
-
-          // Debug: Log projects that don't match with full details
-          if (!matches && projectAgencyId) {
-            this.logger.debug(`Project agency mismatch - Project ID: ${project.id}, expected: ${agencyId} (type: ${typeof agencyId}), got: ${projectAgencyId} (type: ${typeof projectAgencyId}), responsibleAgency: ${JSON.stringify(project.responsibleAgency)}`);
-          } else if (!matches && !projectAgencyId) {
-            this.logger.debug(`Project has no responsibleAgency - Project ID: ${project.id}, responsibleAgency: ${JSON.stringify(project.responsibleAgency)}`);
-          }
-
           return matches;
         };
 
         latestRevised = latestRevised.filter(filterByAgency);
         original = original.filter(filterByAgency);
 
-        // Debug: Log after filtering
-        this.logger.debug(`After filter - latestRevised: ${latestRevised.length}, original: ${original.length}`);
       } else {
         latestRevised = [];
         original = [];
@@ -1967,6 +2033,69 @@ export class ProjectGroupsService {
 
     return projects;
   }
+  private async findLatestRevisedProjectsAllStatus(
+    developmentPlanId: string,
+    status?: string,
+    isBooked?: boolean,
+  ): Promise<RevisedProjectGroup[]> {
+    // subquery เลือก revision ล่าสุดของแต่ละ projectGroup
+    // 1. SubQuery: หา revisionNumber สูงสุด ของแต่ละ Project Group ID ภายใต้แผนนี้
+    const maxRevisionSubQuery = this.revisedProjectGroupRepo
+      .createQueryBuilder('rp_sub')
+      .select('rp_sub.project_group_id', 'projectGroupId')
+      .addSelect('MAX(dpr_sub.revisionNumber)', 'maxRevision')
+      .leftJoin('rp_sub.developmentPlanRevision', 'dpr_sub')
+      .where('rp_sub.development_plan_id = :planId', { planId: developmentPlanId })
+      .groupBy('rp_sub.project_group_id');
+
+    // 2. Main Query
+    const query = this.revisedProjectGroupRepo
+      .createQueryBuilder('revisedProject')
+      .leftJoinAndSelect('revisedProject.developmentPlanRevision', 'developmentPlanRevision')
+      .leftJoinAndSelect('developmentPlanRevision.revisionType', 'revisionType')
+      .leftJoinAndSelect('revisedProject.developmentPlan', 'developmentPlan')
+      .leftJoinAndSelect('revisedProject.projectGroup', 'originalProject')
+      .leftJoinAndSelect('revisedProject.createdBy', 'createdBy')
+      .leftJoinAndSelect('createdBy.user', 'createdByUser')
+      .leftJoinAndSelect('createdBy.amphoe', 'amphoe')
+      .leftJoinAndSelect('createdBy.localAdministrativeOrganization', 'localAdministrativeOrganization')
+      .leftJoinAndSelect('revisedProject.amphoe', 'revisedAmphoe')
+      .leftJoinAndSelect('revisedProject.localAdministrativeOrganization', 'revisedLocalAdministrativeOrganization')
+      .leftJoinAndSelect('revisedProject.strategy', 'strategy')
+      .leftJoinAndSelect('revisedProject.tactic', 'tactic')
+      .leftJoinAndSelect('revisedProject.plan', 'plan')
+      .leftJoinAndSelect('revisedProject.budgets', 'budgets')
+      .leftJoinAndSelect('revisedProject.trackingStatus', 'trackingStatus')
+      .leftJoinAndSelect('trackingStatus.statusId', 'status')
+      .leftJoinAndSelect('trackingStatus.comments', 'comments')
+      .leftJoinAndSelect('trackingStatus.createdBy', 'workHistory')
+      .leftJoinAndSelect('workHistory.user', 'user')
+      .leftJoinAndSelect('workHistory.localAdministrativeOrganization', 'localAdministrativeOrganizationWorkHistory')
+      .leftJoinAndSelect('workHistory.governmentAgencies', 'governmentAgencies')
+      .leftJoinAndSelect('workHistory.workStatus', 'workStatus')
+      .leftJoinAndSelect('revisedProject.responsibleAgency', 'responsibleAgency')
+      .leftJoinAndSelect('revisedProject.originAgencyId', 'originAgencyId')
+      .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
+      .leftJoinAndSelect('revisedProject.favorites', 'favorites')
+      .leftJoinAndSelect('favorites.userId', 'userId')
+
+      // ** KEY LOGIC: Inner Join กับ SubQuery เพื่อกรองเอาเฉพาะตัวล่าสุด **
+      .innerJoin(
+        '(' + maxRevisionSubQuery.getQuery() + ')',
+        'max_rev_table',
+        '"revisedProject"."project_group_id" = max_rev_table."projectGroupId" AND "developmentPlanRevision"."revision_number" = max_rev_table."maxRevision"'
+      )
+      .setParameters(maxRevisionSubQuery.getParameters())
+
+      .andWhere('revisedProject.development_plan_id = :developmentPlanId', { developmentPlanId })
+      .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true });
+
+    if (status) {
+      query.andWhere('status.name = :statusName', { statusName: status });
+    }
+
+    return await query.getMany();
+  }
 
   private async findLatestRevisedProjects(
     developmentPlanId: string,
@@ -2032,7 +2161,38 @@ export class ProjectGroupsService {
     return await query.getMany();
   }
 
+  private async findOriginalWithoutRevisionAllStatus(
+    developmentPlanId: string,
+    status?: string,
+    isBooked?: boolean,
+  ): Promise<ProjectGroup[]> {
+    const queryBuilder = this.projectGroupRepo
+      .createQueryBuilder('pg')
+      .leftJoin(RevisedProjectGroup, 'rp', 'rp.project_group_id = pg.id')
+      .leftJoin(DevelopmentPlanRevision, 'rev', 'rev.id = rp.development_plan_revision_id')
+      .leftJoinAndSelect('pg.strategy', 'strategy')
+      .leftJoinAndSelect('pg.tactic', 'tactic')
+      .leftJoinAndSelect('pg.plan', 'plan')
+      .leftJoinAndSelect('pg.developmentPlan', 'developmentPlan')
+      .leftJoinAndSelect('pg.createdBy', 'createdBy')
+      .leftJoinAndSelect('pg.originAgencyId', 'originAgencyId')
+      .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
+      .leftJoinAndSelect('pg.responsibleAgency', 'responsibleAgency')
+      .leftJoinAndSelect('pg.amphoe', 'amphoe')
+      .leftJoinAndSelect('pg.localAdministrativeOrganization', 'localAdministrativeOrganization')
+      .leftJoinAndSelect('pg.budgets', 'budgets')
+      .leftJoinAndSelect('pg.favorites', 'favorites')
+      .leftJoinAndSelect('pg.trackingStatus', 'trackingStatus')
+      .leftJoinAndSelect('trackingStatus.statusId', 'status')
+      .where('pg.development_plan_id = :developmentPlanId', { developmentPlanId })
+      .andWhere('rev.id IS NULL')   // ไม่มี revision
+      .andWhere('pg.isDraft = false')
+      .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+      .andWhere('status.name <> :statusName', { statusName: 'Ready' })
+    // .andWhere('pg.isBooked = :isBooked', { isBooked: true });
 
+    return await queryBuilder.getMany();
+  }
   private async findOriginalWithoutRevision(
     developmentPlanId: string,
     status?: string,
@@ -4328,6 +4488,7 @@ export class ProjectGroupsService {
           'originAgencyId',
           'localAdministrativeOrganization',
           'attachments',
+          'amphoe'
         ],
       });
 

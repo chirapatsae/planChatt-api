@@ -64,4 +64,7 @@ export class Amphoe {
     },
   )
   projectGroups: ProjectGroup[];
+
+  laoCount?: number;
+  projectCount?: number;
 }

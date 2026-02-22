@@ -41,5 +41,7 @@ export class GovernmentAgency {
       onUpdate: 'CASCADE',
     },
   )
-  responsibleAgencyProjectGroup: WorkHistory[];
+  responsibleAgencyProjectGroup: ProjectGroup[];
+
+  projectCount?: number;
 }

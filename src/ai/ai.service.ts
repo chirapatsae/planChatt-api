@@ -1,11 +1,13 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, HttpException } from '@nestjs/common';
 import { OpenAI } from 'openai';
+import { AiUsageQuotasService } from 'src/ai-usage-quotas/ai-usage-quotas.service';
 import { RegenerateFieldDto } from './dto/generate-project.dto';
 import { SmartApproveRequestDto } from './dto/smart-approve.dto';
 import {
   SmartApproveEvaluationResponse,
   SmartApprovePrecheckService,
 } from './smart-approve-precheck.service';
+import { calculateAiCost } from './utils/cost-calculator';
 
 @Injectable()
 export class AiService {
@@ -13,6 +15,7 @@ export class AiService {
 
   constructor(
     private readonly precheckService: SmartApprovePrecheckService,
+    private readonly aiUsageQuotasService: AiUsageQuotasService,
   ) {
     this.openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
@@ -23,6 +26,7 @@ export class AiService {
     strategy: string,
     tactic: string,
     plan: string,
+    userId: string, // Add userId
     userPrompt?: string,
   ) {
     const systemPrompt = `คุณเป็นเจ้าหน้าที่วางแผนพัฒนาท้องถิ่นผู้เชี่ยวชาญ มีหน้าที่ให้คำแนะนำและร่างรายละเอียดโครงการโดยใช้ภาษาราชการไทยที่ถูกต้องและสละสลวย ให้รายละเอียดที่ครบถ้วน ชัดเจน และครอบคลุมทุกด้านของโครงการ`;
@@ -62,8 +66,25 @@ export class AiService {
         ],
       });
 
-      return completion.choices[0].message.content;
+      // Calculate and deduct cost
+      if (completion.usage) {
+        const costUsd = calculateAiCost('gpt-4o', completion.usage);
+        await this.aiUsageQuotasService.checkAndLogUsage(userId, costUsd, {
+          usageType: 'PROJECT_GENERATION',
+          inputTokens: completion.usage.prompt_tokens,
+          outputTokens: completion.usage.completion_tokens,
+        });
+      }
+
+      return {
+        content: completion.choices[0].message.content,
+        usage: completion.usage,
+      };
     } catch (error) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      // ...
       console.error('Error calling OpenAI API:', error);
       throw new InternalServerErrorException(
         'เกิดข้อผิดพลาดในการประมวลผลข้อมูลกับ AI',
@@ -71,7 +92,7 @@ export class AiService {
     }
   }
 
-  async regenerateField(dto: RegenerateFieldDto): Promise<string> {
+  async regenerateField(dto: RegenerateFieldDto, userId: string) {
     const {
       strategy,
       tactic,
@@ -134,13 +155,29 @@ export class AiService {
         ],
       });
 
+      // Calculate and deduct cost
+      if (completion.usage) {
+        const costUsd = calculateAiCost('gpt-4o', completion.usage);
+        await this.aiUsageQuotasService.checkAndLogUsage(userId, costUsd, {
+          usageType: 'FIELD_REGENERATION',
+          inputTokens: completion.usage.prompt_tokens,
+          outputTokens: completion.usage.completion_tokens,
+        });
+      }
+
       if (completion.choices[0].message?.content) {
-        return completion.choices[0].message.content.trim();
+        return {
+          content: completion.choices[0].message.content.trim(),
+          usage: completion.usage,
+        };
       }
       throw new InternalServerErrorException(
         'AI response is invalid or incomplete.',
       );
     } catch (error) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
       console.error('Error calling OpenAI API for regeneration:', error);
       throw new InternalServerErrorException(
         'เกิดข้อผิดพลาดในการสร้างข้อมูลใหม่จาก AI',
@@ -150,9 +187,11 @@ export class AiService {
 
   async analyzeProjectForSmartApprove(
     dto: SmartApproveRequestDto,
+    userId: string,
   ): Promise<SmartApproveEvaluationResponse> {
 
-    const precheck = this.precheckService.evaluate(dto);
+
+    const precheck = await this.precheckService.evaluate(dto);
 
     if (!precheck.shouldUseLLM) {
       return precheck.response;
@@ -161,6 +200,7 @@ export class AiService {
     const aiResult = await this.executeLlmSmartApproveAnalysis(
       dto,
       precheck.response,
+      userId,
     );
 
     return this.mergePrecheckAndAi(precheck.response, aiResult);
@@ -169,6 +209,7 @@ export class AiService {
   private async executeLlmSmartApproveAnalysis(
     dto: SmartApproveRequestDto,
     precheck: SmartApproveEvaluationResponse,
+    userId: string,
   ): Promise<SmartApproveEvaluationResponse> {
     const {
       strategyName,
@@ -232,12 +273,12 @@ ${JSON.stringify(precheck, null, 2)}`;
 - ให้สถานะ "ผ่าน" หากข้อมูลเพียงพอ สอดคล้องและชัดเจน, "ควรปรับปรุง" หากข้อมูลไม่เพียงพอ ไม่ชัดเจน หรือต้องปรับแก้, "ไม่ผ่าน" หากไม่สอดคล้องอย่างชัดเจนหรือไม่สื่อความหมาย
 
 **2. หมวด "งบประมาณ" (budget):**
-- ตรวจสอบความสอดคล้องของงบประมาณกับกิจกรรมโครงการ
-- พิจารณาว่างบประมาณเพียงพอสำหรับการดำเนินโครงการหรือไม่ (เช่น สร้างถนน 5 บาท ไม่พอ)
-- ประเมินความเหมาะสมของงบประมาณรายปี
-- ประเมินรายละเอียดเกี่ยวกับการใช้จ่ายงบประมาณในแต่ละกิจกรรม (เช่น การจัดสรรงบประมาณให้แต่ละกิจกรรมมีความชัดเจนและเหมาะสมหรือไม่)
-- ประเมินว่าข้อมูลงบประมาณเพียงพอหรือไม่เพียงพอ ไม่สื่อความหมายหรือไม่
-- ให้สถานะ "ผ่าน" หากข้อมูลเพียงพอและสมเหตุสมผล, "ควรปรับปรุง" หากข้อมูลไม่เพียงพอ ไม่สมเหตุสมผล หรือต้องปรับแก้, "ไม่ผ่าน" หากไม่สมเหตุสมผลอย่างชัดเจน
+- ตรวจสอบความเหมาะสม ความสอดคล้อง และความเพียงพอของงบประมาณเมื่อเทียบกับกิจกรรมของโครงการ
+- เน้นพิจารณาที่ "ความสมเหตุสมผลของยอดงบประมาณรวม" ว่าเพียงพอต่อการดำเนินโครงการให้สำเร็จหรือไม่
+- หากงบประมาณไม่สอดคล้อง (เช่น น้อยเกินไปจนไม่สามารถทำจริงได้ หรือมากเกินความจำเป็น) ให้ระบุเหตุผลความไม่สอดคล้องนั้น เช่น "งบประมาณน้อยกว่าเกณฑ์เฉลี่ยของกิจกรรมนี้" หรือ "ไม่สอดคล้องกับขอบเขตงาน"
+- **ห้าม** แนะนำให้ "ระบุรายละเอียดการใช้จ่ายงบประมาณในแต่ละกิจกรรม" หรือ "แจกแจงงบย่อย" หากยอดงบประมาณรวมดูสมเหตุสมผลและเป็นไปได้แล้ว
+- ให้สถานะ "ผ่าน" หากประเมินแล้วว่างบประมาณมีความสมเหตุสมผลและเพียงพอต่อการดำเนินงาน
+- ให้สถานะ "ควรปรับปรุง" หรือ "ไม่ผ่าน" เฉพาะกรณีที่ตัวเลขงบประมาณดูผิดปกติ ไม่สมจริง หรือไม่สัมพันธ์กับกิจกรรมอย่างชัดเจนเท่านั้น
 
 **3. หมวด "ตัวชี้วัดและผลที่คาดว่าจะได้รับ" (indicators):**
 - ตรวจสอบว่าตัวชี้วัดและผลที่คาดว่าจะได้รับสอดคล้องกับเป้าหมายและวัตถุประสงค์ของโครงการหรือไม่
@@ -400,8 +441,22 @@ ${instructions}`.trim();
         );
       }
 
+      // Calculate and Log Usage
+      if (completion.usage) {
+        const costUsd = calculateAiCost('gpt-4o', completion.usage);
+        await this.aiUsageQuotasService.checkAndLogUsage(userId, costUsd, {
+          usageType: 'SMART_APPROVE_ANALYSIS',
+          inputTokens: completion.usage.prompt_tokens,
+          outputTokens: completion.usage.completion_tokens,
+        });
+      }
+
       return JSON.parse(content);
     } catch (error) {
+      // If it is an HttpException (like Quota exceeded), rethrow it
+      if (error instanceof HttpException) {
+        throw error;
+      }
       console.error('Error calling OpenAI API for smart approve:', error);
       throw new InternalServerErrorException(
         'เกิดข้อผิดพลาดในการวิเคราะห์โครงการด้วย AI',

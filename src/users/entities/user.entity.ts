@@ -1,4 +1,4 @@
-import { Exclude } from 'class-transformer';
+import { Exclude, Transform } from 'class-transformer';
 import { AiUsageQuota } from 'src/ai-usage-quotas/entities/ai-usage-quota.entity';
 import { Favorite } from 'src/favorite/entities/favorite.entity';
 import { Position } from 'src/positions/entities/position.entity';
@@ -42,6 +42,17 @@ export class User {
   @Column({ nullable: true, unique: true })
   phone?: string;
 
+  @Column({ name: 'profile_image_url', nullable: true })
+  @Transform(({ value }) => {
+    if (!value) return null;
+
+    const appUrl = process.env.APP_URL;
+
+    // ถ้า value เป็นแค่ชื่อไฟล์ เช่น profile-123.jpg
+    return `${appUrl}${value}`;
+  })
+  profileImageUrl?: string;
+
   @Column({ name: 'is_first_login', default: true })
   isFirstLogin: boolean;
 
@@ -51,6 +62,15 @@ export class User {
 
   @Column({ default: () => 'CURRENT_TIMESTAMP', name: 'create_at' })
   createAt: Date;
+
+  @Column({ name: 'allow_email_notification', default: true })
+  allowEmailNotification: boolean;
+
+  @Column({ name: 'allow_line_notification', default: true })
+  allowLineNotification: boolean;
+
+  @Column({ name: 'line_id', nullable: true })
+  lineId?: string;
 
   @OneToMany(() => WorkHistory, (workHistory) => workHistory.user, {
     onDelete: 'CASCADE',
@@ -83,7 +103,6 @@ export class User {
   userActivityLogs: UserActivityLog[];
 
   @OneToOne(() => AiUsageQuota, (aiUsageQuota) => aiUsageQuota.user)
-  @JoinColumn({ name: 'ai_usage_quota_id' })
   aiUsageQuota?: AiUsageQuota;
 
   @OneToMany(() => UserNotification, (userNotification) => userNotification.user, {

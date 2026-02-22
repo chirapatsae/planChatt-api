@@ -1,8 +1,10 @@
 import {
+  IsBoolean,
   IsEmail,
   IsNotEmpty,
   IsOptional,
   IsPhoneNumber,
+  IsString,
   IsUUID,
   Matches,
 } from 'class-validator';
@@ -35,4 +37,16 @@ export class CreateUserDto {
 
   @IsOptional()
   isFirstLogin?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  allowEmailNotification?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  allowLineNotification?: boolean;
+
+  @IsOptional()
+  @IsString()
+  lineId?: string;
 }

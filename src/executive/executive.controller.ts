@@ -1,11 +1,22 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Req, UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from 'src/auth/auth.guard';
+import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 import { ExecutiveService } from './executive.service';
 import { CreateExecutiveDto } from './dto/create-executive.dto';
 import { UpdateExecutiveDto } from './dto/update-executive.dto';
 
-@Controller('executive')
+@Controller({
+  path: 'executive',
+  version: '1',
+})
+@UseGuards(JwtAuthGuard)
 export class ExecutiveController {
-  constructor(private readonly executiveService: ExecutiveService) {}
+  constructor(private readonly executiveService: ExecutiveService) { }
+
+  @Get('team-dashboard')
+  getTeamDashboard(@Req() req: Request & { user: JwtPayloadUser }) {
+    return this.executiveService.getTeamDashboard(req.user.userId);
+  }
 
   @Post()
   create(@Body() createExecutiveDto: CreateExecutiveDto) {

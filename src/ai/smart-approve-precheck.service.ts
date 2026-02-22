@@ -36,15 +36,15 @@ export class SmartApprovePrecheckService {
   constructor(
     private readonly referenceService: SmartApproveReferenceService,
     private readonly geoBoundaryService: GeoBoundaryService,
-  ) {}
+  ) { }
 
-  evaluate(dto: SmartApproveRequestDto): PrecheckResult {
+  async evaluate(dto: SmartApproveRequestDto): Promise<PrecheckResult> {
     const categories: SmartApproveEvaluationResponse['categories'] = {
-      strategy: this.evaluateStrategy(dto),
-      projectInfo: this.evaluateProjectInfo(dto),
-      location: this.evaluateLocation(dto),
-      budget: this.evaluateBudget(dto),
-      indicators: this.evaluateIndicators(dto),
+      strategy: await this.evaluateStrategy(dto),
+      projectInfo: await this.evaluateProjectInfo(dto),
+      location: await this.evaluateLocation(dto),
+      budget: await this.evaluateBudget(dto),
+      indicators: await this.evaluateIndicators(dto),
     };
 
     const worstStatus = this.computeOverallStatus(categories);
@@ -64,15 +64,15 @@ export class SmartApprovePrecheckService {
     return { response, shouldUseLLM };
   }
 
-  private evaluateStrategy(
+  private async evaluateStrategy(
     dto: SmartApproveRequestDto,
-  ): SmartApproveCategoryResult {
+  ): Promise<SmartApproveCategoryResult> {
     const { strategyName, tacticName, planName } = dto;
     const issues: string[] = [];
     const suggestions: string[] = [];
     let hasCriticalIssue = false;
 
-    const strategy = this.referenceService.findStrategyByName(strategyName);
+    const strategy = await this.referenceService.findStrategyByName(strategyName);
     if (!strategy) {
       hasCriticalIssue = true;
       issues.push(
@@ -83,7 +83,7 @@ export class SmartApprovePrecheckService {
       );
     }
 
-    const tactic = this.referenceService.findTacticByName(tacticName);
+    const tactic = await this.referenceService.findTacticByName(tacticName);
     if (!tactic) {
       hasCriticalIssue = true;
       issues.push(`ไม่พบชื่อกลยุทธ์ "${tacticName}" ในฐานข้อมูลอ้างอิง`);
@@ -92,7 +92,7 @@ export class SmartApprovePrecheckService {
       );
     }
 
-    const plan = this.referenceService.findPlanByName(planName);
+    const plan = await this.referenceService.findPlanByName(planName);
     if (!plan) {
       hasCriticalIssue = true;
       issues.push(`ไม่พบชื่อแผนงาน "${planName}" ในฐานข้อมูลอ้างอิง`);
@@ -101,17 +101,19 @@ export class SmartApprovePrecheckService {
       );
     }
 
-    if (strategy && tactic && tactic.strategy_id !== strategy.id) {
+    if (strategy && tactic && tactic.strategy?.id !== strategy.id) {
+      // Note: Tactic entity has 'strategy' relation, so we check tactic.strategy.id
       hasCriticalIssue = true;
-      const expectedStrategy = this.referenceService.getStrategyById(
-        tactic.strategy_id,
+      const expectedStrategy = await this.referenceService.getStrategyById(
+        tactic.strategy?.id ?? '',
       );
       issues.push(
-        `กลยุทธ์ "${tacticName}" อยู่ภายใต้ยุทธศาสตร์ "${expectedStrategy?.name ?? tactic.strategy_id}" ไม่ตรงกับ "${strategyName}"`,
+        `กลยุทธ์ "${tacticName}" อยู่ภายใต้ยุทธศาสตร์ "${expectedStrategy?.name ?? tactic.strategy?.id}" ไม่ตรงกับ "${strategyName}"`,
       );
-      const validTactics = this.referenceService
-        .getTacticsForStrategy(strategy.id)
+      const validTactics = (await this.referenceService
+        .getTacticsForStrategy(strategy.id))
         .map((item) => item.name);
+
       if (validTactics.length > 0) {
         suggestions.push(
           `เลือกกลยุทธ์ที่อยู่ในยุทธศาสตร์ "${strategy.name}": ${validTactics.join(', ')}`,
@@ -124,15 +126,16 @@ export class SmartApprovePrecheckService {
     }
 
     if (plan && tactic) {
-      const relationIsValid = this.referenceService.isPlanLinkedToTactic(
+      const relationIsValid = await this.referenceService.isPlanLinkedToTactic(
         plan.id,
         tactic.id,
       );
       if (!relationIsValid) {
         hasCriticalIssue = true;
-        const validPlans = this.referenceService
-          .getPlansForTactic(tactic.id)
+        const validPlans = (await this.referenceService
+          .getPlansForTactic(tactic.id))
           .map((item) => item.name);
+
         issues.push(
           `แผนงาน "${planName}" ไม่ได้เชื่อมกับกลยุทธ์ "${tacticName}" ตามฐานข้อมูล`,
         );
@@ -183,9 +186,9 @@ export class SmartApprovePrecheckService {
     };
   }
 
-  private evaluateLocation(
+  private async evaluateLocation(
     dto: SmartApproveRequestDto,
-  ): SmartApproveCategoryResult {
+  ): Promise<SmartApproveCategoryResult> {
     const { project } = dto;
     const suggestions: string[] = [];
 
@@ -205,7 +208,7 @@ export class SmartApprovePrecheckService {
       };
     }
 
-    const localOrg = this.referenceService.getLocalOrganizationById(
+    const localOrg = await this.referenceService.getLocalOrganizationById(
       project.localOrganizationId,
     );
     if (project.localOrganizationId && !localOrg) {
@@ -217,7 +220,7 @@ export class SmartApprovePrecheckService {
     const amphoeId =
       project.amphoeId !== undefined && project.amphoeId !== null
         ? project.amphoeId
-        : localOrg?.amphoe_id;
+        : localOrg?.amphoe?.id ? Number(localOrg.amphoe.id) : undefined; // Access amphoe relation from localOrg
 
     if (amphoeId === undefined || amphoeId === null) {
       // ไม่มีรหัสอำเภอ ไม่สามารถตรวจสอบพื้นที่ได้ แต่ถือว่า pass
@@ -235,7 +238,7 @@ export class SmartApprovePrecheckService {
       );
 
       if (isInside === false) {
-        const amphoe = this.referenceService.getAmphoeById(amphoeId);
+        const amphoe = await this.referenceService.getAmphoeById(amphoeId);
         return {
           status: 'ควรปรับปรุง',
           details: `พิกัดโครงการอยู่นอกพื้นที่อำเภอ${amphoe ? ` ${amphoe.name}` : ''}ที่ระบุ กรุณาตรวจสอบหรือแก้ไขข้อมูลพิกัด`,
@@ -246,7 +249,7 @@ export class SmartApprovePrecheckService {
       }
 
       if (isInside === true) {
-        const amphoe = this.referenceService.getAmphoeById(amphoeId);
+        const amphoe = await this.referenceService.getAmphoeById(amphoeId);
         return {
           status: suggestions.length > 0 ? 'ควรปรับปรุง' : 'ผ่าน',
           details: `พิกัดโครงการอยู่ในพื้นที่อำเภอ${amphoe ? ` ${amphoe.name}` : ''}ที่ระบุ`,

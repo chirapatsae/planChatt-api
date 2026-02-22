@@ -843,6 +843,8 @@ export class DevelopmentPlanService {
         relations: [
           'createdBy',
           'createdBy.user',
+          'createdBy.amphoe',
+          'createdBy.localAdministrativeOrganization',
           'developmentPlanRevision',
           'developmentPlanRevision.revisionType',
           'planPhases',

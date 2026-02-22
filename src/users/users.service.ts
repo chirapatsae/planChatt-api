@@ -14,6 +14,8 @@ import {
   hashCitizenId,
 } from 'src/util/encryption.util';
 import { handleException } from 'src/util/handleException';
+import { AiUsageQuotasService } from 'src/ai-usage-quotas/ai-usage-quotas.service';
+import { StorageService } from 'src/storage/storage.service';
 
 @Injectable()
 export class UsersService {
@@ -22,7 +24,9 @@ export class UsersService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-  ) {}
+    private readonly aiUsageQuotasService: AiUsageQuotasService,
+    private readonly storageService: StorageService,
+  ) { }
 
   /**
    * Creates a new user. Unique constraints are handled by the database.
@@ -31,18 +35,18 @@ export class UsersService {
     try {
       // Use pre-calculated hash if provided, otherwise calculate new one
       const hashedCid = preCalculatedHash || hashCitizenId(createUserDto.citizenId);
-      
+
       // Check if user with this hash already exists before creating
       const existingUser = await this.userRepository.findOne({
         where: { citizenIdHash: hashedCid }
       });
-      
+
       if (existingUser) {
         this.logger.warn(`User with hash ${hashedCid} already exists. Returning existing user.`);
         existingUser.citizenId = await decryption(existingUser.citizenId);
         return existingUser;
       }
-      
+
       const encryptedCid = await encryption(createUserDto.citizenId);
 
       const user = this.userRepository.create({
@@ -52,6 +56,10 @@ export class UsersService {
       });
 
       const savedUser = await this.userRepository.save(user);
+
+      // Assign default AI quota
+      await this.aiUsageQuotasService.createDefaultQuota(savedUser.id);
+
       savedUser.citizenId = await decryption(savedUser.citizenId); // Decrypt for the response
       return savedUser;
     } catch (error) {
@@ -101,7 +109,9 @@ export class UsersService {
             governmentAgencies: true,
             role: true,
           },
-          aiUsageQuota: true,
+          aiUsageQuota: {
+            aiUsageLogs: true,
+          },
         },
       });
 
@@ -188,6 +198,37 @@ export class UsersService {
         );
       }
       return { message: `User with ID ${id} has been restored.` };
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * Uploads and updates a user's profile image.
+   */
+  async uploadProfileImage(id: string, file: Express.Multer.File): Promise<User> {
+    try {
+      const user = await this.userRepository.findOne({ where: { id } });
+      if (!user) {
+        throw new NotFoundException(`User with ID ${id} not found`);
+      }
+
+      // 1. Delete old image if it exists to save space
+      if (user.profileImageUrl) {
+        await this.storageService.deleteFileIfExist(user.profileImageUrl);
+      }
+
+      // 2. Save new image using StorageService
+      const imageUrl = await this.storageService.saveFile(file, 'profiles');
+
+      // 3. Update database
+      user.profileImageUrl = imageUrl;
+      const updatedUser = await this.userRepository.save(user);
+
+      // Decrypt for response
+      updatedUser.citizenId = await decryption(updatedUser.citizenId);
+
+      return updatedUser;
     } catch (error) {
       handleException(this.logger, error);
     }

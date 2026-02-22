@@ -211,6 +211,20 @@ export class ProjectGroupsController {
   }
 
   // --- Find Latest All ---
+  @Get('/latest')
+  async findLatestProjects(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('countOnly') countOnly?: string,
+    @Query('developmentPlanId', new ParseUUIDPipe({ optional: true })) developmentPlanId?: string,
+  ) {
+    return this.projectGroupsService.findLatestProjects({
+      userId: req.user.userId,
+      countOnly: countOnly === 'true' || countOnly === '1',
+      developmentPlanId,
+    });
+  }
+
+  // --- Find Latest All ---
   @Get('/latest-all')
   async findLatestAllProjects(
     @Req() req: Request & { user: JwtPayloadUser },
@@ -268,7 +282,7 @@ export class ProjectGroupsController {
   async findByPdf(
     @Req() req: Request & { user: JwtPayloadUser },
     @Param('id', ParseUUIDPipe) id: string) {
-    return this.projectGroupsService.findOutAuthorityByPdf({id  , userId : req.user.userId});
+    return this.projectGroupsService.findOutAuthorityByPdf({ id, userId: req.user.userId });
   }
 
   // --- Executive Dashboard/Analysis ---
@@ -317,8 +331,8 @@ export class ProjectGroupsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Req() req: Request & { user: JwtPayloadUser },
   ) {
-     
-    return this.projectGroupsService.findOne(id , req.user.userId);
+
+    return this.projectGroupsService.findOne(id, req.user.userId);
   }
 
   // ===================================================================
@@ -327,7 +341,7 @@ export class ProjectGroupsController {
 
   @Patch('bulk-assign-agency')
   async bulkAssignAgency(
-    @Body(new ValidationPipe({ 
+    @Body(new ValidationPipe({
       transform: true,
       whitelist: false, // Allow array directly
       forbidNonWhitelisted: false // Don't forbid array structure

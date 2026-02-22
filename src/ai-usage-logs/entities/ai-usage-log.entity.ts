@@ -4,24 +4,33 @@ import { Column, CreateDateColumn, Entity, JoinColumn, ManyToOne, PrimaryGenerat
 @Entity('ai_usage_logs')
 export class AiUsageLog {
     @PrimaryGeneratedColumn('uuid')
-    id : string;
-    
-    @Column({name : 'usage_type'})
-    usageType : string
+    id: string;
 
-    @Column({name : 'input_text_length'})
-    inputTextLength : number
+    @Column({ name: 'usage_type' })
+    usageType: string
 
-    @Column({name : 'output_text_length'})
-    outputTextLength : number
+    @Column({ name: 'model_name' })
+    modelName: string
 
-    @Column({name : 'cost_bath'})
-    costBaht : number
+    @Column({ name: 'input_tokens' })
+    inputTokens: number
 
-    @CreateDateColumn({name : 'used_at'})
-    used_at : Date
+    @Column({ name: 'output_tokens' })
+    outputTokens: number
 
-    @ManyToOne(() => AiUsageQuota , (aiUsageQuota) => aiUsageQuota.aiUsageLogs)
-    @JoinColumn({name : 'ai_usage_quota_id'})
-    aiUsageQuota : AiUsageQuota
+    @Column({ name: 'input_text_length', nullable: true })
+    inputTextLength: number
+
+    @Column({ name: 'output_text_length', nullable: true })
+    outputTextLength: number
+
+    @Column({ name: 'cost_bath', type: 'decimal', precision: 12, scale: 4 })
+    costBaht: number
+
+    @CreateDateColumn({ name: 'used_at' })
+    used_at: Date
+
+    @ManyToOne(() => AiUsageQuota, (aiUsageQuota) => aiUsageQuota.aiUsageLogs)
+    @JoinColumn({ name: 'ai_usage_quota_id' })
+    aiUsageQuota: AiUsageQuota
 }

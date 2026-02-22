@@ -15,12 +15,14 @@ dotenv.config();
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
-  
+
   // Security middleware - Helmet
-  app.use(helmet());
-  
+  app.use(helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' }
+  }));
+
   app.enableCors({
-    origin: ['http://localhost:5173', 'https://pb.koratpao.go.th'], 
+    origin: ['http://localhost:5173', 'https://pb.koratpao.go.th'],
     credentials: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     allowedHeaders: ['Content-Type', 'Authorization', 'Secret-Key'],
