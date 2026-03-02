@@ -622,7 +622,6 @@ export class RevisedProjectGroupService {
       if (developmentPlanId) {
         query.andWhere('dp.id = :developmentPlanId', { developmentPlanId });
       }
-
       // Filter by developmentPlanRevisionId if provided
       if (developmentPlanRevisionId) {
         query.andWhere('dpr.id = :developmentPlanRevisionId', {
@@ -663,7 +662,14 @@ export class RevisedProjectGroupService {
               // ถ้าไม่ได้รับผิดชอบอำเภอใดเลย ให้ไม่เห็นโครงการใด
               query.andWhere('1 = 0'); // Always false condition
             }
-          } else {
+          } else if (userRole === 'user') {
+            query.andWhere(
+              '(agencyCreatedBy.id = responsibleAgency.id OR createdByUser.id = :userId)',
+              { userId: workHistory.user.id },
+            );
+          }
+
+          else {
             query.andWhere('1 = 0'); // Always false condition
           }
         }
@@ -1239,6 +1245,8 @@ export class RevisedProjectGroupService {
           'plan',
           'createdBy',
           'createdBy.user',
+          'createdBy.amphoe',
+          'createdBy.localAdministrativeOrganization',
           'budgets',
           'trackingStatus',
           'trackingStatus.statusId',

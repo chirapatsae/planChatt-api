@@ -1107,6 +1107,8 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('projectGroup.plan', 'plan')
       .leftJoinAndSelect('projectGroup.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('projectGroup.budgets', 'budgets')
+      .innerJoin('projectGroup.trackingStatus', 'latestTrackingStatus', 'latestTrackingStatus.isLatest = :isLatest', { isLatest: true })
+      .innerJoin('latestTrackingStatus.statusId', 'latestStatus', 'latestStatus.name = :statusName', { statusName: 'Verified' })
       .leftJoinAndSelect('projectGroup.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
       .leftJoinAndSelect('trackingStatus.comments', 'comments')
@@ -1121,8 +1123,6 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('projectGroup.favorites', 'favorites')
       .leftJoinAndSelect('favorites.userId', 'userId')
       .andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
-      .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-      .andWhere('status.name = :statusName', { statusName: 'Verified' })
       .andWhere('projectGroup.originAgencyId IS NOT NULL')
       .andWhere('developmentPlan.id = :developmentPlanId', { developmentPlanId: developmentPlan.id })
       .andWhere('developmentPlan.isBooked = :isBooked', { isBooked: false });
@@ -2078,6 +2078,7 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
       .leftJoinAndSelect('revisedProject.favorites', 'favorites')
       .leftJoinAndSelect('favorites.userId', 'userId')
+      .leftJoinAndSelect('revisedProject.attachments', 'attachments')
 
       // ** KEY LOGIC: Inner Join กับ SubQuery เพื่อกรองเอาเฉพาะตัวล่าสุด **
       .innerJoin(
@@ -2142,6 +2143,7 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
       .leftJoinAndSelect('revisedProject.favorites', 'favorites')
       .leftJoinAndSelect('favorites.userId', 'userId')
+      .leftJoinAndSelect('revisedProject.attachments', 'attachments')
 
       // ** KEY LOGIC: Inner Join กับ SubQuery เพื่อกรองเอาเฉพาะตัวล่าสุด **
       .innerJoin(
@@ -2184,6 +2186,7 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('pg.favorites', 'favorites')
       .leftJoinAndSelect('pg.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
+      .leftJoinAndSelect('pg.attachments', 'attachments')
       .where('pg.development_plan_id = :developmentPlanId', { developmentPlanId })
       .andWhere('rev.id IS NULL')   // ไม่มี revision
       .andWhere('pg.isDraft = false')
@@ -2247,6 +2250,7 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('pg.favorites', 'favorites')
       .leftJoinAndSelect('pg.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
+      .leftJoinAndSelect('pg.attachments', 'attachments')
       .where('pg.development_plan_id = :developmentPlanId', { developmentPlanId })
       .andWhere('rev.id IS NULL')
       .andWhere('pg.isDraft = false')
@@ -4494,15 +4498,21 @@ export class ProjectGroupsService {
 
       if (role === 'user') {
         // Allow access if user is the creator (owner) or belongs to the same organization
-        const isOwner = projectGroup?.createdBy?.id === workHistory.id;
 
+        const isOwner = projectGroup?.createdBy?.id === workHistory.id;
         if (!isOwner) {
-          if (
-            !projectGroup?.localAdministrativeOrganization ||
-            !workHistory.localAdministrativeOrganization ||
-            projectGroup.localAdministrativeOrganization.id !== workHistory.localAdministrativeOrganization.id
-          ) {
-            throw new UnauthorizedException('คุณไม่มีสิทธิ์ในการเข้าถึงข้อมูลโครงการนี้');
+          const sameAgency =
+            String(projectGroup?.responsibleAgency?.id) ===
+            String(workHistory?.governmentAgencies?.id);
+
+          const sameLao =
+            String(projectGroup?.localAdministrativeOrganization?.id) ===
+            String(workHistory?.localAdministrativeOrganization?.id);
+
+          if (!sameAgency && !sameLao) {
+            throw new UnauthorizedException(
+              'คุณไม่มีสิทธิ์ในการเข้าถึงข้อมูลโครงการนี้'
+            );
           }
         }
       } else if (role === 'staff' || role === 'admin' || role === 'super-admin' || role === 'c-level') {

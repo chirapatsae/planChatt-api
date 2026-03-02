@@ -65,6 +65,7 @@ export class ExecutiveService {
       .leftJoinAndSelect('wh.user', 'user')
       .leftJoinAndSelect('wh.role', 'role')
       .leftJoinAndSelect('wh.localAdministrativeOrganization', 'lao')
+      .leftJoinAndSelect('wh.amphoe', 'amphoes')
       .leftJoinAndSelect('wh.governmentAgencies', 'ga')
 
       // ✅ join responsibility amphoe
