@@ -8,6 +8,7 @@
   "scripts": {
     "build": "nest build",
     "postbuild": "copyfiles -u 1 \"src/fonts/**/*\" dist",
+    "build:prod": "npm run build && npm run postbuild && pm2 start ecosystem.config.js --env production",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
@@ -79,6 +80,7 @@
     "@types/passport-jwt": "^4.0.1",
     "@types/pdfmake": "^0.2.12",
     "@types/supertest": "^6.0.2",
+    "copyfiles": "^2.4.1",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-prettier": "^5.2.2",
