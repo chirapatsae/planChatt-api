@@ -166,7 +166,7 @@ export class ExecutiveService {
                     id: p.id,
                     title: p.title,
                     aging: diffDays,
-                    user: staff.user ? staff.user : 'Unknown'
+                    user: staff.user ? `${staff.user.prefix || ''} ${staff.user.firstname} ${staff.user.lastname}`.trim() : 'Unknown'
                   });
                 }
               }
@@ -232,7 +232,7 @@ export class ExecutiveService {
                     id: p.id,
                     title: p.title,
                     aging: diffDays,
-                    user: staff.user ? `${staff.user.firstname} ${staff.user.lastname}` : 'Unknown'
+                    user: staff.user ? staff.user : 'Unknown'
                   });
                 }
               }
@@ -268,11 +268,20 @@ export class ExecutiveService {
 
 
 
-    const projectGroupCount = await this.projectGroupRepo.count({
-      where: {
-        developmentPlan: { id: developmentPlan?.id }
-      }
-    })
+    const projectGroupCount = await this.projectGroupRepo
+      .createQueryBuilder('pg')
+      .innerJoin('pg.trackingStatus', 'ts')
+      .innerJoin('ts.statusId', 'status')
+      .where('pg.developmentPlan = :id', {
+        id: developmentPlan?.id
+      })
+      .andWhere('status.name != :readyStatus', {
+        readyStatus: 'Ready'
+      })
+      .andWhere('ts.isLatest = :isLatest', { isLatest: true })
+      .andWhere('pg.isDraft = :isDraft', { isDraft: false })
+      .getCount();
+
     const projectGroupApproveCount = await this.projectGroupRepo
       .createQueryBuilder('pg')
       .innerJoin('pg.trackingStatus', 'ts')
@@ -294,8 +303,8 @@ export class ExecutiveService {
       .where('pg.developmentPlan = :id', {
         id: developmentPlan?.id
       })
-      .andWhere('status.name <> :status', {
-        status: 'Approved'
+      .andWhere('status.name NOT IN (:...excludeStatuses)', {
+        excludeStatuses: ['Approved', 'Ready']
       })
       .andWhere('ts.isLatest = :isLatest', { isLatest: true })
       .andWhere('pg.isDraft = :isDraft', { isDraft: false })
@@ -323,126 +332,6 @@ export class ExecutiveService {
       query.andWhere('wh.id = :whId', { whId: currentUserWH.id });
     }
 
-    const staffMembers = await query.getMany();
-
-    // 3. Aggregate Projects for each staff
-    const membersData: any[] = [];
-    let grandTotalProjects = 0;
-    let grandTotalInProgress = 0;
-    const statusTotals = {
-      draft: 0,
-      inReview: 0,
-      waitingApproval: 0,
-      inProgress: 0,
-      done: 0
-    };
-
-    // Aging accumulator
-    const agingData = {
-      inReview: { totalDays: 0, count: 0, overThreshold: 0 },
-      waitingApproval: { totalDays: 0, count: 0, overThreshold: 0 },
-    };
-
-    for (const staff of staffMembers) {
-      const stats = {
-        draft: 0,
-        inReview: 0,
-        waitingApproval: 0,
-        inProgress: 0,
-        done: 0
-      };
-
-      // Query projects created by this staff
-      const projects = await this.projectGroupRepo.createQueryBuilder('pg')
-        .leftJoinAndSelect('pg.trackingStatus', 'ts')
-        .leftJoinAndSelect('ts.statusId', 'status')
-        .where('pg.create_by = :staffWhId', { staffWhId: staff.id })
-        .andWhere('(pg.deleted_at IS NULL)') // Not deleted
-        .getMany();
-
-      for (const p of projects) {
-        if (p.isDraft) {
-          stats.draft++;
-        } else {
-          // Check latest tracking status
-          // Assuming project.trackingStatus is loaded.
-          // Note: In OneToMany default, specific ordering isn't guaranteed unless specified in entity or query.
-          // We should filter for isLatest=true.
-          const latestStatus = p.trackingStatus?.find(t => t.isLatest);
-
-          if (latestStatus && latestStatus.statusId) {
-            const statusName = latestStatus.statusId.name; // English name
-
-            // Map Status Name to Category
-            if (statusName === 'Approved') {
-              // "Approved" usually means In Progress (or Done if specific flag?)
-              // User definition: "completed" -> done
-              // "inProgress" -> "Approved" 
-              // Let's assume 'Done' or 'Completed' exists for Done.
-              stats.inProgress++;
-            } else if (statusName === 'Done' || statusName === 'Completed') {
-              stats.done++;
-            } else if (statusName === 'Pending' || statusName === 'In Review') {
-              stats.inReview++;
-
-              // Aging Calculation
-              const days = (Date.now() - new Date(latestStatus.createAt).getTime()) / (1000 * 3600 * 24);
-              agingData.inReview.totalDays += days;
-              agingData.inReview.count++;
-              if (days > 3) agingData.inReview.overThreshold++; // Example Threshold
-
-            } else if (statusName === 'Waiting' || statusName === 'Waiting Approval') {
-              stats.waitingApproval++;
-
-              // Aging Calculation
-              const days = (Date.now() - new Date(latestStatus.createAt).getTime()) / (1000 * 3600 * 24);
-              agingData.waitingApproval.totalDays += days;
-              agingData.waitingApproval.count++;
-              if (days > 7) agingData.waitingApproval.overThreshold++; // Example Threshold
-            } else {
-              // Fallback or other statuses
-              // Maybe count as inReview if not sure?
-            }
-          }
-        }
-      }
-
-      // Aggregate Member Data
-      membersData.push({
-        id: staff.user.id,
-        name: `${staff.user.firstname} ${staff.user.lastname}`,
-        role: staff.role.name, // or mapped Thai role
-        agency: staff.localAdministrativeOrganization?.name || staff.governmentAgencies?.name || '-',
-        statusCounts: stats,
-        // For filtering
-        isRisk: (stats.inReview + stats.waitingApproval) >= 3
-      });
-
-      // Aggregate Grand Totals
-      statusTotals.draft += stats.draft;
-      statusTotals.inReview += stats.inReview;
-      statusTotals.waitingApproval += stats.waitingApproval;
-      statusTotals.inProgress += stats.inProgress;
-      statusTotals.done += stats.done;
-
-      grandTotalProjects += (stats.draft + stats.inReview + stats.waitingApproval + stats.inProgress + stats.done);
-      grandTotalInProgress += stats.inProgress;
-    }
-
-    // 4. Calculate Final Aging
-    const agingByStatus = [
-      {
-        label: 'รอตรวจ',
-        avgDays: agingData.inReview.count > 0 ? agingData.inReview.totalDays / agingData.inReview.count : 0,
-        overThreshold: agingData.inReview.overThreshold
-      },
-      {
-        label: 'รออนุมัติ',
-        avgDays: agingData.waitingApproval.count > 0 ? agingData.waitingApproval.totalDays / agingData.waitingApproval.count : 0,
-        overThreshold: agingData.waitingApproval.overThreshold
-      }
-    ];
-
     // 5. Construct Response
     return {
       staffWithTotalLao,
@@ -452,14 +341,6 @@ export class ExecutiveService {
       projectGroupInprogressCount,
       type,
       developmentPlan,
-      // staff: staffRole,
-      // members: membersData,
-      // aggregates: {
-      //   totalProjects: grandTotalProjects,
-      //   totalInProgress: grandTotalInProgress,
-      //   statusTotals
-      // },
-      // agingByStatus
     };
   }
 }
