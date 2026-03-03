@@ -7,13 +7,22 @@ import {
 } from 'crypto';
 import { promisify } from 'util';
 import * as dotenv from 'dotenv';
+import * as fs from 'fs';
+import * as path from 'path';
 
-// Load environment variables at module level
-dotenv.config();
+// Load environment variables based on NODE_ENV (.env.production, .env.development, fallback to .env)
+const nodeEnv = process.env.NODE_ENV || 'development';
+const candidateEnvFile = `.env.${nodeEnv}`;
+const resolvedCandidatePath = path.resolve(process.cwd(), candidateEnvFile);
+const envFileToLoad = fs.existsSync(resolvedCandidatePath)
+  ? resolvedCandidatePath
+  : path.resolve(process.cwd(), '.env');
 
-const algorithm = process.env.ALGORITHM || ''
-const secretKey = process.env.SECRET_KEY || ''
-const salt = process.env.SALT || ''
+dotenv.config({ path: envFileToLoad });
+
+const algorithm = process.env.ALGORITHM || '';
+const secretKey = process.env.SECRET_KEY || '';
+const salt = process.env.SALT || '';
 
 // Validate that required environment variables are set
 if (!secretKey) {
