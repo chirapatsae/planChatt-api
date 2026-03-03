@@ -1,5 +1,6 @@
 import { Plan } from './plan/entities/plan.entity';
 import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { UsersModule } from './users/users.module';
@@ -97,8 +98,16 @@ import { AttachmentProjectGroup } from './attachment-project-groups/entities/att
 import { AttachmentRevisedProjectGroupsModule } from './attachment-revised-project-groups/attachment-revised-project-groups.module';
 import { AttachmentRevisedProjectGroup } from './attachment-revised-project-groups/entities/attachment-revised-project-group.entity';
 
+
 @Module({
   imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: [
+        `.env.${process.env.NODE_ENV}`,
+        '.env',
+      ],
+    }),
     ScheduleModule.forRoot(),
     BullModule.forRoot({
       redis: {
@@ -110,11 +119,11 @@ import { AttachmentRevisedProjectGroup } from './attachment-revised-project-grou
     WorkHistoryModule,
     TypeOrmModule.forRoot({
       type: 'postgres',
-      host: 'localhost',
-      port: 5432,
-      username: 'postgres',
-      password: 'Pao@1234!',
-      database: 'project_bank',
+      host: process.env.DB_HOST,
+      port: Number(process.env.DB_PORT) || 5432,
+      username: process.env.DB_USERNAME,
+      password: process.env.DB_PASSWORD,
+      database: process.env.DB_NAME,
       entities: [
         User,
         UserActivityLog,
