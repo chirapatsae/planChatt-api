@@ -18,7 +18,14 @@ async function bootstrap() {
 
   // Security middleware - Helmet
   app.use(helmet({
-    crossOriginResourcePolicy: { policy: 'cross-origin' }
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: {
+        "default-src": ["'self'"],
+        "frame-ancestors": ["'self'", "http://localhost:5173", "https://pb.koratpao.go.th"],
+      },
+    },
   }));
 
   app.enableCors({
