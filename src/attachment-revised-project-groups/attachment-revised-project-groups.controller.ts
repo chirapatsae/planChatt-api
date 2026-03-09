@@ -63,7 +63,7 @@ export class AttachmentRevisedProjectGroupsController {
       throw new NotFoundException(`File with ID ${id} not found`);
     }
 
-    const baseUrl = `${req.protocol}://${req.get('host')}/api/v1/attachment-revised-project-groups/public/${id}`;
+    const baseUrl = `${process.env.APP_URL}/api/v1/attachment-revised-project-groups/public/${id}`;
     const signedUrl = UrlSigningUtil.generateSignedUrl(baseUrl, id);
 
     return {

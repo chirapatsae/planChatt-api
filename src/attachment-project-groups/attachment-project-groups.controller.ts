@@ -68,7 +68,7 @@ export class AttachmentProjectGroupsController {
     }
 
     // สร้าง signed URL
-    const baseUrl = `${req.protocol}://${req.get('host')}/api/v1/attachment-project-groups/public/${id}`;
+    const baseUrl = `${process.env.APP_URL}/api/v1/attachment-project-groups/public/${id}`;
     const signedUrl = UrlSigningUtil.generateSignedUrl(baseUrl, id);
 
     return {
