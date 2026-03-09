@@ -498,6 +498,7 @@ export class ProjectGroupsService {
       .andWhere('projectGroup.isDraft = :isDraft', { isDraft: false });
 
 
+
     // Add conditions based on type
     if (type) {
       switch (type) {
@@ -522,7 +523,8 @@ export class ProjectGroupsService {
             .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
             .andWhere('status.name = :statusName', { statusName: 'Revision' })
             .andWhere('projectGroup.createdBy.id = :workHistoryId', { workHistoryId: workHistory.id })
-            .andWhere('developmentPlan.isLatest = :developmentPlanIsLatest', { developmentPlanIsLatest: true });
+            .andWhere('developmentPlan.isLatest = :developmentPlanIsLatest', { developmentPlanIsLatest: true })
+            .andWhere('developmentPlan.isBooked = :isBooked', { isBooked: false })
           break;
         case 'verified':
           query.andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
