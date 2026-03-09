@@ -32,7 +32,7 @@ export class AttachmentRevisedProjectGroupsController {
 
   constructor(
     private readonly attachmentService: AttachmentRevisedProjectGroupsService,
-  ) {}
+  ) { }
 
   @Get('public/:id')
   async viewFile(

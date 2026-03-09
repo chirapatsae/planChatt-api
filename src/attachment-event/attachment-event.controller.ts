@@ -36,7 +36,7 @@ import { UrlSigningUtil } from 'src/util/url-signing.util';
 export class AttachmentEventController {
   private readonly logger = new Logger(AttachmentEventController.name);
 
-  constructor(private readonly attachmentEventService: AttachmentEventService) {}
+  constructor(private readonly attachmentEventService: AttachmentEventService) { }
 
   // Public file viewing endpoint with URL signing
   @Get('public/:id')
@@ -46,13 +46,13 @@ export class AttachmentEventController {
     @Res() res: Response
   ) {
     this.logger.log(`Viewing file with ID: ${id} with signed token`);
-    
+
     // ตรวจสอบ signed token
     if (!signedToken || !UrlSigningUtil.validateSignedToken(id, signedToken)) {
       this.logger.warn(`Invalid or missing signed token for file ID: ${id}`);
       throw new UnauthorizedException('Token ไม่ถูกต้องหรือหมดอายุ');
     }
-    
+
     return this.attachmentEventService.viewFile(id, res);
   }
 
@@ -64,17 +64,17 @@ export class AttachmentEventController {
     @Req() req: Request & { user: JwtPayloadUser }
   ) {
     this.logger.log(`Generating signed URL for file ID: ${id} by user: ${req.user.userId}`);
-    
+
     // ตรวจสอบว่าไฟล์มีอยู่จริง
     const fileExists = await this.attachmentEventService.fileExists(id);
     if (!fileExists) {
       throw new NotFoundException(`File with ID ${id} not found`);
     }
-    
+
     // สร้าง signed URL
     const baseUrl = `${req.protocol}://${req.get('host')}/api/v1/attachment-events/public/${id}`;
     const signedUrl = UrlSigningUtil.generateSignedUrl(baseUrl, id);
-    
+
     return {
       signedUrl,
       expiresIn: '24 hours',
@@ -99,21 +99,21 @@ export class AttachmentEventController {
     @Req() req: Request & { user: JwtPayloadUser }
   ) {
     this.logger.log(`Uploading ${files.length} files for event: ${eventId} by user: ${req.user.userId}`);
-    
+
     // Fix UTF-8 encoding for filenames
     const fixedFiles = files.map(file => {
       const originalName = file.originalname;
       const fixedName = Buffer.from(originalName, 'latin1').toString('utf8');
-      
+
       this.logger.log(`Original filename: ${originalName}`);
       this.logger.log(`Fixed filename: ${fixedName}`);
-      
+
       return {
         ...file,
         originalname: fixedName
       };
     });
-    
+
     return this.attachmentEventService.uploadMultipleFiles(fixedFiles, eventId);
   }
 
