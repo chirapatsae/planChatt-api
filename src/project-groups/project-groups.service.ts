@@ -1125,6 +1125,7 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('projectGroup.originAgencyId', 'originAgencyId')
       .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
       .leftJoinAndSelect('projectGroup.amphoe', 'projectGroupAmphoe')
+      .leftJoinAndSelect('projectGroup.attachments', 'attachments')
       .leftJoinAndSelect('projectGroup.favorites', 'favorites')
       .leftJoinAndSelect('favorites.userId', 'userId')
       .andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
