@@ -775,8 +775,9 @@ export class RevisedProjectGroupService {
         ],
       });
       if (!workHistory) throw new NotFoundException('ไม่พบข้อมูลผู้ใช้งาน');
+      console.log(workHistory.role)
       const userRole = workHistory.role.name;
-      if (userRole !== 'user' && userRole !== 'admin' && userRole !== 'super-admin' && userRole !== 'c-level') {
+      if (userRole !== 'user' && userRole !== 'staff' && userRole !== 'admin' && userRole !== 'super-admin' && userRole !== 'c-level') {
         throw new UnauthorizedException('คุณไม่มีสิทธิในการเข้าถึงข้อมูล');
       }
       if (workHistory.localAdministrativeOrganization?.id !== '3001027') return []

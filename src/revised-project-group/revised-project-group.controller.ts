@@ -27,7 +27,7 @@ export class RevisedProjectGroupController {
 
   constructor(
     private readonly revisedProjectGroupService: RevisedProjectGroupService,
-  ) {}
+  ) { }
 
   // ========================================
   // CRUD Operations (Basic)
@@ -161,8 +161,8 @@ export class RevisedProjectGroupController {
   @Get('tracking/edit/pending')
   async findPendingRevisionProjects(
     @Req() req: Request & { user: JwtPayloadUser },
-    @Query('developmentPlanId' , ParseUUIDPipe) developmentPlanId?: string,
-    @Query('developmentPlanRevisionId' , ParseUUIDPipe) developmentPlanRevisionId?: string,
+    @Query('developmentPlanId', ParseUUIDPipe) developmentPlanId?: string,
+    @Query('developmentPlanRevisionId', ParseUUIDPipe) developmentPlanRevisionId?: string,
     @Query('countOnly') countOnly?: string,
   ) {
     const shouldCount = countOnly === 'true';
@@ -170,18 +170,18 @@ export class RevisedProjectGroupController {
     this.logger.log(
       `Fetching ${shouldCount ? 'count of ' : ''}pending revision projects - developmentPlanId: ${developmentPlanId}, developmentPlanRevisionId: ${developmentPlanRevisionId}, userId: ${userId}`,
     );
-    
+
     const result = await this.revisedProjectGroupService.findPendingRevisionProjects(
       developmentPlanId,
       developmentPlanRevisionId,
       shouldCount,
       userId,
     );
-    
+
     if (shouldCount) {
       return { count: result as number };
     }
-    
+
     return result;
   }
 
@@ -201,52 +201,52 @@ export class RevisedProjectGroupController {
     this.logger.log(
       `Fetching ${shouldCount ? 'count of ' : ''}verify revision projects - developmentPlanId: ${developmentPlanId}, developmentPlanRevisionId: ${developmentPlanRevisionId}`,
     );
-    
+
     const result = await this.revisedProjectGroupService.findVerifyRevisionProjects(
       developmentPlanId,
       developmentPlanRevisionId,
       shouldCount,
     );
-    
+
     if (shouldCount) {
       return { count: result as number };
     }
-    
+
     return result;
   }
 
-    /**
-   * ดึงโครงการประเภท "แก้ไข" ที่มีสถานะ "Revision "
-   * @param developmentPlanId - ID ของ DevelopmentPlan (optional)
-   * @param developmentPlanRevisionId - ID ของ DevelopmentPlanRevision (optional)
-   * @param countOnly - ถ้าเป็น true จะ return จำนวนโครงการแทน array (optional)
-   */
-    @Get('tracking/edit/revision')
-    async findRevisionProjects(
-      @Req() req: Request & { user: JwtPayloadUser },
-      @Query('developmentPlanId' , ParseUUIDPipe) developmentPlanId?: string,
-      @Query('developmentPlanRevisionId' , ParseUUIDPipe) developmentPlanRevisionId?: string,
-      @Query('countOnly') countOnly?: string,
-    ) {
-      const shouldCount = countOnly === 'true';
-      const userId = req.user?.userId;
-      this.logger.log(
-        `Fetching ${shouldCount ? 'count of ' : ''}revised revision projects - developmentPlanId: ${developmentPlanId}, developmentPlanRevisionId: ${developmentPlanRevisionId}, userId: ${userId}`,
-      );
-      
-      const result = await this.revisedProjectGroupService.findRevisionProjects(
-        developmentPlanId,
-        developmentPlanRevisionId,
-        shouldCount,
-        userId,
-      );
+  /**
+ * ดึงโครงการประเภท "แก้ไข" ที่มีสถานะ "Revision "
+ * @param developmentPlanId - ID ของ DevelopmentPlan (optional)
+ * @param developmentPlanRevisionId - ID ของ DevelopmentPlanRevision (optional)
+ * @param countOnly - ถ้าเป็น true จะ return จำนวนโครงการแทน array (optional)
+ */
+  @Get('tracking/edit/revision')
+  async findRevisionProjects(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('developmentPlanId', ParseUUIDPipe) developmentPlanId?: string,
+    @Query('developmentPlanRevisionId', ParseUUIDPipe) developmentPlanRevisionId?: string,
+    @Query('countOnly') countOnly?: string,
+  ) {
+    const shouldCount = countOnly === 'true';
+    const userId = req.user?.userId;
+    this.logger.log(
+      `Fetching ${shouldCount ? 'count of ' : ''}revised revision projects - developmentPlanId: ${developmentPlanId}, developmentPlanRevisionId: ${developmentPlanRevisionId}, userId: ${userId}`,
+    );
 
-      if (shouldCount) {
-        return { count: result as number };
-      }
+    const result = await this.revisedProjectGroupService.findRevisionProjects(
+      developmentPlanId,
+      developmentPlanRevisionId,
+      shouldCount,
+      userId,
+    );
 
-      return UnifiedProjectMapper.mapMany(result as any[]);
+    if (shouldCount) {
+      return { count: result as number };
     }
+
+    return UnifiedProjectMapper.mapMany(result as any[]);
+  }
 
   /**
    * ดึงโครงการประเภท "แก้ไข" ที่มีสถานะ "Pending Approval"
@@ -264,17 +264,17 @@ export class RevisedProjectGroupController {
     this.logger.log(
       `Fetching ${shouldCount ? 'count of ' : ''}Pending Approval revision projects - developmentPlanId: ${developmentPlanId}, developmentPlanRevisionId: ${developmentPlanRevisionId}`,
     );
-    
+
     const result = await this.revisedProjectGroupService.findVerifyPendingApprovalProjects(
       developmentPlanId,
       developmentPlanRevisionId,
       shouldCount,
     );
-    
+
     if (shouldCount) {
       return { count: result as number };
     }
-    
+
     return result;
   }
 
@@ -294,17 +294,17 @@ export class RevisedProjectGroupController {
     this.logger.log(
       `Fetching ${shouldCount ? 'count of ' : ''}Approved revision projects - developmentPlanId: ${developmentPlanId}, developmentPlanRevisionId: ${developmentPlanRevisionId}`,
     );
-    
+
     const result = await this.revisedProjectGroupService.findApprovedProjects(
       developmentPlanId,
       developmentPlanRevisionId,
       shouldCount,
     );
-    
+
     if (shouldCount) {
       return { count: result as number };
     }
-    
+
     return result;
   }
 
@@ -328,17 +328,17 @@ export class RevisedProjectGroupController {
     this.logger.log(
       `Fetching ${shouldCount ? 'count of ' : ''}pending supplement projects - developmentPlanId: ${developmentPlanId}, developmentPlanRevisionId: ${developmentPlanRevisionId}`,
     );
-    
+
     const result = await this.revisedProjectGroupService.findPendingSupplementProjects(
       developmentPlanId,
       developmentPlanRevisionId,
       shouldCount,
     );
-    
+
     if (shouldCount) {
       return { count: result as number };
     }
-    
+
     return result;
   }
 
@@ -358,17 +358,17 @@ export class RevisedProjectGroupController {
     this.logger.log(
       `Fetching ${shouldCount ? 'count of ' : ''}verify supplement projects - developmentPlanId: ${developmentPlanId}, developmentPlanRevisionId: ${developmentPlanRevisionId}`,
     );
-    
+
     const result = await this.revisedProjectGroupService.findVerifySupplementProjects(
       developmentPlanId,
       developmentPlanRevisionId,
       shouldCount,
     );
-    
+
     if (shouldCount) {
       return { count: result as number };
     }
-    
+
     return result;
   }
 
@@ -388,17 +388,17 @@ export class RevisedProjectGroupController {
     this.logger.log(
       `Fetching ${shouldCount ? 'count of ' : ''}Pending Approval supplement projects - developmentPlanId: ${developmentPlanId}, developmentPlanRevisionId: ${developmentPlanRevisionId}`,
     );
-    
+
     const result = await this.revisedProjectGroupService.findVerifyPendingApprovalSupplementProjects(
       developmentPlanId,
       developmentPlanRevisionId,
       shouldCount,
     );
-    
+
     if (shouldCount) {
       return { count: result as number };
     }
-    
+
     return result;
   }
 
@@ -418,17 +418,17 @@ export class RevisedProjectGroupController {
     this.logger.log(
       `Fetching ${shouldCount ? 'count of ' : ''}Approved supplement projects - developmentPlanId: ${developmentPlanId}, developmentPlanRevisionId: ${developmentPlanRevisionId}`,
     );
-    
+
     const result = await this.revisedProjectGroupService.findApprovedSupplementProjects(
       developmentPlanId,
       developmentPlanRevisionId,
       shouldCount,
     );
-    
+
     if (shouldCount) {
       return { count: result as number };
     }
-    
+
     return result;
   }
 
