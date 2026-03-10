@@ -775,7 +775,6 @@ export class RevisedProjectGroupService {
         ],
       });
       if (!workHistory) throw new NotFoundException('ไม่พบข้อมูลผู้ใช้งาน');
-      console.log(workHistory.role)
       const userRole = workHistory.role.name;
       if (userRole !== 'user' && userRole !== 'staff' && userRole !== 'admin' && userRole !== 'super-admin' && userRole !== 'c-level') {
         throw new UnauthorizedException('คุณไม่มีสิทธิในการเข้าถึงข้อมูล');
@@ -807,11 +806,9 @@ export class RevisedProjectGroupService {
         .leftJoinAndSelect('trackingStatusCreatedBy.localAdministrativeOrganization', 'trackingStatusCreatedByLocalAdministrativeOrganization')
         .leftJoinAndSelect('trackingStatusCreatedBy.user', 'trackingStatusCreatedByUser')
         .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-        .andWhere('rt.name = :revisionTypeName', { revisionTypeName: 'แก้ไข' })
         .andWhere('status.name = :statusName', { statusName: 'Revision' })
         .andWhere('dpr.isLatest = :isLatestRevision', { isLatestRevision: true })
         .andWhere('dpr.isBooked = :isBooked', { isBooked: false });
-
 
       // Filter by developmentPlanId if provided
       if (developmentPlanId) {

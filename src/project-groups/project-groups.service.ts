@@ -2209,6 +2209,7 @@ export class ProjectGroupsService {
       .andWhere('pg.isDraft = false')
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
       .andWhere('status.name <> :statusName', { statusName: 'Ready' })
+      .andWhere('status.name <> :statusName', { statusName: 'Revision' })
     // .andWhere('pg.isBooked = :isBooked', { isBooked: true });
 
     return await queryBuilder.getMany();
@@ -4292,27 +4293,178 @@ export class ProjectGroupsService {
    * - แสดงทุก revision (เรียงตาม revisionNumber)
    * - แต่ละ revision เอาสถานะล่าสุด (trackingStatus.isLatest = true)
    */
+  // async findAllVersions(
+  //   projectId: string,
+  //   userId: string,
+  // ): Promise<any> {
+  //   // Validate user permissions
+  //   const workHistory = await this.workHistoryRepo.findOne({
+  //     where: { user: { id: userId } },
+  //     relations: ['workStatus', 'role'],
+  //   });
+
+  //   if (!workHistory)
+  //     throw new UnauthorizedException('User not found');
+  //   if (workHistory.workStatus.name !== 'approved')
+  //     throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+
+  //   const allowedRoles = ['user', 'staff', 'admin', 'super-admin', 'c-level'];
+  //   if (!allowedRoles.includes(workHistory.role.name))
+  //     throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+
+  //   // Try to find as ProjectGroup first
+  //   let originalProject = await this.projectGroupRepo.findOne({
+  //     where: { id: projectId },
+  //     relations: [
+  //       'createdBy',
+  //       'createdBy.user',
+  //       'createdBy.amphoe',
+  //       'createdBy.localAdministrativeOrganization',
+  //       'strategy',
+  //       'tactic',
+  //       'plan',
+  //       'developmentPlan',
+  //       'budgets',
+  //       'trackingStatus',
+  //       'trackingStatus.statusId',
+  //       'trackingStatus.comments',
+  //       'trackingStatus.createdBy',
+  //       'trackingStatus.createdBy.user',
+  //       'responsibleAgency',
+  //       'originAgencyId',
+  //       'favorites',
+  //       'favorites.userId',
+  //       'attachments',
+  //     ],
+  //   });
+
+  //   const allRevisions = await this.revisedProjectGroupRepo.find({
+  //     where: {
+  //       projectGroup: { id: originalProject?.id },
+  //       trackingStatus: { isLatest: true },
+  //     },
+  //     relations: [
+  //       'developmentPlanRevision',
+  //       'developmentPlanRevision.developmentPlan',
+  //       'developmentPlanRevision.revisionType',
+  //       'projectGroup',
+  //       'createdBy',
+  //       'createdBy.user',
+  //       'createdBy.amphoe',
+  //       'createdBy.localAdministrativeOrganization',
+  //       'strategy',
+  //       'tactic',
+  //       'plan',
+  //       'budgets',
+  //       'trackingStatus',
+  //       'trackingStatus.statusId',
+  //       'trackingStatus.comments',
+  //       'trackingStatus.createdBy',
+  //       'trackingStatus.createdBy.user',
+  //       'responsibleAgency',
+  //       'originAgencyId',
+  //       'attachments',
+  //     ],
+  //     order: {
+  //       developmentPlanRevision: {
+  //         revisionNumber: 'ASC',
+  //       },
+  //     },
+  //   });
+
+  //   // Map to unified format
+  //   const unifiedOriginal = originalProject
+  //     ? UnifiedProjectMapper.fromProjectGroup(originalProject)
+  //     : null;
+
+  //   const unifiedRevisions = allRevisions.map((revision) =>
+  //     UnifiedProjectMapper.fromRevisedProjectGroup(revision),
+  //   );
+
+
+  //   // Add comparison data to each revision
+  //   for (let i = 0; i < unifiedRevisions.length; i++) {
+  //     const current = unifiedRevisions[i];
+  //     let previous: IUnifiedProjectDisplay | null = null;
+  //     let comparedWith: 'original' | 'revised' | null = null;
+
+  //     if (i === 0) {
+  //       // First revision: compare with original project
+  //       previous = unifiedOriginal;
+  //       comparedWith = previous ? 'original' : null;
+  //     } else {
+  //       // Subsequent revisions: compare with previous revision
+  //       previous = unifiedRevisions[i - 1];
+  //       comparedWith = 'revised';
+  //     }
+
+  //     // Calculate changed fields
+  //     const changedFields = this.calculateChangedFields(current, previous);
+
+  //     // Add changes to the current revision
+  //     current.changes = {
+  //       comparedWith,
+  //       changedFields,
+  //     };
+  //   }
+
+  //   // Calculate total versions
+  //   const totalVersions =
+  //     (originalProject ? 1 : 0) + unifiedRevisions.length;
+
+  //   // Find latest version
+  //   let latestVersion: IProjectVersionsResponse['latestVersion'] = null;
+  //   if (unifiedRevisions.length > 0) {
+  //     const latest = unifiedRevisions[unifiedRevisions.length - 1];
+  //     latestVersion = {
+  //       id: latest.id,
+  //       revisionNumber: latest.developmentPlanRevision?.revisionNumber,
+  //       isOriginal: false,
+  //     };
+  //   } else if (originalProject) {
+  //     latestVersion = {
+  //       id: originalProject.id,
+  //       isOriginal: true,
+  //     };
+  //   }
+
+  //   return {
+  //     originalProject: unifiedOriginal,
+  //     revisions: unifiedRevisions,
+  //     totalVersions,
+  //     latestVersion,
+
+  //   };
+  // }
+
   async findAllVersions(
     projectId: string,
     userId: string,
   ): Promise<any> {
     // Validate user permissions
     const workHistory = await this.workHistoryRepo.findOne({
-      where: { user: { id: userId } },
+      where: { user: { id: userId }, isCurrent: true },
       relations: ['workStatus', 'role'],
     });
-
-    if (!workHistory)
+  
+    if (!workHistory) {
       throw new UnauthorizedException('User not found');
-    if (workHistory.workStatus.name !== 'approved')
+    }
+  
+    if (workHistory.workStatus.name !== 'approved') {
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
-
+    }
+  
     const allowedRoles = ['user', 'staff', 'admin', 'super-admin', 'c-level'];
-    if (!allowedRoles.includes(workHistory.role.name))
+    if (!allowedRoles.includes(workHistory.role.name)) {
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
-
-    // Try to find as ProjectGroup first
-    let originalProject = await this.projectGroupRepo.findOne({
+    }
+  
+    let originalProject: any = null;
+    let rootProjectGroupId: string | null = null;
+  
+    // 1) ลองหาเป็น project group ก่อน
+    originalProject = await this.projectGroupRepo.findOne({
       where: { id: projectId },
       relations: [
         'createdBy',
@@ -4336,10 +4488,59 @@ export class ProjectGroupsService {
         'attachments',
       ],
     });
-
+  
+    if (originalProject) {
+      rootProjectGroupId = originalProject.id;
+    } else {
+      // 2) ถ้าไม่เจอ ลองหาเป็น revised project
+      const revisedProject = await this.revisedProjectGroupRepo.findOne({
+        where: { id: projectId },
+        relations: [
+          'projectGroup',
+        ],
+      });
+  
+      if (!revisedProject) {
+        throw new NotFoundException('ไม่พบโครงการ');
+      }
+  
+      rootProjectGroupId = revisedProject.projectGroup?.id || null;
+  
+      if (!rootProjectGroupId) {
+        throw new NotFoundException('ไม่พบโครงการต้นฉบับของรายการแก้ไขนี้');
+      }
+  
+      // 3) ใช้ root project group id ไปดึง original project
+      originalProject = await this.projectGroupRepo.findOne({
+        where: { id: rootProjectGroupId },
+        relations: [
+          'createdBy',
+          'createdBy.user',
+          'createdBy.amphoe',
+          'createdBy.localAdministrativeOrganization',
+          'strategy',
+          'tactic',
+          'plan',
+          'developmentPlan',
+          'budgets',
+          'trackingStatus',
+          'trackingStatus.statusId',
+          'trackingStatus.comments',
+          'trackingStatus.createdBy',
+          'trackingStatus.createdBy.user',
+          'responsibleAgency',
+          'originAgencyId',
+          'favorites',
+          'favorites.userId',
+          'attachments',
+        ],
+      });
+    }
+  
+    // 4) ดึง revisions ทั้งหมดของ project group นั้น
     const allRevisions = await this.revisedProjectGroupRepo.find({
       where: {
-        projectGroup: { id: originalProject?.id },
+        projectGroup: { id: rootProjectGroupId as string },
         trackingStatus: { isLatest: true },
       },
       relations: [
@@ -4354,6 +4555,7 @@ export class ProjectGroupsService {
         'strategy',
         'tactic',
         'plan',
+        'developmentPlan',
         'budgets',
         'trackingStatus',
         'trackingStatus.statusId',
@@ -4370,49 +4572,41 @@ export class ProjectGroupsService {
         },
       },
     });
-
-    // Map to unified format
+  
     const unifiedOriginal = originalProject
       ? UnifiedProjectMapper.fromProjectGroup(originalProject)
       : null;
-
+  
     const unifiedRevisions = allRevisions.map((revision) =>
       UnifiedProjectMapper.fromRevisedProjectGroup(revision),
     );
-
-
-    // Add comparison data to each revision
+  
+    // Add comparison data
     for (let i = 0; i < unifiedRevisions.length; i++) {
       const current = unifiedRevisions[i];
       let previous: IUnifiedProjectDisplay | null = null;
       let comparedWith: 'original' | 'revised' | null = null;
-
+  
       if (i === 0) {
-        // First revision: compare with original project
         previous = unifiedOriginal;
         comparedWith = previous ? 'original' : null;
       } else {
-        // Subsequent revisions: compare with previous revision
         previous = unifiedRevisions[i - 1];
         comparedWith = 'revised';
       }
-
-      // Calculate changed fields
+  
       const changedFields = this.calculateChangedFields(current, previous);
-
-      // Add changes to the current revision
+  
       current.changes = {
         comparedWith,
         changedFields,
       };
     }
-
-    // Calculate total versions
-    const totalVersions =
-      (originalProject ? 1 : 0) + unifiedRevisions.length;
-
-    // Find latest version
+  
+    const totalVersions = (unifiedOriginal ? 1 : 0) + unifiedRevisions.length;
+  
     let latestVersion: IProjectVersionsResponse['latestVersion'] = null;
+  
     if (unifiedRevisions.length > 0) {
       const latest = unifiedRevisions[unifiedRevisions.length - 1];
       latestVersion = {
@@ -4420,19 +4614,18 @@ export class ProjectGroupsService {
         revisionNumber: latest.developmentPlanRevision?.revisionNumber,
         isOriginal: false,
       };
-    } else if (originalProject) {
+    } else if (unifiedOriginal) {
       latestVersion = {
-        id: originalProject.id,
+        id: unifiedOriginal.id,
         isOriginal: true,
       };
     }
-
+  
     return {
       originalProject: unifiedOriginal,
       revisions: unifiedRevisions,
       totalVersions,
       latestVersion,
-
     };
   }
 
