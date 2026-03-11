@@ -99,6 +99,22 @@ export class RevisedProjectGroupController {
   }
 
   /**
+   * เปลี่ยนแปลง DevelopmentPlanRevisionID ของ RevisedProjectGroup (Optimized)
+   */
+  @Patch('change/developmentPlanRevision/:id')
+  async updateChangeDevelopmentPlanRevision(
+    @Param('id') id: string,
+    @Body('developmentPlanRevisionId') developmentPlanRevisionId: string,
+  ) {
+    this.logger.log(
+      `Updating revision ID for revised project group with id: ${id}`,
+    );
+    return this.revisedProjectGroupService.updateChangeDevelopmentPlanRevision(
+      id,
+      developmentPlanRevisionId,
+    );
+  }
+  /**
    * อัพเดท RevisedProjectGroup
    */
   @Patch(':id')
@@ -109,6 +125,7 @@ export class RevisedProjectGroupController {
     this.logger.log(`Updating revised project group with id: ${id}`);
     return this.revisedProjectGroupService.update(id, updateDto);
   }
+
 
   /**
    * ลบ RevisedProjectGroup

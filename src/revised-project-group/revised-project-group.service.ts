@@ -352,6 +352,34 @@ export class RevisedProjectGroupService {
     }
   }
 
+  async updateChangeDevelopmentPlanRevision(
+    id: string,
+    developmentPlanRevisionId: string,
+  ): Promise<RevisedProjectGroup> {
+    try {
+      // 1. Validate if the project exists
+      const projectExists = await this.revisedProjectGroupRepo.exist({ where: { id } });
+      if (!projectExists) {
+        throw new NotFoundException(`RevisedProjectGroup with id ${id} not found`);
+      }
+
+      // 2. Validate if the revision exists
+      const revisionExists = await this.developmentPlanRevisionRepo.exist({ where: { id: developmentPlanRevisionId } });
+      if (!revisionExists) {
+        throw new NotFoundException(`DevelopmentPlanRevision not found: ${developmentPlanRevisionId}`);
+      }
+
+      // 3. Update the revision ID directly
+      await this.revisedProjectGroupRepo.update(id, {
+        developmentPlanRevision: { id: developmentPlanRevisionId } as any,
+      });
+
+      // 4. Return the updated project
+      return this.findOneEntity(id);
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
   /**
    * อัพเดท RevisedProjectGroup
    */
