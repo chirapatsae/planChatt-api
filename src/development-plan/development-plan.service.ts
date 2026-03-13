@@ -594,6 +594,7 @@ export class DevelopmentPlanService {
         .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
         .andWhere('status.name = :statusName', { statusName: 'Approved' })
         .andWhere('revisedProjectGroups.id IS NULL') // คือต้องไม่มีโครงการลูก
+        .orderBy('strategy.id', 'ASC')
         .getMany();
 
       // Convert to unified format
@@ -626,7 +627,7 @@ export class DevelopmentPlanService {
 
       const pdfBuffer = await this.pdfService.generateProjectReportWithColumns(
         allProjects,
-        ['index', 'title', 'objective', 'target', 'budget', 'kpi', 'expectedResult', 'mainAgency'],
+        ['index', 'title', 'objective', 'target', 'budget', 'expectedResult', 'mainAgency'],
         { developmentPlanId },
       );
 
@@ -757,6 +758,7 @@ export class DevelopmentPlanService {
         .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
         .andWhere('status.name = :statusName', { statusName: 'Approved' })
         .andWhere('revisedProjectGroups.id IS NULL')
+        .orderBy('strategy.id', 'ASC')
         .getMany();
 
       const allProjects = [
@@ -775,7 +777,6 @@ export class DevelopmentPlanService {
           'objective',
           'target',
           'budget',
-          'kpi',
           'expectedResult',
           'mainAgency',
         ],

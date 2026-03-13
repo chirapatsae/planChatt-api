@@ -461,6 +461,7 @@ export class DevelopmentPlanRevisionService {
         .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
         .andWhere('status.name = :statusName', { statusName: 'Approved' })
         .andWhere('revisedProject.deletedAt IS NULL')
+        .orderBy('strategy.id', 'ASC')
         .getMany();
 
       // Convert to unified format
@@ -491,7 +492,7 @@ export class DevelopmentPlanRevisionService {
 
       const pdfBuffer = await this.pdfService.generateRevisionApprovedReportWithColumns(
         developmentPlanRevisionId,
-        ['index', 'title', 'objective', 'target', 'budget', 'kpi', 'expectedResult', 'mainAgency'],
+        ['index', 'title', 'objective', 'target', 'budget', 'expectedResult', 'mainAgency'],
       );
 
       // Send progress: PDF generated (70%)
@@ -655,6 +656,7 @@ export class DevelopmentPlanRevisionService {
         .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
         .andWhere('status.name = :statusName', { statusName: 'Approved' })
         .andWhere('revisedProject.deletedAt IS NULL')
+        .orderBy('strategy.id', 'ASC')
         .getMany();
 
       // Convert to unified format
@@ -685,7 +687,7 @@ export class DevelopmentPlanRevisionService {
 
       const pdfBuffer = await this.pdfService.generateRevisionApprovedReportWithColumns(
         developmentPlanRevisionId,
-        ['index', 'title', 'objective', 'target', 'budget', 'kpi', 'expectedResult', 'mainAgency'],
+        ['index', 'title', 'objective', 'target', 'budget', 'expectedResult', 'mainAgency'],
       );
 
       // Send progress: PDF generated (70%)

@@ -50,7 +50,7 @@ export class PdfController {
 
     const pdfBuffer = await this.pdfService.generateProjectReportWithColumns(
       projects,
-      selectedColumns || ['index', 'title', 'objective', 'target', 'budget', 'kpi', 'expectedResult', 'mainAgency'],
+      selectedColumns || ['index', 'title', 'objective', 'target', 'budget', 'expectedResult', 'mainAgency'],
       { developmentPlanId, reportType: type }
     );
 
@@ -76,7 +76,7 @@ export class PdfController {
 
     const pdfBuffer = await this.pdfService.generateProjectReportWithColumns(
       projects,
-      selectedColumns || ['index', 'title', 'objective', 'target', 'budget', 'kpi', 'expectedResult', 'mainAgency'],
+      selectedColumns || ['index', 'title', 'objective', 'target', 'budget', 'expectedResult', 'mainAgency'],
       { developmentPlanId, reportType: 'outAuthority' }
     );
 
@@ -317,6 +317,61 @@ export class PdfController {
     return result;
   }
 
+  @Post('generate-revision-custom')
+  async generateRevisionCustomPdf(@Body() body: any, @Res() res: Response) {
+    const { ids, selectedColumns } = body;
+    
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      res.status(400).json({ message: 'ids is required and must be a non-empty array' });
+      return;
+    }
+
+    // Query revised projects from IDs
+    const revisedProjects = await this.pdfService.findRevisedProjectsByIds(ids);
+    
+    if (revisedProjects.length === 0) {
+      res.status(404).json({ message: 'No revised projects found for the provided IDs' });
+      return;
+    }
+
+    // Get developmentPlanRevisionId and type from first project
+    const firstProject = revisedProjects[0];
+    const developmentPlanRevisionId = firstProject?.developmentPlanRevision?.id;
+    const revisionType = firstProject?.developmentPlanRevision?.revisionType?.name;
+
+    if (!developmentPlanRevisionId || !revisionType) {
+      res.status(400).json({ message: 'Invalid revised projects: missing revision metadata' });
+      return;
+    }
+
+    const columnsToUse = selectedColumns || ['index', 'title', 'objective', 'target', 'budget', 'expectedResult', 'mainAgency'];
+    let pdfBuffer: Buffer;
+
+    if (revisionType === 'แก้ไข') {
+      pdfBuffer = await this.pdfService.generateRevisionEditDraftReportWithColumns(
+        developmentPlanRevisionId,
+        columnsToUse,
+        revisedProjects,
+      );
+    } else if (revisionType === 'เปลี่ยนแปลง') {
+      pdfBuffer = await this.pdfService.generateRevisionChangeDraftReportWithColumns(
+        developmentPlanRevisionId,
+        columnsToUse,
+        revisedProjects,
+      );
+    } else {
+      res.status(400).json({ message: `Unsupported revision type: ${revisionType}` });
+      return;
+    }
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': 'attachment; filename=custom-revision-report.pdf',
+    });
+
+    res.end(pdfBuffer);
+  }
+
   @Post('generate-revision-details-only')
   async generateRevisionDetailsOnly(@Body() body: any, @Res() res: Response) {
     const { ids, selectedColumns } = body;
@@ -353,7 +408,7 @@ export class PdfController {
 
     const pdfBuffer = await this.pdfService.generateRevisionEditDetailsOnly(
       developmentPlanRevisionId,
-      selectedColumns || ['index', 'title', 'objective', 'target', 'budget', 'kpi', 'expectedResult', 'mainAgency'],
+      selectedColumns || ['index', 'title', 'objective', 'target', 'budget', 'expectedResult', 'mainAgency'],
       revisedProjects,
     );
 

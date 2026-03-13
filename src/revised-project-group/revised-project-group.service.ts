@@ -637,6 +637,7 @@ export class RevisedProjectGroupService {
         .leftJoinAndSelect('rpg.responsibleAgency', 'responsibleAgency')
         .leftJoinAndSelect('rpg.budgets', 'budgets')
         .leftJoinAndSelect('rpg.trackingStatus', 'trackingStatus')
+        .leftJoinAndSelect('rpg.attachments', 'attachments')
         .leftJoinAndSelect('trackingStatus.statusId', 'status')
         .leftJoinAndSelect('trackingStatus.createdBy', 'trackingStatusCreatedBy')
         .leftJoinAndSelect('trackingStatusCreatedBy.user', 'trackingStatusCreatedByUser')
@@ -745,6 +746,7 @@ export class RevisedProjectGroupService {
         .leftJoinAndSelect('rpg.responsibleAgency', 'responsibleAgency')
         .leftJoinAndSelect('rpg.budgets', 'budgets')
         .leftJoinAndSelect('rpg.trackingStatus', 'trackingStatus')
+        .leftJoinAndSelect('rpg.attachments', 'attachments')
         .leftJoinAndSelect('trackingStatus.statusId', 'status')
         .leftJoinAndSelect('trackingStatus.createdBy', 'trackingStatusCreatedBy')
         .leftJoinAndSelect('trackingStatusCreatedBy.user', 'trackingStatusCreatedByUser')
@@ -897,6 +899,7 @@ export class RevisedProjectGroupService {
         .leftJoinAndSelect('rpg.responsibleAgency', 'responsibleAgency')
         .leftJoinAndSelect('rpg.budgets', 'budgets')
         .leftJoinAndSelect('rpg.trackingStatus', 'trackingStatus')
+        .leftJoinAndSelect('rpg.attachments', 'attachments')
         .leftJoinAndSelect('trackingStatus.statusId', 'status')
         .leftJoinAndSelect('trackingStatus.createdBy', 'trackingStatusCreatedBy')
         .leftJoinAndSelect('trackingStatusCreatedBy.user', 'trackingStatusCreatedByUser')
@@ -959,13 +962,14 @@ export class RevisedProjectGroupService {
         .leftJoinAndSelect('rpg.originAgencyId', 'originAgency')
         .leftJoinAndSelect('rpg.responsibleAgency', 'responsibleAgency')
         .leftJoinAndSelect('rpg.budgets', 'budgets')
+        .innerJoin('rpg.trackingStatus', 'latestTrackingStatus', 'latestTrackingStatus.isLatest = :isLatest', { isLatest: true })
+        .innerJoin('latestTrackingStatus.statusId', 'latestStatus', 'latestStatus.name = :statusName', { statusName: 'Approved' })
         .leftJoinAndSelect('rpg.trackingStatus', 'trackingStatus')
         .leftJoinAndSelect('trackingStatus.statusId', 'status')
+        .leftJoinAndSelect('rpg.attachments', 'attachments')
         .leftJoinAndSelect('trackingStatus.createdBy', 'trackingStatusCreatedBy')
         .leftJoinAndSelect('trackingStatusCreatedBy.user', 'trackingStatusCreatedByUser')
         .where('rt.name = :revisionTypeName', { revisionTypeName: 'แก้ไข' })
-        .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-        .andWhere('status.name = :statusName', { statusName: 'Approved' })
         .andWhere('dpr.isLatest = :isLatestRevision', { isLatestRevision: true })
         .andWhere('dpr.isBooked = :isBooked', { isBooked: false });
 
@@ -1027,6 +1031,7 @@ export class RevisedProjectGroupService {
         .leftJoinAndSelect('rpg.responsibleAgency', 'responsibleAgency')
         .leftJoinAndSelect('rpg.budgets', 'budgets')
         .leftJoinAndSelect('rpg.trackingStatus', 'trackingStatus')
+        .leftJoinAndSelect('rpg.attachments', 'attachments')
         .leftJoinAndSelect('trackingStatus.statusId', 'status')
         .leftJoinAndSelect('trackingStatus.createdBy', 'trackingStatusCreatedBy')
         .leftJoinAndSelect('trackingStatusCreatedBy.user', 'trackingStatusCreatedByUser')
@@ -1089,13 +1094,14 @@ export class RevisedProjectGroupService {
         .leftJoinAndSelect('rpg.originAgencyId', 'originAgency')
         .leftJoinAndSelect('rpg.responsibleAgency', 'responsibleAgency')
         .leftJoinAndSelect('rpg.budgets', 'budgets')
+        .leftJoinAndSelect('rpg.attachments', 'attachments')
+        .innerJoin('rpg.trackingStatus', 'latestTrackingStatus', 'latestTrackingStatus.isLatest = :isLatest', { isLatest: true })
+        .innerJoin('latestTrackingStatus.statusId', 'latestStatus', 'latestStatus.name = :statusName', { statusName: 'Verified' })
         .leftJoinAndSelect('rpg.trackingStatus', 'trackingStatus')
         .leftJoinAndSelect('trackingStatus.statusId', 'status')
         .leftJoinAndSelect('trackingStatus.createdBy', 'trackingStatusCreatedBy')
         .leftJoinAndSelect('trackingStatusCreatedBy.user', 'trackingStatusCreatedByUser')
         .where('rt.name = :revisionTypeName', { revisionTypeName: 'เปลี่ยนแปลง' })
-        .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-        .andWhere('status.name = :statusName', { statusName: 'Verified' })
         .andWhere('dpr.isLatest = :isLatestRevision', { isLatestRevision: true })
         .andWhere('dpr.isBooked = :isBooked', { isBooked: false });
 
@@ -1152,13 +1158,14 @@ export class RevisedProjectGroupService {
         .leftJoinAndSelect('rpg.originAgencyId', 'originAgency')
         .leftJoinAndSelect('rpg.responsibleAgency', 'responsibleAgency')
         .leftJoinAndSelect('rpg.budgets', 'budgets')
+        .leftJoinAndSelect('rpg.attachments', 'attachments')
+        .innerJoin('rpg.trackingStatus', 'latestTrackingStatus', 'latestTrackingStatus.isLatest = :isLatest', { isLatest: true })
+        .innerJoin('latestTrackingStatus.statusId', 'latestStatus', 'latestStatus.name = :statusName', { statusName: 'Pending_Approval' })
         .leftJoinAndSelect('rpg.trackingStatus', 'trackingStatus')
         .leftJoinAndSelect('trackingStatus.statusId', 'status')
         .leftJoinAndSelect('trackingStatus.createdBy', 'trackingStatusCreatedBy')
         .leftJoinAndSelect('trackingStatusCreatedBy.user', 'trackingStatusCreatedByUser')
         .where('rt.name = :revisionTypeName', { revisionTypeName: 'เปลี่ยนแปลง' })
-        .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-        .andWhere('status.name = :statusName', { statusName: 'Pending_Approval' })
         .andWhere('dpr.isLatest = :isLatestRevision', { isLatestRevision: true })
         .andWhere('dpr.isBooked = :isBooked', { isBooked: false });
 
@@ -1215,13 +1222,14 @@ export class RevisedProjectGroupService {
         .leftJoinAndSelect('rpg.originAgencyId', 'originAgency')
         .leftJoinAndSelect('rpg.responsibleAgency', 'responsibleAgency')
         .leftJoinAndSelect('rpg.budgets', 'budgets')
+        .leftJoinAndSelect('rpg.attachments', 'attachments')
+        .innerJoin('rpg.trackingStatus', 'latestTrackingStatus', 'latestTrackingStatus.isLatest = :isLatest', { isLatest: true })
+        .innerJoin('latestTrackingStatus.statusId', 'latestStatus', 'latestStatus.name = :statusName', { statusName: 'Approved' })
         .leftJoinAndSelect('rpg.trackingStatus', 'trackingStatus')
         .leftJoinAndSelect('trackingStatus.statusId', 'status')
         .leftJoinAndSelect('trackingStatus.createdBy', 'trackingStatusCreatedBy')
         .leftJoinAndSelect('trackingStatusCreatedBy.user', 'trackingStatusCreatedByUser')
         .where('rt.name = :revisionTypeName', { revisionTypeName: 'เปลี่ยนแปลง' })
-        .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-        .andWhere('status.name = :statusName', { statusName: 'Approved' })
         .andWhere('dpr.isLatest = :isLatestRevision', { isLatestRevision: true })
         .andWhere('dpr.isBooked = :isBooked', { isBooked: false });
 
@@ -1552,23 +1560,181 @@ export class RevisedProjectGroupService {
     ];
   }
 
-  /**
-   * คำนวณว่าเป็น "แก้ไขครั้งที่" หรือ "เปลี่ยนแปลงครั้งที่" เท่าไหร่
-   * โดยนับจำนวน revision ไม่จำเป็นต้อง type เดียวกัน
-   */
-  private async calculateRevisionOccurrence(
-    developmentPlanId: string,
-    currentRevisionNumber: number,
-  ): Promise<DevelopmentPlanRevision[]> {
-    // ดึง revisions ทั้งหมดที่มี revisionNumber น้อยกว่า (ไม่จำกัด type)
-    const previousRevisions = await this.developmentPlanRevisionRepo
-      .createQueryBuilder('dpr')
-      .where('dpr.development_plan_id = :developmentPlanId', { developmentPlanId })
-      .andWhere('dpr.revision_number < :currentRevisionNumber', {
-        currentRevisionNumber,
-      }).getMany();
 
-    // ครั้งที่ = จำนวนครั้งก่อนหน้า + 1
-    return previousRevisions;
+  async findAllVersions(
+    projectId: string,
+    userId: string,
+  ): Promise<any> {
+    // Validate user permissions
+    const workHistory = await this.workHistoryRepo.findOne({
+      where: { user: { id: userId }, isCurrent: true },
+      relations: ['workStatus', 'role'],
+    });
+
+    if (!workHistory) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    if (workHistory.workStatus.name !== 'approved') {
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+    }
+
+    const allowedRoles = ['user', 'staff', 'admin', 'super-admin', 'c-level'];
+    if (!allowedRoles.includes(workHistory.role.name)) {
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+    }
+
+    let currentProject: IUnifiedProjectDisplay | null = null;
+    let originalProject: any = null;
+    let rootProjectGroupId: string | null = null;
+
+    // 1) ลองหาเป็น project group ก่อน
+    originalProject = await this.projectGroupRepo.findOne({
+      where: { id: projectId },
+      relations: [
+        'createdBy',
+        'createdBy.user',
+        'createdBy.amphoe',
+        'createdBy.localAdministrativeOrganization',
+        'strategy',
+        'tactic',
+        'plan',
+        'developmentPlan',
+        'budgets',
+        'trackingStatus',
+        'trackingStatus.statusId',
+        'trackingStatus.comments',
+        'trackingStatus.createdBy',
+        'trackingStatus.createdBy.user',
+        'responsibleAgency',
+        'originAgencyId',
+        'favorites',
+        'favorites.userId',
+        'attachments',
+      ],
+    });
+
+    if (originalProject) {
+      rootProjectGroupId = originalProject.id;
+      currentProject = UnifiedProjectMapper.fromProjectGroup(originalProject);
+    } else {
+      // 2) ถ้าไม่เจอ ลองหาเป็น revised project
+      const requestedRevisedProject = await this.revisedProjectGroupRepo.findOne({
+        where: { id: projectId },
+        relations: [
+          'projectGroup',
+          'developmentPlanRevision',
+          'developmentPlanRevision.developmentPlan',
+          'developmentPlanRevision.revisionType',
+          'createdBy',
+          'createdBy.user',
+          'strategy',
+          'tactic',
+          'plan',
+          'budgets',
+          'trackingStatus',
+          'trackingStatus.statusId',
+          'responsibleAgency',
+          'originAgencyId',
+          'attachments',
+        ],
+      });
+
+      if (!requestedRevisedProject) {
+        throw new NotFoundException('ไม่พบโครงการ');
+      }
+
+      currentProject = UnifiedProjectMapper.fromRevisedProjectGroup(requestedRevisedProject);
+      rootProjectGroupId = requestedRevisedProject.projectGroup?.id || null;
+
+      if (!rootProjectGroupId) {
+        throw new NotFoundException('ไม่พบโครงการต้นฉบับของรายการแก้ไขนี้');
+      }
+
+      // 3) ใช้ root project group id ไปดึง original project
+      originalProject = await this.projectGroupRepo.findOne({
+        where: { id: rootProjectGroupId },
+        relations: [
+          'createdBy',
+          'createdBy.user',
+          'createdBy.amphoe',
+          'createdBy.localAdministrativeOrganization',
+          'strategy',
+          'tactic',
+          'plan',
+          'developmentPlan',
+          'budgets',
+          'trackingStatus',
+          'trackingStatus.statusId',
+          'trackingStatus.comments',
+          'trackingStatus.createdBy',
+          'trackingStatus.createdBy.user',
+          'responsibleAgency',
+          'originAgencyId',
+          'favorites',
+          'favorites.userId',
+          'attachments',
+        ],
+      });
+    }
+
+    // 4) ดึง revisions ทั้งหมดของ project group นั้น
+    const allRevisions = await this.revisedProjectGroupRepo.find({
+      where: {
+        projectGroup: { id: rootProjectGroupId as string },
+        trackingStatus: { isLatest: true },
+      },
+      relations: [
+        'developmentPlanRevision',
+        'developmentPlanRevision.developmentPlan',
+        'developmentPlanRevision.revisionType',
+        'projectGroup',
+        'createdBy',
+        'createdBy.user',
+        'createdBy.amphoe',
+        'createdBy.localAdministrativeOrganization',
+        'strategy',
+        'tactic',
+        'plan',
+        'developmentPlan',
+        'budgets',
+        'trackingStatus',
+        'trackingStatus.statusId',
+        'trackingStatus.comments',
+        'trackingStatus.createdBy',
+        'trackingStatus.createdBy.user',
+        'responsibleAgency',
+        'originAgencyId',
+        'attachments',
+      ],
+      order: {
+        developmentPlanRevision: {
+          revisionNumber: 'ASC',
+        },
+      },
+    });
+
+    const unifiedOriginal = originalProject
+      ? UnifiedProjectMapper.fromProjectGroup(originalProject)
+      : null;
+
+    const unifiedRevisions = allRevisions.map((revision) =>
+      UnifiedProjectMapper.fromRevisedProjectGroup(revision),
+    );
+
+    // Set currentProject from the list
+    if (currentProject?.projectType === 'revised') {
+      const found = unifiedRevisions.find((r) => r.id === projectId);
+      if (found) currentProject = found;
+    } else if (currentProject?.projectType === 'original') {
+      currentProject = unifiedOriginal;
+    }
+
+    return {
+      original: unifiedOriginal,
+      current: currentProject,
+      currentId: projectId,
+      revisions: unifiedRevisions,
+    };
   }
 }

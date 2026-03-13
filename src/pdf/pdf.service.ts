@@ -141,10 +141,10 @@ export class PdfService {
   private getPdfFonts() {
     return {
       THSarabun: {
-        normal: this.resolveFontPath('THSarabunIT9.ttf'),
-        bold: this.resolveFontPath('THSarabunIT9 Bold.ttf'),
-        italics: this.resolveFontPath('THSarabunIT9 Italic.ttf'),
-        bolditalics: this.resolveFontPath('THSarabunIT9 BoldItalic.ttf'),
+        normal: this.resolveFontPath('THSarabun.ttf'),
+        bold: this.resolveFontPath('THSarabun Bold.ttf'),
+        italics: this.resolveFontPath('THSarabun Italic.ttf'),
+        bolditalics: this.resolveFontPath('THSarabun BoldItalic.ttf'),
       },
       Roboto: {
         normal: path.resolve(__dirname, '../fonts/Roboto-Regular.ttf'),
@@ -352,7 +352,7 @@ export class PdfService {
         relations: [
           'developmentPlan', 'strategy', 'tactic', 'plan', 'createdBy', 'createdBy.user',
           'budgets', 'trackingStatus', 'trackingStatus.statusId', 'trackingStatus.createdBy',
-          'trackingStatus.createdBy.user', 'originAgencyId', 'responsibleAgency' , 'amphoe',
+          'trackingStatus.createdBy.user', 'originAgencyId', 'responsibleAgency', 'amphoe',
         ],
       });
     } else if (current.prevProjectType === "revised" || current.prevProjectType === "revision") {
@@ -410,6 +410,7 @@ export class PdfService {
       .leftJoinAndSelect('projectGroup.originAgencyId', 'originAgencyId')
       .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
       .where('projectGroup.id IN (:...ids)', { ids: projectIds })
+      .orderBy('strategy.id', 'ASC')
       .getMany();
 
     const revisedProjects = await this.revisedProjectGroupRepo.createQueryBuilder('revisedProject')
@@ -437,6 +438,7 @@ export class PdfService {
       .leftJoinAndSelect('revisedProject.originAgencyId', 'originAgencyId')
       .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
       .where('revisedProject.id IN (:...ids)', { ids: projectIds })
+      .orderBy('strategy.id', 'ASC')
       .getMany();
 
     const allProjects = [
@@ -470,6 +472,7 @@ export class PdfService {
       .leftJoinAndSelect('createdBy.amphoe', 'amphoe')
       .leftJoinAndSelect('createdBy.localAdministrativeOrganization', 'localAdministrativeOrganization')
       .where('revisedProject.id IN (:...ids)', { ids: projectRevisionIds })
+      .orderBy('strategy.id', 'ASC')
       .getMany();
   }
 
@@ -504,6 +507,7 @@ export class PdfService {
       .andWhere('status.name IN (:...statusNames)', { statusNames: ['Pending_Approval', 'Approved'] })
       .andWhere('projectGroup.originAgencyId IS NULL')
       .andWhere('projectGroup.responsibleAgency IS NOT NULL')
+      .orderBy('strategy.id', 'ASC')
       .getMany();
 
     return projects.map(p => UnifiedProjectMapper.fromProjectGroup(p));
@@ -539,6 +543,7 @@ export class PdfService {
       .andWhere('projectGroup.isBooked = :isBooked', { isBooked: false })
       .andWhere('status.name IN (:...statusNames)', { statusNames: ['Pending_Approval', 'Approved'] })
       .andWhere('projectGroup.originAgencyId IS NOT NULL')
+      .orderBy('strategy.id', 'ASC')
       .getMany();
 
     return projects.map(p => UnifiedProjectMapper.fromProjectGroup(p));
@@ -575,6 +580,7 @@ export class PdfService {
       .andWhere('status.name = :statusName', { statusName: 'Rejected' })
       .andWhere('projectGroup.originAgencyId IS NOT NULL')
       .andWhere('projectGroup.responsibleAgency IS NULL')
+      .orderBy('strategy.id', 'ASC')
       .getMany();
 
     return projects.map(p => UnifiedProjectMapper.fromProjectGroup(p));
@@ -610,6 +616,7 @@ export class PdfService {
       .andWhere('revisionType.name = :revisionTypeName', { revisionTypeName: 'แก้ไข' })
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
       .andWhere('status.name IN (:...statusNames)', { statusNames: ['Pending_Approval', 'Approved'] })
+      .orderBy('strategy.id', 'ASC')
       .getMany();
 
     return projects;
@@ -645,6 +652,7 @@ export class PdfService {
       .andWhere('revisionType.name = :revisionTypeName', { revisionTypeName: 'เปลี่ยนแปลง' })
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
       .andWhere('status.name IN (:...statusNames)', { statusNames: ['Pending_Approval', 'Approved'] })
+      .orderBy('strategy.id', 'ASC')
       .getMany();
 
     return projects.map(p => UnifiedProjectMapper.fromRevisedProjectGroup(p));
@@ -656,7 +664,7 @@ export class PdfService {
 
   async generateProjectReport(projects: any[], options?: GenerateReportOptions): Promise<Buffer> {
     return this.generateProjectReportWithColumns(projects, [
-      'index', 'title', 'objective', 'target', 'budget', 'kpi', 'expectedResult', 'mainAgency'
+      'index', 'title', 'objective', 'target', 'budget', 'expectedResult', 'mainAgency'
     ], options);
   }
 
@@ -782,7 +790,7 @@ export class PdfService {
     const defaultColumns = ['index', 'title', 'objective', 'target', 'budget', 'kpi', 'expectedResult', 'mainAgency'];
     const columnsToUse = selectedColumns || defaultColumns;
     const availableColumns = columnsToUse.filter(col => columnMap[col] && col !== 'amphoe' && col !== 'coordinates');
-    
+
     const fonts = this.getPdfFonts();
     const years = Array.from({ length: dp.endYear - dp.startYear + 1 }, (_, index) => dp.startYear + index);
     const { groupedProjects } = this.prepareReportAggregations(projects, years);
@@ -1211,7 +1219,7 @@ export class PdfService {
     const projects = await this.findProjectsForRevisionEditDraft(options.developmentPlanRevisionId);
     if (projects.length === 0) throw new Error('No projects found with status Pending_Approval or Approved');
 
-    const selectedColumns = ['index', 'title', 'objective', 'target', 'budget', 'kpi', 'expectedResult', 'mainAgency'];
+    const selectedColumns = ['index', 'title', 'objective', 'target', 'budget', 'expectedResult', 'mainAgency'];
     const pdfBuffer = await this.generateRevisionEditDraftReportWithColumns(
       options.developmentPlanRevisionId, selectedColumns, projects
     );
@@ -1245,27 +1253,28 @@ export class PdfService {
     let revisedProjects: RevisedProjectGroup[] = [];
 
     if (existingProjects) {
-        revisedProjects = existingProjects;
+      revisedProjects = existingProjects;
     } else {
-        revisedProjects = await this.revisedProjectGroupRepo.createQueryBuilder('revisedProject')
-            .leftJoinAndSelect('revisedProject.developmentPlanRevision', 'developmentPlanRevision')
-            .leftJoinAndSelect('developmentPlanRevision.developmentPlan', 'developmentPlan')
-            .leftJoinAndSelect('developmentPlanRevision.revisionType', 'revisionType')
-            .leftJoinAndSelect('revisedProject.projectGroup', 'projectGroup')
-            .leftJoinAndSelect('revisedProject.strategy', 'strategy')
-            .leftJoinAndSelect('revisedProject.tactic', 'tactic')
-            .leftJoinAndSelect('revisedProject.plan', 'plan')
-            .leftJoinAndSelect('revisedProject.budgets', 'budgets')
-            .leftJoinAndSelect('revisedProject.responsibleAgency', 'responsibleAgency')
-            .leftJoinAndSelect('revisedProject.originAgencyId', 'originAgencyId')
-            .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
-            .leftJoinAndSelect('revisedProject.trackingStatus', 'trackingStatus')
-            .leftJoinAndSelect('trackingStatus.statusId', 'status')
-            .where('developmentPlanRevision.id = :developmentPlanRevisionId', { developmentPlanRevisionId })
-            .andWhere('revisionType.name = :revisionTypeName', { revisionTypeName: 'แก้ไข' })
-            .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-            .andWhere('status.name IN (:...statusNames)', { statusNames: ['Pending_Approval', 'Approved'] })
-            .getMany();
+      revisedProjects = await this.revisedProjectGroupRepo.createQueryBuilder('revisedProject')
+        .leftJoinAndSelect('revisedProject.developmentPlanRevision', 'developmentPlanRevision')
+        .leftJoinAndSelect('developmentPlanRevision.developmentPlan', 'developmentPlan')
+        .leftJoinAndSelect('developmentPlanRevision.revisionType', 'revisionType')
+        .leftJoinAndSelect('revisedProject.projectGroup', 'projectGroup')
+        .leftJoinAndSelect('revisedProject.strategy', 'strategy')
+        .leftJoinAndSelect('revisedProject.tactic', 'tactic')
+        .leftJoinAndSelect('revisedProject.plan', 'plan')
+        .leftJoinAndSelect('revisedProject.budgets', 'budgets')
+        .leftJoinAndSelect('revisedProject.responsibleAgency', 'responsibleAgency')
+        .leftJoinAndSelect('revisedProject.originAgencyId', 'originAgencyId')
+        .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
+        .leftJoinAndSelect('revisedProject.trackingStatus', 'trackingStatus')
+        .leftJoinAndSelect('trackingStatus.statusId', 'status')
+        .where('developmentPlanRevision.id = :developmentPlanRevisionId', { developmentPlanRevisionId })
+        .andWhere('revisionType.name = :revisionTypeName', { revisionTypeName: 'แก้ไข' })
+        .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+        .andWhere('status.name IN (:...statusNames)', { statusNames: ['Pending_Approval', 'Approved'] })
+        .orderBy('strategy.id', 'ASC')
+        .getMany();
     }
 
     if (revisedProjects.length === 0) throw new Error('No projects found with status Pending_Approval or Approved');
@@ -1368,27 +1377,28 @@ export class PdfService {
     let revisedProjects: RevisedProjectGroup[] = [];
 
     if (existingProjects) {
-        revisedProjects = existingProjects;
+      revisedProjects = existingProjects;
     } else {
-        revisedProjects = await this.revisedProjectGroupRepo.createQueryBuilder('revisedProject')
-            .leftJoinAndSelect('revisedProject.developmentPlanRevision', 'developmentPlanRevision')
-            .leftJoinAndSelect('developmentPlanRevision.developmentPlan', 'developmentPlan')
-            .leftJoinAndSelect('developmentPlanRevision.revisionType', 'revisionType')
-            .leftJoinAndSelect('revisedProject.projectGroup', 'projectGroup')
-            .leftJoinAndSelect('revisedProject.strategy', 'strategy')
-            .leftJoinAndSelect('revisedProject.tactic', 'tactic')
-            .leftJoinAndSelect('revisedProject.plan', 'plan')
-            .leftJoinAndSelect('revisedProject.budgets', 'budgets')
-            .leftJoinAndSelect('revisedProject.responsibleAgency', 'responsibleAgency')
-            .leftJoinAndSelect('revisedProject.originAgencyId', 'originAgencyId')
-            .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
-            .leftJoinAndSelect('revisedProject.trackingStatus', 'trackingStatus')
-            .leftJoinAndSelect('trackingStatus.statusId', 'status')
-            .where('developmentPlanRevision.id = :developmentPlanRevisionId', { developmentPlanRevisionId })
-            .andWhere('revisionType.name = :revisionTypeName', { revisionTypeName: 'แก้ไข' })
-            .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-            .andWhere('status.name IN (:...statusNames)', { statusNames: ['Pending_Approval', 'Approved'] })
-            .getMany();
+      revisedProjects = await this.revisedProjectGroupRepo.createQueryBuilder('revisedProject')
+        .leftJoinAndSelect('revisedProject.developmentPlanRevision', 'developmentPlanRevision')
+        .leftJoinAndSelect('developmentPlanRevision.developmentPlan', 'developmentPlan')
+        .leftJoinAndSelect('developmentPlanRevision.revisionType', 'revisionType')
+        .leftJoinAndSelect('revisedProject.projectGroup', 'projectGroup')
+        .leftJoinAndSelect('revisedProject.strategy', 'strategy')
+        .leftJoinAndSelect('revisedProject.tactic', 'tactic')
+        .leftJoinAndSelect('revisedProject.plan', 'plan')
+        .leftJoinAndSelect('revisedProject.budgets', 'budgets')
+        .leftJoinAndSelect('revisedProject.responsibleAgency', 'responsibleAgency')
+        .leftJoinAndSelect('revisedProject.originAgencyId', 'originAgencyId')
+        .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
+        .leftJoinAndSelect('revisedProject.trackingStatus', 'trackingStatus')
+        .leftJoinAndSelect('trackingStatus.statusId', 'status')
+        .where('developmentPlanRevision.id = :developmentPlanRevisionId', { developmentPlanRevisionId })
+        .andWhere('revisionType.name = :revisionTypeName', { revisionTypeName: 'แก้ไข' })
+        .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+        .andWhere('status.name IN (:...statusNames)', { statusNames: ['Pending_Approval', 'Approved'] })
+        .orderBy('strategy.id', 'ASC')
+        .getMany();
     }
 
     if (revisedProjects.length === 0) throw new Error('No projects found with status Pending_Approval or Approved');
@@ -1397,7 +1407,7 @@ export class PdfService {
       revisedProjects.map(async (current) => this.findProjectComparisonForRevisionEdit(current, developmentPlanId))
     );
 
-    const defaultColumns = ['index', 'title', 'objective', 'target', 'budget', 'kpi', 'expectedResult', 'mainAgency'];
+    const defaultColumns = ['index', 'title', 'objective', 'target', 'budget', 'expectedResult', 'mainAgency'];
     const columnsToUse = selectedColumns || defaultColumns;
 
     const columnMap: Record<string, { text: string; key: string }> = {
@@ -1433,7 +1443,7 @@ export class PdfService {
     // สร้างเฉพาะ detail pages (ไม่สร้าง summary และ cover page)
     for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
       const [strategyName, tacticName, planName] = groupKey.split('||');
-      
+
       const detailDoc = createRevisionEditGroupDetailDocDefinitionUser({
         developmentPlanRevisionName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
         pageMargins, pageOrientation, newWord: this.newWord.bind(this),
@@ -1570,7 +1580,7 @@ export class PdfService {
     const projects = await this.findProjectsForRevisionChangeDraft(options.developmentPlanRevisionId);
     if (projects.length === 0) throw new Error('No projects found with status Pending_Approval or Approved');
 
-    const selectedColumns = ['index', 'title', 'objective', 'target', 'budget', 'kpi', 'expectedResult', 'mainAgency'];
+    const selectedColumns = ['index', 'title', 'objective', 'target', 'budget', 'expectedResult', 'mainAgency'];
     const pdfBuffer = await this.generateRevisionChangeDraftReportWithColumns(
       options.developmentPlanRevisionId, selectedColumns,
     );
@@ -1587,6 +1597,7 @@ export class PdfService {
   async generateRevisionChangeDraftReportWithColumns(
     developmentPlanRevisionId: string,
     selectedColumns: string[],
+    existingProjects?: RevisedProjectGroup[]
   ): Promise<Buffer> {
     const developmentPlanRevision = await this.developmentPlanRevisionRepo.findOne({
       where: { id: developmentPlanRevisionId },
@@ -1601,25 +1612,32 @@ export class PdfService {
     const revisionTypeName = developmentPlanRevision.description || 'เปลี่ยนแปลง';
     const developmentPlanRevisionName = `${dp.name} ${revisionTypeName}`;
 
-    const revisedProjects = await this.revisedProjectGroupRepo.createQueryBuilder('revisedProject')
-      .leftJoinAndSelect('revisedProject.developmentPlanRevision', 'developmentPlanRevision')
-      .leftJoinAndSelect('developmentPlanRevision.developmentPlan', 'developmentPlan')
-      .leftJoinAndSelect('developmentPlanRevision.revisionType', 'revisionType')
-      .leftJoinAndSelect('revisedProject.projectGroup', 'projectGroup')
-      .leftJoinAndSelect('revisedProject.strategy', 'strategy')
-      .leftJoinAndSelect('revisedProject.tactic', 'tactic')
-      .leftJoinAndSelect('revisedProject.plan', 'plan')
-      .leftJoinAndSelect('revisedProject.budgets', 'budgets')
-      .leftJoinAndSelect('revisedProject.responsibleAgency', 'responsibleAgency')
-      .leftJoinAndSelect('revisedProject.originAgencyId', 'originAgencyId')
-      .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
-      .leftJoinAndSelect('revisedProject.trackingStatus', 'trackingStatus')
-      .leftJoinAndSelect('trackingStatus.statusId', 'status')
-      .where('developmentPlanRevision.id = :developmentPlanRevisionId', { developmentPlanRevisionId })
-      .andWhere('revisionType.name = :revisionTypeName', { revisionTypeName: 'เปลี่ยนแปลง' })
-      .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-      .andWhere('status.name IN (:...statusNames)', { statusNames: ['Pending_Approval', 'Approved'] })
-      .getMany();
+    let revisedProjects: RevisedProjectGroup[] = [];
+
+    if (existingProjects) {
+      revisedProjects = existingProjects;
+    } else {
+      revisedProjects = await this.revisedProjectGroupRepo.createQueryBuilder('revisedProject')
+        .leftJoinAndSelect('revisedProject.developmentPlanRevision', 'developmentPlanRevision')
+        .leftJoinAndSelect('developmentPlanRevision.developmentPlan', 'developmentPlan')
+        .leftJoinAndSelect('developmentPlanRevision.revisionType', 'revisionType')
+        .leftJoinAndSelect('revisedProject.projectGroup', 'projectGroup')
+        .leftJoinAndSelect('revisedProject.strategy', 'strategy')
+        .leftJoinAndSelect('revisedProject.tactic', 'tactic')
+        .leftJoinAndSelect('revisedProject.plan', 'plan')
+        .leftJoinAndSelect('revisedProject.budgets', 'budgets')
+        .leftJoinAndSelect('revisedProject.responsibleAgency', 'responsibleAgency')
+        .leftJoinAndSelect('revisedProject.originAgencyId', 'originAgencyId')
+        .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
+        .leftJoinAndSelect('revisedProject.trackingStatus', 'trackingStatus')
+        .leftJoinAndSelect('trackingStatus.statusId', 'status')
+        .where('developmentPlanRevision.id = :developmentPlanRevisionId', { developmentPlanRevisionId })
+        .andWhere('revisionType.name = :revisionTypeName', { revisionTypeName: 'เปลี่ยนแปลง' })
+        .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+        .andWhere('status.name IN (:...statusNames)', { statusNames: ['Pending_Approval', 'Approved'] })
+        .orderBy('strategy.id', 'ASC')
+        .getMany();
+    }
 
     if (revisedProjects.length === 0) throw new Error('No projects found with status Pending_Approval or Approved');
 

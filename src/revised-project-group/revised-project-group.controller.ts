@@ -114,6 +114,18 @@ export class RevisedProjectGroupController {
       developmentPlanRevisionId,
     );
   }
+
+  /**
+   * ดูประวัติการแก้ไขทั้งหมดของโครงการ (Original + All Revisions)
+   */
+  @Get(':id/versions')
+  async findAllVersions(
+    @Param('id') id: string,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    this.logger.log(`Fetching all versions for project with id: ${id}`);
+    return this.revisedProjectGroupService.findAllVersions(id, req.user.userId);
+  }
   /**
    * อัพเดท RevisedProjectGroup
    */
