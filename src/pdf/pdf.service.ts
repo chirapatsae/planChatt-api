@@ -760,6 +760,106 @@ export class PdfService {
     return this.mergePdfBuffers(pdfBuffers);
   }
 
+  async generateProjectReportWithPageTracking(
+    projects: any[],
+    selectedColumns: string[],
+    options?: GenerateReportOptions,
+  ): Promise<{ buffer: Buffer; pageMap: Map<string, number> }> {
+    const developmentPlanId = options?.developmentPlanId;
+    const reportType = options?.reportType ?? 'default';
+
+    const dp = developmentPlanId
+      ? await this.developmentPlanRepo.findOne({ where: { id: developmentPlanId } })
+      : await this.developmentPlanRepo.findOneBy({ isLatest: true });
+    if (!dp) throw new Error('DevelopmentPlan not found');
+    const developmentPlanName = dp?.name ?? 'ไม่พบแผนพัฒนาจังหวัด';
+
+    const columnMap: Record<string, { text: string; key: string }> = {
+      index: { text: 'ที่', key: 'index' },
+      title: { text: 'โครงการ', key: 'title' },
+      objective: { text: 'วัตถุประสงค์', key: 'objective' },
+      target: { text: 'เป้าหมาย \n(ผลผลิตของโครงการ)', key: 'target' },
+      budget: { text: 'งบประมาณ (บาท)', key: 'budget' },
+      kpi: { text: 'ตัวชี้วัด (KPI)', key: 'kpi' },
+      expectedResult: { text: 'ผลที่คาดว่าจะได้รับ', key: 'expectedResult' },
+      mainAgency: { text: 'หน่วยงาน\nรับผิดชอบหลัก', key: 'mainAgency' },
+      amphoe: { text: 'อำเภอ', key: 'amphoe' },
+      coordinates: { text: 'พิกัดทาง \nภูมิศาสตร์', key: 'coordinates' },
+    };
+
+    const availableColumns = selectedColumns.filter(col => columnMap[col] && col !== 'amphoe' && col !== 'coordinates');
+    const fonts = this.getPdfFonts();
+    const years = Array.from({ length: dp.endYear - dp.startYear + 1 }, (_, index) => dp.startYear + index);
+    const { strategies, overallSum, overallCount, groupedProjects } = this.prepareReportAggregations(projects, years);
+
+    const pageMargins: [number, number, number, number] = [15, 60, 15, 40];
+    const pageOrientation: 'portrait' | 'landscape' = 'landscape';
+
+    let coverSummaryDoc: TDocumentDefinitions | null = null;
+    if (reportType !== 'outAuthority') {
+      coverSummaryDoc = createSummaryPartDocDefinition({
+        developmentPlanName, years, strategies, overallSum, overallCount,
+        pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+      });
+    }
+
+    const pdfBuffers: Buffer[] = [];
+    const pageMap = new Map<string, number>();
+    let pageOffset = 0;
+
+    if (coverSummaryDoc) {
+      const summaryBuffer = await this.createPdfBuffer(coverSummaryDoc, fonts);
+      pdfBuffers.push(summaryBuffer);
+      const summaryPdf = await PDFDocument.load(summaryBuffer);
+      pageOffset += summaryPdf.getPageCount();
+    }
+
+    const strategyGroups = new Map<string, Array<{ groupKey: string, projects: any[] }>>();
+    for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
+      const [strategyName] = groupKey.split('||');
+      if (!strategyGroups.has(strategyName)) strategyGroups.set(strategyName, []);
+      strategyGroups.get(strategyName)!.push({ groupKey, projects: groupProjectsValue });
+    }
+
+    for (const [strategyName, subGroups] of strategyGroups.entries()) {
+      const coverPageDoc = createGroupCoverPageDocDefinition(
+        strategyName, developmentPlanName, pageMargins, pageOrientation,
+        this.newWord.bind(this), pageOffset,
+      );
+      const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
+      pdfBuffers.push(coverPageBuffer);
+      const coverPagePdf = await PDFDocument.load(coverPageBuffer);
+      pageOffset += coverPagePdf.getPageCount();
+
+      for (const group of subGroups) {
+        const { groupKey, projects: groupProjectsValue } = group;
+        const [, tacticName, planName] = groupKey.split('||');
+
+        for (const project of groupProjectsValue) {
+          const projectDetailDoc = createGroupDetailDocDefinition({
+            developmentPlanName, years, groupProjects: [project], availableColumns, columnMap,
+            pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+            reportType, strategyName, tacticName, planName, pageOffset,
+          });
+
+          if (projectDetailDoc) {
+            const projectBuffer = await this.createPdfBuffer(projectDetailDoc, fonts);
+            pdfBuffers.push(projectBuffer);
+            const projectPdf = await PDFDocument.load(projectBuffer);
+            
+            pageMap.set(project.id, pageOffset + 1);
+            pageOffset += projectPdf.getPageCount();
+          }
+        }
+      }
+    }
+
+    if (pdfBuffers.length === 0) throw new Error('No PDF documents could be generated');
+    const mergedBuffer = await this.mergePdfBuffers(pdfBuffers);
+    
+    return { buffer: mergedBuffer, pageMap };
+  }
+
   async generateProjectDetailsOnly(
     projects: any[],
     selectedColumns?: string[],
@@ -1822,6 +1922,7 @@ export class PdfService {
     projectIdsSnapshot: Array<string | number>;
     originalProjectIds?: Array<string | number>;
     createdById: string;
+    pageMap?: Map<string, number>;
   }): Promise<{ version: number; filePath: string; fileUrl: string; projectCount: number; createdAt: string; createdBy: { id: string; firstname: string; lastname: string }; }> {
     const developmentPlan = await this.developmentPlanRepo.findOne({ where: { id: options.developmentPlanId } });
     if (!developmentPlan) throw new Error(`DevelopmentPlan with ID ${options.developmentPlanId} not found`);
@@ -1858,10 +1959,19 @@ export class PdfService {
       : options.projectIdsSnapshot;
 
     if (projectGroupIdsToUpdate && projectGroupIdsToUpdate.length > 0) {
-      await this.projectGroupRepo.update(
-        { id: In(projectGroupIdsToUpdate) },
-        { isBooked: true, bookedAt: new Date() }
-      );
+      if (options.pageMap) {
+        for (const [projectId, pageNumber] of options.pageMap.entries()) {
+          await this.projectGroupRepo.update(
+            { id: projectId },
+            { isBooked: true, bookedAt: new Date(), pageNumber }
+          );
+        }
+      } else {
+        await this.projectGroupRepo.update(
+          { id: In(projectGroupIdsToUpdate) },
+          { isBooked: true, bookedAt: new Date() }
+        );
+      }
     }
 
     await this.developmentPlanRepo.update({ id: developmentPlanId }, { isBooked: true });

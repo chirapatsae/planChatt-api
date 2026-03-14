@@ -625,10 +625,10 @@ export class DevelopmentPlanService {
         },
       });
 
-      const pdfBuffer = await this.pdfService.generateProjectReportWithColumns(
+       const { buffer: pdfBuffer, pageMap } = await this.pdfService.generateProjectReportWithPageTracking(
         allProjects,
         ['index', 'title', 'objective', 'target', 'budget', 'expectedResult', 'mainAgency'],
-        { developmentPlanId },
+        { developmentPlanId: String(developmentPlanId) },
       );
 
       // Send progress: PDF generated (70%)
@@ -668,6 +668,7 @@ export class DevelopmentPlanService {
         projectIdsSnapshot: allProjectIds,
         originalProjectIds,
         createdById: userId,
+        pageMap,
       });
 
       // Ensure DevelopmentPlan is marked as booked
@@ -1090,7 +1091,7 @@ export class DevelopmentPlanService {
       if (projectIds.length > 0) {
         await this.projectGroupRepository.update(
           { id: In(projectIds) },
-          { isBooked: false, bookedAt: null },
+          { isBooked: false, bookedAt: null, pageNumber: null },
         );
       }
 
