@@ -15,7 +15,6 @@ import { WorkHistoryGovernmentAgencyResponsibilityService } from './work-history
 import { CreateWorkHistoryGovernmentAgencyResponsibilityDto } from './dto/create-work-history-government-agency-responsibility.dto';
 import {
   UpdateWorkHistoryGovernmentAgencyResponsibilityDto,
-  TransferResponsibilityDto,
 } from './dto/update-work-history-government-agency-responsibility.dto';
 import { JwtAuthGuard } from '../auth/auth.guard';
 import { JwtPayloadUser } from '../auth/jwt.strategy';
@@ -28,7 +27,7 @@ import { JwtPayloadUser } from '../auth/jwt.strategy';
 export class WorkHistoryGovernmentAgencyResponsibilityController {
   constructor(
     private readonly workHistoryGovernmentAgencyResponsibilityService: WorkHistoryGovernmentAgencyResponsibilityService,
-  ) {}
+  ) { }
 
   @Post()
   create(
@@ -52,6 +51,13 @@ export class WorkHistoryGovernmentAgencyResponsibilityController {
     );
   }
 
+  @Get('agency/:id')
+  findOneByAgency(
+    @Param('id') id: string,
+    @Request() req: Request & { user: JwtPayloadUser },
+  ) {
+    return this.workHistoryGovernmentAgencyResponsibilityService.findOneByAgency(id, req.user.userId);
+  }
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.workHistoryGovernmentAgencyResponsibilityService.findOne(id);

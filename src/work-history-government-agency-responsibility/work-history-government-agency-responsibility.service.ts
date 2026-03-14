@@ -32,7 +32,7 @@ export class WorkHistoryGovernmentAgencyResponsibilityService {
     private readonly governmentAgencyRepository: Repository<GovernmentAgency>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-  ) {}
+  ) { }
 
   async create(
     dto: CreateWorkHistoryGovernmentAgencyResponsibilityDto,
@@ -119,6 +119,44 @@ export class WorkHistoryGovernmentAgencyResponsibilityService {
           'assignedByWorkHistory',
         ],
       });
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+  async findOneByAgency(id: string, userId: string): Promise<WorkHistoryGovernmentAgencyResponsibility> {
+    try {
+      const exitUser = await this.userRepository.findOneBy({ id: userId });
+      if (!exitUser) {
+        throw new NotFoundException(`ไม่พบผู้ใช้ที่ ID ${id}`);
+      }
+      const responsibility = await this.responsibilityRepository.findOne({
+        where: { governmentAgency: { id } },
+        relations: [
+          'workHistory',
+          'workHistory.user',
+          'workHistory.localAdministrativeOrganization',
+          'workHistory.governmentAgencies'
+        ],
+        select: {
+          id: true,
+          workHistory: {
+            id: true,
+            user: {
+              id: true,
+              firstname: true,
+              lastname: true,
+              prefix: true,
+              email: true,
+            },
+            localAdministrativeOrganization: true,
+            governmentAgencies: true
+          }
+        }
+      });
+      if (!responsibility) {
+        throw new NotFoundException(`ไม่พบความรับผิดชอบที่ ID ${id}`);
+      }
+      return responsibility;
     } catch (error) {
       handleException(this.logger, error);
     }
