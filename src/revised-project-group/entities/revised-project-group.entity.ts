@@ -88,6 +88,9 @@ export class RevisedProjectGroup {
   @Column({ type: 'timestamp', nullable: true })
   bookedAt: Date | null;
 
+  @Column({ type: 'int', nullable: true })
+  pageNumber: number | null;
+
   @ManyToOne(() => Strategy, (strategy) => strategy.projectGroup, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',

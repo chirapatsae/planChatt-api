@@ -35,6 +35,7 @@ export interface IUnifiedProjectDisplay {
   isDraft?: boolean; // Only for original projects, not revised
   isBooked: boolean;
   bookedAt: Date | null;
+  pageNumber: number | null;
   createdAt: Date;
   attachments?: (AttachmentProjectGroup | AttachmentRevisedProjectGroup)[];
   // Type แยกว่ามาจากไหน
@@ -107,6 +108,7 @@ export class UnifiedProjectMapper {
       isDraft: project.isDraft,
       isBooked: project.isBooked,
       bookedAt: project.bookedAt,
+      pageNumber: project.pageNumber,
       amphoe: project.amphoe,
       localAdministrativeOrganization: project.localAdministrativeOrganization,
       attachments: project.attachments,
@@ -155,6 +157,7 @@ export class UnifiedProjectMapper {
       favorites: revisedProject.favorites,
       isBooked: revisedProject.isBooked,
       bookedAt: revisedProject.bookedAt,
+      pageNumber: revisedProject.pageNumber,
       additionalDetail: revisedProject.additionalDetail,
       oldAdditionDetail: revisedProject.oldAdditionDetail,
     };
