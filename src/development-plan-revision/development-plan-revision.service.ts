@@ -490,7 +490,7 @@ export class DevelopmentPlanRevisionService {
         },
       });
 
-      const pdfBuffer = await this.pdfService.generateRevisionApprovedReportWithColumns(
+      const { buffer: pdfBuffer, pageMap } = await this.pdfService.generateRevisionApprovedReportWithPageTracking(
         developmentPlanRevisionId,
         ['index', 'title', 'objective', 'target', 'budget', 'expectedResult', 'mainAgency'],
       );
@@ -533,6 +533,7 @@ export class DevelopmentPlanRevisionService {
         projectIdsSnapshot: allProjectIds,
         createdById: userId,
         editNo: revision.revisionNumber,
+        pageMap,
       });
 
       // Mark revised projects as booked
@@ -685,7 +686,7 @@ export class DevelopmentPlanRevisionService {
         },
       });
 
-      const pdfBuffer = await this.pdfService.generateRevisionApprovedReportWithColumns(
+      const { buffer: pdfBuffer, pageMap } = await this.pdfService.generateRevisionApprovedReportWithPageTracking(
         developmentPlanRevisionId,
         ['index', 'title', 'objective', 'target', 'budget', 'expectedResult', 'mainAgency'],
       );
@@ -728,6 +729,7 @@ export class DevelopmentPlanRevisionService {
         projectIdsSnapshot: allProjectIds,
         createdById: userId,
         changeNo: revision.revisionNumber,
+        pageMap,
       });
 
       // Mark revised projects as booked
@@ -796,7 +798,7 @@ export class DevelopmentPlanRevisionService {
       if (projectIds.length > 0) {
         await this.revisedProjectGroupRepository.update(
           { id: In(projectIds) },
-          { isBooked: false, bookedAt: null },
+          { isBooked: false, bookedAt: null, pageNumber: null },
         );
       }
 
