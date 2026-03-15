@@ -62,6 +62,12 @@ export class DevelopmentPlanController {
     return this.developmentPlanService.findAllUnordered();
   }
 
+  @Get('status/count')
+  async getStatusCount() {
+    this.logger.log('Fetching development plan status counts');
+    return this.developmentPlanService.getCurrentPlanStatus();
+  }
+
   @Post(':id/book')
   async generateApprovedBookForPlan(
     @Param('id') id: string,

@@ -22,6 +22,7 @@ import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { UnifiedProjectMapper } from 'src/project-groups/dto/unified-project-display.dto';
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
+import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entities/development-plan-supplement.entity';
 import { CreateDevelopmentPlanWithPhaseDto } from './dto/create-development-plan-with-phase.dto';
 import { UpdateDevelopmentPlanWithPhasesDto } from './dto/update-development-plan-with-phase.dto';
 import { UpdateDevelopmentPlanLatestStatusDto } from './dto/update-development-plan-latest-status.dto';
@@ -49,6 +50,9 @@ export class DevelopmentPlanService {
 
     @InjectRepository(DevelopmentPlanRevision)
     private readonly developmentPlanRevisionRepository: Repository<DevelopmentPlanRevision>,
+
+    @InjectRepository(DevelopmentPlanSupplement)
+    private readonly developmentPlanSupplementRepository: Repository<DevelopmentPlanSupplement>,
 
     private readonly dataSource: DataSource,
     private readonly pdfService: PdfService,
@@ -279,6 +283,49 @@ export class DevelopmentPlanService {
 
         return { developmentPlan: savedDevelopmentPlan, planPhases: savedPlanPhases };
       });
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  async getCurrentPlanStatus() {
+    try {
+      const latestPlan = await this.developmentPlanRepository.findOne({
+        where: { isLatest: true },
+        select: ['id', 'name', 'startYear', 'endYear'],
+      });
+
+      if (!latestPlan) {
+        return {
+          plan: null,
+          counts: {
+            openPhases: 0,
+            openRevisions: 0,
+            openSupplements: 0,
+          },
+        };
+      }
+
+      const openPhasesCount = await this.planPhaseRepository.count({
+        where: { developmentPlan: { id: latestPlan.id }, isOpen: true },
+      });
+
+      const openRevisionsCount = await this.developmentPlanRevisionRepository.count({
+        where: { developmentPlan: { id: latestPlan.id }, isOpen: true },
+      });
+
+      const openSupplementsCount = await this.developmentPlanSupplementRepository.count({
+        where: { developmentPlan: { id: latestPlan.id }, isOpen: true },
+      });
+
+      return {
+        plan: latestPlan,
+        counts: {
+          openPhases: openPhasesCount,
+          openRevisions: openRevisionsCount,
+          openSupplements: openSupplementsCount,
+        },
+      };
     } catch (error) {
       handleException(this.logger, error);
     }

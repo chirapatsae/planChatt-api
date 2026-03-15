@@ -11,10 +11,11 @@ import { PlanPhase } from 'src/plan-phase/entities/plan-phase.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
+import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entities/development-plan-supplement.entity';
 import { UsersModule } from 'src/users/users.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([DevelopmentPlan, WorkHistory, PlanPhase, ProjectGroup, RevisedProjectGroup, DevelopmentPlanRevision]), PdfModule, ProjectGroupsModule, WebsocketModule, UsersModule],
+  imports: [TypeOrmModule.forFeature([DevelopmentPlan, WorkHistory, PlanPhase, ProjectGroup, RevisedProjectGroup, DevelopmentPlanRevision, DevelopmentPlanSupplement]), PdfModule, ProjectGroupsModule, WebsocketModule, UsersModule],
   controllers: [DevelopmentPlanController],
   providers: [DevelopmentPlanService],
 })
