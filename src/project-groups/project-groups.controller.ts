@@ -54,7 +54,7 @@ export class ProjectGroupsController {
   @Get('/by-status')
   async findByStatus(
     @Req() req: Request & { user: JwtPayloadUser },
-    @Query('type') type: 'draft' | 'ready' | 'pending' | 'edit' | 'verified' | 'approved' | 'rejected' | 'draft-development-plan' | 'provincial-committee',
+    @Query('type') type: 'draft' | 'ready' | 'pending' | 'edit' | 'verified' | 'approved' | 'rejected' | 'draft-development-plan' | 'provincial-committee' | 'pull_back',
     @Query('countOnly') countOnly?: string,
     @Query('isCoordinate') isCoordinate?: boolean,
   ) {

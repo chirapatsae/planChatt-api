@@ -1,6 +1,6 @@
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import {
-  BadRequestException,
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -44,7 +44,8 @@ export class TrackingStatusService {
       return await this.dataSource.transaction(async (manager) => {
         // หา workHistory ของ user
         const workHistory = await manager.findOne(WorkHistory, {
-          where: { user: { id: userId } },
+          where: { user: { id: userId }, isCurrent: true },
+          relations: ['role'],
         });
         if (!workHistory) {
           throw new NotFoundException(`WorkHistory for user ${userId} not found`);
@@ -53,6 +54,7 @@ export class TrackingStatusService {
         // หา projectGroup
         const projectGroup = await manager.findOne(ProjectGroup, {
           where: { id: dto.projectId },
+          relations: ['createdBy'],
         });
         if (!projectGroup) {
           throw new NotFoundException(`ProjectGroup with ID ${dto.projectId} not found`);
@@ -66,6 +68,24 @@ export class TrackingStatusService {
           throw new NotFoundException(`Status with ID ${dto.statusId} not found`);
         }
 
+        // --- RBAC & Ownership Check ---
+        const allowedRoles = ['staff', 'admin', 'super-admin'];
+        const userRole = workHistory.role?.name;
+
+        if (!allowedRoles.includes(userRole)) {
+          if (userRole === 'user') {
+            const isOwner = projectGroup.createdBy?.id === workHistory.id;
+            const isPullBack = status.name === 'Pull_Back';
+
+            if (!isOwner || !isPullBack) {
+              throw new ForbiddenException('คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะโครงการนี้ (อนุญาตเฉพาะการดึงกลับโครงการของตนเองเท่านั้น)');
+            }
+          } else {
+            throw new ForbiddenException('คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะโครงการ');
+          }
+        }
+        // ------------------------------
+
         // อัปเดต TrackingStatus ตัวเก่าให้ isLatest = false
         await manager.update(TrackingStatus, {
           projectGroupId: { id: projectGroup.id },
@@ -77,6 +97,7 @@ export class TrackingStatusService {
         const tracking = manager.create(TrackingStatus, {
           createdBy: workHistory,
           projectGroupId: projectGroup,
+          comment: dto.comment,
           statusId: status,
           isLatest: true,
         });
@@ -103,18 +124,45 @@ export class TrackingStatusService {
   async createMany(dtos: CreateTrackingStatusDto[], userId: string) {
     try {
       const workHistory = await this.workHistoryRepo.findOne({
-        where: { user: { id: userId } },
+        where: { user: { id: userId }, isCurrent: true },
+        relations: ['role'],
       });
 
       if (!workHistory) {
         throw new NotFoundException(`WorkHistory for user ${userId} not found`);
       }
 
+      const allowedRoles = ['staff', 'admin', 'super-admin'];
+      const userRole = workHistory.role?.name;
+
       return this.dataSource.transaction(async (manager) => {
         const results: TrackingStatus[] = [];
 
         for (const dto of dtos) {
           const { projectId, statusId } = dto;
+
+          // --- RBAC & Ownership Check ---
+          if (!allowedRoles.includes(userRole)) {
+            if (userRole === 'user') {
+              const projectGroup = await manager.findOne(ProjectGroup, {
+                where: { id: projectId },
+                relations: ['createdBy'],
+              });
+              const status = await manager.findOne(Status, {
+                where: { id: statusId },
+              });
+
+              const isOwner = projectGroup?.createdBy?.id === workHistory.id;
+              const isPullBack = status?.name === 'Pull_Back';
+
+              if (!isOwner || !isPullBack) {
+                throw new ForbiddenException(`คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะโครงการ ID: ${projectId} (อนุญาตเฉพาะการดึงกลับโครงการของตนเองเท่านั้น)`);
+              }
+            } else {
+              throw new ForbiddenException('คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะโครงการ');
+            }
+          }
+          // ------------------------------
 
           // 1) update old tracking status
           await manager.update(
@@ -144,18 +192,45 @@ export class TrackingStatusService {
   async createManyRevisedProjectGroup(dtos: CreateTrackingStatusDto[], userId: string) {
     try {
       const workHistory = await this.workHistoryRepo.findOne({
-        where: { user: { id: userId } },
+        where: { user: { id: userId }, isCurrent: true },
+        relations: ['role'],
       });
 
       if (!workHistory) {
         throw new NotFoundException(`WorkHistory for user ${userId} not found`);
       }
 
+      const allowedRoles = ['staff', 'admin', 'super-admin'];
+      const userRole = workHistory.role?.name;
+
       return this.dataSource.transaction(async (manager) => {
         const results: TrackingStatus[] = [];
 
         for (const dto of dtos) {
           const { projectId, statusId } = dto;
+
+          // --- RBAC & Ownership Check ---
+          if (!allowedRoles.includes(userRole)) {
+            if (userRole === 'user') {
+              const revisedProjectGroup = await manager.findOne(RevisedProjectGroup, {
+                where: { id: projectId },
+                relations: ['createdBy'],
+              });
+              const status = await manager.findOne(Status, {
+                where: { id: statusId },
+              });
+
+              const isOwner = revisedProjectGroup?.createdBy?.id === workHistory.id;
+              const isPullBack = status?.name === 'Pull_Back';
+
+              if (!isOwner || !isPullBack) {
+                throw new ForbiddenException(`คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะโครงการ ID: ${projectId} (อนุญาตเฉพาะการดึงกลับโครงการของตนเองเท่านั้น)`);
+              }
+            } else {
+              throw new ForbiddenException('คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะโครงการ');
+            }
+          }
+          // ------------------------------
 
           // 1) update old tracking status
           await manager.update(
@@ -306,7 +381,8 @@ export class TrackingStatusService {
       return await this.dataSource.transaction(async (manager) => {
         // หา workHistory ของ user
         const workHistory = await manager.findOne(WorkHistory, {
-          where: { user: { id: userId } },
+          where: { user: { id: userId }, isCurrent: true },
+          relations: ['role'],
         });
         if (!workHistory) {
           throw new NotFoundException(`WorkHistory for user ${userId} not found`);
@@ -315,6 +391,7 @@ export class TrackingStatusService {
         // หา RevisedProjectGroup
         const revisedProjectGroup = await manager.findOne(RevisedProjectGroup, {
           where: { id: dto.projectId },
+          relations: ['createdBy'],
         });
         if (!revisedProjectGroup) {
           throw new NotFoundException(`RevisedProjectGroup with ID ${dto.projectId} not found`);
@@ -327,6 +404,24 @@ export class TrackingStatusService {
         if (!status) {
           throw new NotFoundException(`Status with ID ${dto.statusId} not found`);
         }
+
+        // --- RBAC & Ownership Check ---
+        const allowedRoles = ['staff', 'admin', 'super-admin'];
+        const userRole = workHistory.role?.name;
+
+        if (!allowedRoles.includes(userRole)) {
+          if (userRole === 'user') {
+            const isOwner = revisedProjectGroup.createdBy?.id === workHistory.id;
+            const isPullBack = status.name === 'Pull_Back';
+
+            if (!isOwner || !isPullBack) {
+              throw new ForbiddenException('คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะโครงการนี้ (อนุญาตเฉพาะการดึงกลับโครงการของตนเองเท่านั้น)');
+            }
+          } else {
+            throw new ForbiddenException('คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะโครงการ');
+          }
+        }
+        // ------------------------------
 
         // อัปเดต oldAdditionDetail ใน RevisedProjectGroup ถ้ามีการส่งมา
         if (dto.oldAdditionDetail !== undefined) {
@@ -347,7 +442,7 @@ export class TrackingStatusService {
           revisedProjectGroupId: revisedProjectGroup,
           statusId: status,
           isLatest: true,
-          comment : dto.comment,
+          comment: dto.comment,
         });
         const savedTracking = await manager.save(TrackingStatus, tracking);
 
@@ -436,7 +531,7 @@ export class TrackingStatusService {
       handleException(this.logger, error);
     }
   }
-  
+
   async rollbackRevisionProjectGroupStatus(revisionProjectGroupId: string): Promise<{ message: string; status: string }> {
     try {
       return await this.dataSource.transaction(async (manager) => {

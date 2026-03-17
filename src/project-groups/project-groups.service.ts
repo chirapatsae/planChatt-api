@@ -450,7 +450,7 @@ export class ProjectGroupsService {
   async findProjectsByStatus(options: {
     userId: string;
     countOnly?: boolean;
-    type?: 'draft' | 'ready' | 'pending' | 'edit' | 'verified' | 'approved' | 'rejected' | 'draft-development-plan' | 'provincial-committee';
+    type?: 'draft' | 'ready' | 'pending' | 'edit' | 'verified' | 'approved' | 'rejected' | 'draft-development-plan' | 'provincial-committee' | 'pull_back';
   }) {
     const { userId, countOnly, type } = options;
 
@@ -508,29 +508,38 @@ export class ProjectGroupsService {
           break;
         case 'ready':
           query.andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
-            .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-            .andWhere('status.name = :statusName', { statusName: 'Ready' })
+            .innerJoin('projectGroup.trackingStatus', 'latestTrackingStatus', 'latestTrackingStatus.isLatest = :isLatest', { isLatest: true })
+            .innerJoin('latestTrackingStatus.statusId', 'latestStatus', 'latestStatus.name = :statusName', { statusName: 'Ready' })
             .andWhere('localAdministrativeOrganization.id = :localAdministrativeOrganizationId', { localAdministrativeOrganizationId: workHistory.localAdministrativeOrganization.id });
           break;
         case 'pending':
           query.andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
-            .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-            .andWhere('status.name = :statusName', { statusName: 'Pending' })
+            .innerJoin('projectGroup.trackingStatus', 'latestTrackingStatus', 'latestTrackingStatus.isLatest = :isLatest', { isLatest: true })
+            .innerJoin('latestTrackingStatus.statusId', 'latestStatus', 'latestStatus.name = :statusName', { statusName: 'Pending' })
             .andWhere('developmentPlan.isLatest = :developmentPlanIsLatest', { developmentPlanIsLatest: true })
+            .andWhere('developmentPlan.isBooked = :isBooked', { isBooked: false })
           break;
         case 'edit':
           query.andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
-            .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-            .andWhere('status.name = :statusName', { statusName: 'Revision' })
+            .innerJoin('projectGroup.trackingStatus', 'latestTrackingStatus', 'latestTrackingStatus.isLatest = :isLatest', { isLatest: true })
+            .innerJoin('latestTrackingStatus.statusId', 'latestStatus', 'latestStatus.name = :statusName', { statusName: 'Revision' })
             .andWhere('projectGroup.createdBy.id = :workHistoryId', { workHistoryId: workHistory.id })
+            .andWhere('developmentPlan.isLatest = :developmentPlanIsLatest', { developmentPlanIsLatest: true })
+            .andWhere('developmentPlan.isBooked = :isBooked', { isBooked: false })
+          break;
+        case 'pull_back':
+          query.andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
+            .innerJoin('projectGroup.trackingStatus', 'latestTrackingStatus', 'latestTrackingStatus.isLatest = :isLatest', { isLatest: true })
+            .innerJoin('latestTrackingStatus.statusId', 'latestStatus', 'latestStatus.name = :statusName', { statusName: 'Pull_Back' })
             .andWhere('developmentPlan.isLatest = :developmentPlanIsLatest', { developmentPlanIsLatest: true })
             .andWhere('developmentPlan.isBooked = :isBooked', { isBooked: false })
           break;
         case 'verified':
           query.andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
-            .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-            .andWhere('status.name = :statusName', { statusName: 'Verified' })
-            .andWhere('developmentPlan.isLatest = :developmentPlanIsLatest', { developmentPlanIsLatest: true });
+            .innerJoin('projectGroup.trackingStatus', 'latestTrackingStatus', 'latestTrackingStatus.isLatest = :isLatest', { isLatest: true })
+            .innerJoin('latestTrackingStatus.statusId', 'latestStatus', 'latestStatus.name = :statusName', { statusName: 'Verified' })
+            .andWhere('developmentPlan.isLatest = :developmentPlanIsLatest', { developmentPlanIsLatest: true })
+            .andWhere('developmentPlan.isBooked = :isBooked', { isBooked: false })
           break;
       }
     }
@@ -4446,23 +4455,23 @@ export class ProjectGroupsService {
       where: { user: { id: userId }, isCurrent: true },
       relations: ['workStatus', 'role'],
     });
-  
+
     if (!workHistory) {
       throw new UnauthorizedException('User not found');
     }
-  
+
     if (workHistory.workStatus.name !== 'approved') {
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
     }
-  
+
     const allowedRoles = ['user', 'staff', 'admin', 'super-admin', 'c-level'];
     if (!allowedRoles.includes(workHistory.role.name)) {
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
     }
-  
+
     let originalProject: any = null;
     let rootProjectGroupId: string | null = null;
-  
+
     // 1) ลองหาเป็น project group ก่อน
     originalProject = await this.projectGroupRepo.findOne({
       where: { id: projectId },
@@ -4488,7 +4497,7 @@ export class ProjectGroupsService {
         'attachments',
       ],
     });
-  
+
     if (originalProject) {
       rootProjectGroupId = originalProject.id;
     } else {
@@ -4499,17 +4508,17 @@ export class ProjectGroupsService {
           'projectGroup',
         ],
       });
-  
+
       if (!revisedProject) {
         throw new NotFoundException('ไม่พบโครงการ');
       }
-  
+
       rootProjectGroupId = revisedProject.projectGroup?.id || null;
-  
+
       if (!rootProjectGroupId) {
         throw new NotFoundException('ไม่พบโครงการต้นฉบับของรายการแก้ไขนี้');
       }
-  
+
       // 3) ใช้ root project group id ไปดึง original project
       originalProject = await this.projectGroupRepo.findOne({
         where: { id: rootProjectGroupId },
@@ -4536,7 +4545,7 @@ export class ProjectGroupsService {
         ],
       });
     }
-  
+
     // 4) ดึง revisions ทั้งหมดของ project group นั้น
     const allRevisions = await this.revisedProjectGroupRepo.find({
       where: {
@@ -4572,21 +4581,21 @@ export class ProjectGroupsService {
         },
       },
     });
-  
+
     const unifiedOriginal = originalProject
       ? UnifiedProjectMapper.fromProjectGroup(originalProject)
       : null;
-  
+
     const unifiedRevisions = allRevisions.map((revision) =>
       UnifiedProjectMapper.fromRevisedProjectGroup(revision),
     );
-  
+
     // Add comparison data
     for (let i = 0; i < unifiedRevisions.length; i++) {
       const current = unifiedRevisions[i];
       let previous: IUnifiedProjectDisplay | null = null;
       let comparedWith: 'original' | 'revised' | null = null;
-  
+
       if (i === 0) {
         previous = unifiedOriginal;
         comparedWith = previous ? 'original' : null;
@@ -4594,19 +4603,19 @@ export class ProjectGroupsService {
         previous = unifiedRevisions[i - 1];
         comparedWith = 'revised';
       }
-  
+
       const changedFields = this.calculateChangedFields(current, previous);
-  
+
       current.changes = {
         comparedWith,
         changedFields,
       };
     }
-  
+
     const totalVersions = (unifiedOriginal ? 1 : 0) + unifiedRevisions.length;
-  
+
     let latestVersion: IProjectVersionsResponse['latestVersion'] = null;
-  
+
     if (unifiedRevisions.length > 0) {
       const latest = unifiedRevisions[unifiedRevisions.length - 1];
       latestVersion = {
@@ -4620,7 +4629,7 @@ export class ProjectGroupsService {
         isOriginal: true,
       };
     }
-  
+
     return {
       originalProject: unifiedOriginal,
       revisions: unifiedRevisions,
