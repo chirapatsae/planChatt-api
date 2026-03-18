@@ -24,12 +24,6 @@ export interface AnnouncementNotification {
   message?: string;
 }
 
-export interface RoleNotification {
-  roleNames: string[];
-  event: string;
-  data: any;
-  message?: string;
-}
 
 export interface PdfGenerationProgressNotification {
   userId: string;
@@ -106,36 +100,6 @@ export class WebsocketService {
     } catch (error) {
       this.logger.error(
         `Failed to broadcast announcement to role rooms: ${error.message}`,
-        error.stack,
-      );
-      throw error;
-    }
-  }
-
-  /**
-   * ส่ง general notification ไปยัง role rooms
-   */
-  async broadcastNotificationToRoles(notification: RoleNotification) {
-    try {
-      const { roleNames, event, data, message } = notification;
-
-      this.logger.log(
-        `Broadcasting ${event} notification to ${roleNames.length} role rooms: ${roleNames.join(', ')}`,
-      );
-
-      // ส่ง notification ไปยัง role rooms
-      this.webSocketGateway.broadcastNotificationToRoles(roleNames, data);
-
-      return {
-        success: true,
-        message: `Notification broadcasted successfully to ${roleNames.length} role rooms`,
-        roleNames,
-        event,
-        timestamp: new Date().toISOString(),
-      };
-    } catch (error) {
-      this.logger.error(
-        `Failed to broadcast notification to role rooms: ${error.message}`,
         error.stack,
       );
       throw error;

@@ -26,6 +26,13 @@ export enum NotificationStatus {
   FAILED = 'failed',
 }
 
+export enum NotificationType {
+  ANNOUNCEMENT = 'announcement',
+  SYSTEM = 'system',
+  ALERT = 'alert',
+  GENERAL = 'general',
+}
+
 @Entity('announcements')
 export class Announcement {
   @PrimaryGeneratedColumn('uuid')
@@ -39,19 +46,17 @@ export class Announcement {
 
   @Column({
     type: 'enum',
+    enum: NotificationType,
+    default: NotificationType.ANNOUNCEMENT,
+  })
+  type: NotificationType;
+
+  @Column({
+    type: 'enum',
     enum: AnnouncementStatus,
     default: AnnouncementStatus.DRAFT,
   })
   status: AnnouncementStatus;
-
-  @Column({ type: 'timestamp', nullable: true })
-  startDate: Date;
-
-  @Column({ type: 'timestamp', nullable: true })
-  endDate: Date;
-
-  @Column({ type: 'text', nullable: true })
-  location: string;
 
   @Column({ type: 'timestamp', nullable: true })
   publishDateTime: Date;
@@ -73,6 +78,9 @@ export class Announcement {
   @JoinColumn({ name: 'created_by' })
   createdBy: WorkHistory;
 
+  @DeleteDateColumn({ name: 'deleted_at', nullable: true })
+  deletedAt?: Date;
+
   @OneToMany(() => AnnouncementRole, (announcementRole) => announcementRole.announcement, {
     cascade: true,
     onDelete: 'CASCADE',
@@ -91,6 +99,5 @@ export class Announcement {
   })
   userNotifications: UserNotification[];
 
-  @DeleteDateColumn({ name: 'deleted_at', nullable: true })
-  deletedAt?: Date;
+
 }

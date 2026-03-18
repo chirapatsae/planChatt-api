@@ -22,12 +22,10 @@ export class WorkHistoryDto {
 
 export class AnnouncementResponseDto {
   id: string;
+  type: string;
   title: string;
   description?: string;
   status: AnnouncementStatus;
-  startDate?: Date;
-  endDate?: Date;
-  location?: string;
   publishDateTime?: Date;
   notificationStatus: NotificationStatus;
   createdAt: Date;

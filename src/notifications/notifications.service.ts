@@ -72,7 +72,7 @@ export class NotificationsService {
               // ใช้ notifyWorkStatusUpdate แทน notifyUser (เพราะ notifyUser ไม่มีอยู่แล้ว)
               await this.webSocketService.notifyWorkStatusUpdate({
                 userId: workHistory.user.id,
-                workStatus: 'announcement', // ใช้ workStatus เป็น announcement
+                workStatus: announcement.type || 'announcement', // ใช้ type จาก announcement
                 workHistoryId: workHistory.id,
                 role: announcementRole.role.name,
                 timestamp: new Date(),

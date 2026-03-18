@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { CreateAnnouncementDto } from './dto/create-announcement.dto';
 import { UpdateAnnouncementDto } from './dto/update-announcement.dto';
-import { Announcement, AnnouncementStatus, NotificationStatus } from './entities/announcement.entity';
+import { Announcement, AnnouncementStatus, NotificationStatus, NotificationType } from './entities/announcement.entity';
 import { AnnouncementRole } from 'src/announcement-roles/entities/announcement-role.entity';
 import { Role } from 'src/roles/entities/role.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
@@ -54,10 +54,9 @@ export class AnnouncementsService {
     // Create the announcement
     const announcement = this.announcementRepository.create({
       ...announcementData,
+      type: announcementData.type || NotificationType.ANNOUNCEMENT,
       // Convert string dates to Date objects
       publishDateTime: announcementData.publishDateTime ? new Date(announcementData.publishDateTime) : undefined,
-      startDate: announcementData.startDate ? new Date(announcementData.startDate) : undefined,
-      endDate: announcementData.endDate ? new Date(announcementData.endDate) : undefined,
       createdBy: { id: workHistory.id },
     });
     
@@ -132,8 +131,6 @@ export class AnnouncementsService {
       ...updateData,
       // Convert string dates to Date objects
       publishDateTime: updateData.publishDateTime ? new Date(updateData.publishDateTime) : undefined,
-      startDate: updateData.startDate ? new Date(updateData.startDate) : undefined,
-      endDate: updateData.endDate ? new Date(updateData.endDate) : undefined,
     };
     
     // Update announcement data
@@ -245,16 +242,15 @@ export class AnnouncementsService {
         await this.websocketService.broadcastAnnouncementToRoles({
           announcement: {
             id: announcement.id,
+            type: announcement.type,
             title: announcement.title,
             description: announcement.description,
             status: announcement.status,
             publishDateTime: announcement.publishDateTime,
-            startDate: announcement.startDate,
-            endDate: announcement.endDate,
             createdBy: announcement.createdBy,
           },
           roleNames,
-          message: `New announcement published for roles: ${roleNames.join(', ')}`,
+          message: `New ${announcement.type} published for roles: ${roleNames.join(', ')}`,
         });
         console.log(`📢 Successfully broadcasted announcement to ${roleNames.length} role rooms: ${roleNames.join(', ')}`);
       } catch (error) {

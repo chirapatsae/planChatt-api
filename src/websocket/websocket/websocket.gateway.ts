@@ -143,8 +143,8 @@ export class WebsocketGateway
   broadcastAnnouncementToRoles(roleNames: string[], announcement: any) {
     for (const roleName of roleNames) {
       const roomName = `role-${roleName}`;
-      this.server.to(roomName).emit('announcement-published', {
-        type: 'announcement-published',
+      this.server.to(roomName).emit('announcement', {
+        type: 'announcement',
         announcement,
         role: roleName,
         timestamp: new Date().toISOString(),
@@ -155,21 +155,6 @@ export class WebsocketGateway
     }
   }
 
-  // Method to broadcast general notification to role rooms
-  broadcastNotificationToRoles(roleNames: string[], notification: any) {
-    for (const roleName of roleNames) {
-      const roomName = `role-${roleName}`;
-      this.server.to(roomName).emit('notification', {
-        type: 'notification',
-        notification,
-        role: roleName,
-        timestamp: new Date().toISOString(),
-        message: `New notification for role: ${roleName}`,
-      });
-      
-      this.logger.log(`Broadcasted notification to role room: ${roomName}`);
-    }
-  }
 
   // Get connected clients info for debugging
   getConnectedClients() {

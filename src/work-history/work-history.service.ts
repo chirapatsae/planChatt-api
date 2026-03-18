@@ -17,6 +17,9 @@ import { Role } from 'src/roles/entities/role.entity';
 import { GovernmentAgency } from 'src/government-agencies/entities/government-agency.entity';
 import { Position } from 'src/positions/entities/position.entity';
 import { WebsocketService } from 'src/websocket/websocket/websocket.service';
+import { AnnouncementsService } from 'src/announcements/announcements.service';
+import { AnnouncementStatus, NotificationType } from 'src/announcements/entities/announcement.entity';
+import { In } from 'typeorm';
 
 @Injectable()
 export class WorkHistoryService {
@@ -48,6 +51,7 @@ export class WorkHistoryService {
     private readonly positionRepository: Repository<Position>,
 
     private readonly webSocketService: WebsocketService,
+    private readonly announcementsService: AnnouncementsService,
   ) { }
 
   async create(
@@ -127,7 +131,33 @@ export class WorkHistoryService {
       // ตั้งค่า isCurrent = true สำหรับ workHistory ใหม่
       workHistory.isCurrent = true;
 
-      return this.workHistoryRepository.save(workHistory);
+      const savedWorkHistory = await this.workHistoryRepository.save(workHistory);
+
+      // ถ้าสถานะเป็น pending ให้ส่งการแจ้งเตือนไปยัง staff และ admin
+      if (workStatus.name === 'pending') {
+        try {
+          const adminRoles = await this.roleRepository.find({
+            where: { name: In(['staff', 'admin']) }
+          });
+          const roleIds = adminRoles.map(r => r.id);
+
+          if (roleIds.length > 0) {
+            await this.announcementsService.create({
+              title: 'มีผู้ใช้งานใหม่รอการอนุมัติ',
+              description: `ผู้ใช้: ${user.firstname} ${user.lastname} จาก ${lao.name} ได้ลงทะเบียนเข้าสู่ระบบและรอการตรวจสอบสิทธิ์`,
+              type: NotificationType.SYSTEM,
+              status: AnnouncementStatus.PUBLISHED,
+              roleIds: roleIds
+            }, creatorId);
+            this.logger.log(`Created new registration announcement for user ${user.id}`);
+          }
+        } catch (announcementError) {
+          this.logger.error(`Failed to create registration announcement: ${announcementError.message}`, announcementError.stack);
+          // ไม่ต้อง throw error ต่ะ เพราะต้องการให้การสร้าง workHistory สำเร็จ
+        }
+      }
+
+      return savedWorkHistory;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -206,17 +236,25 @@ export class WorkHistoryService {
         where: { workStatus: { name: 'pending' } },
       });
 
-      // ส่ง notification ไปยัง room role "staff"
-      await this.webSocketService.broadcastNotificationToRoles({
-        roleNames: ['staff'],
-        event: 'pending-approval',
-        data: {
-          pendingCount,
-          userId,
-          userName: `${user.firstname} ${user.lastname}`,
-          message: `มีผู้ใช้รออนุมัติ ${user.firstname} ${user.lastname}`,
-        },
+      // ดึงข้อมูล roles: staff และ admin เพื่อส่งประกาศ
+      const adminRoles = await this.roleRepository.find({
+        where: { name: In(['staff', 'admin']) }
       });
+      const roleIds = adminRoles.map(r => r.id);
+
+      if (roleIds.length > 0) {
+        // สร้าง Announcement ประเภท SYSTEM แทนการส่ง WebSocket เปล่าๆ
+        // เพื่อให้ข้อมูลถูกบันทึกลงฐานข้อมูลและ Inbox ของ Staff/Admin
+        await this.announcementsService.create({
+          title: 'แจ้งเตือน: ตรวจสอบการอนุมัติผู้ใช้งาน',
+          description: `ต้องการการตรวจสอบ: ผู้ใช้ ${user.firstname} ${user.lastname} (ปัจจุบันมีรายการรออนุมัติทั้งหมด ${pendingCount} รายการ)`,
+          type: NotificationType.SYSTEM,
+          status: AnnouncementStatus.PUBLISHED,
+          roleIds: roleIds
+        }, userId);
+        
+        this.logger.log(`Created management nudge announcement for user ${userId}`);
+      }
 
       return true;
     } catch (error) {

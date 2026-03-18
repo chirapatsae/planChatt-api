@@ -18,6 +18,8 @@ export class Role {
   @Column()
   name: string;
 
+  @Column({ name: 'th_name', nullable: true })
+  thName: string
   @DeleteDateColumn({ name: 'deleted_at', nullable: true })
   deletedAt?: Date;
 

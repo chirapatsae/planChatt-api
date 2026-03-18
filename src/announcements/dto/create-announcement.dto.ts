@@ -1,7 +1,11 @@
 import { IsArray, IsDateString, IsEnum, IsOptional, IsString, IsUUID, ValidateIf } from 'class-validator';
-import { AnnouncementStatus } from '../entities/announcement.entity';
+import { AnnouncementStatus, NotificationType } from '../entities/announcement.entity';
 
 export class CreateAnnouncementDto {
+  @IsOptional()
+  @IsEnum(NotificationType)
+  type?: NotificationType;
+
   @IsString()
   title: string;
 
@@ -12,18 +16,6 @@ export class CreateAnnouncementDto {
   @IsOptional()
   @IsEnum(AnnouncementStatus)
   status?: AnnouncementStatus;
-
-  @IsOptional()
-  @IsDateString()
-  startDate?: string;
-
-  @IsOptional()
-  @IsDateString()
-  endDate?: string;
-
-  @IsOptional()
-  @IsString()
-  location?: string;
 
   @ValidateIf((o) => o.status === AnnouncementStatus.SCHEDULED)
   @IsDateString()

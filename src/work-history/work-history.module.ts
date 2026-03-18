@@ -11,6 +11,7 @@ import { GovernmentAgency } from 'src/government-agencies/entities/government-ag
 import { Position } from 'src/positions/entities/position.entity';
 import { WorkStatus } from 'src/work-status/entities/work-status.entity';
 import { WebsocketModule } from 'src/websocket/websocket.module';
+import { AnnouncementsModule } from 'src/announcements/announcements.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { WebsocketModule } from 'src/websocket/websocket.module';
       WorkStatus,
     ]),
     WebsocketModule,
+    AnnouncementsModule,
   ],
   controllers: [WorkHistoryController],
   providers: [WorkHistoryService],
