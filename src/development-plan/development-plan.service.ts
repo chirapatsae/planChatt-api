@@ -310,8 +310,20 @@ export class DevelopmentPlanService {
         where: { developmentPlan: { id: latestPlan.id }, isOpen: true },
       });
 
-      const openRevisionsCount = await this.developmentPlanRevisionRepository.count({
-        where: { developmentPlan: { id: latestPlan.id }, isOpen: true },
+      const openEditCount = await this.developmentPlanRevisionRepository.count({
+        where: {
+          developmentPlan: { id: latestPlan.id },
+          isOpen: true,
+          revisionType: { name: 'แก้ไข' },
+        },
+      });
+
+      const openChangeCount = await this.developmentPlanRevisionRepository.count({
+        where: {
+          developmentPlan: { id: latestPlan.id },
+          isOpen: true,
+          revisionType: { name: 'เปลี่ยนแปลง' },
+        },
       });
 
       const openSupplementsCount = await this.developmentPlanSupplementRepository.count({
@@ -322,7 +334,8 @@ export class DevelopmentPlanService {
         plan: latestPlan,
         counts: {
           openPhases: openPhasesCount,
-          openRevisions: openRevisionsCount,
+          openEdit: openEditCount,
+          openChange: openChangeCount,
           openSupplements: openSupplementsCount,
         },
       };
@@ -672,7 +685,7 @@ export class DevelopmentPlanService {
         },
       });
 
-       const { buffer: pdfBuffer, pageMap } = await this.pdfService.generateProjectReportWithPageTracking(
+      const { buffer: pdfBuffer, pageMap } = await this.pdfService.generateProjectReportWithPageTracking(
         allProjects,
         ['index', 'title', 'objective', 'target', 'budget', 'expectedResult', 'mainAgency'],
         { developmentPlanId: String(developmentPlanId) },

@@ -75,7 +75,7 @@ export class TrackingStatusService {
         if (!allowedRoles.includes(userRole)) {
           if (userRole === 'user') {
             const isOwner = projectGroup.createdBy?.id === workHistory.id;
-            const isPullBack = status.name === 'Pull_Back';
+            const isPullBack = status.name === 'Pull_Back' || status.name === 'Pending';
 
             if (!isOwner || !isPullBack) {
               throw new ForbiddenException('คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะโครงการนี้ (อนุญาตเฉพาะการดึงกลับโครงการของตนเองเท่านั้น)');

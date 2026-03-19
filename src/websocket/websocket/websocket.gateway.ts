@@ -18,8 +18,7 @@ import { Logger } from '@nestjs/common';
   namespace: '/api/v1/notifications',
 })
 export class WebsocketGateway
-  implements OnGatewayConnection, OnGatewayDisconnect
-{
+  implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
 
@@ -47,17 +46,17 @@ export class WebsocketGateway
     @MessageBody() data: { userId: string },
   ) {
     const { userId } = data;
-    
+
     // Join user-specific room
     client.join(`user-${userId}`);
-    
+
     // Store client connection with userId and empty roles array
     this.connectedClients.set(client.id, { userId, socket: client, roles: [] });
-    
+
     this.logger.log(`User ${userId} joined room: user-${userId}`);
-    
+
     // Send confirmation
-    client.emit('joined-room', { 
+    client.emit('joined-room', {
       message: `Joined room for user ${userId}`,
       room: `user-${userId}`
     });
@@ -69,10 +68,10 @@ export class WebsocketGateway
     @MessageBody() data: { roleName: string },
   ) {
     const { roleName } = data;
-    
+
     // Join role-specific room
     client.join(`role-${roleName}`);
-    
+
     // Update client's roles in connectedClients
     const clientInfo = this.connectedClients.get(client.id);
     if (clientInfo) {
@@ -80,11 +79,11 @@ export class WebsocketGateway
         clientInfo.roles.push(roleName);
       }
     }
-    
+
     this.logger.log(`Client ${client.id} joined role room: role-${roleName}`);
-    
+
     // Send confirmation
-    client.emit('joined-room', { 
+    client.emit('joined-room', {
       message: `Joined role room: ${roleName}`,
       room: `role-${roleName}`
     });
@@ -99,7 +98,7 @@ export class WebsocketGateway
         break;
       }
     }
-    
+
     this.logger.log(`Client ${client.id} left user room`);
   }
 
@@ -109,16 +108,16 @@ export class WebsocketGateway
     @MessageBody() data: { roleName: string },
   ) {
     const { roleName } = data;
-    
+
     // Leave role-specific room
     client.leave(`role-${roleName}`);
-    
+
     // Update client's roles in connectedClients
     const clientInfo = this.connectedClients.get(client.id);
     if (clientInfo) {
       clientInfo.roles = clientInfo.roles.filter(role => role !== roleName);
     }
-    
+
     this.logger.log(`Client ${client.id} left role room: role-${roleName}`);
   }
 
@@ -135,7 +134,7 @@ export class WebsocketGateway
       timestamp: new Date().toISOString(),
       message: `Your work status has been updated to: ${workStatus}`,
     });
-    
+
     this.logger.log(`Notified user ${userId} about work status update: ${workStatus}, role: ${role}, previousRole: ${previousRole}, previousWorkStatus: ${previousWorkStatus}`);
   }
 
@@ -143,6 +142,10 @@ export class WebsocketGateway
   broadcastAnnouncementToRoles(roleNames: string[], announcement: any) {
     for (const roleName of roleNames) {
       const roomName = `role-${roleName}`;
+
+      this.logger.log(`[Gateway] broadcasting announcement to ${roomName}`);
+      this.logger.log(`[Gateway] payload: ${JSON.stringify(announcement)}`);
+
       this.server.to(roomName).emit('announcement', {
         type: 'announcement',
         announcement,
@@ -150,7 +153,7 @@ export class WebsocketGateway
         timestamp: new Date().toISOString(),
         message: `New announcement published for role: ${roleName}`,
       });
-      
+
       this.logger.log(`Broadcasted announcement to role room: ${roomName}`);
     }
   }

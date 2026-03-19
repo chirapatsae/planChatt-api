@@ -236,29 +236,30 @@ export class AnnouncementsService {
         console.error('❌ Failed to create user notifications:', error);
         throw error;
       }
+    }
 
-      // Broadcast announcement to role rooms
-      try {
-        await this.websocketService.broadcastAnnouncementToRoles({
-          announcement: {
-            id: announcement.id,
-            type: announcement.type,
-            title: announcement.title,
-            description: announcement.description,
-            status: announcement.status,
-            publishDateTime: announcement.publishDateTime,
-            createdBy: announcement.createdBy,
-          },
-          roleNames,
-          message: `New ${announcement.type} published for roles: ${roleNames.join(', ')}`,
-        });
-        console.log(`📢 Successfully broadcasted announcement to ${roleNames.length} role rooms: ${roleNames.join(', ')}`);
-      } catch (error) {
-        console.error('❌ Failed to broadcast announcement to role rooms:', error);
-        // ไม่ throw error เพราะไม่ต้องการให้ announcement creation ล้มเหลว
-      }
+    // Broadcast announcement to role rooms (ย้ายมาไว้นอก if เพื่อให้พ่น log เสมอแม้ยังไม่มี user)
+    try {
+      await this.websocketService.broadcastAnnouncementToRoles({
+        announcement: {
+          id: announcement.id,
+          type: announcement.type,
+          title: announcement.title,
+          description: announcement.description,
+          status: announcement.status,
+          publishDateTime: announcement.publishDateTime,
+          createdBy: announcement.createdBy,
+        },
+        roleNames,
+        message: `New ${announcement.type} published for roles: ${roleNames.join(', ')}`,
+      });
+      console.log(`📢 Successfully broadcasted announcement to ${roleNames.length} role rooms: ${roleNames.join(', ')}`);
+    } catch (error) {
+      console.error('❌ Failed to broadcast announcement to role rooms:', error);
+      // ไม่ throw error เพราะไม่ต้องการให้ announcement creation ล้มเหลว
+    }
       
-    } else {
+    if (allWorkHistories.length === 0) { // This `else` block was originally part of `if (allWorkHistories.length > 0)`
       console.log(`⚠️ No work histories to create notifications for`);
     }
 
