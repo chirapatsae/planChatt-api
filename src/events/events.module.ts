@@ -5,11 +5,15 @@ import { EventsController } from './events.controller';
 import { Event } from './entities/event.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { AttachmentEventModule } from 'src/attachment-event/attachment-event.module';
+import { AnnouncementsModule } from 'src/announcements/announcements.module';
+import { RolesModule } from 'src/roles/roles.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Event, WorkHistory]),
     AttachmentEventModule,
+    AnnouncementsModule,
+    RolesModule,
   ],
   controllers: [EventsController],
   providers: [EventsService],

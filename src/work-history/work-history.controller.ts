@@ -24,11 +24,11 @@ import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 })
 @UseGuards(JwtAuthGuard)
 export class WorkHistoryController {
-  constructor(private readonly workHistoryService: WorkHistoryService) {}
+  constructor(private readonly workHistoryService: WorkHistoryService) { }
 
   @Get()
   findAll(
-    @Query('status') status: string, 
+    @Query('status') status: string,
     @Query('role') role: string
   ) {
     return this.workHistoryService.findAll(status, role);
@@ -39,23 +39,23 @@ export class WorkHistoryController {
     return this.workHistoryService.findPendingWorkHistory();
   }
 
-  @Post('/notify-staff-pending')
-  notifyStaffPending(
-    @Body('userId', ParseUUIDPipe) userId: string,
-  ) {
-    return this.workHistoryService.notifyStaffPending(userId);
-  }
+  // @Post('/notify-staff-pending')
+  // notifyStaffPending(
+  //   @Body('userId', ParseUUIDPipe) userId: string,
+  // ) {
+  //   return this.workHistoryService.notifyStaffPending(userId);
+  // }
 
   @Get('/by-agency/:id')
   findAllByAgencyId(
-    @Param('id') id: string,  
+    @Param('id') id: string,
     @Query('role') role: string
   ) {
     return this.workHistoryService.findAllByGovernmentAgencyId(id, role);
   }
   @Get('/by-lao/:id')
   findAllByLaoId(
-    @Param('id') id: string,  
+    @Param('id') id: string,
     @Query('role') role: string
   ) {
     return this.workHistoryService.findAllByLocalAdministrativeOrganizationId(id, role);

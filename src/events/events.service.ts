@@ -7,6 +7,9 @@ import { UpdateEventDto } from './dto/update-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { AttachmentEventService } from 'src/attachment-event/attachment-event.service';
+import { AnnouncementsService } from 'src/announcements/announcements.service';
+import { RolesService } from 'src/roles/roles.service';
+import { AnnouncementStatus, NotificationType } from 'src/announcements/entities/announcement.entity';
 
 @Injectable()
 export class EventsService {
@@ -18,6 +21,8 @@ export class EventsService {
     @InjectRepository(WorkHistory)
     private readonly workHistoryRepository: Repository<WorkHistory>,
     private readonly attachmentEventService: AttachmentEventService,
+    private readonly announcementsService: AnnouncementsService,
+    private readonly rolesService: RolesService,
   ) {}
 
   async create(createEventDto: CreateEventDto, userId: string): Promise<EventResponseDto> {
@@ -42,6 +47,27 @@ export class EventsService {
       });
 
       const savedEvent = await this.eventRepository.save(event);
+
+      // Send notification to all roles
+      try {
+        const roles = await this.rolesService.findAll();
+        const roleIds = roles.map(r => r.id);
+
+        if (roleIds.length > 0) {
+          await this.announcementsService.create({
+            title: `กิจกรรมใหม่: ${savedEvent.title}`,
+            description: savedEvent.description,
+            type: NotificationType.EVENT,
+            status: AnnouncementStatus.PUBLISHED,
+            roleIds: roleIds,
+          }, userId);
+          this.logger.log(`Created new event notification for all roles`);
+        }
+      } catch (notificationError) {
+        this.logger.error(`Failed to create event notification: ${notificationError.message}`, notificationError.stack);
+        // We don't throw here because the event itself is already saved successfully
+      }
+
       return await this.mapToResponseDto(savedEvent);
     } catch (error) {
       this.logger.error(`Error creating event: ${error.message}`, error.stack);

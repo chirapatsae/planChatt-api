@@ -3,6 +3,9 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { EventsService } from './events.service';
 import { Event } from './entities/event.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
+import { AnnouncementsService } from 'src/announcements/announcements.service';
+import { RolesService } from 'src/roles/roles.service';
+import { AttachmentEventService } from 'src/attachment-event/attachment-event.service';
 
 describe('EventsService', () => {
   let service: EventsService;
@@ -26,6 +29,18 @@ describe('EventsService', () => {
     findOne: jest.fn(),
   };
 
+  const mockAnnouncementsService = {
+    create: jest.fn(),
+  };
+
+  const mockRolesService = {
+    findAll: jest.fn(),
+  };
+
+  const mockAttachmentEventService = {
+    findByEventId: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -38,6 +53,18 @@ describe('EventsService', () => {
           provide: getRepositoryToken(WorkHistory),
           useValue: mockWorkHistoryRepository,
         },
+        {
+          provide: AnnouncementsService,
+          useValue: mockAnnouncementsService,
+        },
+        {
+          provide: RolesService,
+          useValue: mockRolesService,
+        },
+        {
+          provide: AttachmentEventService,
+          useValue: mockAttachmentEventService,
+        },
       ],
     }).compile();
 
@@ -49,7 +76,7 @@ describe('EventsService', () => {
   });
 
   describe('create', () => {
-    it('should create an event successfully', async () => {
+    it('should create an event successfully and send notifications', async () => {
       const createEventDto = {
         title: 'Test Event',
         description: 'Test Description',
@@ -64,10 +91,13 @@ describe('EventsService', () => {
 
       const mockWorkHistory = { id: 'work-history-id', user: { id: 'user-id' } };
       const mockEvent = { id: 'event-id', ...createEventDto, status: 'upcoming' };
+      const mockRoles = [{ id: 'role-1' }, { id: 'role-2' }];
 
       mockWorkHistoryRepository.findOne.mockResolvedValue(mockWorkHistory);
       mockEventRepository.create.mockReturnValue(mockEvent);
       mockEventRepository.save.mockResolvedValue(mockEvent);
+      mockRolesService.findAll.mockResolvedValue(mockRoles);
+      mockAttachmentEventService.findByEventId.mockResolvedValue([]);
 
       const result = await service.create(createEventDto, 'user-id');
       
@@ -75,6 +105,14 @@ describe('EventsService', () => {
       expect(mockWorkHistoryRepository.findOne).toHaveBeenCalled();
       expect(mockEventRepository.create).toHaveBeenCalled();
       expect(mockEventRepository.save).toHaveBeenCalled();
+      expect(mockRolesService.findAll).toHaveBeenCalled();
+      expect(mockAnnouncementsService.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'event',
+          roleIds: ['role-1', 'role-2'],
+        }),
+        'user-id'
+      );
     });
   });
 

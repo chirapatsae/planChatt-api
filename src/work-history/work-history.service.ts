@@ -143,9 +143,9 @@ export class WorkHistoryService {
 
           if (roleIds.length > 0) {
             await this.announcementsService.create({
-              title: 'มีผู้ใช้งานใหม่รอการอนุมัติ',
+              title: `มีผู้ใช้ ${user.firstname} ${user.lastname} รอการอนุมัติ`,
               description: `ผู้ใช้: ${user.firstname} ${user.lastname} จาก ${lao.name} ได้ลงทะเบียนเข้าสู่ระบบและรอการตรวจสอบสิทธิ์`,
-              type: NotificationType.SYSTEM,
+              type: NotificationType.USER,
               status: AnnouncementStatus.PUBLISHED,
               roleIds: roleIds
             }, creatorId);
@@ -204,11 +204,11 @@ export class WorkHistoryService {
       handleException(this.logger, error);
     }
   }
-  
+
   async findPendingWorkHistory(): Promise<number> {
     try {
       const count = await this.workHistoryRepository.count({
-        where: { workStatus: { name: 'pending' }  , isCurrent: true },
+        where: { workStatus: { name: 'pending' }, isCurrent: true },
       });
       return count || 0;
     } catch (error) {
@@ -220,52 +220,52 @@ export class WorkHistoryService {
    * Trigger ให้ backend ส่ง notification ไปหา role "staff"
    * ว่ามี user รออนุมัติอยู่ โดยรับ userId จาก frontend
    */
-  async notifyStaffPending(userId: string) {
-    try {
-      // ดึงข้อมูล user สำหรับใช้แสดงผลใน notification
-      const user = await this.userRepository.findOne({
-        where: { id: userId },
-      });
+  // async notifyStaffPending(userId: string) {
+  //   try {
+  //     // ดึงข้อมูล user สำหรับใช้แสดงผลใน notification
+  //     const user = await this.userRepository.findOne({
+  //       where: { id: userId },
+  //     });
 
-      if (!user) {
-        throw new NotFoundException(`User with ID ${userId} not found`);
-      }
+  //     if (!user) {
+  //       throw new NotFoundException(`User with ID ${userId} not found`);
+  //     }
 
-      // นับจำนวน work history ที่สถานะ pending ทั้งหมด
-      const pendingCount = await this.workHistoryRepository.count({
-        where: { workStatus: { name: 'pending' } },
-      });
+  //     // นับจำนวน work history ที่สถานะ pending ทั้งหมด
+  //     const pendingCount = await this.workHistoryRepository.count({
+  //       where: { workStatus: { name: 'pending' } },
+  //     });
 
-      // ดึงข้อมูล roles: staff และ admin เพื่อส่งประกาศ
-      const adminRoles = await this.roleRepository.find({
-        where: { name: In(['staff', 'admin']) }
-      });
-      const roleIds = adminRoles.map(r => r.id);
+  //     // ดึงข้อมูล roles: staff และ admin เพื่อส่งประกาศ
+  //     const adminRoles = await this.roleRepository.find({
+  //       where: { name: In(['staff', 'admin']) }
+  //     });
+  //     const roleIds = adminRoles.map(r => r.id);
 
-      if (roleIds.length > 0) {
-        // สร้าง Announcement ประเภท SYSTEM แทนการส่ง WebSocket เปล่าๆ
-        // เพื่อให้ข้อมูลถูกบันทึกลงฐานข้อมูลและ Inbox ของ Staff/Admin
-        await this.announcementsService.create({
-          title: 'แจ้งเตือน: ตรวจสอบการอนุมัติผู้ใช้งาน',
-          description: `ต้องการการตรวจสอบ: ผู้ใช้ ${user.firstname} ${user.lastname} (ปัจจุบันมีรายการรออนุมัติทั้งหมด ${pendingCount} รายการ)`,
-          type: NotificationType.SYSTEM,
-          status: AnnouncementStatus.PUBLISHED,
-          roleIds: roleIds
-        }, userId);
-        
-        this.logger.log(`Created management nudge announcement for user ${userId}`);
-      }
+  //     if (roleIds.length > 0) {
+  //       // สร้าง Announcement ประเภท SYSTEM แทนการส่ง WebSocket เปล่าๆ
+  //       // เพื่อให้ข้อมูลถูกบันทึกลงฐานข้อมูลและ Inbox ของ Staff/Admin
+  //       await this.announcementsService.create({
+  //         title: 'แจ้งเตือน: ตรวจสอบการอนุมัติผู้ใช้งาน',
+  //         description: `ต้องการการตรวจสอบ: ผู้ใช้ ${user.firstname} ${user.lastname} (ปัจจุบันมีรายการรออนุมัติทั้งหมด ${pendingCount} รายการ)`,
+  //         type: NotificationType.USER,
+  //         status: AnnouncementStatus.PUBLISHED,
+  //         roleIds: roleIds
+  //       }, userId);
 
-      return true;
-    } catch (error) {
-      handleException(this.logger, error);
-    }
-  }
+  //       this.logger.log(`Created management nudge announcement for user ${userId}`);
+  //     }
 
-  async findAllByGovernmentAgencyId(id: string , role : string): Promise<WorkHistory[]> {
+  //     return true;
+  //   } catch (error) {
+  //     handleException(this.logger, error);
+  //   }
+  // }
+
+  async findAllByGovernmentAgencyId(id: string, role: string): Promise<WorkHistory[]> {
     try {
       const query = this.workHistoryRepository.find({
-        where: { governmentAgencies: { id } , role: { name: role } , workStatus: { name: 'approved' }},
+        where: { governmentAgencies: { id }, role: { name: role }, workStatus: { name: 'approved' } },
         relations: [
           'user',
           // 'amphoe',
@@ -279,16 +279,16 @@ export class WorkHistoryService {
       handleException(this.logger, error);
     }
   }
-  async findAllByLocalAdministrativeOrganizationId(id: string , role : string): Promise<WorkHistory[]> {
+  async findAllByLocalAdministrativeOrganizationId(id: string, role: string): Promise<WorkHistory[]> {
     try {
       const query = this.workHistoryRepository.find({
-        where: { localAdministrativeOrganization: { id: id } , role: { name: role } , workStatus: { name: 'approved' }},
+        where: { localAdministrativeOrganization: { id: id }, role: { name: role }, workStatus: { name: 'approved' } },
         relations: [
           'user',
           // 'amphoe',
           // 'localAdministrativeOrganization',
-        //   'workStatus',
-        //   'role',
+          //   'workStatus',
+          //   'role',
         ]
       });
       return query;
