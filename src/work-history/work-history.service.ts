@@ -143,7 +143,7 @@ export class WorkHistoryService {
 
           if (roleIds.length > 0) {
             await this.announcementsService.create({
-              title: `มีผู้ใช้ ${user.firstname} ${user.lastname} รอการอนุมัติ`,
+              title: `ผู้ใช้ใหม่ ${user.firstname} ${user.lastname} รอการอนุมัติ`,
               description: `ผู้ใช้: ${user.firstname} ${user.lastname} จาก ${lao.name} ได้ลงทะเบียนเข้าสู่ระบบและรอการตรวจสอบสิทธิ์`,
               type: NotificationType.USER,
               status: AnnouncementStatus.PUBLISHED,
