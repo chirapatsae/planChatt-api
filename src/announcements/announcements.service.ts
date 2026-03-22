@@ -228,11 +228,21 @@ export class AnnouncementsService {
       }
     }
 
+    // กำจัด User ซ้ำ (ในกรณีที่ User หนึ่งคนมีหลาย Role และประกาศส่งไปหลาย Role)
+    const uniqueWorkHistoriesMap = new Map<string, WorkHistory>();
+    for (const wh of allWorkHistories) {
+      if (wh.user && wh.user.id) {
+        uniqueWorkHistoriesMap.set(wh.user.id, wh);
+      }
+    }
+    const uniqueWorkHistories = Array.from(uniqueWorkHistoriesMap.values());
+    console.log(`[DEBUG] [AnnouncementsService] [${new Date().toISOString()}] Unique work histories: ${uniqueWorkHistories.length} (from total ${allWorkHistories.length})`);
+
     // สร้าง user_notifications สำหรับทุก users
-    if (allWorkHistories.length > 0) {
+    if (uniqueWorkHistories.length > 0) {
       try {
-        console.log(`[DEBUG] [AnnouncementsService] [${new Date().toISOString()}] Starting createBulk for ${allWorkHistories.length} users`);
-        const result = await this.userNotificationsService.createBulk(announcement, allWorkHistories);
+        console.log(`[DEBUG] [AnnouncementsService] [${new Date().toISOString()}] Starting createBulk for ${uniqueWorkHistories.length} users (Announcement: ${announcement.id})`);
+        const result = await this.userNotificationsService.createBulk(announcement, uniqueWorkHistories);
         console.log(`[DEBUG] [AnnouncementsService] [${new Date().toISOString()}] ✅ Successfully created ${result.length} user notifications`);
       } catch (error) {
         console.error('❌ Failed to create user notifications:', error);

@@ -64,13 +64,16 @@ export class UserNotificationsService {
         return 0;
       }
 
-      const count = await this.userNotificationRepository.count({
+      const notifications = await this.userNotificationRepository.find({
         where: {
           user: { id: workHistory.user.id },
           status: UserNotificationStatus.UNREAD
         },
+        relations: ['announcement']
       });
+      const count = notifications.length;
       console.log(`[DEBUG] [UserNotificationsService] [${new Date().toISOString()}] getUnreadCount for user ${userId} returning ${count}`);
+      console.log(`[DEBUG] [UserNotificationsService] [${new Date().toISOString()}] Unread Announcement IDs: ${notifications.map(n => n.announcement?.id).join(', ')}`);
       return count;
     } catch (error) {
       handleException(this.logger, error);
