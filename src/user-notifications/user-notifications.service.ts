@@ -16,7 +16,7 @@ export class UserNotificationsService {
     private userNotificationRepository: Repository<UserNotification>,
     @InjectRepository(WorkHistory)
     private workHistoryRepository: Repository<WorkHistory>,
-  ) {}
+  ) { }
 
   async create(createUserNotificationDto: CreateUserNotificationDto): Promise<UserNotification> {
     try {
@@ -53,28 +53,21 @@ export class UserNotificationsService {
 
   async getUnreadCount(userId: string): Promise<number> {
     try {
-      console.log(`[DEBUG] [UserNotificationsService] [${new Date().toISOString()}] getUnreadCount requested for user ${userId}`);
       const workHistory = await this.workHistoryRepository.findOne({
         where: { user: { id: userId }, isCurrent: true },
         relations: ['user', 'role'],
       });
 
       if (!workHistory) {
-        console.log(`[DEBUG] [UserNotificationsService] [${new Date().toISOString()}] No current workHistory for user ${userId}`);
         return 0;
       }
 
-      const notifications = await this.userNotificationRepository.find({
+      return await this.userNotificationRepository.count({
         where: {
           user: { id: workHistory.user.id },
           status: UserNotificationStatus.UNREAD
         },
-        relations: ['announcement']
       });
-      const count = notifications.length;
-      console.log(`[DEBUG] [UserNotificationsService] [${new Date().toISOString()}] getUnreadCount for user ${userId} returning ${count}`);
-      console.log(`[DEBUG] [UserNotificationsService] [${new Date().toISOString()}] Unread Announcement IDs: ${notifications.map(n => n.announcement?.id).join(', ')}`);
-      return count;
     } catch (error) {
       handleException(this.logger, error);
       return 0;
@@ -131,9 +124,8 @@ export class UserNotificationsService {
         })
       );
 
-      console.log(`[DEBUG] [UserNotificationsService] [${new Date().toISOString()}] Saving ${userNotifications.length} notifications to DB`);
       const savedNotifications = await this.userNotificationRepository.save(userNotifications);
-      console.log(`[DEBUG] [UserNotificationsService] [${new Date().toISOString()}] Successfully saved ${savedNotifications.length} notifications to DB`);
+      this.logger.log(`Created ${savedNotifications.length} new user notifications for announcement ${announcement.id}`);
 
       return savedNotifications;
     } catch (error) {

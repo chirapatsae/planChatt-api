@@ -236,14 +236,12 @@ export class AnnouncementsService {
       }
     }
     const uniqueWorkHistories = Array.from(uniqueWorkHistoriesMap.values());
-    console.log(`[DEBUG] [AnnouncementsService] [${new Date().toISOString()}] Unique work histories: ${uniqueWorkHistories.length} (from total ${allWorkHistories.length})`);
 
     // สร้าง user_notifications สำหรับทุก users
     if (uniqueWorkHistories.length > 0) {
       try {
-        console.log(`[DEBUG] [AnnouncementsService] [${new Date().toISOString()}] Starting createBulk for ${uniqueWorkHistories.length} users (Announcement: ${announcement.id})`);
         const result = await this.userNotificationsService.createBulk(announcement, uniqueWorkHistories);
-        console.log(`[DEBUG] [AnnouncementsService] [${new Date().toISOString()}] ✅ Successfully created ${result.length} user notifications`);
+        console.log(`✅ Successfully created ${result.length} user notifications`);
       } catch (error) {
         console.error('❌ Failed to create user notifications:', error);
         throw error;
@@ -252,10 +250,8 @@ export class AnnouncementsService {
 
     // Broadcast announcement to role rooms (ย้ายมาไว้นอก if เพื่อให้พ่น log เสมอแม้ยังไม่มี user)
     // เพิ่ม delay 1 วินาที เพื่อลดปัญหา race condition ที่ client ดึง unread count เร็วเกินไปก่อน DB จะ commit เสร็จ
-    console.log(`[DEBUG] [AnnouncementsService] [${new Date().toISOString()}] Scheduling broadcast with 1000ms delay`);
     setTimeout(async () => {
       try {
-        console.log(`[DEBUG] [AnnouncementsService] [${new Date().toISOString()}] Starting broadcastAnnouncementToRoles`);
         await this.websocketService.broadcastAnnouncementToRoles({
           announcement: {
             id: announcement.id,
@@ -269,11 +265,11 @@ export class AnnouncementsService {
           roleNames,
           message: `New ${announcement.type} published for roles: ${roleNames.join(', ')}`,
         });
-        console.log(`[DEBUG] [AnnouncementsService] [${new Date().toISOString()}] 📢 Successfully broadcasted announcement`);
+        console.log(`📢 Successfully broadcasted announcement to ${roleNames.length} role rooms: ${roleNames.join(', ')}`);
       } catch (error) {
         console.error('❌ Failed to broadcast announcement to role rooms:', error);
       }
-    }, 1000);
+    }, 500);
 
     if (allWorkHistories.length === 0) { // This `else` block was originally part of `if (allWorkHistories.length > 0)`
       console.log(`⚠️ No work histories to create notifications for`);
