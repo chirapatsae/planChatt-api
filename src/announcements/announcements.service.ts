@@ -23,12 +23,12 @@ export class AnnouncementsService {
     private roleRepository: Repository<Role>,
     @InjectRepository(WorkHistory)
     private workHistoryRepository: Repository<WorkHistory>,
-    
+
     private readonly announcementSchedulerService: AnnouncementSchedulerService,
     private readonly userNotificationsService: UserNotificationsService,
     private readonly notificationLogsService: NotificationLogsService,
     private readonly websocketService: WebsocketService,
-  ) {}
+  ) { }
 
   async create(createAnnouncementDto: CreateAnnouncementDto, userId: string): Promise<Announcement> {
     const { roleIds, ...announcementData } = createAnnouncementDto;
@@ -42,11 +42,11 @@ export class AnnouncementsService {
       throw new Error('PUBLISHED announcements should not have publishDateTime');
     }
 
-    const workHistory = await this.workHistoryRepository.findOne({ 
+    const workHistory = await this.workHistoryRepository.findOne({
       where: { user: { id: userId } },
       relations: ['user']
     });
-    
+
     if (!workHistory) {
       throw new NotFoundException(`Work history with user ID ${userId} not found`);
     }
@@ -59,14 +59,14 @@ export class AnnouncementsService {
       publishDateTime: announcementData.publishDateTime ? new Date(announcementData.publishDateTime) : undefined,
       createdBy: { id: workHistory.id },
     });
-    
+
     const savedAnnouncement = await this.announcementRepository.save(announcement);
 
     // If roleIds are provided, create the announcement-role relationships
     if (roleIds && roleIds.length > 0) {
       const roles = await this.roleRepository.findBy({ id: In(roleIds) });
-      
-      const announcementRoles = roles.map(role => 
+
+      const announcementRoles = roles.map(role =>
         this.announcementRoleRepository.create({
           announcement: { id: savedAnnouncement.id },
           role: { id: role.id },
@@ -81,10 +81,10 @@ export class AnnouncementsService {
       savedAnnouncement.publishDateTime = new Date();
       savedAnnouncement.notificationStatus = NotificationStatus.PENDING;
       await this.announcementRepository.save(savedAnnouncement);
-      
+
       // ต้องหา announcement ที่มี relations ก่อน
       const announcementWithRelations = await this.findOne(savedAnnouncement.id);
-      
+
       // ส่ง notifications ทันที + บันทึก user_notifications
       await this.sendNotificationsAndCreateUserNotifications(announcementWithRelations);
     }
@@ -105,6 +105,7 @@ export class AnnouncementsService {
     return this.announcementRepository.find({
       relations: ['createdBy', 'createdBy.user', 'announcementRoles', 'announcementRoles.role', 'createdBy.amphoe', 'createdBy.localAdministrativeOrganization'],
       order: { createdAt: 'DESC' },
+      where: { type: NotificationType.ANNOUNCEMENT }
     });
   }
 
@@ -125,14 +126,14 @@ export class AnnouncementsService {
     const { roleIds, ...updateData } = updateAnnouncementDto;
     console.log(updateData);
     const announcement = await this.findOne(id);
-    
+
     // Create a properly typed update object
     const updateObject: Partial<Announcement> = {
       ...updateData,
       // Convert string dates to Date objects
       publishDateTime: updateData.publishDateTime ? new Date(updateData.publishDateTime) : undefined,
     };
-    
+
     // Update announcement data
     Object.assign(announcement, updateObject);
     await this.announcementRepository.save(announcement);
@@ -141,12 +142,12 @@ export class AnnouncementsService {
     if (roleIds !== undefined) {
       // Remove existing role relationships
       await this.announcementRoleRepository.delete({ announcement: { id } });
-      
+
       // Create new role relationships
       if (roleIds.length > 0) {
         const roles = await this.roleRepository.findBy({ id: In(roleIds) });
-        
-        const announcementRoles = roles.map(role => 
+
+        const announcementRoles = roles.map(role =>
           this.announcementRoleRepository.create({
             announcement: { id },
             role: { id: role.id },
@@ -168,7 +169,7 @@ export class AnnouncementsService {
 
   async getPendingNotifications(): Promise<Announcement[]> {
     return this.announcementRepository.find({
-      where: { 
+      where: {
         status: AnnouncementStatus.PUBLISHED,
         notificationStatus: NotificationStatus.PENDING,
       },
@@ -185,18 +186,18 @@ export class AnnouncementsService {
   async updateStatus(id: string, status: AnnouncementStatus): Promise<Announcement> {
     const announcement = await this.findOne(id);
     announcement.status = status;
-    
+
     if (status === AnnouncementStatus.PUBLISHED) {
       announcement.publishDateTime = new Date();
       announcement.notificationStatus = NotificationStatus.PENDING;
     }
-    
+
     return this.announcementRepository.save(announcement);
   }
 
   async getWorkHistoriesByRole(roleId: string): Promise<WorkHistory[]> {
     return this.workHistoryRepository.find({
-      where: { role: { id: roleId } , workStatus: { name: 'approved' } },
+      where: { role: { id: roleId }, workStatus: { name: 'approved' } },
       relations: ['user', 'role'],
     });
   }
@@ -211,14 +212,14 @@ export class AnnouncementsService {
 
     const allWorkHistories: WorkHistory[] = [];
     const roleNames: string[] = [];
-    
+
     // รวบรวม workHistories ของทุก roles และ role names
     for (const announcementRole of announcement.announcementRoles) {
       const workHistories = await this.getWorkHistoriesByRole(announcementRole.role.id);
       console.log(`Found ${workHistories.length} work histories for role ${announcementRole.role.name}`);
       allWorkHistories.push(...workHistories);
       roleNames.push(announcementRole.role.name);
-      
+
       // บันทึก notification log
       try {
         await this.notificationLogsService.logSuccess(announcement.id, announcementRole.role.id);
@@ -258,7 +259,7 @@ export class AnnouncementsService {
       console.error('❌ Failed to broadcast announcement to role rooms:', error);
       // ไม่ throw error เพราะไม่ต้องการให้ announcement creation ล้มเหลว
     }
-      
+
     if (allWorkHistories.length === 0) { // This `else` block was originally part of `if (allWorkHistories.length > 0)`
       console.log(`⚠️ No work histories to create notifications for`);
     }
