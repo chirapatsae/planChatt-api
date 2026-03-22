@@ -53,21 +53,25 @@ export class UserNotificationsService {
 
   async getUnreadCount(userId: string): Promise<number> {
     try {
+      console.log(`[DEBUG] [UserNotificationsService] [${new Date().toISOString()}] getUnreadCount requested for user ${userId}`);
       const workHistory = await this.workHistoryRepository.findOne({
         where: { user: { id: userId }, isCurrent: true },
         relations: ['user', 'role'],
       });
 
       if (!workHistory) {
+        console.log(`[DEBUG] [UserNotificationsService] [${new Date().toISOString()}] No current workHistory for user ${userId}`);
         return 0;
       }
 
-      return await this.userNotificationRepository.count({
+      const count = await this.userNotificationRepository.count({
         where: {
           user: { id: workHistory.user.id },
           status: UserNotificationStatus.UNREAD
         },
       });
+      console.log(`[DEBUG] [UserNotificationsService] [${new Date().toISOString()}] getUnreadCount for user ${userId} returning ${count}`);
+      return count;
     } catch (error) {
       handleException(this.logger, error);
       return 0;
@@ -124,8 +128,9 @@ export class UserNotificationsService {
         })
       );
 
+      console.log(`[DEBUG] [UserNotificationsService] [${new Date().toISOString()}] Saving ${userNotifications.length} notifications to DB`);
       const savedNotifications = await this.userNotificationRepository.save(userNotifications);
-      this.logger.log(`Created ${savedNotifications.length} new user notifications for announcement ${announcement.id}`);
+      console.log(`[DEBUG] [UserNotificationsService] [${new Date().toISOString()}] Successfully saved ${savedNotifications.length} notifications to DB`);
 
       return savedNotifications;
     } catch (error) {

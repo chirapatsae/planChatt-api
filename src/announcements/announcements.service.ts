@@ -231,8 +231,9 @@ export class AnnouncementsService {
     // สร้าง user_notifications สำหรับทุก users
     if (allWorkHistories.length > 0) {
       try {
+        console.log(`[DEBUG] [AnnouncementsService] [${new Date().toISOString()}] Starting createBulk for ${allWorkHistories.length} users`);
         const result = await this.userNotificationsService.createBulk(announcement, allWorkHistories);
-        console.log(`✅ Successfully created ${result.length} user notifications for ${allWorkHistories.length} users`);
+        console.log(`[DEBUG] [AnnouncementsService] [${new Date().toISOString()}] ✅ Successfully created ${result.length} user notifications`);
       } catch (error) {
         console.error('❌ Failed to create user notifications:', error);
         throw error;
@@ -241,8 +242,10 @@ export class AnnouncementsService {
 
     // Broadcast announcement to role rooms (ย้ายมาไว้นอก if เพื่อให้พ่น log เสมอแม้ยังไม่มี user)
     // เพิ่ม delay 1 วินาที เพื่อลดปัญหา race condition ที่ client ดึง unread count เร็วเกินไปก่อน DB จะ commit เสร็จ
+    console.log(`[DEBUG] [AnnouncementsService] [${new Date().toISOString()}] Scheduling broadcast with 1000ms delay`);
     setTimeout(async () => {
       try {
+        console.log(`[DEBUG] [AnnouncementsService] [${new Date().toISOString()}] Starting broadcastAnnouncementToRoles`);
         await this.websocketService.broadcastAnnouncementToRoles({
           announcement: {
             id: announcement.id,
@@ -256,7 +259,7 @@ export class AnnouncementsService {
           roleNames,
           message: `New ${announcement.type} published for roles: ${roleNames.join(', ')}`,
         });
-        console.log(`📢 Successfully broadcasted announcement to ${roleNames.length} role rooms: ${roleNames.join(', ')}`);
+        console.log(`[DEBUG] [AnnouncementsService] [${new Date().toISOString()}] 📢 Successfully broadcasted announcement`);
       } catch (error) {
         console.error('❌ Failed to broadcast announcement to role rooms:', error);
       }
