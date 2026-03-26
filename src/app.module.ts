@@ -32,6 +32,7 @@ import { PlanTactic } from './plan/entities/plan-tactic.entity';
 import { PdfModule } from './pdf/pdf.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { BullModule } from '@nestjs/bull';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { CommentsModule } from './comments/comments.module';
 import { Comment } from './comments/entities/comment.entity';
 import { AiModule } from './ai/ai.module';
@@ -109,6 +110,7 @@ import { AttachmentRevisedProjectGroup } from './attachment-revised-project-grou
       ],
     }),
     ScheduleModule.forRoot(),
+    EventEmitterModule.forRoot(),
     BullModule.forRoot({
       redis: {
         host: 'localhost',

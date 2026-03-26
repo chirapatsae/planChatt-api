@@ -11,6 +11,7 @@ import { AnnouncementSchedulerService } from './announcement-scheduler.service';
 import { UserNotificationsService } from '../user-notifications/user-notifications.service';
 import { NotificationLogsService } from '../notification-logs/notification-logs.service';
 import { WebsocketService } from '../websocket/websocket/websocket.service';
+import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 
 @Injectable()
 export class AnnouncementsService {
@@ -28,6 +29,7 @@ export class AnnouncementsService {
     private readonly userNotificationsService: UserNotificationsService,
     private readonly notificationLogsService: NotificationLogsService,
     private readonly websocketService: WebsocketService,
+    private readonly eventEmitter: EventEmitter2,
   ) { }
 
   async create(createAnnouncementDto: CreateAnnouncementDto, userId: string): Promise<Announcement> {
@@ -248,28 +250,19 @@ export class AnnouncementsService {
       }
     }
 
-    // Broadcast announcement to role rooms (ย้ายมาไว้นอก if เพื่อให้พ่น log เสมอแม้ยังไม่มี user)
-    // เพิ่ม delay 1 วินาที เพื่อลดปัญหา race condition ที่ client ดึง unread count เร็วเกินไปก่อน DB จะ commit เสร็จ
-    setTimeout(async () => {
-      try {
-        await this.websocketService.broadcastAnnouncementToRoles({
-          announcement: {
-            id: announcement.id,
-            type: announcement.type,
-            title: announcement.title,
-            description: announcement.description,
-            status: announcement.status,
-            publishDateTime: announcement.publishDateTime,
-            createdBy: announcement.createdBy,
-          },
-          roleNames,
-          message: `New ${announcement.type} published for roles: ${roleNames.join(', ')}`,
-        });
-        console.log(`📢 Successfully broadcasted announcement to ${roleNames.length} role rooms: ${roleNames.join(', ')}`);
-      } catch (error) {
-        console.error('❌ Failed to broadcast announcement to role rooms:', error);
-      }
-    }, 500);
+    // Broadcast announcement via Event (ใช้ EventEmitter แทน setTimeout)
+    this.eventEmitter.emit('announcement.published', {
+      announcement: {
+        id: announcement.id,
+        type: announcement.type,
+        title: announcement.title,
+        description: announcement.description,
+        status: announcement.status,
+        publishDateTime: announcement.publishDateTime,
+        createdBy: announcement.createdBy,
+      },
+      roleNames,
+    });
 
     if (allWorkHistories.length === 0) { // This `else` block was originally part of `if (allWorkHistories.length > 0)`
       console.log(`⚠️ No work histories to create notifications for`);
@@ -277,5 +270,24 @@ export class AnnouncementsService {
 
     // อัพเดท notification status เป็น SENT
     await this.updateNotificationStatus(announcement.id, NotificationStatus.SENT);
+  }
+
+  // Listener สำหรับจัดการการส่ง Socket หลังบันทึกข้อมูลเสร็จ
+  @OnEvent('announcement.published', { async: true })
+  async handleAnnouncementPublished(payload: { announcement: any, roleNames: string[] }) {
+    const { announcement, roleNames } = payload;
+
+    // หน่วงเวลาเล็กน้อย (Optional) เพื่อให้แน่ใจว่า Transaction อื่นๆ (ถ้ามี) Commit เสร็จ
+    // หรือจะส่งทันทีก็ได้เพราะ OnEvent(async: true) จะทำงานแยกจาก Main Thread หลัก
+    try {
+      await this.websocketService.broadcastAnnouncementToRoles({
+        announcement,
+        roleNames,
+        message: `New ${announcement.type} published for roles: ${roleNames.join(', ')}`,
+      });
+      console.log(`📢 [Event] Successfully broadcasted announcement to ${roleNames.length} role rooms: ${roleNames.join(', ')}`);
+    } catch (error) {
+      console.error('❌ [Event] Failed to broadcast announcement:', error);
+    }
   }
 }
