@@ -3154,6 +3154,17 @@ export class ProjectGroupsService {
    * Transform data to district structure (Amphoe > LAO > Projects)
    */
   private transformToDistrictStructure(amphoes: any[], localOrgs: any[], allProjects: any[]): any[] {
+    // กรองเฉพาะโครงการที่สถานะตรงตามที่กำหนด: Pending_Approval, Pending, Rejected, Approved, Verified
+    const allowedStatuses = ['Pending_Approval', 'Pending', 'Rejected', 'Approved', 'Verified'];
+    const filteredProjects = allProjects.filter(project => {
+      let statusName = 'Unknown';
+      if (project.trackingStatus && project.trackingStatus.length > 0) {
+        const latestTrackingStatus = project.trackingStatus.find(ts => ts.isLatest) || project.trackingStatus[0];
+        statusName = latestTrackingStatus?.statusId?.name;
+      }
+      return allowedStatuses.includes(statusName);
+    });
+
     // แสดงทุกอำเภอแม้ไม่มีโครงการ (array เปล่า) และ sort ตาม id
     const sortedAmphoes = [...amphoes].sort((a, b) => a.id.localeCompare(b.id));
 
@@ -3166,7 +3177,7 @@ export class ProjectGroupsService {
       // Transform LAOs with their projects (แสดงทุกอปทแม้ไม่มีโครงการ)
       const localOrganizations = amphoeLAOs.map(lao => {
         // Find projects for this LAO
-        const laoProjects = allProjects.filter(project => {
+        const laoProjects = filteredProjects.filter(project => {
           const originAgency = project.originAgencyId || project.originalProject?.originAgencyId;
           const responsibleAgency = project.responsibleAgency || project.originalProject?.responsibleAgency;
 
@@ -3304,7 +3315,7 @@ export class ProjectGroupsService {
 
       // Add LAOs that have projects but no existing LAO record in the system
       // This handles edge cases where projects exist but LAO record is missing
-      const projectsWithoutLAO = allProjects.filter(project => {
+      const projectsWithoutLAO = filteredProjects.filter(project => {
         const originAgency = project.originAgencyId || project.originalProject?.originAgencyId;
         const responsibleAgency = project.responsibleAgency || project.originalProject?.responsibleAgency;
 
@@ -3525,11 +3536,8 @@ export class ProjectGroupsService {
     const statusMap = {
       'Approved': 'approved',
       'Verified': 'approved',
-      'Ready': 'pending',
       'Pending': 'pending',
-      'Plan Committee': 'pending',
-      'Provincial Committee': 'pending',
-      'Revision': 'pending',
+      'Pending_Approval': 'pending',
       'Rejected': 'rejected'
     };
 
