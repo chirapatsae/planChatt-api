@@ -23,13 +23,13 @@ async function bootstrap() {
       useDefaults: true,
       directives: {
         "default-src": ["'self'"],
-        "frame-ancestors": ["'self'", "http://localhost:5173", "https://pb.koratpao.go.th", "http://api-pb.thaiakitech.co.th:8080"],
+        "frame-ancestors": ["'self'", "http://localhost:5173", "https://pb.koratpao.go.th", "http://pb.thaiakitech.co.th:8080"],
       },
     },
   }));
 
   app.enableCors({
-    origin: ['http://localhost:5173', 'https://pb.koratpao.go.th', 'http://api-pb.thaiakitech.co.th:8080'],
+    origin: ['http://localhost:5173', 'https://pb.koratpao.go.th', 'http://pb.thaiakitech.co.th:8080'],
     credentials: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     allowedHeaders: ['Content-Type', 'Authorization', 'Secret-Key'],
