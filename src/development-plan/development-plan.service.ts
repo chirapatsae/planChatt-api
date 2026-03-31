@@ -8,7 +8,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Not, Repository, In, IsNull } from 'typeorm';
+import { DataSource, Not, Repository, In, IsNull, EntityManager } from 'typeorm';
 import { DevelopmentPlan } from './entities/development-plan.entity';
 import { CreateDevelopmentPlanDto } from './dto/create-development-plan.dto';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
@@ -61,6 +61,50 @@ export class DevelopmentPlanService {
     private readonly usersService: UsersService,
   ) { }
 
+  private async validatePreviousPlanCompletion(manager: EntityManager): Promise<void> {
+    const developmentPlanRepository = manager.getRepository(DevelopmentPlan);
+    const planPhaseRepository = manager.getRepository(PlanPhase);
+    const developmentPlanRevisionRepository = manager.getRepository(DevelopmentPlanRevision);
+    const developmentPlanSupplementRepository = manager.getRepository(DevelopmentPlanSupplement);
+
+    const latestPlan = await developmentPlanRepository.findOne({
+      where: { isLatest: true },
+    });
+
+    if (latestPlan) {
+      if (!latestPlan.isBooked) {
+        throw new BadRequestException('ไม่สามารถสร้างแผนพัฒนาฉบับใหม่ได้ เนื่องจากแผนพัฒนาฉบับล่าสุดยังไม่ได้จัดทำรูปเล่ม (Booked)');
+      }
+
+      const openPhasesCount = await planPhaseRepository.count({
+        where: { developmentPlan: { id: latestPlan.id }, isOpen: true },
+      });
+      if (openPhasesCount > 0) {
+        throw new BadRequestException('ไม่สามารถสร้างแผนพัฒนาฉบับใหม่ได้ เนื่องจากยังมีห้วงเวลา (Phase) ของแผนล่าสุดที่เปิดรับข้อมูลอยู่');
+      }
+
+      const uncompletedRevisionsCount = await developmentPlanRevisionRepository.count({
+        where: [
+          { developmentPlan: { id: latestPlan.id }, isOpen: true },
+          { developmentPlan: { id: latestPlan.id }, isBooked: false }
+        ]
+      });
+      if (uncompletedRevisionsCount > 0) {
+        throw new BadRequestException('ไม่สามารถสร้างแผนพัฒนาฉบับใหม่ได้ เนื่องจากยังมีรายการขอเปลี่ยนแปลง/แก้ไขของแผนล่าสุดที่ยังเปิดอยู่ หรือ ยังไม่ได้จัดทำรูปเล่ม');
+      }
+
+      const uncompletedSupplementsCount = await developmentPlanSupplementRepository.count({
+        where: [
+          { developmentPlan: { id: latestPlan.id }, isOpen: true },
+          { developmentPlan: { id: latestPlan.id }, isBooked: false }
+        ]
+      });
+      if (uncompletedSupplementsCount > 0) {
+        throw new BadRequestException('ไม่สามารถสร้างแผนพัฒนาฉบับใหม่ได้ เนื่องจากยังมีรายการขอเพิ่มเติมของแผนล่าสุดที่ยังเปิดอยู่ หรือ ยังไม่ได้จัดทำรูปเล่ม');
+      }
+    }
+  }
+
   async create(dto: CreateDevelopmentPlanDto, userId: string): Promise<DevelopmentPlan> {
     try {
       const { name, startYear, endYear } = dto;
@@ -76,6 +120,8 @@ export class DevelopmentPlanService {
       }
 
       return await this.dataSource.transaction(async (manager) => {
+        await this.validatePreviousPlanCompletion(manager);
+
         const existingPlans = await manager.find(DevelopmentPlan);
 
         const isExactDuplicate = existingPlans.some(
@@ -130,7 +176,7 @@ export class DevelopmentPlanService {
       if (!developmentPlanDto || !planPhases || planPhases.length === 0) {
         throw new BadRequestException('ข้อมูล developmentPlan หรือ planPhases ไม่ครบถ้วน');
       }
-      const { name, startYear, endYear, isBooked } = developmentPlanDto;
+      const { name, startYear, endYear } = developmentPlanDto;
 
       const workHistory = await this.workHistoryRepository.findOne({
         where: { user: { id: userId }, workStatus: { name: 'approved' } },
@@ -168,16 +214,13 @@ export class DevelopmentPlanService {
         };
       });
 
-      const openTypeSet = new Set<string>();
-      parsedPlanPhases.forEach((phase) => {
-        if (phase.isOpen) {
-          if (openTypeSet.has(phase.phaseType)) {
-            phase.isOpen = false;
-          } else {
-            openTypeSet.add(phase.phaseType);
-          }
+      const phaseTypes = [...new Set(parsedPlanPhases.map(p => p.phaseType))];
+      for (const type of phaseTypes) {
+        const openPhases = parsedPlanPhases.filter(p => p.phaseType === type && p.isOpen);
+        if (openPhases.length > 1) {
+          throw new BadRequestException(`ประเภทแผน ${type} ไม่สามารถเปิดพร้อมกันได้เกิน 1 รอบ`);
         }
-      });
+      }
 
       // ตรวจสอบเวลาในรายการที่ส่งมาเองไม่ให้ซ้อนกัน หาก phase type เดียวกัน
       const phasesByType = new Map<string, { openDate: Date; closeDate: Date }[]>();
@@ -201,6 +244,8 @@ export class DevelopmentPlanService {
       }
 
       return await this.dataSource.transaction(async (manager) => {
+        await this.validatePreviousPlanCompletion(manager);
+
         const developmentPlanRepository = manager.getRepository(DevelopmentPlan);
         const planPhaseRepository = manager.getRepository(PlanPhase);
 
@@ -234,7 +279,7 @@ export class DevelopmentPlanService {
           startYear,
           endYear,
           isLatest: true,
-          isBooked: isBooked ?? false,
+          isBooked: false,
           createdBy: { id: workHistory.id },
         });
 
@@ -465,16 +510,13 @@ export class DevelopmentPlanService {
             };
           });
 
-          const phaseTypeOpenHandled = new Set<string>();
-          parsedPlanPhases.forEach((phase) => {
-            if (phase.isOpen) {
-              if (phaseTypeOpenHandled.has(phase.phaseType)) {
-                phase.isOpen = false;
-              } else {
-                phaseTypeOpenHandled.add(phase.phaseType);
-              }
+          const phaseTypes = [...new Set(parsedPlanPhases.map(p => p.phaseType))];
+          for (const type of phaseTypes) {
+            const openPhases = parsedPlanPhases.filter(p => p.phaseType === type && p.isOpen);
+            if (openPhases.length > 1) {
+              throw new BadRequestException(`ประเภทแผน ${type} ไม่สามารถเปิดพร้อมกันได้เกิน 1 รอบ`);
             }
-          });
+          }
 
           const phasesByType = new Map<
             string,
