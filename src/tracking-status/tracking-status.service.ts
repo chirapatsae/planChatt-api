@@ -13,7 +13,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { CreateTrackingStatusDto } from './dto/create-tracking-status.dto';
 import { UpdateTrackingStatusDto } from './dto/update-tracking-status.dto';
-import { User } from 'src/users/entities/user.entity';
 import { Status } from 'src/status/entities/status.entity';
 import { TrackingStatus } from './entities/tracking-status.entity';
 import { Comment } from 'src/comments/entities/comment.entity';
@@ -251,8 +250,19 @@ export class TrackingStatusService {
         throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)');
       }
 
+      // Staff-led only: this endpoint is restricted to staff/admin/super-admin
       const allowedRoles = ['staff', 'admin', 'super-admin'];
       const userRole = workHistory.role?.name;
+      if (!allowedRoles.includes(userRole)) {
+        throw new ForbiddenException('เฉพาะเจ้าหน้าที่ (staff/admin/super-admin) เท่านั้นที่สามารถใช้งาน endpoint นี้ได้');
+      }
+
+      // Strict transition map (CLAUDE.md §3, workflow-add-project §STATE TRANSITIONS)
+      const staffAllowedTransitions: Record<string, string> = {
+        Pending: 'Verified',
+        Verified: 'Pending_Approval',
+        Pending_Approval: 'Approved',
+      };
 
       return this.dataSource.transaction(async (manager) => {
         const results: TrackingStatus[] = [];
@@ -260,37 +270,58 @@ export class TrackingStatusService {
         for (const dto of dtos) {
           const { projectId, statusId } = dto;
 
-          // --- RBAC & Ownership Check ---
-          if (!allowedRoles.includes(userRole)) {
-            if (userRole === 'user') {
-              const projectGroup = await manager.findOne(ProjectGroup, {
-                where: { id: projectId },
-                relations: ['createdBy'],
-              });
-              const status = await manager.findOne(Status, {
-                where: { id: statusId },
-              });
-
-              const isOwner = projectGroup?.createdBy?.id === workHistory.id;
-              const isPullBack = status?.name === 'Pull_Back';
-
-              if (!isOwner || !isPullBack) {
-                throw new ForbiddenException(`คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะโครงการ ID: ${projectId} (อนุญาตเฉพาะการดึงกลับโครงการของตนเองเท่านั้น)`);
-              }
-            } else {
-              throw new ForbiddenException('คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะโครงการ');
-            }
+          // Load project with DevelopmentPlan scope
+          const projectGroup = await manager.findOne(ProjectGroup, {
+            where: { id: projectId },
+            relations: ['developmentPlan'],
+          });
+          if (!projectGroup) {
+            throw new NotFoundException(`ProjectGroup with ID ${projectId} not found`);
           }
-          // ------------------------------
 
-          // 1) update old tracking status
+          const targetStatus = await manager.findOne(Status, { where: { id: statusId } });
+          if (!targetStatus) {
+            throw new NotFoundException(`Status with ID ${statusId} not found`);
+          }
+
+          // Plan scope binding (CLAUDE.md §10)
+          const dp = projectGroup.developmentPlan;
+          if (!dp?.isLatest) {
+            throw new ForbiddenException(`แผนพัฒนาฯ ที่เชื่อมโยงกับโครงการนี้ไม่ใช่แผนปัจจุบัน (โครงการ ID: ${projectId})`);
+          }
+          if (dp?.isBooked) {
+            throw new ForbiddenException(`แผนพัฒนาฯ ที่เชื่อมโยงกับโครงการนี้ถูกรวมเล่มแล้ว (โครงการ ID: ${projectId})`);
+          }
+
+          // Load and validate current TrackingStatus
+          const currentTracking = await manager.findOne(TrackingStatus, {
+            where: { projectGroupId: { id: projectId }, isLatest: true },
+            relations: ['statusId'],
+          });
+          if (!currentTracking) {
+            throw new BadRequestException(`ไม่พบสถานะปัจจุบันของโครงการ ID: ${projectId}`);
+          }
+          const currentStatusName = currentTracking.statusId?.name;
+          if (!currentStatusName) {
+            throw new BadRequestException(`ไม่สามารถอ่านสถานะปัจจุบันของโครงการ ID: ${projectId}`);
+          }
+
+          // Enforce strict transition map
+          const allowedDestination = staffAllowedTransitions[currentStatusName];
+          if (!allowedDestination || allowedDestination !== targetStatus.name) {
+            throw new ForbiddenException(
+              `ไม่อนุญาตให้เปลี่ยนสถานะจาก "${currentStatusName}" เป็น "${targetStatus.name}" ` +
+              `(โครงการ ID: ${projectId}, เส้นทางที่อนุญาต: ${currentStatusName} → ${allowedDestination ?? 'ไม่มี'})`,
+            );
+          }
+
+          // Commit transition
           await manager.update(
             TrackingStatus,
             { projectGroupId: { id: projectId } },
             { isLatest: false },
           );
 
-          // 2) create new tracking status
           const tracking = manager.create(TrackingStatus, {
             createdBy: workHistory,
             projectGroupId: { id: projectId },
@@ -322,8 +353,19 @@ export class TrackingStatusService {
         throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)');
       }
 
+      // Staff-led only: this endpoint is restricted to staff/admin/super-admin
       const allowedRoles = ['staff', 'admin', 'super-admin'];
       const userRole = workHistory.role?.name;
+      if (!allowedRoles.includes(userRole)) {
+        throw new ForbiddenException('เฉพาะเจ้าหน้าที่ (staff/admin/super-admin) เท่านั้นที่สามารถใช้งาน endpoint นี้ได้');
+      }
+
+      // Strict transition map (CLAUDE.md §3)
+      const staffAllowedTransitions: Record<string, string> = {
+        Pending: 'Verified',
+        Verified: 'Pending_Approval',
+        Pending_Approval: 'Approved',
+      };
 
       return this.dataSource.transaction(async (manager) => {
         const results: TrackingStatus[] = [];
@@ -331,37 +373,65 @@ export class TrackingStatusService {
         for (const dto of dtos) {
           const { projectId, statusId } = dto;
 
-          // --- RBAC & Ownership Check ---
-          if (!allowedRoles.includes(userRole)) {
-            if (userRole === 'user') {
-              const revisedProjectGroup = await manager.findOne(RevisedProjectGroup, {
-                where: { id: projectId },
-                relations: ['createdBy'],
-              });
-              const status = await manager.findOne(Status, {
-                where: { id: statusId },
-              });
-
-              const isOwner = revisedProjectGroup?.createdBy?.id === workHistory.id;
-              const isPullBack = status?.name === 'Pull_Back';
-
-              if (!isOwner || !isPullBack) {
-                throw new ForbiddenException(`คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะโครงการ ID: ${projectId} (อนุญาตเฉพาะการดึงกลับโครงการของตนเองเท่านั้น)`);
-              }
-            } else {
-              throw new ForbiddenException('คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะโครงการ');
-            }
+          // Load RPG with DPR + parent DPlan scope
+          const revisedProjectGroup = await manager.findOne(RevisedProjectGroup, {
+            where: { id: projectId },
+            relations: ['developmentPlanRevision', 'developmentPlanRevision.developmentPlan'],
+          });
+          if (!revisedProjectGroup) {
+            throw new NotFoundException(`RevisedProjectGroup with ID ${projectId} not found`);
           }
-          // ------------------------------
 
-          // 1) update old tracking status
+          const targetStatus = await manager.findOne(Status, { where: { id: statusId } });
+          if (!targetStatus) {
+            throw new NotFoundException(`Status with ID ${statusId} not found`);
+          }
+
+          const dpr = revisedProjectGroup.developmentPlanRevision;
+
+          // DPR scope (CLAUDE.md §9)
+          if (!dpr?.isOpen) {
+            throw new ForbiddenException(`รอบการแก้ไข/เปลี่ยนแปลงปิดแล้ว ไม่สามารถดำเนินการได้ (โครงการ ID: ${projectId})`);
+          }
+
+          // Parent DevelopmentPlan scope (CLAUDE.md §10)
+          const dprDp = dpr.developmentPlan;
+          if (!dprDp?.isLatest) {
+            throw new ForbiddenException(`แผนพัฒนาฯ ที่อ้างอิงโดยรอบการแก้ไขไม่ใช่แผนปัจจุบัน (โครงการ ID: ${projectId})`);
+          }
+          if (dprDp?.isBooked) {
+            throw new ForbiddenException(`แผนพัฒนาฯ ที่อ้างอิงโดยรอบการแก้ไขถูกรวมเล่มแล้ว (โครงการ ID: ${projectId})`);
+          }
+
+          // Load and validate current TrackingStatus
+          const currentTracking = await manager.findOne(TrackingStatus, {
+            where: { revisedProjectGroupId: { id: projectId }, isLatest: true },
+            relations: ['statusId'],
+          });
+          if (!currentTracking) {
+            throw new BadRequestException(`ไม่พบสถานะปัจจุบันของโครงการ ID: ${projectId}`);
+          }
+          const currentStatusName = currentTracking.statusId?.name;
+          if (!currentStatusName) {
+            throw new BadRequestException(`ไม่สามารถอ่านสถานะปัจจุบันของโครงการ ID: ${projectId}`);
+          }
+
+          // Enforce strict transition map
+          const allowedDestination = staffAllowedTransitions[currentStatusName];
+          if (!allowedDestination || allowedDestination !== targetStatus.name) {
+            throw new ForbiddenException(
+              `ไม่อนุญาตให้เปลี่ยนสถานะจาก "${currentStatusName}" เป็น "${targetStatus.name}" ` +
+              `(โครงการ ID: ${projectId}, เส้นทางที่อนุญาต: ${currentStatusName} → ${allowedDestination ?? 'ไม่มี'})`,
+            );
+          }
+
+          // Commit transition
           await manager.update(
             TrackingStatus,
             { revisedProjectGroupId: { id: projectId } },
             { isLatest: false },
           );
 
-          // 2) create new tracking status
           const tracking = manager.create(TrackingStatus, {
             createdBy: workHistory,
             revisedProjectGroupId: { id: projectId },
@@ -429,6 +499,9 @@ export class TrackingStatusService {
         relations: ['role', 'workStatus'],
       });
       if (!workHistory) throw new NotFoundException('WorkHistory not found');
+      if (workHistory.workStatus?.name !== 'approved') {
+        throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)');
+      }
       if (!['admin', 'super-admin'].includes(workHistory.role?.name)) {
         throw new ForbiddenException('เฉพาะ admin หรือ super-admin เท่านั้นที่สามารถแก้ไข TrackingStatus ได้');
       }
@@ -464,6 +537,9 @@ export class TrackingStatusService {
         relations: ['role', 'workStatus'],
       });
       if (!workHistory) throw new NotFoundException('WorkHistory not found');
+      if (workHistory.workStatus?.name !== 'approved') {
+        throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)');
+      }
       if (!['admin', 'super-admin'].includes(workHistory.role?.name)) {
         throw new ForbiddenException('เฉพาะ admin หรือ super-admin เท่านั้นที่สามารถลบ TrackingStatus ได้');
       }
@@ -493,6 +569,9 @@ export class TrackingStatusService {
         relations: ['role', 'workStatus'],
       });
       if (!workHistory) throw new NotFoundException('WorkHistory not found');
+      if (workHistory.workStatus?.name !== 'approved') {
+        throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)');
+      }
       if (!['admin', 'super-admin'].includes(workHistory.role?.name)) {
         throw new ForbiddenException('เฉพาะ admin หรือ super-admin เท่านั้นที่สามารถกู้คืน TrackingStatus ได้');
       }
@@ -730,6 +809,8 @@ export class TrackingStatusService {
         });
         if (!projectGroup) throw new NotFoundException(`ProjectGroup with ID ${projectGroupId} not found`);
 
+        // NOTE: responsibleAgency is eagerly loaded above for clearResponsibleAgency check
+
         // 5. Staff district (Amphoe) responsibility check
         //    Staff must be responsible for the project's Amphoe.
         //    Admin and super-admin bypass this check.
@@ -766,8 +847,14 @@ export class TrackingStatusService {
           throw new BadRequestException(`ไม่สามารถดึงกลับได้จากสถานะ "${currentStatusName}"`);
         }
 
-        // 8. Optional: clear responsibleAgency for LAO-origin projects only (CLAUDE.md §7)
+        // 8. Optional: clear responsibleAgency — LAO-origin projects only (CLAUDE.md §7.1, §7.2, §7.3)
+        // Agency projects MUST NOT have this field cleared (CLAUDE.md §7.1).
         if (clearResponsibleAgency === true) {
+          // R5-H2: Clearing is allowed ONLY when current status is Pending_Approval (CLAUDE.md §7.4)
+          if (currentStatusName !== 'Pending_Approval') {
+            throw new ForbiddenException('การล้างหน่วยงานรับผิดชอบทำได้เฉพาะเมื่อโครงการอยู่ในสถานะ Pending_Approval เท่านั้น (CLAUDE.md §7.4)');
+          }
+
           const projectCreatorWorkHistory = await manager.findOne(WorkHistory, {
             where: { id: projectGroup.createdBy?.id },
             relations: ['amphoe', 'localAdministrativeOrganization'],
@@ -824,10 +911,10 @@ export class TrackingStatusService {
           throw new ForbiddenException('เฉพาะเจ้าหน้าที่ (staff/admin/super-admin) เท่านั้นที่สามารถดึงกลับโครงการได้');
         }
 
-        // 4. Load RevisedProjectGroup with DPR scope
+        // 4. Load RevisedProjectGroup with DPR scope (including parent DPlan for R5-H1)
         const revisionProjectGroup = await manager.findOne(RevisedProjectGroup, {
           where: { id: revisionProjectGroupId },
-          relations: ['createdBy', 'developmentPlanRevision', 'responsibleAgency'],
+          relations: ['createdBy', 'developmentPlanRevision', 'developmentPlanRevision.developmentPlan', 'responsibleAgency'],
         });
         if (!revisionProjectGroup) {
           throw new NotFoundException(`RevisedProjectGroup with ID ${revisionProjectGroupId} not found`);
@@ -858,6 +945,15 @@ export class TrackingStatusService {
           throw new BadRequestException('รอบการแก้ไข/เปลี่ยนแปลงปิดแล้ว ไม่สามารถดึงกลับได้');
         }
 
+        // R5-H1: Validate parent DevelopmentPlan scope (CLAUDE.md §9, §10)
+        const dprDp = dpr.developmentPlan;
+        if (!dprDp?.isLatest) {
+          throw new BadRequestException('แผนพัฒนาฯ ที่อ้างอิงโดยรอบการแก้ไขไม่ใช่แผนปัจจุบัน ไม่สามารถดึงกลับได้');
+        }
+        if (dprDp?.isBooked) {
+          throw new BadRequestException('แผนพัฒนาฯ ที่อ้างอิงโดยรอบการแก้ไขถูกรวมเล่มแล้ว ไม่สามารถดึงกลับได้');
+        }
+
         // 7. Status constraint — cannot rollback from Pull_Back or Ready
         const currentTracking = await manager.findOne(TrackingStatus, {
           where: { revisedProjectGroupId: { id: revisionProjectGroupId }, isLatest: true },
@@ -872,6 +968,11 @@ export class TrackingStatusService {
 
         // 8. Optional: clear responsibleAgency for LAO-origin revised projects only (CLAUDE.md §7)
         if (clearResponsibleAgency === true) {
+          // R5-H2: Clearing is allowed ONLY when current status is Pending_Approval (CLAUDE.md §7.4)
+          if (currentStatusName !== 'Pending_Approval') {
+            throw new ForbiddenException('การล้างหน่วยงานรับผิดชอบทำได้เฉพาะเมื่อโครงการอยู่ในสถานะ Pending_Approval เท่านั้น (CLAUDE.md §7.4)');
+          }
+
           const projectCreatorWorkHistory = await manager.findOne(WorkHistory, {
             where: { id: revisionProjectGroup.createdBy?.id },
             relations: ['amphoe', 'localAdministrativeOrganization'],

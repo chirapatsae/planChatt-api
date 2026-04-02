@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -28,6 +29,14 @@ export class CreateTrackingStatusDto {
   @IsOptional()
   @IsString()
   oldAdditionDetail?: string;
+
+  /**
+   * R5-M1: LAO-project owner pull-back may request clearResponsibleAgency.
+   * Backend enforces all rules before acting on this flag.
+   */
+  @IsOptional()
+  @IsBoolean()
+  clearResponsibleAgency?: boolean;
 }
 
 export class CreateComments {
