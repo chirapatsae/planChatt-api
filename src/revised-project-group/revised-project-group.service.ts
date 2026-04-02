@@ -4,7 +4,9 @@ import {
   Logger,
   BadRequestException,
   UnauthorizedException,
+  ForbiddenException,
 } from '@nestjs/common';
+import { Status } from 'src/status/entities/status.entity';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { CreateRevisedProjectGroupDto } from './dto/create-revised-project-group.dto';
@@ -131,15 +133,17 @@ export class RevisedProjectGroupService {
           );
         }
 
-        // Get responsibleAgency if provided (required field)
+        // Get responsibleAgency if provided — nullable for LAO-origin projects (CLAUDE.md §5.2)
+        // For agency-origin projects it is auto-assigned at creation; for LAO-origin it is assigned
+        // later by staff. Throw only when an ID was explicitly provided but the entity is not found.
         const responsibleAgency = dto.responsibleAgency
           ? await manager.findOne(GovernmentAgency, {
             where: { id: dto.responsibleAgency },
           })
           : null;
-        if (!responsibleAgency) {
+        if (dto.responsibleAgency && !responsibleAgency) {
           throw new NotFoundException(
-            `ResponsibleAgency (GovernmentAgency) ID is required and not found: ${dto.responsibleAgency}`,
+            `ResponsibleAgency (GovernmentAgency) ID not found: ${dto.responsibleAgency}`,
           );
         }
 
@@ -181,6 +185,7 @@ export class RevisedProjectGroupService {
             revisedProjectGroupId: savedProject,
             statusId: { id: '96be5646-cd55-4542-ae92-b82b2935167e' } as any,
             createdBy: workHistory,
+            isLatest: true,
           });
           await manager.save(trackingStatus);
         }
@@ -189,6 +194,7 @@ export class RevisedProjectGroupService {
             revisedProjectGroupId: savedProject,
             statusId: { id: '96be5646-cd55-4542-ae92-b82b2935167e' } as any,
             createdBy: workHistory,
+            isLatest: true,
           });
           await manager.save(trackingStatus);
         }
@@ -1543,11 +1549,46 @@ export class RevisedProjectGroupService {
       throw new NotFoundException(`Plan ID is required and not found: ${dto.planId}`);
     }
 
+    // 1-3. WorkHistory with isCurrent=true + workStatus (CLAUDE.md validation order)
     const workHistory = await manager.findOne(WorkHistory, {
-      where: { user: { id: userId } },
+      where: { user: { id: userId }, isCurrent: true },
+      relations: ['role', 'workStatus', 'localAdministrativeOrganization', 'amphoe', 'governmentAgencies'],
     });
     if (!workHistory) {
       throw new NotFoundException('Work history not found for this user');
+    }
+    if (workHistory.workStatus?.name !== 'approved') {
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)');
+    }
+
+    // 4. User classification: ONLY agency users may revise/change (CLAUDE.md §3, workflow-revision §Actors)
+    const isAgency =
+      workHistory.amphoe?.id === '3001' &&
+      workHistory.localAdministrativeOrganization?.id === '3001027';
+    if (!isAgency) {
+      throw new ForbiddenException('เฉพาะผู้ใช้ประเภท Agency เท่านั้นที่สามารถยื่นขอแก้ไขหรือเปลี่ยนแปลงโครงการได้');
+    }
+
+    // 7. Revision scope: DevelopmentPlanRevision must be OPEN
+    if (!developmentPlanRevision.isOpen) {
+      throw new BadRequestException('รอบการแก้ไข/เปลี่ยนแปลงยังไม่เปิด หรือปิดแล้ว');
+    }
+
+    // 7. Revision type must be a valid workflow type
+    const validRevisionTypes = ['แก้ไข', 'เปลี่ยนแปลง'];
+    if (!validRevisionTypes.includes(developmentPlanRevision.revisionType?.name)) {
+      throw new BadRequestException('ประเภทการแก้ไขไม่ถูกต้อง');
+    }
+
+    // 5. Source project must exist and be in Approved status
+    if (dto.projectGroupId && projectGroup) {
+      const latestTracking = await manager.findOne(TrackingStatus, {
+        where: { projectGroupId: { id: dto.projectGroupId }, isLatest: true },
+        relations: ['statusId'],
+      });
+      if (!latestTracking || latestTracking.statusId?.name !== 'Approved') {
+        throw new BadRequestException('โครงการต้นฉบับต้องมีสถานะ Approved เท่านั้นจึงจะสามารถยื่นขอแก้ไขหรือเปลี่ยนแปลงได้');
+      }
     }
 
     return [

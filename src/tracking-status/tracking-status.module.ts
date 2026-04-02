@@ -10,6 +10,10 @@ import { Comment } from 'src/comments/entities/comment.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 
+import { AnnouncementsModule } from 'src/announcements/announcements.module';
+import { WorkHistoryAmphoeResponsibility } from 'src/work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity';
+import { WorkHistoryGovernmentAgencyResponsibility } from 'src/work-history-government-agency-responsibility/entities/work-history-government-agency-responsibility.entity';
+
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -20,7 +24,10 @@ import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-
       Comment,
       ProjectGroup,
       RevisedProjectGroup,
+      WorkHistoryAmphoeResponsibility,
+      WorkHistoryGovernmentAgencyResponsibility,
     ]),
+    AnnouncementsModule,
   ],
   controllers: [TrackingStatusController],
   providers: [TrackingStatusService],

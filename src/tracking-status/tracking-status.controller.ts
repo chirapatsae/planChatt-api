@@ -72,23 +72,22 @@ export class TrackingStatusController {
   @Post('rollback/:projectGroupId')
   rollbackStatus(
     @Param('projectGroupId', ParseUUIDPipe) projectGroupId: string,
-    @Body() body: {
-      isResponsibleClear?: boolean
-      isBookedClear?: boolean
-    },
+    @Body() body: { clearResponsibleAgency?: boolean },
+    @Req() req: Request & { user: JwtPayloadUser },
   ) {
-    // รองรับทั้ง shouldClearResponsible (จากหน้าบ้าน) และ isResponsibleClear (backward compatibility)
-    this.logger.log(`Request to rollback tracking status for project group: ${projectGroupId}`)
-    return this.trackingStatusService.rollbackStatus(projectGroupId, body.isResponsibleClear , body.isBookedClear);
+    this.logger.log(`Request to pull back project group: ${projectGroupId}`);
+    return this.trackingStatusService.rollbackStatus(projectGroupId, req.user.userId, body?.clearResponsibleAgency);
   }
 
 
   @Post('rollback/revised-project-group/:revisionProjectGroupId')
   rollbackStatusRevisedProjectGroup(
     @Param('revisionProjectGroupId', ParseUUIDPipe) revisionProjectGroupId: string,
+    @Body() body: { clearResponsibleAgency?: boolean },
+    @Req() req: Request & { user: JwtPayloadUser },
   ) {
-    this.logger.log(`Request to rollback tracking status for project group: ${revisionProjectGroupId}`);
-    return this.trackingStatusService.rollbackRevisionProjectGroupStatus(revisionProjectGroupId);
+    this.logger.log(`Request to pull back revised project group: ${revisionProjectGroupId}`);
+    return this.trackingStatusService.rollbackRevisionProjectGroupStatus(revisionProjectGroupId, req.user.userId, body?.clearResponsibleAgency);
   }
 
 
@@ -102,22 +101,25 @@ export class TrackingStatusController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateTrackingStatusDto,
+    @Req() req: Request & { user: JwtPayloadUser },
   ) {
     this.logger.log(`Request to update tracking status with ID: ${id}`);
-    return this.trackingStatusService.update(id, dto);
+    return this.trackingStatusService.update(id, dto, req.user.userId);
   }
 
   @Delete(':id')
   remove(
     @Param('id', ParseUUIDPipe) id: string,
-    @Query('mode') mode: 'soft' | 'hard' = 'soft',
     @Req() req: Request & { user: JwtPayloadUser },
   ) {
-    return this.trackingStatusService.softRemove(id);
+    return this.trackingStatusService.softRemove(id, req.user.userId);
   }
 
   @Patch(':id/restore')
-  restore(@Param('id', ParseUUIDPipe) id: string) {
-    return this.trackingStatusService.restore(id);
+  restore(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    return this.trackingStatusService.restore(id, req.user.userId);
   }
 }

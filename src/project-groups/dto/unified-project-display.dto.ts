@@ -61,7 +61,7 @@ export interface IUnifiedProjectDisplay {
   createdBy?: WorkHistory;
   responsibleBy?: WorkHistory;
   originAgencyId?: LocalAdministrativeOrganization;
-  responsibleAgency?: GovernmentAgency;
+  responsibleAgency?: GovernmentAgency | null;
   amphoe?: Amphoe;
   localAdministrativeOrganization?: LocalAdministrativeOrganization;
   budgets?: Budget[];

@@ -7,6 +7,7 @@ import {
   InternalServerErrorException,
   ConflictException,
   UnauthorizedException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, DeepPartial, EntityManager, IsNull, Not, Repository } from 'typeorm';
@@ -33,6 +34,7 @@ import {
 } from './dto/unified-project-display.dto';
 import { IProjectVersionsResponse } from './dto/project-versions.dto';
 import { PdfOutAuthorityDocument } from 'src/pdf/entities/pdf-out-authority-document.entity';
+import { PlanPhase, PhaseType } from 'src/plan-phase/entities/plan-phase.entity';
 
 @Injectable()
 export class ProjectGroupsService {
@@ -88,8 +90,10 @@ export class ProjectGroupsService {
     try {
       return await this.dataSource.transaction(async (manager) => {
         const workHistory = await this.getWorkHistory(manager, userId);
+        this.assertWorkStatusApproved(workHistory);
         await this.ensureNoDuplicateTitle(manager, dto.title, workHistory.id, undefined);
         const [developmentPlan, strategy, tactic, plan] = await this.validateForeignKeys(manager, dto);
+        await this.validatePlanPhase(manager, developmentPlan as DevelopmentPlan, workHistory);
         const agencyData = this.getAgencyData(workHistory);
 
         const group = manager.create(ProjectGroup, {
@@ -169,6 +173,7 @@ export class ProjectGroupsService {
     try {
       const savedDraft = await this.dataSource.transaction(async (manager) => {
         const workHistory = await this.getWorkHistory(manager, userId);
+        this.assertWorkStatusApproved(workHistory);
         await this.ensureNoDuplicateTitle(manager, dto.title, workHistory.id, undefined);
         // Validate only strategy, tactic, plan for draft (skip developmentPlan validation)
         const [strategy, tactic, plan] = await Promise.all([
@@ -243,23 +248,30 @@ export class ProjectGroupsService {
   async publishDraft(id: string, dto: CreateProjectGroupDto, userId: string) {
     try {
       await this.dataSource.transaction(async (manager) => {
-        // ตรวจสอบว่า draft มีอยู่จริงและเป็นของ user นี้
-        const existingDraft = await manager.findOne(ProjectGroup, {
-          where: {
-            id,
-            isDraft: true,
-            createdBy: { user: { id: userId } }
-          },
-          relations: ['createdBy', 'createdBy.user'],
-        });
+        // 1-3. WorkHistory + workStatus
+        const workHistory = await this.getWorkHistory(manager, userId);
+        this.assertWorkStatusApproved(workHistory);
 
+        // 4. Load project
+        const existingDraft = await manager.findOne(ProjectGroup, {
+          where: { id, isDraft: true },
+          relations: ['createdBy'],
+        });
         if (!existingDraft) {
-          throw new NotFoundException('Draft not found or you do not have permission to publish it');
+          throw new NotFoundException('Draft not found');
         }
 
-        const workHistory = await this.getWorkHistory(manager, userId);
+        // 5. Ownership: createdBy.id === workHistory.id (CLAUDE.md §4)
+        if (existingDraft.createdBy?.id !== workHistory.id) {
+          throw new ForbiddenException('คุณไม่มีสิทธิ์ดำเนินการกับโครงการนี้');
+        }
+
         await this.ensureNoDuplicateTitle(manager, dto.title, workHistory.id, id);
         const [developmentPlan, strategy, tactic, plan] = await this.validateForeignKeys(manager, dto);
+
+        // 6-7. PlanPhase scope
+        await this.validatePlanPhase(manager, developmentPlan as DevelopmentPlan, workHistory);
+
         const agencyData = this.getAgencyData(workHistory);
 
         // อัพเดท project group data
@@ -288,10 +300,12 @@ export class ProjectGroupsService {
         // อัพเดท project group
         await manager.update(ProjectGroup, id, projectGroupData);
 
+        await manager.update(TrackingStatus, { projectGroupId: { id } }, { isLatest: false });
         const trackingStatus = manager.create(TrackingStatus, {
           projectGroupId: { id },
           statusId: { id: '8219cd82-fa61-4292-bd0d-fa58b08507e1' },
           createdBy: workHistory,
+          isLatest: true,
         });
         await manager.save(trackingStatus);
 
@@ -329,21 +343,24 @@ export class ProjectGroupsService {
   async updateDraft(id: string, dto: CreateDraftProjectGroupDto, userId: string) {
     try {
       await this.dataSource.transaction(async (manager) => {
-        // ตรวจสอบว่า draft มีอยู่จริงและเป็นของ user นี้
-        const existingDraft = await manager.findOne(ProjectGroup, {
-          where: {
-            id,
-            isDraft: true,
-            createdBy: { user: { id: userId } }
-          },
-          relations: ['createdBy', 'createdBy.user'],
-        });
+        // 1-3. WorkHistory + workStatus
+        const workHistory = await this.getWorkHistory(manager, userId);
+        this.assertWorkStatusApproved(workHistory);
 
+        // 4. Load project
+        const existingDraft = await manager.findOne(ProjectGroup, {
+          where: { id, isDraft: true },
+          relations: ['createdBy'],
+        });
         if (!existingDraft) {
           throw new NotFoundException('Draft not found or you do not have permission to update it');
         }
 
-        const workHistory = await this.getWorkHistory(manager, userId);
+        // 5. Ownership: createdBy.id === workHistory.id (CLAUDE.md §4)
+        if (existingDraft.createdBy?.id !== workHistory.id) {
+          throw new ForbiddenException('คุณไม่มีสิทธิ์ดำเนินการกับโครงการนี้');
+        }
+
         await this.ensureNoDuplicateTitle(manager, dto.title, workHistory.id, id);
         // Validate only strategy, tactic, plan for draft (skip developmentPlan validation)
         const [strategy, tactic, plan] = await Promise.all([
@@ -412,31 +429,39 @@ export class ProjectGroupsService {
   async simplePublish(id: string, userId: string) {
     try {
       await this.dataSource.transaction(async (manager) => {
-        // 1. ตรวจสอบว่ามี draft จริง และเป็นของ user นี้
-        const existingDraft = await manager.findOne(ProjectGroup, {
-          where: {
-            id,
-            isDraft: true,
-            createdBy: { user: { id: userId } }
-          },
-          relations: ['createdBy', 'createdBy.user'],
-        });
+        // 1-3. WorkHistory + workStatus
+        const workHistory = await this.getWorkHistory(manager, userId);
+        this.assertWorkStatusApproved(workHistory);
 
+        // 4. Load project with developmentPlan
+        const existingDraft = await manager.findOne(ProjectGroup, {
+          where: { id, isDraft: true },
+          relations: ['createdBy', 'developmentPlan'],
+        });
         if (!existingDraft) {
           throw new NotFoundException(`Draft with ID ${id} not found or already published`);
         }
 
-        // 2. อัปเดต isDraft เป็น false
+        // 5. Ownership: createdBy.id === workHistory.id (CLAUDE.md §4)
+        if (existingDraft.createdBy?.id !== workHistory.id) {
+          throw new ForbiddenException('คุณไม่มีสิทธิ์ดำเนินการกับโครงการนี้');
+        }
+
+        // 6-7. Plan scope + PlanPhase
+        const dp = existingDraft.developmentPlan;
+        if (!dp) throw new BadRequestException('โครงการ Draft ต้องระบุแผนพัฒนาฯ ก่อนเผยแพร่');
+        if (!dp.isLatest) throw new BadRequestException('แผนพัฒนาฯ ที่ระบุไม่ใช่แผนปัจจุบัน');
+        if (dp.isBooked) throw new BadRequestException('แผนพัฒนาฯ ถูกรวมเล่มแล้ว ไม่สามารถดำเนินการได้');
+        await this.validatePlanPhase(manager, dp, workHistory);
+
         await manager.update(ProjectGroup, { id }, { isDraft: false });
 
-        // 3. ดึง workHistory ของผู้ใช้
-        const workHistory = await this.getWorkHistory(manager, userId);
-
-        // 4. บันทึกสถานะใหม่ (tracking)
+        await manager.update(TrackingStatus, { projectGroupId: { id } }, { isLatest: false });
         const trackingStatus = manager.create(TrackingStatus, {
           projectGroupId: { id },
-          statusId: { id: '8219cd82-fa61-4292-bd0d-fa58b08507e1' }, // เปลี่ยนตาม status จริงถ้ามี
+          statusId: { id: '8219cd82-fa61-4292-bd0d-fa58b08507e1' },
           createdBy: workHistory,
+          isLatest: true,
         });
         await manager.save(trackingStatus);
       });
@@ -4928,13 +4953,37 @@ export class ProjectGroupsService {
   // ───────────────────── Helpers ─────────────────────
   private async getWorkHistory(manager: EntityManager, userId: string) {
     const workHistory = await manager.findOne(WorkHistory, {
-      where: { user: { id: userId } },
-      relations: ['user', 'localAdministrativeOrganization', 'governmentAgencies', 'amphoe'],
+      where: { user: { id: userId }, isCurrent: true },
+      relations: ['user', 'localAdministrativeOrganization', 'governmentAgencies', 'amphoe', 'workStatus', 'role'],
     });
     if (!workHistory) {
       throw new NotFoundException('Work history ID not found');
     }
     return workHistory;
+  }
+
+  private assertWorkStatusApproved(workHistory: WorkHistory): void {
+    if (workHistory.workStatus?.name !== 'approved') {
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)');
+    }
+  }
+
+  private async validatePlanPhase(manager: EntityManager, developmentPlan: DevelopmentPlan, workHistory: WorkHistory): Promise<void> {
+    const isAgency =
+      workHistory.amphoe?.id === '3001' &&
+      workHistory.localAdministrativeOrganization?.id === '3001027';
+    const requiredPhaseType = isAgency ? PhaseType.AGENCY : PhaseType.LAO;
+    const openPhase = await manager.findOne(PlanPhase, {
+      where: {
+        developmentPlan: { id: developmentPlan.id },
+        phaseType: requiredPhaseType,
+        isOpen: true,
+      },
+    });
+    if (!openPhase) {
+      const typeLabel = isAgency ? 'ส่วนราชการ (AGENCY)' : 'อปท. (LAO)';
+      throw new BadRequestException(`ระยะเวลายื่นโครงการสำหรับ ${typeLabel} ยังไม่เปิด หรือปิดแล้ว`);
+    }
   }
 
   private async ensureNoDuplicateTitle(manager: EntityManager, title: string, workHistoryId: string, id?: string) {
@@ -4965,6 +5014,8 @@ export class ProjectGroupsService {
     ]);
 
     if (!developmentPlan) throw new NotFoundException(`Development Plan ID not found: ${dto.developmentPlanId}`);
+    if (!(developmentPlan as DevelopmentPlan).isLatest) throw new BadRequestException('แผนพัฒนาฯ ที่ระบุไม่ใช่แผนปัจจุบัน');
+    if ((developmentPlan as DevelopmentPlan).isBooked) throw new BadRequestException('แผนพัฒนาฯ ถูกรวมเล่มแล้ว ไม่สามารถดำเนินการได้');
     if (!strategy) throw new NotFoundException(`Strategy ID not found: ${dto.strategyId}`);
     if (!tactic) throw new NotFoundException(`Tactic ID not found: ${dto.tacticId}`);
     if (!plan) throw new NotFoundException(`Plan ID not found: ${dto.planId}`);
@@ -4973,14 +5024,18 @@ export class ProjectGroupsService {
   }
 
   private getAgencyData(workHistory: WorkHistory): Partial<ProjectGroup> {
-    // กรณีหน่วยงานส่วนกลาง (อบจ. นครราชสีมา)
-    if (workHistory.governmentAgencies && workHistory.localAdministrativeOrganization?.id === '3001027') {
+    // Agency: amphoe.id = 3001 AND lao.id = 3001027 (CLAUDE.md §1)
+    if (
+      workHistory.amphoe?.id === '3001' &&
+      workHistory.governmentAgencies &&
+      workHistory.localAdministrativeOrganization?.id === '3001027'
+    ) {
       return {
         responsibleAgency: { id: workHistory.governmentAgencies.id } as any,
       };
     }
 
-    // กรณีหน่วยงานภายนอก (เทศบาล/อบต.)
+    // LAO: all others with a valid localAdministrativeOrganization
     if (workHistory.localAdministrativeOrganization && workHistory.localAdministrativeOrganization.id !== '3001027') {
       return {
         originAgencyId: { id: workHistory.localAdministrativeOrganization.id } as any,

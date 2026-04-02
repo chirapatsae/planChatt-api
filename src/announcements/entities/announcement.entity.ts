@@ -33,6 +33,7 @@ export enum NotificationType {
   GENERAL = 'general',
   EVENT = 'event',
   USER = 'user',
+  PROJECT = 'project',
 }
 
 @Entity('announcements')
