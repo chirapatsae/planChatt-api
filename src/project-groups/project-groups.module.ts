@@ -16,6 +16,7 @@ import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/
 import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
 import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
 import { PdfOutAuthorityDocument } from 'src/pdf/entities/pdf-out-authority-document.entity';
+import { GeoBoundaryService } from 'src/ai/geo-boundary.service';
 
 @Module({
   imports: [
@@ -37,7 +38,7 @@ import { PdfOutAuthorityDocument } from 'src/pdf/entities/pdf-out-authority-docu
     ]),
   ],
   controllers: [ProjectGroupsController],
-  providers: [ProjectGroupsService],
+  providers: [ProjectGroupsService, GeoBoundaryService],
   exports: [ProjectGroupsService],
 })
 export class ProjectGroupsModule {}

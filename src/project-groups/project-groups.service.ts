@@ -35,6 +35,7 @@ import {
 import { IProjectVersionsResponse } from './dto/project-versions.dto';
 import { PdfOutAuthorityDocument } from 'src/pdf/entities/pdf-out-authority-document.entity';
 import { PlanPhase, PhaseType } from 'src/plan-phase/entities/plan-phase.entity';
+import { GeoBoundaryService } from 'src/ai/geo-boundary.service';
 
 @Injectable()
 export class ProjectGroupsService {
@@ -84,6 +85,7 @@ export class ProjectGroupsService {
     private readonly pdfOutAuthorityRepo: Repository<PdfOutAuthorityDocument>,
 
     private readonly dataSource: DataSource,
+    private readonly geoBoundaryService: GeoBoundaryService,
   ) { }
 
   async create(dto: CreateProjectGroupDto, userId: string) {
@@ -171,7 +173,7 @@ export class ProjectGroupsService {
 
   async createDraft(dto: CreateDraftProjectGroupDto, userId: string) {
     try {
-      const savedDraft = await this.dataSource.transaction(async (manager) => {
+      const { id: savedDraftId, geoWarning } = await this.dataSource.transaction(async (manager) => {
         const workHistory = await this.getWorkHistory(manager, userId);
         this.assertWorkStatusApproved(workHistory);
         await this.ensureNoDuplicateTitle(manager, dto.title, workHistory.id, undefined);
@@ -236,10 +238,13 @@ export class ProjectGroupsService {
           await manager.save(budgets);
         }
 
-        return savedGroupResult;
+        return {
+          id: savedGroupResult.id,
+          geoWarning: this.checkGeoWarning(workHistory, dto),
+        };
       });
 
-      return { message: 'Create draft success', id: savedDraft.id };
+      return { message: 'Create draft success', id: savedDraftId, ...(geoWarning ? { geoWarning } : {}) };
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -342,7 +347,7 @@ export class ProjectGroupsService {
 
   async updateDraft(id: string, dto: CreateDraftProjectGroupDto, userId: string) {
     try {
-      await this.dataSource.transaction(async (manager) => {
+      const geoWarning = await this.dataSource.transaction(async (manager) => {
         // 1-3. WorkHistory + workStatus
         const workHistory = await this.getWorkHistory(manager, userId);
         this.assertWorkStatusApproved(workHistory);
@@ -419,8 +424,9 @@ export class ProjectGroupsService {
           await manager.save(budgets);
         }
 
+        return this.checkGeoWarning(workHistory, dto);
       });
-      return { message: 'Update draft success' };
+      return { message: 'Update draft success', ...(geoWarning ? { geoWarning } : {}) };
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -4966,6 +4972,52 @@ export class ProjectGroupsService {
     if (workHistory.workStatus?.name !== 'approved') {
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)');
     }
+  }
+
+  /**
+   * CLAUDE.md §13 — Advisory geo validation for LAO users only.
+   * Returns a Thai warning string when any supplied coordinate falls outside the
+   * user's amphoe boundary, or null when no warning is needed.
+   * This check is NEVER blocking — callers must treat the result as advisory only.
+   */
+  private checkGeoWarning(
+    workHistory: WorkHistory,
+    coords: { startLat?: number | null; startLng?: number | null; endLat?: number | null; endLng?: number | null },
+  ): string | null {
+    // Agency users are exempt from this rule (CLAUDE.md §13)
+    const isAgency =
+      workHistory.amphoe?.id === '3001' &&
+      workHistory.localAdministrativeOrganization?.id === '3001027';
+    if (isAgency) return null;
+
+    const amphoeId = workHistory.amphoe?.id;
+    if (!amphoeId) return null;
+
+    const warnings: string[] = [];
+
+    if (coords.startLat != null && coords.startLng != null) {
+      const inside = this.geoBoundaryService.isPointInsideAmphoe(
+        Number(coords.startLat),
+        Number(coords.startLng),
+        amphoeId,
+      );
+      if (inside === false) {
+        warnings.push('พิกัดจุดเริ่มต้นอยู่นอกเขตอำเภอของคุณ');
+      }
+    }
+
+    if (coords.endLat != null && coords.endLng != null) {
+      const inside = this.geoBoundaryService.isPointInsideAmphoe(
+        Number(coords.endLat),
+        Number(coords.endLng),
+        amphoeId,
+      );
+      if (inside === false) {
+        warnings.push('พิกัดจุดสิ้นสุดอยู่นอกเขตอำเภอของคุณ');
+      }
+    }
+
+    return warnings.length > 0 ? warnings.join(' และ ') : null;
   }
 
   private async validatePlanPhase(manager: EntityManager, developmentPlan: DevelopmentPlan, workHistory: WorkHistory): Promise<void> {
