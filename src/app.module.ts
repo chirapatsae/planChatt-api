@@ -98,6 +98,10 @@ import { AttachmentProjectGroupsModule } from './attachment-project-groups/attac
 import { AttachmentProjectGroup } from './attachment-project-groups/entities/attachment-project-group.entity';
 import { AttachmentRevisedProjectGroupsModule } from './attachment-revised-project-groups/attachment-revised-project-groups.module';
 import { AttachmentRevisedProjectGroup } from './attachment-revised-project-groups/entities/attachment-revised-project-group.entity';
+import { BookAssemblyModule } from './book-assembly/book-assembly.module';
+import { BookAssemblyDraft } from './book-assembly/entities/book-assembly-draft.entity';
+import { BookAssemblyVersion } from './book-assembly/entities/book-assembly-version.entity';
+import { DeprecationAuditLog } from './book-assembly/entities/deprecation-audit-log.entity';
 
 
 @Module({
@@ -174,6 +178,9 @@ import { AttachmentRevisedProjectGroup } from './attachment-revised-project-grou
         PlanPhase,
         AttachmentProjectGroup,
         AttachmentRevisedProjectGroup,
+        BookAssemblyDraft,
+        BookAssemblyVersion,
+        DeprecationAuditLog,
       ],
       synchronize: true,
       extra: {
@@ -226,6 +233,7 @@ import { AttachmentRevisedProjectGroup } from './attachment-revised-project-grou
     PlanPhaseModule,
     AttachmentProjectGroupsModule,
     AttachmentRevisedProjectGroupsModule,
+    BookAssemblyModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -96,11 +96,12 @@ export class DevelopmentPlanRevisionController {
   }
 
   // ============================================
-  // 📘 Book Generation (สร้างเล่มอนุมัติ)
+  // 📘 Book Generation (สร้างเล่มอนุมัติ) — DEPRECATED
   // ============================================
 
   /**
-   * สร้างเล่มอนุมัติสำหรับ "การแก้ไข" (Edit Revision)
+   * @deprecated Use the new book assembly flow instead:
+   *   POST /book-assembly/edit_revision/{revisionId}/draft → upload parts → POST .../merge
    */
   @Post('edit/book')
   async generateApprovedEditBook(
@@ -109,12 +110,13 @@ export class DevelopmentPlanRevisionController {
     @Req() req: Request & { user: JwtPayloadUser },
   ) {
     const userId = req.user?.userId;
-    this.logger.log(`Generate approved book for development plan revision ${id} by user ${userId}`);
+    this.logger.warn(`DEPRECATED: POST /development-plan-revision/edit/book — use POST /book-assembly/edit_revision/${body.developmentPlanRevisionId}/draft/merge instead`);
     return this.developmentPlanRevisionService.generateApprovedBookForEditRevision(body.developmentPlanRevisionId, userId);
   }
 
   /**
-   * สร้างเล่มอนุมัติสำหรับ "การเปลี่ยนแปลง" (Change Revision)
+   * @deprecated Use the new book assembly flow instead:
+   *   POST /book-assembly/change_revision/{revisionId}/draft → upload parts → POST .../merge
    */
   @Post('change/book')
   async generateApprovedChangeBook(
@@ -123,13 +125,13 @@ export class DevelopmentPlanRevisionController {
     @Req() req: Request & { user: JwtPayloadUser },
   ) {
     const userId = req.user?.userId;
-    this.logger.log(`Generate approved book for development plan revision ${id} by user ${userId}`);
+    this.logger.warn(`DEPRECATED: POST /development-plan-revision/change/book — use POST /book-assembly/change_revision/${body.developmentPlanRevisionId}/draft/merge instead`);
     return this.developmentPlanRevisionService.generateApprovedBookForChangeRevision(body.developmentPlanRevisionId, userId);
   }
 
   /**
-   * ยกเลิกการออกเล่ม (Rollback Book)
-   * ใช้กรณีออกเล่มผิดพลาด หรือต้องการย้อนกลับสถานะ Booked
+   * @deprecated Use the new book assembly flow instead:
+   *   POST /book-assembly/{edit_revision|change_revision}/{id}/cancel
    */
   @Post(':id/rollback-book')
   async rollbackBook(
@@ -137,7 +139,7 @@ export class DevelopmentPlanRevisionController {
     @Req() req: Request & { user: JwtPayloadUser },
   ) {
     const userId = req.user?.userId;
-    this.logger.log(`Rollback book for development plan revision ${id} by user ${userId}`);
+    this.logger.warn(`DEPRECATED: POST /development-plan-revision/${id}/rollback-book — use POST /book-assembly/{sourceType}/${id}/cancel instead`);
     return this.developmentPlanRevisionService.rollbackBook(id, userId);
   }
 }

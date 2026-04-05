@@ -761,7 +761,7 @@ export class DevelopmentPlanRevisionService {
       handleException(this.logger, error);
     }
   }
-  
+
   /**
    * ยกเลิกการออกเล่ม (Rollback Book)
    * - ยกเลิกสถานะ Booked ของโครงการและ Revision

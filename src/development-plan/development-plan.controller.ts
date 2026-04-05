@@ -68,16 +68,24 @@ export class DevelopmentPlanController {
     return this.developmentPlanService.getCurrentPlanStatus();
   }
 
+  /**
+   * @deprecated Use the new book assembly flow instead:
+   *   POST /book-assembly/main_plan/{id}/draft → upload parts → POST .../merge
+   */
   @Post(':id/book')
   async generateApprovedBookForPlan(
     @Param('id') id: string,
     @Req() req: Request & { user: JwtPayloadUser },
   ) {
     const userId = req.user?.userId;
-    this.logger.log(`Generate approved book for development plan ${id} by user ${userId}`);
+    this.logger.warn(`DEPRECATED: POST /development-plan/${id}/book — use POST /book-assembly/main_plan/${id}/draft/merge instead`);
     return this.developmentPlanService.generateApprovedBookForPlan(id, userId);
   }
 
+  /**
+   * @deprecated Use the new book assembly flow instead:
+   *   POST /book-assembly/main_plan/{id}/draft/preview
+   */
   @Post(':id/book-preview')
   async previewApprovedBookForPlan(
     @Param('id') id: string,
@@ -85,9 +93,7 @@ export class DevelopmentPlanController {
     @Res() res: Response,
   ) {
     const userId = req.user?.userId;
-    this.logger.log(
-      `Generate approved book PREVIEW for development plan ${id} by user ${userId}`,
-    );
+    this.logger.warn(`DEPRECATED: POST /development-plan/${id}/book-preview — use POST /book-assembly/main_plan/${id}/draft/preview instead`);
     const pdfBuffer =
       await this.developmentPlanService.generateApprovedBookPreviewForPlan(
         id,
@@ -171,13 +177,17 @@ export class DevelopmentPlanController {
     return this.developmentPlanService.restore(id);
   }
 
+  /**
+   * @deprecated Use the new book assembly flow instead:
+   *   POST /book-assembly/main_plan/{id}/cancel
+   */
   @Post(':id/rollback-book')
   async rollbackBook(
     @Param('id') id: string,
     @Req() req: Request & { user: JwtPayloadUser },
   ) {
     const userId = req.user?.userId;
-    this.logger.log(`Rollback book for development plan ${id} by user ${userId}`);
+    this.logger.warn(`DEPRECATED: POST /development-plan/${id}/rollback-book — use POST /book-assembly/main_plan/${id}/cancel instead`);
     return this.developmentPlanService.rollbackBook(id, userId);
   }
 }
