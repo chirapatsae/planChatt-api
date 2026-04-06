@@ -1,0 +1,45 @@
+{
+  "version": 8,
+  "sourceType": "main_plan",
+  "sourceId": "f0926661-3ae4-4240-aeaf-9d391e345605",
+  "status": "completed",
+  "correctionMode": "correction_part1",
+  "correctionReason": "แก้ไขรายละเอียดส่วนที่ 1",
+  "parts": {
+    "part1": {
+      "source": "uploaded",
+      "originalFileName": "book-v3.pdf",
+      "uploadedBy": "1a0f8d63-69f3-4e06-a5d2-e7046d926d29",
+      "uploadedAt": "2026-04-05T15:39:24.027Z"
+    },
+    "part2": {
+      "source": "reused",
+      "originalFileName": "book-v1-part3.pdf",
+      "uploadedBy": "1a0f8d63-69f3-4e06-a5d2-e7046d926d29",
+      "uploadedAt": "2026-04-05T15:33:29.362Z"
+    },
+    "part3": {
+      "source": "reused",
+      "projectCount": 6,
+      "projectIds": [
+        "39d6114d-7dee-463c-afe5-1a29bb4656b6",
+        "2cb6ef3b-2296-42ab-9a66-655492090409",
+        "6ea2fca3-1fa2-4b92-b8d0-c901dc904f0f",
+        "895074a0-6cde-4837-82b7-62388538947b",
+        "2a4ba6bb-88d9-4fbf-b1d9-3d141da50f09",
+        "921de897-ddbd-41ab-8c29-440150996fc2"
+      ],
+      "generatedAt": "2026-04-05T15:33:29.364Z"
+    }
+  },
+  "merged": {
+    "fileName": "official-book-v8.pdf",
+    "mergedAt": "2026-04-05T15:39:52.249Z",
+    "totalPages": 67
+  },
+  "createdBy": "1a0f8d63-69f3-4e06-a5d2-e7046d926d29",
+  "createdAt": "2026-04-05T15:39:51.975Z",
+  "deprecatedAt": null,
+  "deprecatedBy": null,
+  "deprecationReason": null
+}
