@@ -15,6 +15,7 @@ export enum AssemblyDraftStatus {
   PREPARING = 'preparing',
   READY = 'ready',
   MERGED = 'merged',
+  CANCELED = 'canceled',
 }
 
 export enum BookAssemblyVersionStatus {
@@ -38,4 +39,5 @@ export enum PartSource {
 export enum DeprecationAuditAction {
   SUCCESS = 'success',
   FAILED = 'failed',
+  RESTORED = 'restored',
 }

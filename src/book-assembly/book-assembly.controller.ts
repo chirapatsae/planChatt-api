@@ -2,7 +2,9 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
+  Headers,
   Param,
   ParseIntPipe,
   Post,
@@ -84,8 +86,44 @@ export class BookAssemblyController {
   ) {
     const userId = req.user?.userId;
     this.logger.log(`Discarding draft for ${sourceType}/${sourceId} by user ${userId}`);
-    await this.bookAssemblyService.discardDraft(sourceType, sourceId, userId);
-    return { message: 'ยกเลิก draft สำเร็จ' };
+    return this.bookAssemblyService.discardDraft(sourceType, sourceId, userId);
+  }
+
+  @Get(':sourceType/:sourceId/draft/canceled')
+  async getCanceledDraft(
+    @Param('sourceType') sourceType: BookAssemblySourceType,
+    @Param('sourceId') sourceId: string,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    const userId = req.user?.userId;
+    const draft = await this.bookAssemblyService.getCanceledDraft(sourceType, sourceId, userId);
+    if (!draft) {
+      throw new NotFoundException('ไม่พบ draft ที่ถูกยกเลิก');
+    }
+    return draft;
+  }
+
+  @Post(':sourceType/:sourceId/draft/restore')
+  async restoreDraft(
+    @Param('sourceType') sourceType: BookAssemblySourceType,
+    @Param('sourceId') sourceId: string,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    const userId = req.user?.userId;
+    this.logger.log(`Restoring draft for ${sourceType}/${sourceId} by user ${userId}`);
+    return this.bookAssemblyService.restoreDraft(sourceType, sourceId, userId);
+  }
+
+  @Delete(':sourceType/:sourceId/draft/canceled')
+  async purgeCanceledDraft(
+    @Param('sourceType') sourceType: BookAssemblySourceType,
+    @Param('sourceId') sourceId: string,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    const userId = req.user?.userId;
+    this.logger.log(`Purging canceled draft for ${sourceType}/${sourceId} by user ${userId}`);
+    await this.bookAssemblyService.purgeCanceledDraft(sourceType, sourceId, userId);
+    return { message: 'ลบ draft ที่ยกเลิกแล้วเรียบร้อย' };
   }
 
   // ===========================================================================
@@ -392,5 +430,79 @@ export class BookAssemblyController {
       targetVersion: draft.targetVersion,
       correctionMode: draft.correctionMode,
     };
+  }
+
+  // ===========================================================================
+  // Dev Reset (development environment ONLY)
+  // ===========================================================================
+
+  // CRITICAL: dev-reset-all MUST be declared BEFORE :sourceType/:sourceId/dev-reset
+  // to avoid NestJS route shadowing.
+
+  @Delete('dev-reset-all')
+  async devResetAll(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Headers('x-dev-reset-confirm') confirmHeader: string,
+  ) {
+    // Guard 1: environment check (before anything else)
+    if (process.env.NODE_ENV !== 'development') {
+      throw new ForbiddenException('This endpoint is only available in the development environment');
+    }
+    // Guard 2: confirmation header
+    if (confirmHeader !== 'CONFIRM_FULL_RESET') {
+      throw new BadRequestException('Missing or invalid X-Dev-Reset-Confirm header. Must be: CONFIRM_FULL_RESET');
+    }
+    // Guard 3: JWT auth — handled by class-level @UseGuards(JwtAuthGuard)
+    // Guard 4: super-admin role — enforced inside service
+    const userId = req.user?.userId;
+    this.logger.warn(`DEV RESET ALL requested by user ${userId}`);
+
+    try {
+      const result = await this.bookAssemblyService.resetAllForTesting(userId);
+      return { message: 'Full Book Assembly reset complete', ...result };
+    } catch (error) {
+      if (error instanceof ForbiddenException || error instanceof NotFoundException) {
+        throw error;
+      }
+      this.logger.error(`DEV RESET ALL failed: ${error?.message}`, error?.stack);
+      throw new BadRequestException({ message: 'Reset failed', error: error?.message });
+    }
+  }
+
+  @Delete(':sourceType/:sourceId/dev-reset')
+  async devReset(
+    @Param('sourceType') sourceType: BookAssemblySourceType,
+    @Param('sourceId') sourceId: string,
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Headers('x-dev-reset-confirm') confirmHeader: string,
+  ) {
+    // Guard 1: environment check (before anything else)
+    if (process.env.NODE_ENV !== 'development') {
+      throw new ForbiddenException('This endpoint is only available in the development environment');
+    }
+    // Guard 2: confirmation header
+    if (confirmHeader !== 'CONFIRM_RESET') {
+      throw new BadRequestException('Missing or invalid X-Dev-Reset-Confirm header. Must be: CONFIRM_RESET');
+    }
+    // Guard 3: JWT auth — handled by class-level @UseGuards(JwtAuthGuard)
+    // Guard 4: super-admin role — enforced inside service
+    const userId = req.user?.userId;
+    this.logger.warn(`DEV RESET requested for ${sourceType}/${sourceId} by user ${userId}`);
+
+    try {
+      const result = await this.bookAssemblyService.resetForTesting(sourceType, sourceId, userId);
+      return {
+        message: 'Book Assembly data reset complete',
+        sourceType,
+        sourceId,
+        ...result,
+      };
+    } catch (error) {
+      if (error instanceof ForbiddenException || error instanceof NotFoundException) {
+        throw error;
+      }
+      this.logger.error(`DEV RESET failed: ${error?.message}`, error?.stack);
+      throw new BadRequestException({ message: 'Reset failed', error: error?.message });
+    }
   }
 }

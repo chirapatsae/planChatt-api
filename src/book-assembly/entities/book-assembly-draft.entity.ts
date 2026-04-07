@@ -133,6 +133,16 @@ export class BookAssemblyDraft {
   })
   assemblyStatus: AssemblyDraftStatus;
 
+  // Canceled (soft-delete) fields
+
+  @Column({ name: 'canceled_at', type: 'timestamp', nullable: true })
+  canceledAt: Date | null;
+
+  @Column({ name: 'canceled_by_id', type: 'uuid', nullable: true })
+  canceledById: string | null;
+
+  // Creator
+
   @Column({ name: 'created_by_id' })
   createdById: string;
 
@@ -156,4 +166,8 @@ export class BookAssemblyDraft {
   @ManyToOne(() => WorkHistory, { nullable: true })
   @JoinColumn({ name: 'part2_uploaded_by_id' })
   part2UploadedBy: WorkHistory | null;
+
+  @ManyToOne(() => WorkHistory, { nullable: true })
+  @JoinColumn({ name: 'canceled_by_id' })
+  canceledBy: WorkHistory | null;
 }

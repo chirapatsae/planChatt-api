@@ -50,6 +50,9 @@ const ADMIN_ROLES = ['admin', 'super-admin'];
 /** Roles permitted to view / download (Spec Section 10.1) */
 const READ_ROLES = ['staff', 'admin', 'super-admin'];
 
+/** Roles permitted to perform dev-reset (dev utility only) */
+const RESET_ROLES = ['super-admin'];
+
 /** Max identity-verification failures before lock (Spec Section 11.4) */
 const MAX_IDENTITY_ATTEMPTS = 3;
 
@@ -131,6 +134,41 @@ export class BookAssemblyService {
         );
       }
 
+      // Check if a canceled draft exists
+      const canceledDraft = await this.draftRepo.findOne({
+        where: {
+          sourceType,
+          sourceId,
+          assemblyStatus: AssemblyDraftStatus.CANCELED,
+        },
+        order: { canceledAt: 'DESC' },
+      });
+      if (canceledDraft) {
+        // Check if a completed version exists for this context
+        const completedVersion = await this.versionRepo.findOne({
+          where: {
+            sourceType,
+            sourceId,
+            status: BookAssemblyVersionStatus.COMPLETED,
+          },
+        });
+
+        if (completedVersion) {
+          // Orphan: silently purge the canceled draft and continue with create
+          await this.draftRepo.remove(canceledDraft);
+          this.logger.log(
+            `Silently purged orphaned canceled draft ${canceledDraft.id} for ${sourceType}/${sourceId}`,
+          );
+        } else {
+          // No completed version — user should choose restore or purge
+          throw new ConflictException({
+            message: 'มี draft ที่ยกเลิกแล้วอยู่ กรุณากู้คืนหรือลบทิ้งก่อนสร้างใหม่',
+            errorCode: 'CANCELED_DRAFT_EXISTS',
+            canceledDraftId: canceledDraft.id,
+          });
+        }
+      }
+
       // Determine next version number
       const maxVersion = await this.versionRepo
         .createQueryBuilder('v')
@@ -140,6 +178,19 @@ export class BookAssemblyService {
         .getRawOne();
       const targetVersion = (maxVersion?.max ?? 0) + 1;
 
+      // Query for the most recently DEPRECATED version (cancel-book linkage)
+      const deprecatedVersion = await this.versionRepo.findOne({
+        where: {
+          sourceType,
+          sourceId,
+          status: BookAssemblyVersionStatus.DEPRECATED,
+        },
+        order: { versionNumber: 'DESC' },
+      });
+      this.logger.warn(
+        `createDraft: deprecatedVersion query result — ${deprecatedVersion ? `id=${deprecatedVersion.id} versionNumber=${deprecatedVersion.versionNumber}` : 'NULL (no deprecated version found)'}`,
+      );
+
       // Create folder structure
       this.fileService.createVersionFolders(sourceType, sourceId, targetVersion);
 
@@ -148,7 +199,7 @@ export class BookAssemblyService {
         sourceType,
         sourceId,
         targetVersion,
-        previousVersionId: null,
+        previousVersionId: deprecatedVersion?.id ?? null,
         correctionMode: null,
         correctionReason: null,
         part1Status: PartUploadStatus.PENDING,
@@ -159,9 +210,15 @@ export class BookAssemblyService {
       });
 
       const saved = await this.draftRepo.save(draft);
-      this.logger.log(
-        `Created draft for ${sourceType}/${sourceId} targetVersion=${targetVersion} [draftId=${saved.id}]`,
-      );
+      if (deprecatedVersion) {
+        this.logger.log(
+          `Created draft for ${sourceType}/${sourceId} targetVersion=${targetVersion} previousVersionId=${deprecatedVersion.id} (cancel-book linkage) [draftId=${saved.id}]`,
+        );
+      } else {
+        this.logger.log(
+          `Created draft for ${sourceType}/${sourceId} targetVersion=${targetVersion} [draftId=${saved.id}]`,
+        );
+      }
       return saved;
     } catch (error) {
       handleException(this.logger, error);
@@ -192,9 +249,317 @@ export class BookAssemblyService {
   }
 
   /**
-   * Discards an active draft. No version is created. No booking state changes.
+   * Soft-deletes an active draft by setting status to CANCELED.
+   * If a restorable DEPRECATED version exists (via previousVersionId OR by context query),
+   * atomically restores that version to COMPLETED within the same transaction.
+   *
+   * Restoration runs when correctionMode is null (cancel-book) or CORRECTION_PART3.
+   * For CORRECTION_PART1/PART2, only version status is restored (no booking reset).
    */
   async discardDraft(
+    sourceType: BookAssemblySourceType,
+    sourceId: string,
+    userId: string,
+  ): Promise<{
+    message: string;
+    draftId: string;
+    restoredVersion: VersionResponseDto | null;
+  }> {
+    try {
+      const workHistory = await this.loadAndValidateWorkHistory(userId, ADMIN_ROLES);
+      const draft = await this.loadActiveDraft(sourceType, sourceId);
+      const appUrl = process.env.APP_URL ?? '';
+
+      // Resolve the version to restore:
+      // 1. Use draft.previousVersionId if set (correction or cancel-book with linkage)
+      // 2. Fallback: query latest DEPRECATED version for this context
+      //    (handles drafts created before the previousVersionId fix was deployed)
+      let versionIdToRestore = draft.previousVersionId;
+
+      if (!versionIdToRestore) {
+        const latestDeprecated = await this.versionRepo.findOne({
+          where: { sourceType, sourceId, status: BookAssemblyVersionStatus.DEPRECATED },
+          order: { versionNumber: 'DESC' },
+        });
+        if (latestDeprecated) {
+          versionIdToRestore = latestDeprecated.id;
+          this.logger.warn(
+            `discardDraft: previousVersionId was NULL, resolved via fallback query → ${latestDeprecated.id} (v${latestDeprecated.versionNumber})`,
+          );
+        }
+      }
+
+      this.logger.warn(
+        `discardDraft: draft.id=${draft.id} correctionMode=${draft.correctionMode ?? 'NULL'} versionIdToRestore=${versionIdToRestore ?? 'NULL'}`,
+      );
+
+      // Atomic soft-delete + version restoration (when a restorable version exists)
+      if (versionIdToRestore) {
+        const result = await this.dataSource.transaction(async (manager) => {
+          // a. Lock the version row (NO relations — FOR UPDATE cannot have LEFT JOINs)
+          const lockedVersion = await manager
+            .getRepository(BookAssemblyVersion)
+            .createQueryBuilder('version')
+            .setLock('pessimistic_write')
+            .where('version.id = :id', { id: versionIdToRestore })
+            .getOne();
+
+          // b. Load relations separately (no lock needed — just for DTO mapping)
+          const previousVersion = lockedVersion
+            ? await manager.findOne(BookAssemblyVersion, {
+                where: { id: versionIdToRestore },
+                relations: ['createdBy', 'createdBy.user'],
+              })
+            : null;
+
+          let restoredVersion: BookAssemblyVersion | null = null;
+
+          if (previousVersion) {
+            // b. Sanity check: only restore if currently DEPRECATED
+            if (previousVersion.status !== BookAssemblyVersionStatus.DEPRECATED) {
+              this.logger.warn(
+                `discardDraft: skip restoration — version ${previousVersion.id} status is '${previousVersion.status}', not DEPRECATED`,
+              );
+            } else {
+              // c. Safeguard: no newer version should exist for this context
+              const newerVersion = await manager.findOne(BookAssemblyVersion, {
+                where: { sourceType, sourceId },
+                order: { versionNumber: 'DESC' },
+              });
+
+              if (newerVersion && newerVersion.versionNumber > previousVersion.versionNumber) {
+                this.logger.warn(
+                  `discardDraft: skip restoration — newer version v${newerVersion.versionNumber} exists`,
+                );
+              } else {
+                // d. Restore version to COMPLETED
+                previousVersion.status = BookAssemblyVersionStatus.COMPLETED;
+                previousVersion.deprecatedAt = null;
+                previousVersion.deprecatedById = null;
+                previousVersion.deprecationReason = null;
+                await manager.save(BookAssemblyVersion, previousVersion);
+                restoredVersion = previousVersion;
+                this.logger.warn(
+                  `discardDraft: version ${previousVersion.id} restored to COMPLETED`,
+                );
+
+                // e. Restore booking state for cancel-book and CORRECTION_PART3 drafts
+                const needsBookingRestore =
+                  draft.correctionMode === null ||
+                  draft.correctionMode === CorrectionMode.CORRECTION_PART3;
+
+                if (needsBookingRestore) {
+                  const projectIds = previousVersion.part3ProjectSnapshot ?? [];
+                  const pageMap = previousVersion.part3PageMap ?? {};
+
+                  if (projectIds.length > 0) {
+                    if (sourceType === BookAssemblySourceType.MAIN_PLAN) {
+                      for (const projectId of projectIds) {
+                        await manager.getRepository(ProjectGroup).update(
+                          { id: projectId },
+                          {
+                            isBooked: true,
+                            bookedAt: new Date(),
+                            pageNumber: pageMap[projectId] ?? null,
+                          },
+                        );
+                      }
+                    } else {
+                      for (const projectId of projectIds) {
+                        await manager.getRepository(RevisedProjectGroup).update(
+                          { id: projectId },
+                          {
+                            isBooked: true,
+                            bookedAt: new Date(),
+                            pageNumber: pageMap[projectId] ?? null,
+                          },
+                        );
+                      }
+                    }
+                    this.logger.warn(
+                      `discardDraft: restored booking for ${projectIds.length} projects`,
+                    );
+                  }
+
+                  // Restore plan state
+                  if (sourceType === BookAssemblySourceType.MAIN_PLAN) {
+                    await manager.getRepository(DevelopmentPlan).update(
+                      { id: sourceId },
+                      { isBooked: true },
+                    );
+                    await manager.getRepository(PlanPhase).update(
+                      { developmentPlan: { id: sourceId } },
+                      { isMerged: true },
+                    );
+                  } else {
+                    await manager.getRepository(DevelopmentPlanRevision).update(
+                      { id: sourceId },
+                      { isBooked: true },
+                    );
+                  }
+                  this.logger.warn(
+                    `discardDraft: restored plan/phase booking for ${sourceType}/${sourceId}`,
+                  );
+                }
+
+                // f. Write restoration audit log
+                await manager.save(DeprecationAuditLog, {
+                  action: DeprecationAuditAction.RESTORED,
+                  versionId: previousVersion.id,
+                  sourceType,
+                  sourceId,
+                  operatorWorkHistoryId: workHistory.id,
+                  operatorRole: workHistory.role?.name,
+                  identityVerified: false,
+                  identityMasked: null,
+                  reason: 'draft discarded by operator',
+                  failureReason: null,
+                });
+              }
+            }
+          } else {
+            this.logger.warn(
+              `discardDraft: version ${versionIdToRestore} not found in DB — skipping restoration`,
+            );
+          }
+
+          // g. Soft-delete draft
+          draft.assemblyStatus = AssemblyDraftStatus.CANCELED;
+          draft.canceledAt = new Date();
+          draft.canceledById = workHistory.id;
+          await manager.save(BookAssemblyDraft, draft);
+
+          return restoredVersion;
+        });
+
+        this.logger.warn(
+          `discardDraft: complete for draft ${draft.id}` +
+          (result ? ` — restored version ${result.id} to COMPLETED` : ' — no restoration'),
+        );
+
+        return {
+          message: 'ยกเลิก draft เรียบร้อยแล้ว',
+          draftId: draft.id,
+          restoredVersion: result ? VersionResponseDto.fromEntity(result, appUrl) : null,
+        };
+      }
+
+      // No restorable version found — soft-delete only (first-ever draft, or post-reset)
+      this.logger.warn(
+        `discardDraft: no restorable version — soft-delete only for draft ${draft.id}`,
+      );
+      draft.assemblyStatus = AssemblyDraftStatus.CANCELED;
+      draft.canceledAt = new Date();
+      draft.canceledById = workHistory.id;
+      await this.draftRepo.save(draft);
+
+      return {
+        message: 'ยกเลิก draft เรียบร้อยแล้ว',
+        draftId: draft.id,
+        restoredVersion: null,
+      };
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * Returns the most recent canceled draft for a source context, or null.
+   * Loads canceledBy.user relation for display.
+   */
+  async getCanceledDraft(
+    sourceType: BookAssemblySourceType,
+    sourceId: string,
+    userId: string,
+  ): Promise<BookAssemblyDraft | null> {
+    try {
+      await this.loadAndValidateWorkHistory(userId, READ_ROLES);
+
+      return await this.draftRepo.findOne({
+        where: {
+          sourceType,
+          sourceId,
+          assemblyStatus: AssemblyDraftStatus.CANCELED,
+        },
+        order: { canceledAt: 'DESC' },
+        relations: ['canceledBy', 'canceledBy.user'],
+      });
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * Restores the most recent canceled draft to active status.
+   * Recomputes assemblyStatus from current part statuses.
+   */
+  async restoreDraft(
+    sourceType: BookAssemblySourceType,
+    sourceId: string,
+    userId: string,
+  ): Promise<BookAssemblyDraft> {
+    try {
+      await this.loadAndValidateWorkHistory(userId, ADMIN_ROLES);
+
+      // 1. Load most recent CANCELED draft
+      const canceledDraft = await this.draftRepo.findOne({
+        where: {
+          sourceType,
+          sourceId,
+          assemblyStatus: AssemblyDraftStatus.CANCELED,
+        },
+        order: { canceledAt: 'DESC' },
+      });
+      if (!canceledDraft) {
+        throw new NotFoundException('ไม่พบ draft ที่ถูกยกเลิก');
+      }
+
+      // 2. Check no active draft exists (PREPARING or READY)
+      const activeDraft = await this.draftRepo.findOne({
+        where: {
+          sourceType,
+          sourceId,
+          assemblyStatus: In([AssemblyDraftStatus.PREPARING, AssemblyDraftStatus.READY]),
+        },
+      });
+      if (activeDraft) {
+        throw new ConflictException({
+          message: 'กู้คืนไม่ได้ มี draft ที่กำลังดำเนินการอยู่แล้ว',
+          errorCode: 'ACTIVE_DRAFT_EXISTS',
+        });
+      }
+
+      // 3. Recompute assemblyStatus from part statuses (§2.7)
+      const part1Ready = canceledDraft.part1Status === PartUploadStatus.UPLOADED
+        || canceledDraft.part1Status === PartUploadStatus.REUSED;
+      const part2Ready = canceledDraft.part2Status === PartUploadStatus.UPLOADED
+        || canceledDraft.part2Status === PartUploadStatus.REUSED;
+      const part3Ready = canceledDraft.part3Status === PartUploadStatus.GENERATED
+        || canceledDraft.part3Status === PartUploadStatus.REUSED;
+
+      canceledDraft.assemblyStatus = (part1Ready && part2Ready && part3Ready)
+        ? AssemblyDraftStatus.READY
+        : AssemblyDraftStatus.PREPARING;
+
+      // 4. Clear canceled fields
+      canceledDraft.canceledAt = null;
+      canceledDraft.canceledById = null;
+
+      const restored = await this.draftRepo.save(canceledDraft);
+      this.logger.log(
+        `Restored draft ${restored.id} for ${sourceType}/${sourceId} → ${restored.assemblyStatus}`,
+      );
+      return restored;
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * Permanently hard-deletes a canceled draft record.
+   * Only CANCELED drafts can be purged. Disk files are NOT deleted.
+   */
+  async purgeCanceledDraft(
     sourceType: BookAssemblySourceType,
     sourceId: string,
     userId: string,
@@ -202,9 +567,22 @@ export class BookAssemblyService {
     try {
       await this.loadAndValidateWorkHistory(userId, ADMIN_ROLES);
 
-      const draft = await this.loadActiveDraft(sourceType, sourceId);
-      await this.draftRepo.remove(draft);
-      this.logger.log(`Discarded draft ${draft.id} for ${sourceType}/${sourceId}`);
+      const canceledDraft = await this.draftRepo.findOne({
+        where: {
+          sourceType,
+          sourceId,
+          assemblyStatus: AssemblyDraftStatus.CANCELED,
+        },
+        order: { canceledAt: 'DESC' },
+      });
+      if (!canceledDraft) {
+        throw new NotFoundException('ไม่พบ draft ที่ถูกยกเลิก');
+      }
+
+      await this.draftRepo.remove(canceledDraft);
+      this.logger.log(
+        `Purged canceled draft ${canceledDraft.id} for ${sourceType}/${sourceId}`,
+      );
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -750,6 +1128,29 @@ export class BookAssemblyService {
           sourceType, sourceId, audit, manager,
         );
 
+        // 5b. Guard: reject if a CANCELED draft exists for this context.
+        // A CANCELED draft is a soft-deleted correction draft awaiting restore
+        // or purge. Allowing correct() while a CANCELED draft exists would
+        // violate the unique index (idx_single_active_draft_per_source) and
+        // leave the system in an inconsistent state. The user must restore or
+        // purge the CANCELED draft before starting a new correction.
+        const canceledDraft = await manager.findOne(BookAssemblyDraft, {
+          where: {
+            sourceType,
+            sourceId,
+            assemblyStatus: AssemblyDraftStatus.CANCELED,
+          },
+        });
+        if (canceledDraft) {
+          audit.failureReason = `CANCELED_DRAFT_EXISTS: cannot start correction while canceled draft exists (id=${canceledDraft.id})`;
+          throw new ConflictException({
+            message:
+              'มี draft ที่ยกเลิกแล้วอยู่ กรุณากู้คืนหรือลบทิ้งก่อนดำเนินการแก้ไข',
+            errorCode: 'CANCELED_DRAFT_EXISTS',
+            canceledDraftId: canceledDraft.id,
+          });
+        }
+
         // 6. Deprecate current version
         await manager.update(BookAssemblyVersion, currentVersion.id, {
           status: BookAssemblyVersionStatus.DEPRECATED,
@@ -914,28 +1315,56 @@ export class BookAssemblyService {
   }
 
   /**
-   * Get the current completed version (or 404 if none).
+   * Get the current version for a source context.
+   *
+   * Returns:
+   * - The COMPLETED version if one exists
+   * - The DEPRECATED version referenced by an active draft's previousVersionId (correction/cancel flow)
+   * - null if no version exists (first-ever draft, post-reset)
+   *
+   * Returns null (HTTP 200) instead of 404 to avoid false error signals
+   * in frontend loadState() which calls this endpoint on every page load.
    */
   async getCurrentVersion(
     sourceType: BookAssemblySourceType,
     sourceId: string,
     userId: string,
-  ): Promise<VersionResponseDto> {
+  ): Promise<VersionResponseDto | null> {
     try {
       await this.loadAndValidateWorkHistory(userId, READ_ROLES);
 
-      const version = await this.versionRepo.findOne({
+      // Step 1: return the COMPLETED version if one exists
+      const completedVersion = await this.versionRepo.findOne({
         where: { sourceType, sourceId, status: BookAssemblyVersionStatus.COMPLETED },
         relations: ['createdBy', 'createdBy.user'],
       });
-      if (!version) {
-        throw new NotFoundException(
-          `ไม่มีเวอร์ชันที่เสร็จสมบูรณ์สำหรับ ${sourceType}/${sourceId}`,
-        );
+      if (completedVersion) {
+        const appUrl = process.env.APP_URL ?? '';
+        return VersionResponseDto.fromEntity(completedVersion, appUrl);
       }
 
-      const appUrl = process.env.APP_URL ?? '';
-      return VersionResponseDto.fromEntity(version, appUrl);
+      // Step 2: no COMPLETED version — check if an active draft references a previous version
+      const activeDraft = await this.draftRepo.findOne({
+        where: {
+          sourceType,
+          sourceId,
+          assemblyStatus: In([AssemblyDraftStatus.PREPARING, AssemblyDraftStatus.READY]),
+        },
+      });
+
+      if (activeDraft?.previousVersionId) {
+        const previousVersion = await this.versionRepo.findOne({
+          where: { id: activeDraft.previousVersionId },
+          relations: ['createdBy', 'createdBy.user'],
+        });
+        if (previousVersion) {
+          const appUrl = process.env.APP_URL ?? '';
+          return VersionResponseDto.fromEntity(previousVersion, appUrl);
+        }
+      }
+
+      // No version exists — return null (not 404)
+      return null;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -1351,11 +1780,11 @@ export class BookAssemblyService {
       await this.dataSource.transaction(async (manager) => {
         await manager.save(DeprecationAuditLog, {
           action: DeprecationAuditAction.FAILED,
-          versionId: audit.versionId ?? '00000000-0000-0000-0000-000000000000', // placeholder if unknown
+          versionId: audit.versionId ?? null,
           sourceType: audit.sourceType,
           sourceId: audit.sourceId,
-          operatorWorkHistoryId: audit.operatorWorkHistoryId ?? '00000000-0000-0000-0000-000000000000',
-          operatorRole: audit.operatorRole ?? 'unknown',
+          operatorWorkHistoryId: audit.operatorWorkHistoryId ?? null,
+          operatorRole: audit.operatorRole ?? null,
           identityVerified: audit.identityVerified ?? false,
           identityMasked: audit.identityMasked ?? null,
           reason: audit.reason ?? null,
@@ -1461,6 +1890,303 @@ export class BookAssemblyService {
       );
     } catch (err) {
       this.logger.warn(`Failed to write metadata.json: ${err?.message}`);
+    }
+  }
+
+  // ===========================================================================
+  // Dev Reset (development environment ONLY)
+  // ===========================================================================
+
+  /**
+   * Resets all Book Assembly data for a single (sourceType, sourceId) context.
+   * Dev-only utility. Deletes audit logs, drafts, versions; resets plan/project flags.
+   * MUST NOT be called in production.
+   *
+   * Uses a single QueryRunner to ensure trigger bypass and transaction share the
+   * same database connection (session_replication_role is per-connection).
+   */
+  async resetForTesting(
+    sourceType: BookAssemblySourceType,
+    sourceId: string,
+    userId: string,
+  ): Promise<{
+    deleted: { auditLogs: number; drafts: number; versions: number };
+    updated: Record<string, any>;
+  }> {
+    // Step 1-2: Load WorkHistory + role guard (super-admin only)
+    const workHistory = await this.workHistoryRepo.findOne({
+      where: { user: { id: userId }, isCurrent: true },
+      relations: ['role'],
+    });
+    if (!workHistory) {
+      throw new NotFoundException(`WorkHistory not found for user ${userId}`);
+    }
+    if (!RESET_ROLES.includes(workHistory.role?.name)) {
+      throw new ForbiddenException(
+        'เฉพาะ super-admin เท่านั้นที่สามารถดำเนินการ dev-reset ได้',
+      );
+    }
+
+    this.logger.warn(
+      `DEV RESET: initiated | sourceType=${sourceType} | sourceId=${sourceId} | operator=${workHistory.id}`,
+    );
+
+    // Use a single QueryRunner so trigger bypass + transaction share the same connection
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+
+    try {
+      // Disable triggers on THIS connection (before starting transaction)
+      try {
+        await queryRunner.query('SET session_replication_role = replica');
+        this.logger.warn('DEV RESET: triggers disabled (session_replication_role = replica)');
+      } catch (triggerErr) {
+        this.logger.warn(
+          `DEV RESET: SET session_replication_role failed (${triggerErr?.message}), attempting ALTER TABLE fallback`,
+        );
+        try {
+          await queryRunner.query(
+            'ALTER TABLE deprecation_audit_logs DISABLE TRIGGER trg_deprecation_audit_no_delete',
+          );
+          this.logger.warn('DEV RESET: triggers disabled via ALTER TABLE fallback');
+        } catch (fallbackErr) {
+          this.logger.warn(
+            `DEV RESET: ALTER TABLE fallback also failed (${fallbackErr?.message}), proceeding anyway`,
+          );
+        }
+      }
+
+      await queryRunner.startTransaction();
+
+      // Step 1: DELETE audit logs
+      const r1 = await queryRunner.query(
+        'DELETE FROM deprecation_audit_logs WHERE source_type = $1 AND source_id = $2 RETURNING id',
+        [sourceType, sourceId],
+      );
+      const auditLogs = Array.isArray(r1) ? r1.length : 0;
+      this.logger.warn(`DEV RESET: deleted audit logs: ${auditLogs} rows`);
+
+      // Step 2: DELETE drafts
+      const r2 = await queryRunner.query(
+        'DELETE FROM book_assembly_drafts WHERE source_type = $1 AND source_id = $2 RETURNING id',
+        [sourceType, sourceId],
+      );
+      const drafts = Array.isArray(r2) ? r2.length : 0;
+      this.logger.warn(`DEV RESET: deleted drafts: ${drafts} rows`);
+
+      // Step 3: DELETE versions
+      const r3 = await queryRunner.query(
+        'DELETE FROM book_assembly_versions WHERE source_type = $1 AND source_id = $2 RETURNING id',
+        [sourceType, sourceId],
+      );
+      const versions = Array.isArray(r3) ? r3.length : 0;
+      this.logger.warn(`DEV RESET: deleted versions: ${versions} rows`);
+
+      // Step 4: UPDATE flags — branch on sourceType
+      const updated: Record<string, any> = {};
+
+      if (sourceType === BookAssemblySourceType.MAIN_PLAN) {
+        const r4 = await queryRunner.query(
+          'UPDATE project_groups SET is_booked = false, booked_at = null, page_number = null WHERE development_plan_id = $1 AND is_booked = true RETURNING id',
+          [sourceId],
+        );
+        updated.projects = Array.isArray(r4) ? r4.length : 0;
+        this.logger.warn(`DEV RESET: updated projects: ${updated.projects} rows (is_booked reset)`);
+
+        await queryRunner.query(
+          'UPDATE development_plans SET is_booked = false WHERE id = $1',
+          [sourceId],
+        );
+        updated.plan = true;
+        this.logger.warn('DEV RESET: updated plan: is_booked = false');
+
+        const r6 = await queryRunner.query(
+          'UPDATE plan_phases SET is_merged = false WHERE development_plan_id = $1 RETURNING id',
+          [sourceId],
+        );
+        updated.phases = Array.isArray(r6) ? r6.length : 0;
+        this.logger.warn(`DEV RESET: updated phases: ${updated.phases} rows (is_merged reset)`);
+      } else {
+        const r4 = await queryRunner.query(
+          'UPDATE revised_project_groups SET is_booked = false, booked_at = null, page_number = null WHERE development_plan_revision_id = $1 AND is_booked = true RETURNING id',
+          [sourceId],
+        );
+        updated.revisedProjects = Array.isArray(r4) ? r4.length : 0;
+        this.logger.warn(`DEV RESET: updated revised projects: ${updated.revisedProjects} rows (is_booked reset)`);
+
+        await queryRunner.query(
+          'UPDATE development_plan_revisions SET is_booked = false, is_open = true WHERE id = $1',
+          [sourceId],
+        );
+        updated.revision = true;
+        this.logger.warn('DEV RESET: updated revision: is_booked = false, is_open = true');
+      }
+
+      await queryRunner.commitTransaction();
+
+      this.logger.warn(
+        `DEV RESET: complete | sourceType=${sourceType} | sourceId=${sourceId}`,
+      );
+      return { deleted: { auditLogs, drafts, versions }, updated };
+    } catch (error) {
+      // Rollback on any error
+      try {
+        await queryRunner.rollbackTransaction();
+      } catch {
+        // Rollback failed — connection may be dead, nothing more we can do
+      }
+      throw error;
+    } finally {
+      // Re-enable triggers on THIS connection (always runs)
+      try {
+        await queryRunner.query('SET session_replication_role = DEFAULT');
+        this.logger.warn('DEV RESET: triggers re-enabled (session_replication_role = DEFAULT)');
+      } catch (restoreErr) {
+        this.logger.warn(
+          `DEV RESET: failed to restore session_replication_role (${restoreErr?.message})`,
+        );
+        try {
+          await queryRunner.query(
+            'ALTER TABLE deprecation_audit_logs ENABLE TRIGGER trg_deprecation_audit_no_delete',
+          );
+        } catch {
+          // Best-effort
+        }
+      }
+      // Release the connection back to the pool
+      await queryRunner.release();
+    }
+  }
+
+  /**
+   * Resets ALL Book Assembly data across ALL contexts.
+   * Dev-only utility. NUCLEAR — use with extreme caution.
+   *
+   * Uses a single QueryRunner to ensure trigger bypass and transaction share
+   * the same database connection.
+   */
+  async resetAllForTesting(
+    userId: string,
+  ): Promise<{
+    deleted: { auditLogs: number; drafts: number; versions: number };
+    updated: Record<string, any>;
+  }> {
+    // Role guard
+    const workHistory = await this.workHistoryRepo.findOne({
+      where: { user: { id: userId }, isCurrent: true },
+      relations: ['role'],
+    });
+    if (!workHistory) {
+      throw new NotFoundException(`WorkHistory not found for user ${userId}`);
+    }
+    if (!RESET_ROLES.includes(workHistory.role?.name)) {
+      throw new ForbiddenException(
+        'เฉพาะ super-admin เท่านั้นที่สามารถดำเนินการ dev-reset ได้',
+      );
+    }
+
+    this.logger.warn(`DEV RESET ALL: initiated | operator=${workHistory.id}`);
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+
+    try {
+      // Disable triggers on THIS connection
+      try {
+        await queryRunner.query('SET session_replication_role = replica');
+        this.logger.warn('DEV RESET ALL: triggers disabled');
+      } catch (triggerErr) {
+        this.logger.warn(`DEV RESET ALL: SET session_replication_role failed (${triggerErr?.message}), attempting fallback`);
+        try {
+          await queryRunner.query(
+            'ALTER TABLE deprecation_audit_logs DISABLE TRIGGER trg_deprecation_audit_no_delete',
+          );
+        } catch {
+          this.logger.warn('DEV RESET ALL: fallback also failed, proceeding');
+        }
+      }
+
+      await queryRunner.startTransaction();
+
+      // Step 1: DELETE all audit logs
+      const r1 = await queryRunner.query('DELETE FROM deprecation_audit_logs RETURNING id');
+      const auditLogs = Array.isArray(r1) ? r1.length : 0;
+      this.logger.warn(`DEV RESET ALL: deleted audit logs: ${auditLogs} rows`);
+
+      // Step 2: DELETE all drafts
+      const r2 = await queryRunner.query('DELETE FROM book_assembly_drafts RETURNING id');
+      const drafts = Array.isArray(r2) ? r2.length : 0;
+      this.logger.warn(`DEV RESET ALL: deleted drafts: ${drafts} rows`);
+
+      // Step 3: DELETE all versions
+      const r3 = await queryRunner.query('DELETE FROM book_assembly_versions RETURNING id');
+      const versions = Array.isArray(r3) ? r3.length : 0;
+      this.logger.warn(`DEV RESET ALL: deleted versions: ${versions} rows`);
+
+      // Step 4: Reset project_groups
+      const r4 = await queryRunner.query(
+        'UPDATE project_groups SET is_booked = false, booked_at = null, page_number = null WHERE is_booked = true RETURNING id',
+      );
+      const projects = Array.isArray(r4) ? r4.length : 0;
+      this.logger.warn(`DEV RESET ALL: updated projects: ${projects} rows`);
+
+      // Step 5: Reset development_plans
+      const r5 = await queryRunner.query(
+        'UPDATE development_plans SET is_booked = false WHERE is_booked = true RETURNING id',
+      );
+      const plans = Array.isArray(r5) ? r5.length : 0;
+      this.logger.warn(`DEV RESET ALL: updated plans: ${plans} rows`);
+
+      // Step 6: Reset plan_phases
+      const r6 = await queryRunner.query(
+        'UPDATE plan_phases SET is_merged = false WHERE is_merged = true RETURNING id',
+      );
+      const phases = Array.isArray(r6) ? r6.length : 0;
+      this.logger.warn(`DEV RESET ALL: updated phases: ${phases} rows`);
+
+      // Step 7: Reset revised_project_groups
+      const r7 = await queryRunner.query(
+        'UPDATE revised_project_groups SET is_booked = false, booked_at = null, page_number = null WHERE is_booked = true RETURNING id',
+      );
+      const revisedProjects = Array.isArray(r7) ? r7.length : 0;
+      this.logger.warn(`DEV RESET ALL: updated revised projects: ${revisedProjects} rows`);
+
+      // Step 8: Reset development_plan_revisions
+      const r8 = await queryRunner.query(
+        'UPDATE development_plan_revisions SET is_booked = false, is_open = true WHERE is_booked = true RETURNING id',
+      );
+      const revisions = Array.isArray(r8) ? r8.length : 0;
+      this.logger.warn(`DEV RESET ALL: updated revisions: ${revisions} rows`);
+
+      await queryRunner.commitTransaction();
+
+      this.logger.warn('DEV RESET ALL: complete');
+      return {
+        deleted: { auditLogs, drafts, versions },
+        updated: { projects, revisedProjects, plans, revisions, phases },
+      };
+    } catch (error) {
+      try {
+        await queryRunner.rollbackTransaction();
+      } catch {
+        // Rollback failed — connection may be dead
+      }
+      throw error;
+    } finally {
+      try {
+        await queryRunner.query('SET session_replication_role = DEFAULT');
+        this.logger.warn('DEV RESET ALL: triggers re-enabled');
+      } catch (restoreErr) {
+        this.logger.warn(`DEV RESET ALL: failed to restore triggers (${restoreErr?.message})`);
+        try {
+          await queryRunner.query(
+            'ALTER TABLE deprecation_audit_logs ENABLE TRIGGER trg_deprecation_audit_no_delete',
+          );
+        } catch {
+          // Best-effort
+        }
+      }
+      await queryRunner.release();
     }
   }
 }

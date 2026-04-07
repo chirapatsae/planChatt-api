@@ -29,8 +29,8 @@ export class DeprecationAuditLog {
   })
   action: DeprecationAuditAction;
 
-  @Column({ name: 'version_id', type: 'uuid' })
-  versionId: string;
+  @Column({ name: 'version_id', type: 'uuid', nullable: true })
+  versionId: string | null;
 
   @Column({
     name: 'source_type',
@@ -42,11 +42,11 @@ export class DeprecationAuditLog {
   @Column({ name: 'source_id', type: 'uuid' })
   sourceId: string;
 
-  @Column({ name: 'operator_work_history_id', type: 'uuid' })
-  operatorWorkHistoryId: string;
+  @Column({ name: 'operator_work_history_id', type: 'uuid', nullable: true })
+  operatorWorkHistoryId: string | null;
 
-  @Column({ name: 'operator_role', type: 'varchar' })
-  operatorRole: string;
+  @Column({ name: 'operator_role', type: 'varchar', nullable: true })
+  operatorRole: string | null;
 
   @Column({
     name: 'identity_verified',
@@ -68,11 +68,11 @@ export class DeprecationAuditLog {
 
   // Relations
 
-  @ManyToOne(() => BookAssemblyVersion)
+  @ManyToOne(() => BookAssemblyVersion, { nullable: true })
   @JoinColumn({ name: 'version_id' })
-  version: BookAssemblyVersion;
+  version: BookAssemblyVersion | null;
 
-  @ManyToOne(() => WorkHistory)
+  @ManyToOne(() => WorkHistory, { nullable: true })
   @JoinColumn({ name: 'operator_work_history_id' })
-  operatorWorkHistory: WorkHistory;
+  operatorWorkHistory: WorkHistory | null;
 }
