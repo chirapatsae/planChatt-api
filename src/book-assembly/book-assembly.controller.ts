@@ -50,6 +50,27 @@ export class BookAssemblyController {
   constructor(private readonly bookAssemblyService: BookAssemblyService) {}
 
   // ===========================================================================
+  // Sidebar Counts & History (MUST be BEFORE parameterized :sourceType routes)
+  // ===========================================================================
+
+  @Get('counts')
+  async getAssemblyCounts(
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    const userId = req.user?.userId;
+    return this.bookAssemblyService.getAssemblyCounts(userId);
+  }
+
+  @Get('history')
+  async getAssemblyHistory(
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    const userId = req.user?.userId;
+    const appUrl = process.env.APP_URL ?? '';
+    return this.bookAssemblyService.getAssemblyHistory(userId, appUrl);
+  }
+
+  // ===========================================================================
   // Draft Management (Spec Section 14.1)
   // ===========================================================================
 

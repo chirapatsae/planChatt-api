@@ -1258,6 +1258,166 @@ export class BookAssemblyService {
   }
 
   // ===========================================================================
+  // Sidebar Counts & History
+  // ===========================================================================
+
+  /**
+   * Returns per-type "pending assembly" badge counts for the sidebar.
+   * Locked rule: isLatest = true AND isBooked = false
+   * No version table query. No NOT EXISTS. Pure flag check.
+   */
+  async getAssemblyCounts(
+    userId: string,
+  ): Promise<{ main: number; editRevision: number; changeRevision: number }> {
+    try {
+      await this.loadAndValidateWorkHistory(userId, READ_ROLES);
+
+      const [mainResult, editResult, changeResult] = await Promise.all([
+        // main: isLatest = true AND isBooked = false
+        this.dataSource.query(`
+          SELECT COUNT(*)::int AS count
+          FROM development_plan dp
+          WHERE dp.is_latest = true
+            AND dp.is_booked = false
+        `),
+        // editRevision: isLatest = true AND isBooked = false AND type = แก้ไข
+        this.dataSource.query(`
+          SELECT COUNT(*)::int AS count
+          FROM development_plan_revision dpr
+          JOIN revision_type rt ON rt.id = dpr.revision_type_id
+          WHERE dpr.is_latest = true
+            AND dpr.is_booked = false
+            AND rt.name = 'แก้ไข'
+        `),
+        // changeRevision: isLatest = true AND isBooked = false AND type = เปลี่ยนแปลง
+        this.dataSource.query(`
+          SELECT COUNT(*)::int AS count
+          FROM development_plan_revision dpr
+          JOIN revision_type rt ON rt.id = dpr.revision_type_id
+          WHERE dpr.is_latest = true
+            AND dpr.is_booked = false
+            AND rt.name = 'เปลี่ยนแปลง'
+        `),
+      ]);
+
+      return {
+        main: mainResult[0]?.count ?? 0,
+        editRevision: editResult[0]?.count ?? 0,
+        changeRevision: changeResult[0]?.count ?? 0,
+      };
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * Returns the full merged-books hierarchy for the history view.
+   * Max 3 DB round trips: plans → (revisions + versions in parallel) → in-memory assembly.
+   */
+  async getAssemblyHistory(
+    userId: string,
+    baseUrl: string,
+  ): Promise<any[]> {
+    try {
+      await this.loadAndValidateWorkHistory(userId, READ_ROLES);
+      const appUrl = process.env.APP_URL ?? baseUrl;
+
+      // Round 1: fetch all latest development plans
+      const plans = await this.devPlanRepo.find({
+        where: { isLatest: true },
+        order: { startYear: 'DESC' },
+      });
+
+      if (plans.length === 0) return [];
+
+      const planIds = plans.map((p) => p.id);
+
+      // Round 2 (parallel): revisions (with plan FK) + main-plan versions
+      const [revisions, mainVersions] = await Promise.all([
+        this.devPlanRevisionRepo.find({
+          where: { developmentPlan: { id: In(planIds) } },
+          relations: ['revisionType', 'developmentPlan'],
+          order: { revisionNumber: 'ASC' },
+        }),
+        this.versionRepo.find({
+          where: { sourceType: BookAssemblySourceType.MAIN_PLAN, sourceId: In(planIds) },
+          order: { versionNumber: 'DESC' },
+          relations: ['createdBy', 'createdBy.user'],
+        }),
+      ]);
+
+      // Round 3: revision versions (need revision IDs from round 2)
+      const revisionIds = revisions.map((r) => r.id);
+      let revisionVersions: BookAssemblyVersion[] = [];
+      if (revisionIds.length > 0) {
+        revisionVersions = await this.versionRepo.find({
+          where: [
+            { sourceType: BookAssemblySourceType.EDIT_REVISION, sourceId: In(revisionIds) },
+            { sourceType: BookAssemblySourceType.CHANGE_REVISION, sourceId: In(revisionIds) },
+          ],
+          order: { versionNumber: 'DESC' },
+          relations: ['createdBy', 'createdBy.user'],
+        });
+      }
+
+      // In-memory assembly: group versions by (sourceType:sourceId)
+      const versionMap = new Map<string, BookAssemblyVersion[]>();
+      for (const v of [...mainVersions, ...revisionVersions]) {
+        const key = `${v.sourceType}:${v.sourceId}`;
+        if (!versionMap.has(key)) versionMap.set(key, []);
+        versionMap.get(key)!.push(v);
+      }
+
+      // Group revisions by plan ID
+      const revByPlan = new Map<string, DevelopmentPlanRevision[]>();
+      for (const r of revisions) {
+        const pid = r.developmentPlan?.id;
+        if (!pid) continue;
+        if (!revByPlan.has(pid)) revByPlan.set(pid, []);
+        revByPlan.get(pid)!.push(r);
+      }
+
+      // Build hierarchy
+      return plans.map((plan) => {
+        const mainKey = `main_plan:${plan.id}`;
+        const mainVers = versionMap.get(mainKey) ?? [];
+        const mainDtos = mainVers.map((v) => VersionResponseDto.fromEntity(v, appUrl));
+        const mainLatest = mainDtos.find((d) => d.status === BookAssemblyVersionStatus.COMPLETED) ?? null;
+
+        const planRevisions = revByPlan.get(plan.id) ?? [];
+
+        const mapRevisions = (typeName: string, sourceType: string) =>
+          planRevisions
+            .filter((r) => r.revisionType?.name === typeName)
+            .map((r) => {
+              const key = `${sourceType}:${r.id}`;
+              const vers = versionMap.get(key) ?? [];
+              const dtos = vers.map((v) => VersionResponseDto.fromEntity(v, appUrl));
+              const latest = dtos.find((d) => d.status === BookAssemblyVersionStatus.COMPLETED) ?? null;
+              return {
+                revisionId: r.id,
+                revisionName: `${typeName} ครั้งที่ ${r.revisionNumber}`,
+                latestVersion: latest,
+                allVersions: dtos,
+              };
+            });
+
+        return {
+          planId: plan.id,
+          planName: plan.name,
+          mainBook: mainVers.length > 0
+            ? { latestVersion: mainLatest, allVersions: mainDtos }
+            : null,
+          editRevisions: mapRevisions('แก้ไข', 'edit_revision'),
+          changeRevisions: mapRevisions('เปลี่ยนแปลง', 'change_revision'),
+        };
+      });
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  // ===========================================================================
   // Version History & Downloads
   // ===========================================================================
 
