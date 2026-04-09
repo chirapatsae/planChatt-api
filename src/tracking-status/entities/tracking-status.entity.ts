@@ -24,6 +24,21 @@ export class TrackingStatus {
   @Column({ nullable: true })
   comment?: string;
 
+  /**
+   * Staff-only internal remark recorded at transition time.
+   *
+   * Only staff / admin / super-admin may set this field.
+   * User role submissions must have this stripped to null by the service layer.
+   *
+   * This field is write-once: it must not be mutated after the record is created.
+   *
+   * CLAUDE.md §12 (Audit Rule): all mutations must be traceable.
+   * CLAUDE.md §3 (Role Responsibilities): only staff-lead roles perform
+   * workflow governance transitions.
+   */
+  @Column({ name: 'staff_remark', type: 'text', nullable: true, default: null })
+  staffRemark?: string | null;
+
   @DeleteDateColumn({ nullable: true })
   @Exclude()
   deletedAt?: Date;

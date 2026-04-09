@@ -180,14 +180,17 @@ describe('TrackingStatusService', () => {
         { projectGroupId: mockProjectGroup },
         { isLatest: false },
       );
+      // staffRemark: null because mockWorkHistory has no role, so strip logic resolves to null.
+      // comment: undefined because createDto does not include comment field.
       expect(mockTransactionManager.create).toHaveBeenCalledWith(
         TrackingStatus,
-        {
+        expect.objectContaining({
           createdBy: mockWorkHistory,
           projectGroupId: mockProjectGroup,
           statusId: mockStatus,
           isLatest: true,
-        },
+          staffRemark: null,
+        }),
       );
       expect(mockTransactionManager.save).toHaveBeenCalledTimes(2);
       expect(result).toEqual(mockTrackingStatus);

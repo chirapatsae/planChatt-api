@@ -43,6 +43,10 @@ import { BookAssemblyFileService } from './book-assembly-file.service';
 import { CancelBookDto } from './dto/cancel-book.dto';
 import { CorrectBookDto } from './dto/correct-book.dto';
 import { VersionResponseDto } from './dto/version-response.dto';
+import { BookDisplayStateDto, BookDisplayStateEnum } from './dto/book-display-state.dto';
+import { ProjectLineageNodeDto } from './dto/project-lineage-node.dto';
+import { BookProjectLineage } from './entities/book-project-lineage.entity';
+import { BookProjectType } from './enums/book-assembly.enums';
 
 /** Roles permitted to perform assembly write actions (Spec Section 10.1) */
 const ADMIN_ROLES = ['admin', 'super-admin'];
@@ -97,6 +101,9 @@ export class BookAssemblyService {
     @InjectRepository(DeprecationAuditLog)
     private readonly auditLogRepo: Repository<DeprecationAuditLog>,
 
+    @InjectRepository(BookProjectLineage)
+    private readonly lineageRepo: Repository<BookProjectLineage>,
+
     private readonly usersService: UsersService,
     private readonly pdfService: PdfService,
     private readonly websocketService: WebsocketService,
@@ -119,6 +126,9 @@ export class BookAssemblyService {
   ): Promise<BookAssemblyDraft> {
     try {
       const workHistory = await this.loadAndValidateWorkHistory(userId, ADMIN_ROLES);
+
+      // Rule 1: Main book freeze guard — block any write action on a frozen main plan
+      await this.assertMainBookNotFrozen(sourceType, sourceId);
 
       // Reject if an active draft already exists
       const existingDraft = await this.draftRepo.findOne({
@@ -673,6 +683,15 @@ export class BookAssemblyService {
         );
       }
 
+      // Rule 2: Project exclusivity guard — only applies to revision rounds (not main plan)
+      // A project must not already be published in a sibling revision's COMPLETED version.
+      if (
+        sourceType === BookAssemblySourceType.EDIT_REVISION ||
+        sourceType === BookAssemblySourceType.CHANGE_REVISION
+      ) {
+        await this.assertProjectsNotInSiblingBook(sourceType, sourceId, projectIds);
+      }
+
       await this.notifyProgress(userId, sourceId, 30, 'preparing', `กำลังเตรียมข้อมูล ${projects.length} โครงการ...`);
       await this.notifyProgress(userId, sourceId, 40, 'generating', 'กำลังสร้างไฟล์ PDF ส่วนที่ 3...');
 
@@ -875,6 +894,9 @@ export class BookAssemblyService {
       const workHistory = await this.loadAndValidateWorkHistory(userId, ADMIN_ROLES);
 
       return await this.dataSource.transaction(async (manager) => {
+        // Rule 1: Main book freeze guard (inside transaction — uses manager)
+        await this.assertMainBookNotFrozen(sourceType, sourceId, manager);
+
         // 1. Load and validate draft
         const draft = await manager.findOne(BookAssemblyDraft, {
           where: {
@@ -991,6 +1013,9 @@ export class BookAssemblyService {
         draft.assemblyStatus = AssemblyDraftStatus.MERGED;
         await manager.save(BookAssemblyDraft, draft);
 
+        // Rule 3: Populate book_project_lineage for every project in the snapshot
+        await this.populateLineageForMerge(sourceType, projectIds, savedVersion.id, manager);
+
         // 10. Write metadata.json (non-transactional file write — OK since DB is committed)
         this.writeVersionMetadata(draft, savedVersion);
 
@@ -1030,7 +1055,21 @@ export class BookAssemblyService {
     const audit = this.buildAuditSkeleton(sourceType, sourceId);
 
     try {
+      // Rule 4b: Main-plan books are NEVER rollbackable via cancel.
+      // This must be checked before the transaction to give a clear, early rejection.
+      if (sourceType === BookAssemblySourceType.MAIN_PLAN) {
+        throw new ForbiddenException({
+          code: 'MAIN_BOOK_CANNOT_ROLLBACK',
+          message:
+            'เล่มแผนหลักที่เผยแพร่แล้วไม่สามารถยกเลิกได้ หากต้องการแก้ไข กรุณาเปิดรอบแก้ไขหรือเปลี่ยนแปลง',
+        });
+      }
+
       await this.dataSource.transaction(async (manager) => {
+        // Rule 1: Main book freeze guard (redundant here given Rule 4b above, but kept for
+        // defence-in-depth in case sourceType logic changes).
+        await this.assertMainBookNotFrozen(sourceType, sourceId, manager);
+
         // 1-4. Validate operator (role, workStatus, confirmation, identity)
         const { workHistory, identityMasked } = await this.validateDeprecationAuth(
           dto.confirmed,
@@ -1046,6 +1085,22 @@ export class BookAssemblyService {
           sourceType, sourceId, audit, manager,
         );
 
+        // Rule 4: Rollback leaf guard — block if this book has descendant published books
+        const hasDescendants = await manager.getRepository(BookProjectLineage).exists({
+          where: {
+            parentBookVersionId: currentVersion.id,
+            isCurrentLeaf: true,
+          },
+        });
+        if (hasDescendants) {
+          audit.failureReason = `BOOK_HAS_DESCENDANT_PUBLISHED: version ${currentVersion.id} has active child lineage rows`;
+          throw new ForbiddenException({
+            code: 'BOOK_HAS_DESCENDANT_PUBLISHED',
+            message:
+              'ไม่สามารถยกเลิกเล่มนี้ได้ เนื่องจากมีเล่มแก้ไข/เปลี่ยนแปลงที่เผยแพร่แล้วและพึ่งพาเล่มนี้อยู่',
+          });
+        }
+
         // 6. Deprecate
         await manager.update(BookAssemblyVersion, currentVersion.id, {
           status: BookAssemblyVersionStatus.DEPRECATED,
@@ -1060,13 +1115,8 @@ export class BookAssemblyService {
         // 8. Reset plan state + reopen
         await this.resetPlanState(sourceType, sourceId, manager);
 
-        // 9. Reset PlanPhase.isMerged (main plan only — Edge Case #12)
-        if (sourceType === BookAssemblySourceType.MAIN_PLAN) {
-          await manager.getRepository(PlanPhase).update(
-            { developmentPlan: { id: sourceId } },
-            { isMerged: false },
-          );
-        }
+        // Rule 4 (lineage): restore parent leaf status for every project in the cancelled version
+        await this.restoreLineageAfterCancel(currentVersion.part3ProjectSnapshot ?? [], currentVersion.id, manager);
 
         // 10. Write SUCCESS audit in same transaction
         audit.action = DeprecationAuditAction.SUCCESS;
@@ -1081,6 +1131,7 @@ export class BookAssemblyService {
           `Cancelled v${currentVersion.versionNumber} for ${sourceType}/${sourceId} by user ${userId}`,
         );
       });
+
     } catch (error) {
       // Persist FAILURE audit in separate transaction
       await this.persistFailedAudit(audit);
@@ -1113,6 +1164,9 @@ export class BookAssemblyService {
 
     try {
       return await this.dataSource.transaction(async (manager) => {
+        // Rule 1: Main book freeze guard (inside transaction — uses manager)
+        await this.assertMainBookNotFrozen(sourceType, sourceId, manager);
+
         // 1-4. Validate operator
         const { workHistory, identityMasked } = await this.validateDeprecationAuth(
           dto.confirmed,
@@ -1127,6 +1181,26 @@ export class BookAssemblyService {
         const currentVersion = await this.loadCompletedVersionForUpdate(
           sourceType, sourceId, audit, manager,
         );
+
+        // Rule 5: Correction leaf guard — block if this book has descendant published books
+        const hasDescendantsForCorrection = await manager.getRepository(BookProjectLineage).exists({
+          where: {
+            parentBookVersionId: currentVersion.id,
+            isCurrentLeaf: true,
+          },
+        });
+        if (hasDescendantsForCorrection) {
+          audit.failureReason = `BOOK_HAS_DESCENDANT_PUBLISHED: version ${currentVersion.id} has active child lineage rows`;
+          throw new ForbiddenException({
+            code: 'BOOK_HAS_DESCENDANT_PUBLISHED',
+            message:
+              'ไม่สามารถแก้ไขเล่มนี้ได้ เนื่องจากมีเล่มแก้ไข/เปลี่ยนแปลงที่เผยแพร่แล้วและพึ่งพาเล่มนี้อยู่',
+          });
+        }
+
+        // Rule 5 (F5): Active-draft-dependency guard — block if a sibling revision has an
+        // active draft that shares projects with this book's snapshot.
+        await this.assertNoActiveDraftDependency(currentVersion.id, sourceType, sourceId, manager);
 
         // 5b. Guard: reject if a CANCELED draft exists for this context.
         // A CANCELED draft is a soft-deleted correction draft awaiting restore
@@ -1377,41 +1451,52 @@ export class BookAssemblyService {
         revByPlan.get(pid)!.push(r);
       }
 
-      // Build hierarchy
-      return plans.map((plan) => {
-        const mainKey = `main_plan:${plan.id}`;
-        const mainVers = versionMap.get(mainKey) ?? [];
-        const mainDtos = mainVers.map((v) => VersionResponseDto.fromEntity(v, appUrl));
-        const mainLatest = mainDtos.find((d) => d.status === BookAssemblyVersionStatus.COMPLETED) ?? null;
+      // Build hierarchy — async because each revision item needs a bookState lookup
+      return Promise.all(
+        plans.map(async (plan) => {
+          const mainKey = `main_plan:${plan.id}`;
+          const mainVers = versionMap.get(mainKey) ?? [];
+          const mainDtos = mainVers.map((v) => VersionResponseDto.fromEntity(v, appUrl));
+          const mainLatest = mainDtos.find((d) => d.status === BookAssemblyVersionStatus.COMPLETED) ?? null;
 
-        const planRevisions = revByPlan.get(plan.id) ?? [];
+          const planRevisions = revByPlan.get(plan.id) ?? [];
 
-        const mapRevisions = (typeName: string, sourceType: string) =>
-          planRevisions
-            .filter((r) => r.revisionType?.name === typeName)
-            .map((r) => {
-              const key = `${sourceType}:${r.id}`;
-              const vers = versionMap.get(key) ?? [];
-              const dtos = vers.map((v) => VersionResponseDto.fromEntity(v, appUrl));
-              const latest = dtos.find((d) => d.status === BookAssemblyVersionStatus.COMPLETED) ?? null;
-              return {
-                revisionId: r.id,
-                revisionName: `${typeName} ครั้งที่ ${r.revisionNumber}`,
-                latestVersion: latest,
-                allVersions: dtos,
-              };
-            });
+          const buildRevisionItems = async (typeName: string, sourceType: BookAssemblySourceType) => {
+            const filtered = planRevisions.filter((r) => r.revisionType?.name === typeName);
+            return Promise.all(
+              filtered.map(async (r) => {
+                const key = `${sourceType}:${r.id}`;
+                const vers = versionMap.get(key) ?? [];
+                const dtos = vers.map((v) => VersionResponseDto.fromEntity(v, appUrl));
+                const latest = dtos.find((d) => d.status === BookAssemblyVersionStatus.COMPLETED) ?? null;
+                const bookState = await this.getBookDisplayState(sourceType, r.id, userId);
+                return {
+                  revisionId: r.id,
+                  revisionName: `${typeName} ครั้งที่ ${r.revisionNumber}`,
+                  latestVersion: latest,
+                  allVersions: dtos,
+                  bookState,
+                };
+              }),
+            );
+          };
 
-        return {
-          planId: plan.id,
-          planName: plan.name,
-          mainBook: mainVers.length > 0
-            ? { latestVersion: mainLatest, allVersions: mainDtos }
-            : null,
-          editRevisions: mapRevisions('แก้ไข', 'edit_revision'),
-          changeRevisions: mapRevisions('เปลี่ยนแปลง', 'change_revision'),
-        };
-      });
+          const [editRevisions, changeRevisions] = await Promise.all([
+            buildRevisionItems('แก้ไข', BookAssemblySourceType.EDIT_REVISION),
+            buildRevisionItems('เปลี่ยนแปลง', BookAssemblySourceType.CHANGE_REVISION),
+          ]);
+
+          return {
+            planId: plan.id,
+            planName: plan.name,
+            mainBook: mainVers.length > 0
+              ? { latestVersion: mainLatest, allVersions: mainDtos }
+              : null,
+            editRevisions,
+            changeRevisions,
+          };
+        }),
+      );
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -1557,6 +1642,237 @@ export class BookAssemblyService {
   // Private Helpers
   // ===========================================================================
 
+  // ===========================================================================
+  // Rule 6: Display State and Lineage Query Endpoints
+  // ===========================================================================
+
+  /**
+   * Returns a structured display state for a given source context.
+   * Encodes freeze, leaf, and publication state for frontend rendering.
+   */
+  async getBookDisplayState(
+    sourceType: BookAssemblySourceType,
+    sourceId: string,
+    userId: string,
+  ): Promise<BookDisplayStateDto> {
+    try {
+      await this.loadAndValidateWorkHistory(userId, READ_ROLES);
+
+      const dto = new BookDisplayStateDto();
+      dto.sourceType = sourceType;
+      dto.sourceId = sourceId;
+
+      // Step 1: Determine isFrozen value for the DTO (cache field, not authoritative)
+      if (sourceType === BookAssemblySourceType.MAIN_PLAN) {
+        const plan = await this.devPlanRepo.findOne({ where: { id: sourceId } });
+        dto.isFrozen = plan?.isFrozen ?? false;
+      } else {
+        const revision = await this.devPlanRevisionRepo.findOne({ where: { id: sourceId } });
+        // For revision types, isFrozen means the round is no longer open
+        dto.isFrozen = revision ? !revision.isOpen : false;
+      }
+
+      // Step 2: Authoritative freeze check for MAIN_PLAN
+      if (sourceType === BookAssemblySourceType.MAIN_PLAN) {
+        const revisionCount = await this.devPlanRevisionRepo.count({
+          where: { developmentPlan: { id: sourceId } },
+        });
+        if (revisionCount > 0) {
+          dto.isLeaf = false;
+          dto.hasActiveDraftDependency = false;
+          dto.blockedProjectCount = 0;
+          dto.state = BookDisplayStateEnum.FROZEN_HISTORICAL;
+          return dto;
+        }
+      }
+
+      // Step 3: Check whether a COMPLETED version exists for this source
+      const completedVersion = await this.versionRepo.findOne({
+        where: { sourceType, sourceId, status: BookAssemblyVersionStatus.COMPLETED },
+      });
+      if (!completedVersion) {
+        // No COMPLETED version — check if an active draft exists
+        const hasActiveDraft = await this.draftRepo.exists({
+          where: {
+            sourceType,
+            sourceId,
+            assemblyStatus: In([AssemblyDraftStatus.PREPARING, AssemblyDraftStatus.READY]),
+          },
+        });
+        dto.isLeaf = true;
+        dto.hasActiveDraftDependency = false;
+        dto.blockedProjectCount = 0;
+        dto.state = hasActiveDraft ? BookDisplayStateEnum.DRAFT : BookDisplayStateEnum.NO_BOOK;
+        return dto;
+      }
+
+      // Step 4: Check lineage for the completed version's projects
+      const projectIds: string[] = completedVersion.part3ProjectSnapshot ?? [];
+      if (projectIds.length === 0) {
+        // Version exists but has no projects (edge case) — treat as published latest
+        dto.isLeaf = true;
+        dto.hasActiveDraftDependency = false;
+        dto.blockedProjectCount = 0;
+        dto.state = BookDisplayStateEnum.PUBLISHED_LATEST;
+        return dto;
+      }
+
+      // Determine project type for lineage queries
+      const projectType =
+        sourceType === BookAssemblySourceType.MAIN_PLAN
+          ? BookProjectType.PROJECT_GROUP
+          : BookProjectType.REVISED_PROJECT_GROUP;
+
+      // Count how many projects have this version as their current leaf
+      const leafCount = await this.lineageRepo
+        .createQueryBuilder('bpl')
+        .where('bpl.bookVersionId = :versionId', { versionId: completedVersion.id })
+        .andWhere('bpl.isCurrentLeaf = true')
+        .andWhere('bpl.projectType = :projectType', { projectType })
+        .getCount();
+
+      // blockedProjectCount: projects in this version whose isCurrentLeaf = false
+      dto.blockedProjectCount = projectIds.length - leafCount;
+
+      // hasActiveDraftDependency: non-throwing version of assertNoActiveDraftDependency
+      dto.hasActiveDraftDependency = await this.checkActiveDraftDependency(
+        completedVersion.id,
+        sourceType,
+        sourceId,
+      );
+
+      if (leafCount === projectIds.length) {
+        dto.isLeaf = true;
+        dto.state = BookDisplayStateEnum.PUBLISHED_LATEST;
+      } else if (leafCount === 0) {
+        dto.isLeaf = false;
+        dto.state = BookDisplayStateEnum.LOCKED_BY_NEWER_REVISION;
+      } else {
+        dto.isLeaf = false;
+        dto.state = BookDisplayStateEnum.PUBLISHED_SUPERSEDED;
+      }
+
+      return dto;
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * Returns the full lineage chain for all projects in the current COMPLETED version's snapshot,
+   * ordered by projectId ASC, createdAt ASC.
+   *
+   * If no COMPLETED version exists for the given source, returns an empty array.
+   */
+  async getProjectLineage(
+    sourceType: BookAssemblySourceType,
+    sourceId: string,
+    userId: string,
+  ): Promise<ProjectLineageNodeDto[]> {
+    try {
+      await this.loadAndValidateWorkHistory(userId, READ_ROLES);
+
+      // Step 1: Find the latest COMPLETED version for this source
+      const completedVersion = await this.versionRepo.findOne({
+        where: { sourceType, sourceId, status: BookAssemblyVersionStatus.COMPLETED },
+      });
+      if (!completedVersion) return [];
+
+      // Step 2: Extract project IDs from snapshot
+      const snapshotIds: string[] = completedVersion.part3ProjectSnapshot ?? [];
+      if (snapshotIds.length === 0) return [];
+
+      // Step 3: Determine project type for lineage queries
+      const projectType =
+        sourceType === BookAssemblySourceType.MAIN_PLAN
+          ? BookProjectType.PROJECT_GROUP
+          : BookProjectType.REVISED_PROJECT_GROUP;
+
+      // Step 4: Query BookProjectLineage for all rows where projectId IN snapshot
+      const rows = await this.lineageRepo
+        .createQueryBuilder('bpl')
+        .where('bpl.projectId IN (:...projectIds)', { projectIds: snapshotIds })
+        .andWhere('bpl.projectType = :projectType', { projectType })
+        .orderBy('bpl.projectId', 'ASC')
+        .addOrderBy('bpl.createdAt', 'ASC')
+        .getMany();
+
+      // Step 5: Map to DTO
+      return rows.map((row) => ({
+        projectId: row.projectId,
+        projectType: row.projectType,
+        bookVersionId: row.bookVersionId,
+        parentBookVersionId: row.parentBookVersionId,
+        isCurrentLeaf: row.isCurrentLeaf,
+        createdAt: row.createdAt,
+      }));
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * Returns approval progress counts for a revision round (edit_revision or change_revision).
+   * Used by the revision book progress bar.
+   *
+   * - totalCount: all non-deleted RevisedProjectGroup rows for the revision
+   * - approvedCount: subset with latest TrackingStatus.status.name = 'Approved'
+   * - isReady: approvedCount === totalCount && totalCount > 0 && !hasOpenPhase
+   * - hasOpenPhase: DevelopmentPlanRevision.isOpen
+   *
+   * Throws BadRequestException for MAIN_PLAN — this endpoint is revision-only.
+   */
+  async getRevisionReadiness(
+    sourceType: BookAssemblySourceType,
+    sourceId: string,
+    userId: string,
+  ): Promise<{ approvedCount: number; totalCount: number; isReady: boolean; hasOpenPhase: boolean }> {
+    try {
+      await this.loadAndValidateWorkHistory(userId, READ_ROLES);
+
+      if (sourceType === BookAssemblySourceType.MAIN_PLAN) {
+        throw new BadRequestException(
+          'endpoint นี้ใช้ได้เฉพาะกับ edit_revision และ change_revision เท่านั้น',
+        );
+      }
+
+      // totalCount: all non-deleted RevisedProjectGroup rows for this revision
+      const totalCount = await this.revisedProjectGroupRepo
+        .createQueryBuilder('rp')
+        .where('rp.developmentPlanRevision = :sourceId', { sourceId })
+        .andWhere('rp.deletedAt IS NULL')
+        .getCount();
+
+      // approvedCount: non-deleted rows whose latest TrackingStatus is 'Approved'
+      const approvedCount = await this.revisedProjectGroupRepo
+        .createQueryBuilder('rp')
+        .innerJoin('rp.trackingStatus', 'ts')
+        .innerJoin('ts.statusId', 'status')
+        .where('rp.developmentPlanRevision = :sourceId', { sourceId })
+        .andWhere('rp.deletedAt IS NULL')
+        .andWhere('ts.isLatest = :isLatest', { isLatest: true })
+        .andWhere('status.name = :statusName', { statusName: 'Approved' })
+        .getCount();
+
+      // hasOpenPhase: whether the revision round is still open
+      const revision = await this.devPlanRevisionRepo.findOne({
+        where: { id: sourceId },
+        select: ['id', 'isOpen'],
+      });
+      const hasOpenPhase = revision?.isOpen ?? false;
+
+      const isReady = approvedCount === totalCount && totalCount > 0 && !hasOpenPhase;
+
+      return { approvedCount, totalCount, isReady, hasOpenPhase };
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  // ===========================================================================
+  // Private Helpers
+  // ===========================================================================
+
   /**
    * Loads and validates the operator's WorkHistory.
    */
@@ -1615,6 +1931,388 @@ export class BookAssemblyService {
       );
     }
     return draft;
+  }
+
+  /**
+   * Rule 1: Asserts that the main plan book is NOT frozen.
+   * Authoritative check: counts DevelopmentPlanRevision rows for the plan.
+   * Only applies when sourceType === MAIN_PLAN; silently passes otherwise.
+   *
+   * @param manager Optional EntityManager for use inside an existing transaction.
+   *                When omitted, falls back to the injected repository.
+   */
+  private async assertMainBookNotFrozen(
+    sourceType: BookAssemblySourceType,
+    sourceId: string,
+    manager?: any,
+  ): Promise<void> {
+    if (sourceType !== BookAssemblySourceType.MAIN_PLAN) return;
+
+    const repo = manager
+      ? manager.getRepository(DevelopmentPlanRevision)
+      : this.devPlanRevisionRepo;
+
+    const count = await repo.count({
+      where: { developmentPlan: { id: sourceId } },
+    });
+
+    if (count > 0) {
+      throw new ForbiddenException({
+        code: 'MAIN_BOOK_FROZEN',
+        message:
+          'เล่มแผนหลักนี้ถูกตรึงแล้ว เนื่องจากมีรอบแก้ไข/เปลี่ยนแปลงที่เชื่อมโยงอยู่',
+      });
+    }
+  }
+
+  /**
+   * Rule 2: Asserts that none of the candidate project IDs already appear in a COMPLETED
+   * version for a sibling revision round (same plan, different sourceId).
+   *
+   * Only called for EDIT_REVISION / CHANGE_REVISION source types.
+   */
+  private async assertProjectsNotInSiblingBook(
+    sourceType: BookAssemblySourceType,
+    sourceId: string,
+    projectIds: string[],
+  ): Promise<void> {
+    if (projectIds.length === 0) return;
+
+    // Find the parent plan ID via the revision record
+    const revision = await this.devPlanRevisionRepo.findOne({
+      where: { id: sourceId },
+      relations: ['developmentPlan'],
+    });
+    if (!revision?.developmentPlan?.id) return;
+
+    const planId = revision.developmentPlan.id;
+
+    // Find all sibling revision IDs for the same plan (excluding this one)
+    const siblingRevisions = await this.devPlanRevisionRepo.find({
+      where: { developmentPlan: { id: planId } },
+      select: ['id'],
+    });
+    const siblingIds = siblingRevisions
+      .map((r) => r.id)
+      .filter((id) => id !== sourceId);
+
+    if (siblingIds.length === 0) return;
+
+    // Check both EDIT_REVISION and CHANGE_REVISION completed versions for sibling rounds
+    const conflictingVersion = await this.versionRepo
+      .createQueryBuilder('v')
+      .where('v.status = :status', { status: BookAssemblyVersionStatus.COMPLETED })
+      .andWhere('v.sourceType IN (:...sourceTypes)', {
+        sourceTypes: [
+          BookAssemblySourceType.EDIT_REVISION,
+          BookAssemblySourceType.CHANGE_REVISION,
+        ],
+      })
+      .andWhere('v.sourceId IN (:...siblingIds)', { siblingIds })
+      .getMany();
+
+    if (conflictingVersion.length === 0) return;
+
+    // Collect ALL overlapping project IDs across all sibling COMPLETED versions
+    const allOverlappingIds = new Set<string>();
+    for (const version of conflictingVersion) {
+      const snapshot: string[] = version.part3ProjectSnapshot ?? [];
+      for (const id of projectIds) {
+        if (snapshot.includes(id)) allOverlappingIds.add(id);
+      }
+    }
+    if (allOverlappingIds.size > 0) {
+      throw new ConflictException({
+        code: 'PROJECTS_ALREADY_IN_ACTIVE_BOOK',
+        message:
+          'โครงการบางรายการถูกรวมอยู่ในเล่มอื่นที่ยังมีผลอยู่แล้ว ไม่สามารถนำมาใช้ซ้ำได้',
+        conflictingProjectIds: Array.from(allOverlappingIds),
+      });
+    }
+  }
+
+  /**
+   * Rule 5 (F5) — non-throwing variant: Returns true if a sibling revision has an active
+   * draft (PREPARING or READY) that shares projects with the given COMPLETED version's snapshot.
+   * Used by getBookDisplayState() to populate hasActiveDraftDependency without throwing.
+   */
+  private async checkActiveDraftDependency(
+    currentVersionId: string,
+    sourceType: BookAssemblySourceType,
+    sourceId: string,
+  ): Promise<boolean> {
+    if (
+      sourceType !== BookAssemblySourceType.EDIT_REVISION &&
+      sourceType !== BookAssemblySourceType.CHANGE_REVISION
+    ) {
+      return false;
+    }
+
+    const currentVersion = await this.versionRepo.findOne({
+      where: { id: currentVersionId },
+      select: ['id', 'part3ProjectSnapshot'],
+    });
+    const snapshotIds: string[] = currentVersion?.part3ProjectSnapshot ?? [];
+    if (snapshotIds.length === 0) return false;
+
+    const revision = await this.devPlanRevisionRepo.findOne({
+      where: { id: sourceId },
+      relations: ['developmentPlan'],
+    });
+    if (!revision?.developmentPlan?.id) return false;
+    const planId = revision.developmentPlan.id;
+
+    const siblingRevisions = await this.devPlanRevisionRepo.find({
+      where: { developmentPlan: { id: planId } },
+      select: ['id'],
+    });
+    const siblingIds = siblingRevisions.map((r) => r.id).filter((id) => id !== sourceId);
+    if (siblingIds.length === 0) return false;
+
+    const activeSiblingDrafts = await this.draftRepo.find({
+      where: {
+        sourceId: In(siblingIds),
+        assemblyStatus: In([AssemblyDraftStatus.PREPARING, AssemblyDraftStatus.READY]),
+      },
+      select: ['id', 'sourceId', 'sourceType', 'part3ProjectSnapshot'],
+    });
+    if (activeSiblingDrafts.length === 0) return false;
+
+    for (const siblingDraft of activeSiblingDrafts) {
+      const draftSnapshot: string[] = siblingDraft.part3ProjectSnapshot ?? [];
+      for (const id of snapshotIds) {
+        if (draftSnapshot.includes(id)) return true;
+      }
+
+      const siblingCompletedVersion = await this.versionRepo.findOne({
+        where: {
+          sourceType: siblingDraft.sourceType,
+          sourceId: siblingDraft.sourceId,
+          status: BookAssemblyVersionStatus.COMPLETED,
+        },
+        select: ['id', 'part3ProjectSnapshot'],
+        order: { versionNumber: 'DESC' },
+      });
+      if (siblingCompletedVersion) {
+        const siblingSnapshot: string[] = siblingCompletedVersion.part3ProjectSnapshot ?? [];
+        for (const id of snapshotIds) {
+          if (siblingSnapshot.includes(id)) return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Rule 5 (F5): Asserts that no sibling revision has an active draft (PREPARING or READY)
+   * that overlaps the project snapshot of the CURRENT COMPLETED version for this source.
+   *
+   * This prevents correction when another revision round is mid-assembly with shared projects,
+   * which would invalidate the lineage chain.
+   *
+   * Only applies to EDIT_REVISION / CHANGE_REVISION source types.
+   * Must be called inside the correct() transaction.
+   */
+  private async assertNoActiveDraftDependency(
+    currentVersionId: string,
+    sourceType: BookAssemblySourceType,
+    sourceId: string,
+    manager: any,
+  ): Promise<void> {
+    // Only applies to revision-type sources
+    if (
+      sourceType !== BookAssemblySourceType.EDIT_REVISION &&
+      sourceType !== BookAssemblySourceType.CHANGE_REVISION
+    ) {
+      return;
+    }
+
+    // Step 1: Load the part3ProjectSnapshot from the current COMPLETED version
+    const currentVersion = await manager.findOne(BookAssemblyVersion, {
+      where: { id: currentVersionId },
+      select: ['id', 'part3ProjectSnapshot'],
+    });
+    const snapshotIds: string[] = currentVersion?.part3ProjectSnapshot ?? [];
+    if (snapshotIds.length === 0) return;
+
+    // Step 2: Find the parent DevelopmentPlan for this source revision
+    const revision = await manager.findOne(DevelopmentPlanRevision, {
+      where: { id: sourceId },
+      relations: ['developmentPlan'],
+    });
+    if (!revision?.developmentPlan?.id) return;
+    const planId = revision.developmentPlan.id;
+
+    // Step 3: Find all sibling revision IDs for the same plan (different sourceId)
+    const siblingRevisions = await manager.getRepository(DevelopmentPlanRevision).find({
+      where: { developmentPlan: { id: planId } },
+      select: ['id'],
+    });
+    const siblingIds = siblingRevisions.map((r) => r.id).filter((id) => id !== sourceId);
+    if (siblingIds.length === 0) return;
+
+    // Step 4: Find any active draft (PREPARING or READY) for sibling revisions
+    const activeSiblingDrafts = await manager.getRepository(BookAssemblyDraft).find({
+      where: {
+        sourceId: In(siblingIds),
+        assemblyStatus: In([AssemblyDraftStatus.PREPARING, AssemblyDraftStatus.READY]),
+      },
+      select: ['id', 'sourceId', 'sourceType', 'part3ProjectSnapshot'],
+    });
+    if (activeSiblingDrafts.length === 0) return;
+
+    // Step 5 & 6: For each active sibling draft, check if its associated COMPLETED version
+    // (or the draft's own part3ProjectSnapshot if the draft has generated Part 3) overlaps
+    // with this version's snapshot. We check both the draft snapshot and the latest
+    // COMPLETED version for that sibling source.
+    const overlappingIds = new Set<string>();
+
+    for (const siblingDraft of activeSiblingDrafts) {
+      // Check the draft's own Part 3 snapshot first (if it has generated Part 3)
+      const draftSnapshot: string[] = siblingDraft.part3ProjectSnapshot ?? [];
+      for (const id of snapshotIds) {
+        if (draftSnapshot.includes(id)) overlappingIds.add(id);
+      }
+
+      // Also check the latest COMPLETED version for this sibling source (if any),
+      // since the draft may not have generated Part 3 yet but targets the same projects
+      const siblingCompletedVersion = await manager.findOne(BookAssemblyVersion, {
+        where: {
+          sourceType: siblingDraft.sourceType,
+          sourceId: siblingDraft.sourceId,
+          status: BookAssemblyVersionStatus.COMPLETED,
+        },
+        select: ['id', 'part3ProjectSnapshot'],
+        order: { versionNumber: 'DESC' },
+      });
+      if (siblingCompletedVersion) {
+        const siblingSnapshot: string[] = siblingCompletedVersion.part3ProjectSnapshot ?? [];
+        for (const id of snapshotIds) {
+          if (siblingSnapshot.includes(id)) overlappingIds.add(id);
+        }
+      }
+    }
+
+    if (overlappingIds.size > 0) {
+      throw new ForbiddenException({
+        code: 'BOOK_HAS_ACTIVE_DRAFT_DEPENDENCY',
+        message:
+          'ไม่สามารถแก้ไขเล่มนี้ได้ เนื่องจากมีการจัดทำเล่มอื่นที่กำลังดำเนินการอยู่และมีโครงการร่วมกัน',
+        conflictingProjectIds: Array.from(overlappingIds),
+      });
+    }
+  }
+
+  /**
+   * Rule 3: Populates book_project_lineage for every project in the snapshot
+   * after a successful merge. Must be called inside the merge() transaction.
+   */
+  private async populateLineageForMerge(
+    sourceType: BookAssemblySourceType,
+    projectIds: string[],
+    newVersionId: string,
+    manager: any,
+  ): Promise<void> {
+    if (!projectIds || projectIds.length === 0) return;
+
+    const projectType =
+      sourceType === BookAssemblySourceType.MAIN_PLAN
+        ? BookProjectType.PROJECT_GROUP
+        : BookProjectType.REVISED_PROJECT_GROUP;
+
+    const lineageRepo = manager.getRepository(BookProjectLineage);
+
+    for (const projectId of projectIds) {
+      // Find the current leaf row for this project (if any)
+      const currentLeaf = await lineageRepo.findOne({
+        where: { projectId, projectType, isCurrentLeaf: true },
+      });
+
+      // Write order: clear old leaf FIRST, then insert new leaf (required by partial unique index)
+      if (currentLeaf) {
+        currentLeaf.isCurrentLeaf = false;
+        await lineageRepo.save(currentLeaf);
+      }
+
+      // Insert the new leaf row
+      const newRow = lineageRepo.create({
+        projectId,
+        projectType,
+        bookVersionId: newVersionId,
+        parentBookVersionId: currentLeaf ? currentLeaf.bookVersionId : null,
+        isCurrentLeaf: true,
+      });
+      await lineageRepo.save(newRow);
+    }
+
+    this.logger.log(
+      `Lineage populated for ${projectIds.length} projects → versionId=${newVersionId}`,
+    );
+  }
+
+  /**
+   * Rule 4 (lineage): After cancelling a version, restore parent leaf status
+   * for each project in the cancelled version's snapshot.
+   * Must be called inside the cancel() transaction.
+   */
+  private async restoreLineageAfterCancel(
+    projectIds: string[],
+    cancelledVersionId: string,
+    manager: any,
+  ): Promise<void> {
+    if (!projectIds || projectIds.length === 0) return;
+
+    const lineageRepo = manager.getRepository(BookProjectLineage);
+
+    for (const projectId of projectIds) {
+      // Find the lineage row pointing to the cancelled version for this project
+      const cancelledRow = await lineageRepo.findOne({
+        where: { projectId, bookVersionId: cancelledVersionId },
+      });
+      if (!cancelledRow) continue;
+
+      // Mark the cancelled version's row as no longer a leaf
+      cancelledRow.isCurrentLeaf = false;
+      await lineageRepo.save(cancelledRow);
+
+      // Restore the parent row's isCurrentLeaf = true (if a parent existed)
+      if (cancelledRow.parentBookVersionId) {
+        const parentRow = await lineageRepo.findOne({
+          where: {
+            projectId,
+            bookVersionId: cancelledRow.parentBookVersionId,
+          },
+        });
+        if (parentRow) {
+          parentRow.isCurrentLeaf = true;
+          await lineageRepo.save(parentRow);
+        }
+      }
+    }
+
+    this.logger.log(
+      `Lineage restored for ${projectIds.length} projects after cancel of versionId=${cancelledVersionId}`,
+    );
+  }
+
+  /**
+   * Synchronises the DevelopmentPlan.isFrozen cache after a cancel/rollback.
+   * Sets isFrozen = false if NO DevelopmentPlanRevision rows remain for the plan.
+   * Must be called OUTSIDE the main transaction (post-commit).
+   */
+  private async syncPlanFrozenCache(planId: string): Promise<void> {
+    try {
+      const count = await this.devPlanRevisionRepo.count({
+        where: { developmentPlan: { id: planId } },
+      });
+      if (count === 0) {
+        await this.devPlanRepo.update({ id: planId }, { isFrozen: false });
+        this.logger.log(`DevelopmentPlan ${planId} isFrozen cache reset to false (no revisions remain)`);
+      }
+    } catch (err) {
+      this.logger.warn(`syncPlanFrozenCache failed for plan ${planId}: ${err?.message}`);
+    }
   }
 
   /**

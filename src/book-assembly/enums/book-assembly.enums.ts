@@ -41,3 +41,8 @@ export enum DeprecationAuditAction {
   FAILED = 'failed',
   RESTORED = 'restored',
 }
+
+export enum BookProjectType {
+  PROJECT_GROUP = 'project_group',
+  REVISED_PROJECT_GROUP = 'revised_project_group',
+}

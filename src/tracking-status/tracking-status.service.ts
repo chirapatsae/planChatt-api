@@ -192,10 +192,19 @@ export class TrackingStatusService {
           isLatest: false,
         });
 
+        // Resolve staffRemark: only staff-lead roles may set this field.
+        // User role submissions must have staffRemark stripped to null.
+        // CLAUDE.md §3 (Role Responsibilities), §12 (Audit Rule).
+        const staffLeadRoles = ['staff', 'admin', 'super-admin'];
+        const resolvedStaffRemark = staffLeadRoles.includes(workHistory.role?.name)
+          ? (dto.staffRemark ?? null)
+          : null;
+
         const tracking = manager.create(TrackingStatus, {
           createdBy: workHistory,
           projectGroupId: projectGroup,
           comment: dto.comment,
+          staffRemark: resolvedStaffRemark,
           statusId: status,
           isLatest: true,
         });
@@ -322,10 +331,13 @@ export class TrackingStatusService {
             { isLatest: false },
           );
 
+          // createMany is staff-only (enforced above); staffRemark is always eligible.
+          // staffRemark comes from per-dto value (each DTO in the bulk array may carry its own remark).
           const tracking = manager.create(TrackingStatus, {
             createdBy: workHistory,
             projectGroupId: { id: projectId },
             statusId: { id: statusId },
+            staffRemark: dto.staffRemark ?? null,
             isLatest: true,
           });
 
@@ -389,18 +401,13 @@ export class TrackingStatusService {
 
           const dpr = revisedProjectGroup.developmentPlanRevision;
 
-          // DPR scope (CLAUDE.md §9)
-          if (!dpr?.isOpen) {
-            throw new ForbiddenException(`รอบการแก้ไข/เปลี่ยนแปลงปิดแล้ว ไม่สามารถดำเนินการได้ (โครงการ ID: ${projectId})`);
+          // Validate DPR scope: DPR must be latest and not yet assembled (staff bulk transition)
+          // DPR.isOpen is NOT a gate for staff. DevelopmentPlan.isBooked is NOT a gate for staff.
+          if (!dpr?.isLatest) {
+            throw new ForbiddenException(`รอบการแก้ไข/เปลี่ยนแปลงนี้ไม่ใช่รอบปัจจุบัน (โครงการ ID: ${projectId})`);
           }
-
-          // Parent DevelopmentPlan scope (CLAUDE.md §10)
-          const dprDp = dpr.developmentPlan;
-          if (!dprDp?.isLatest) {
-            throw new ForbiddenException(`แผนพัฒนาฯ ที่อ้างอิงโดยรอบการแก้ไขไม่ใช่แผนปัจจุบัน (โครงการ ID: ${projectId})`);
-          }
-          if (dprDp?.isBooked) {
-            throw new ForbiddenException(`แผนพัฒนาฯ ที่อ้างอิงโดยรอบการแก้ไขถูกรวมเล่มแล้ว (โครงการ ID: ${projectId})`);
+          if (dpr?.isBooked) {
+            throw new ForbiddenException(`รอบการแก้ไข/เปลี่ยนแปลงถูกรวมเล่มแล้ว (โครงการ ID: ${projectId})`);
           }
 
           // Load and validate current TrackingStatus
@@ -432,10 +439,12 @@ export class TrackingStatusService {
             { isLatest: false },
           );
 
+          // createManyRevisedProjectGroup is staff-only (enforced above); staffRemark is always eligible.
           const tracking = manager.create(TrackingStatus, {
             createdBy: workHistory,
             revisedProjectGroupId: { id: projectId },
             statusId: { id: statusId },
+            staffRemark: dto.staffRemark ?? null,
             isLatest: true,
           });
 
@@ -520,6 +529,9 @@ export class TrackingStatusService {
           );
         tracking.statusId = status;
       }
+      // staffRemark is write-once: it MUST NOT be mutated after creation.
+      // Explicitly ignore any staffRemark value from the update DTO.
+      // CLAUDE.md §12 (Audit Rule): audit fields must remain immutable after recording.
       const updated = await this.trackingStatusRepo.save(tracking);
       return {
         message: 'Tracking status updated successfully',
@@ -693,19 +705,16 @@ export class TrackingStatusService {
           // Ownership is NOT required for staff-controlled workflow transitions.
           // Valid staff transitions: Pending → Verified → Pending_Approval → Approved
 
-          // Validate revision scope: DPR must be open (CLAUDE.md §10)
+          // Validate DPR scope: DPR must be latest and not yet assembled
+          // Per corrected domain: staff transitions are gated by DPR.isLatest + DPR.isBooked only.
+          // DPR.isOpen is NOT a gate for staff (staff may review after submission window closes).
+          // DevelopmentPlan.isBooked is NOT a gate for staff (main plan being booked is expected).
           const staffDpr = revisedProjectGroup.developmentPlanRevision;
-          if (!staffDpr?.isOpen) {
-            throw new ForbiddenException('รอบการแก้ไข/เปลี่ยนแปลงปิดแล้ว ไม่สามารถดำเนินการได้');
+          if (!staffDpr?.isLatest) {
+            throw new ForbiddenException('รอบการแก้ไข/เปลี่ยนแปลงนี้ไม่ใช่รอบปัจจุบัน ไม่สามารถดำเนินการได้');
           }
-
-          // Validate DPR parent DevelopmentPlan scope
-          const staffDp = staffDpr.developmentPlan;
-          if (!staffDp?.isLatest) {
-            throw new ForbiddenException('แผนพัฒนาฯ ที่อ้างอิงโดยรอบการแก้ไขไม่ใช่แผนปัจจุบัน ไม่สามารถดำเนินการได้');
-          }
-          if (staffDp?.isBooked) {
-            throw new ForbiddenException('แผนพัฒนาฯ ที่อ้างอิงโดยรอบการแก้ไขถูกรวมเล่มแล้ว ไม่สามารถดำเนินการได้');
+          if (staffDpr?.isBooked) {
+            throw new ForbiddenException('รอบการแก้ไข/เปลี่ยนแปลงถูกรวมเล่มแล้ว ไม่สามารถดำเนินการได้');
           }
 
           // Load current latest TrackingStatus to enforce transition rules
@@ -754,6 +763,14 @@ export class TrackingStatusService {
           isLatest: false,
         });
 
+        // Resolve staffRemark for createByRevisedProjectGroup.
+        // Only staff-lead roles may set this field; user role submissions are stripped to null.
+        // CLAUDE.md §3 (Role Responsibilities), §12 (Audit Rule).
+        const staffLeadRolesRpg = ['staff', 'admin', 'super-admin'];
+        const resolvedStaffRemarkRpg = staffLeadRolesRpg.includes(workHistory.role?.name)
+          ? (dto.staffRemark ?? null)
+          : null;
+
         // สร้าง TrackingStatus ใหม่
         const tracking = manager.create(TrackingStatus, {
           createdBy: workHistory,
@@ -761,6 +778,7 @@ export class TrackingStatusService {
           statusId: status,
           isLatest: true,
           comment: dto.comment,
+          staffRemark: resolvedStaffRemarkRpg,
         });
         const savedTracking = await manager.save(TrackingStatus, tracking);
 
@@ -939,19 +957,14 @@ export class TrackingStatusService {
           }
         }
 
-        // 6. Revision scope: DPR must be open
+        // 6. Validate DPR scope: DPR must be latest and not yet assembled (staff-led rollback)
+        // DPR.isOpen is NOT a gate for staff rollback. DevelopmentPlan.isBooked is NOT a gate for staff.
         const dpr = revisionProjectGroup.developmentPlanRevision;
-        if (!dpr?.isOpen) {
-          throw new BadRequestException('รอบการแก้ไข/เปลี่ยนแปลงปิดแล้ว ไม่สามารถดึงกลับได้');
+        if (!dpr?.isLatest) {
+          throw new BadRequestException('รอบการแก้ไข/เปลี่ยนแปลงนี้ไม่ใช่รอบปัจจุบัน ไม่สามารถดึงกลับได้');
         }
-
-        // R5-H1: Validate parent DevelopmentPlan scope (CLAUDE.md §9, §10)
-        const dprDp = dpr.developmentPlan;
-        if (!dprDp?.isLatest) {
-          throw new BadRequestException('แผนพัฒนาฯ ที่อ้างอิงโดยรอบการแก้ไขไม่ใช่แผนปัจจุบัน ไม่สามารถดึงกลับได้');
-        }
-        if (dprDp?.isBooked) {
-          throw new BadRequestException('แผนพัฒนาฯ ที่อ้างอิงโดยรอบการแก้ไขถูกรวมเล่มแล้ว ไม่สามารถดึงกลับได้');
+        if (dpr?.isBooked) {
+          throw new BadRequestException('รอบการแก้ไข/เปลี่ยนแปลงถูกรวมเล่มแล้ว ไม่สามารถดึงกลับได้');
         }
 
         // 7. Status constraint — cannot rollback from Pull_Back or Ready

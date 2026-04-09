@@ -34,6 +34,20 @@ export class DevelopmentPlan {
   @Column({ name: 'is_booked', default: false })
   isBooked: boolean;
 
+  /**
+   * Denormalized cache. Set to true by the service when the first
+   * DevelopmentPlanRevision is created for this plan.
+   *
+   * This field enables fast UI filtering to exclude frozen main plans from the
+   * actionable book-assembly view without a JOIN on development_plan_revision.
+   *
+   * IMPORTANT: Backend MUST NOT treat this as the authoritative freeze check.
+   * The authoritative check is always: COUNT(*) FROM development_plan_revision
+   * WHERE development_plan_id = this.id. This field is a performance cache only.
+   */
+  @Column({ name: 'is_frozen', default: false })
+  isFrozen: boolean;
+
   @CreateDateColumn({ name: 'create_at' })
   createAt: Date;
 

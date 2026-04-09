@@ -8,6 +8,7 @@ import { BookAssemblyFileService } from './book-assembly-file.service';
 import { BookAssemblyDraft } from './entities/book-assembly-draft.entity';
 import { BookAssemblyVersion } from './entities/book-assembly-version.entity';
 import { DeprecationAuditLog } from './entities/deprecation-audit-log.entity';
+import { BookProjectLineage } from './entities/book-project-lineage.entity';
 
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
@@ -26,6 +27,7 @@ import { WebsocketModule } from 'src/websocket/websocket.module';
       BookAssemblyDraft,
       BookAssemblyVersion,
       DeprecationAuditLog,
+      BookProjectLineage,
       WorkHistory,
       ProjectGroup,
       RevisedProjectGroup,

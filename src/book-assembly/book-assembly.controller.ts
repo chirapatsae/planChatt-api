@@ -29,6 +29,7 @@ import { BookAssemblySourceType } from './enums/book-assembly.enums';
 import { CancelBookDto } from './dto/cancel-book.dto';
 import { CorrectBookDto } from './dto/correct-book.dto';
 import { VersionResponseDto } from './dto/version-response.dto';
+import { RevisionReadinessDto } from './dto/revision-readiness.dto';
 
 /** Multer configuration — store in memory for PDF processing */
 const pdfMulterConfig = {
@@ -68,6 +69,64 @@ export class BookAssemblyController {
     const userId = req.user?.userId;
     const appUrl = process.env.APP_URL ?? '';
     return this.bookAssemblyService.getAssemblyHistory(userId, appUrl);
+  }
+
+  // ===========================================================================
+  // Display State and Lineage (Rule 6 — MUST be BEFORE :sourceType/:sourceId routes)
+  // ===========================================================================
+
+  /**
+   * Returns the computed display state for a book source context.
+   * Encodes freeze/leaf/publication state for frontend rendering.
+   * GET /book-assembly/:sourceType/:sourceId/book-state
+   */
+  @Get(':sourceType/:sourceId/book-state')
+  async getBookDisplayState(
+    @Param('sourceType') sourceType: BookAssemblySourceType,
+    @Param('sourceId') sourceId: string,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    if (!sourceType || !sourceId) {
+      throw new BadRequestException('sourceType และ sourceId จำเป็นต้องระบุ');
+    }
+    const userId = req.user?.userId;
+    return this.bookAssemblyService.getBookDisplayState(sourceType, sourceId, userId);
+  }
+
+  /**
+   * Returns the full lineage chain for all projects in the current COMPLETED version.
+   * GET /book-assembly/:sourceType/:sourceId/lineage
+   */
+  @Get(':sourceType/:sourceId/lineage')
+  async getProjectLineage(
+    @Param('sourceType') sourceType: BookAssemblySourceType,
+    @Param('sourceId') sourceId: string,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    if (!sourceType || !sourceId) {
+      throw new BadRequestException('sourceType และ sourceId จำเป็นต้องระบุ');
+    }
+    const userId = req.user?.userId;
+    return this.bookAssemblyService.getProjectLineage(sourceType, sourceId, userId);
+  }
+
+  /**
+   * Returns approval progress counts for a revision round.
+   * Used by the Edit and Change book pages to render the Part 3 progress bar.
+   * Only valid for edit_revision and change_revision sourceType.
+   * GET /book-assembly/:sourceType/:sourceId/revision-readiness
+   */
+  @Get(':sourceType/:sourceId/revision-readiness')
+  async getRevisionReadiness(
+    @Param('sourceType') sourceType: BookAssemblySourceType,
+    @Param('sourceId') sourceId: string,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ): Promise<RevisionReadinessDto> {
+    if (!sourceType || !sourceId) {
+      throw new BadRequestException('sourceType และ sourceId จำเป็นต้องระบุ');
+    }
+    const userId = req.user?.userId;
+    return this.bookAssemblyService.getRevisionReadiness(sourceType, sourceId, userId);
   }
 
   // ===========================================================================

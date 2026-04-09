@@ -102,6 +102,7 @@ import { BookAssemblyModule } from './book-assembly/book-assembly.module';
 import { BookAssemblyDraft } from './book-assembly/entities/book-assembly-draft.entity';
 import { BookAssemblyVersion } from './book-assembly/entities/book-assembly-version.entity';
 import { DeprecationAuditLog } from './book-assembly/entities/deprecation-audit-log.entity';
+import { BookProjectLineage } from './book-assembly/entities/book-project-lineage.entity';
 
 
 @Module({
@@ -181,6 +182,7 @@ import { DeprecationAuditLog } from './book-assembly/entities/deprecation-audit-
         BookAssemblyDraft,
         BookAssemblyVersion,
         DeprecationAuditLog,
+        BookProjectLineage,
       ],
       synchronize: true,
       extra: {
