@@ -933,7 +933,7 @@ export class DevelopmentPlanService {
   async findAll(): Promise<DevelopmentPlan[]> {
     try {
       const dv = await this.developmentPlanRepository.find({
-        relations: ['createdBy', 'developmentPlanRevision', 'developmentPlanRevision.revisionType', 'planPhases'],
+        relations: ['createdBy', 'developmentPlanRevision', 'developmentPlanRevision.revisionType', 'planPhases', 'developmentPlanSupplements'],
         order: { createAt: 'DESC' },
         where: { isLatest: true },
       });
