@@ -359,6 +359,7 @@ export class DevelopmentPlanService {
         where: {
           developmentPlan: { id: latestPlan.id },
           isOpen: true,
+          isBooked: false,
           revisionType: { name: 'แก้ไข' },
         },
       });
@@ -367,6 +368,7 @@ export class DevelopmentPlanService {
         where: {
           developmentPlan: { id: latestPlan.id },
           isOpen: true,
+          isBooked: false,
           revisionType: { name: 'เปลี่ยนแปลง' },
         },
       });
