@@ -45,6 +45,7 @@ import { CorrectBookDto } from './dto/correct-book.dto';
 import { VersionResponseDto } from './dto/version-response.dto';
 import { BookDisplayStateDto, BookDisplayStateEnum } from './dto/book-display-state.dto';
 import { ProjectLineageNodeDto } from './dto/project-lineage-node.dto';
+import { RevisionReadinessDto, ReadinessBreakdownDto } from './dto/revision-readiness.dto';
 import { BookProjectLineage } from './entities/book-project-lineage.entity';
 import { BookProjectType } from './enums/book-assembly.enums';
 
@@ -1662,16 +1663,6 @@ export class BookAssemblyService {
       dto.sourceType = sourceType;
       dto.sourceId = sourceId;
 
-      // Step 1: Determine isFrozen value for the DTO (cache field, not authoritative)
-      if (sourceType === BookAssemblySourceType.MAIN_PLAN) {
-        const plan = await this.devPlanRepo.findOne({ where: { id: sourceId } });
-        dto.isFrozen = plan?.isFrozen ?? false;
-      } else {
-        const revision = await this.devPlanRevisionRepo.findOne({ where: { id: sourceId } });
-        // For revision types, isFrozen means the round is no longer open
-        dto.isFrozen = revision ? !revision.isOpen : false;
-      }
-
       // Step 2: Authoritative freeze check for MAIN_PLAN
       if (sourceType === BookAssemblySourceType.MAIN_PLAN) {
         const revisionCount = await this.devPlanRevisionRepo.count({
@@ -1812,61 +1803,203 @@ export class BookAssemblyService {
   }
 
   /**
-   * Returns approval progress counts for a revision round (edit_revision or change_revision).
-   * Used by the revision book progress bar.
+   * Returns approval progress counts and a status/origin breakdown for a
+   * revision round (edit_revision or change_revision) or main plan (main_plan).
    *
-   * - totalCount: all non-deleted RevisedProjectGroup rows for the revision
-   * - approvedCount: subset with latest TrackingStatus.status.name = 'Approved'
-   * - isReady: approvedCount === totalCount && totalCount > 0 && !hasOpenPhase
-   * - hasOpenPhase: DevelopmentPlanRevision.isOpen
+   * Revision path (edit_revision / change_revision):
+   *   - Operates on RevisedProjectGroup rows for the given DevelopmentPlanRevision
+   *   - hasOpenPhase = DevelopmentPlanRevision.isOpen
    *
-   * Throws BadRequestException for MAIN_PLAN — this endpoint is revision-only.
+   * Main plan path (main_plan):
+   *   - Operates on ProjectGroup rows for the given DevelopmentPlan
+   *   - hasOpenPhase = any PlanPhase.isOpen = true for that DevelopmentPlan
+   *
+   * Breakdown fields:
+   *   - agencyCount / laoCount: derived from createdBy WorkHistory using the
+   *     canonical classification rule (CLAUDE.md §1):
+   *       agency  ⟺  workHistory.amphoe.id = '3001'
+   *                  AND workHistory.localAdministrativeOrganization.id = '3001027'
+   *       lao     ⟺  all other cases
+   *   - pendingCount / verifiedCount / pendingApprovalCount / approvedCount:
+   *     counted from the latest TrackingStatus (isLatest = true) per project.
+   *     Projects with no tracking record are excluded from status counts but
+   *     included in totalCount.
+   *
+   * isReady: approvedCount === totalCount && totalCount > 0 && !hasOpenPhase
    */
   async getRevisionReadiness(
     sourceType: BookAssemblySourceType,
     sourceId: string,
     userId: string,
-  ): Promise<{ approvedCount: number; totalCount: number; isReady: boolean; hasOpenPhase: boolean }> {
+  ): Promise<RevisionReadinessDto> {
     try {
       await this.loadAndValidateWorkHistory(userId, READ_ROLES);
 
       if (sourceType === BookAssemblySourceType.MAIN_PLAN) {
-        throw new BadRequestException(
-          'endpoint นี้ใช้ได้เฉพาะกับ edit_revision และ change_revision เท่านั้น',
-        );
+        return this.getMainPlanReadiness(sourceId);
       }
-
-      // totalCount: all non-deleted RevisedProjectGroup rows for this revision
-      const totalCount = await this.revisedProjectGroupRepo
-        .createQueryBuilder('rp')
-        .where('rp.developmentPlanRevision = :sourceId', { sourceId })
-        .andWhere('rp.deletedAt IS NULL')
-        .getCount();
-
-      // approvedCount: non-deleted rows whose latest TrackingStatus is 'Approved'
-      const approvedCount = await this.revisedProjectGroupRepo
-        .createQueryBuilder('rp')
-        .innerJoin('rp.trackingStatus', 'ts')
-        .innerJoin('ts.statusId', 'status')
-        .where('rp.developmentPlanRevision = :sourceId', { sourceId })
-        .andWhere('rp.deletedAt IS NULL')
-        .andWhere('ts.isLatest = :isLatest', { isLatest: true })
-        .andWhere('status.name = :statusName', { statusName: 'Approved' })
-        .getCount();
-
-      // hasOpenPhase: whether the revision round is still open
-      const revision = await this.devPlanRevisionRepo.findOne({
-        where: { id: sourceId },
-        select: ['id', 'isOpen'],
-      });
-      const hasOpenPhase = revision?.isOpen ?? false;
-
-      const isReady = approvedCount === totalCount && totalCount > 0 && !hasOpenPhase;
-
-      return { approvedCount, totalCount, isReady, hasOpenPhase };
+      return this.getRevisionRoundReadiness(sourceId);
     } catch (error) {
       handleException(this.logger, error);
     }
+  }
+
+  /**
+   * Readiness computation for edit_revision / change_revision source types.
+   * Operates on RevisedProjectGroup.
+   */
+  private async getRevisionRoundReadiness(sourceId: string): Promise<RevisionReadinessDto> {
+    // --- scalar counts ---
+    const totalCount = await this.revisedProjectGroupRepo
+      .createQueryBuilder('rp')
+      .where('rp.developmentPlanRevision = :sourceId', { sourceId })
+      .andWhere('rp.deletedAt IS NULL')
+      .getCount();
+
+    const approvedCount = await this.revisedProjectGroupRepo
+      .createQueryBuilder('rp')
+      .innerJoin('rp.trackingStatus', 'ts')
+      .innerJoin('ts.statusId', 'status')
+      .where('rp.developmentPlanRevision = :sourceId', { sourceId })
+      .andWhere('rp.deletedAt IS NULL')
+      .andWhere('ts.isLatest = :isLatest', { isLatest: true })
+      .andWhere('status.name = :statusName', { statusName: 'Approved' })
+      .getCount();
+
+    const revision = await this.devPlanRevisionRepo.findOne({
+      where: { id: sourceId },
+      select: ['id', 'isOpen'],
+    });
+    const hasOpenPhase = revision?.isOpen ?? false;
+    const isReady = approvedCount === totalCount && totalCount > 0 && !hasOpenPhase;
+
+    // --- breakdown: origin (agency vs lao) ---
+    // Agency: workHistory.amphoe.id = '3001' AND workHistory.lao.id = '3001027'
+    const agencyCount = await this.revisedProjectGroupRepo
+      .createQueryBuilder('rp')
+      .innerJoin('rp.createdBy', 'wh')
+      .innerJoin('wh.amphoe', 'amp')
+      .innerJoin('wh.localAdministrativeOrganization', 'lao')
+      .where('rp.developmentPlanRevision = :sourceId', { sourceId })
+      .andWhere('rp.deletedAt IS NULL')
+      .andWhere('amp.id = :amphoeId', { amphoeId: '3001' })
+      .andWhere('lao.id = :laoId', { laoId: '3001027' })
+      .getCount();
+
+    const laoCount = totalCount - agencyCount;
+
+    // --- breakdown: status counts via a single aggregation query ---
+    const statusRows: { statusName: string; cnt: string }[] = await this.revisedProjectGroupRepo
+      .createQueryBuilder('rp')
+      .select('status.name', 'statusName')
+      .addSelect('COUNT(rp.id)', 'cnt')
+      .innerJoin('rp.trackingStatus', 'ts')
+      .innerJoin('ts.statusId', 'status')
+      .where('rp.developmentPlanRevision = :sourceId', { sourceId })
+      .andWhere('rp.deletedAt IS NULL')
+      .andWhere('ts.isLatest = :isLatest', { isLatest: true })
+      .groupBy('status.name')
+      .getRawMany();
+
+    const statusMap = this.buildStatusMap(statusRows);
+
+    const breakdown: ReadinessBreakdownDto = {
+      agencyCount,
+      laoCount,
+      pendingCount: statusMap['Pending'] ?? 0,
+      verifiedCount: statusMap['Verified'] ?? 0,
+      pendingApprovalCount: statusMap['Pending_Approval'] ?? 0,
+      approvedCount: statusMap['Approved'] ?? 0,
+      totalCount,
+    };
+
+    return { approvedCount, totalCount, isReady, hasOpenPhase, breakdown };
+  }
+
+  /**
+   * Readiness computation for main_plan source type.
+   * Operates on ProjectGroup.
+   */
+  private async getMainPlanReadiness(sourceId: string): Promise<RevisionReadinessDto> {
+    // --- scalar counts ---
+    const totalCount = await this.projectGroupRepo
+      .createQueryBuilder('pg')
+      .where('pg.developmentPlan = :sourceId', { sourceId })
+      .andWhere('pg.deletedAt IS NULL')
+      .getCount();
+
+    const approvedCount = await this.projectGroupRepo
+      .createQueryBuilder('pg')
+      .innerJoin('pg.trackingStatus', 'ts')
+      .innerJoin('ts.statusId', 'status')
+      .where('pg.developmentPlan = :sourceId', { sourceId })
+      .andWhere('pg.deletedAt IS NULL')
+      .andWhere('ts.isLatest = :isLatest', { isLatest: true })
+      .andWhere('status.name = :statusName', { statusName: 'Approved' })
+      .getCount();
+
+    // hasOpenPhase: any PlanPhase for this DevelopmentPlan with isOpen = true
+    const openPhaseExists = await this.planPhaseRepo
+      .createQueryBuilder('pp')
+      .where('pp.developmentPlan = :sourceId', { sourceId })
+      .andWhere('pp.isOpen = :isOpen', { isOpen: true })
+      .getExists();
+
+    const hasOpenPhase = openPhaseExists;
+    const isReady = approvedCount === totalCount && totalCount > 0 && !hasOpenPhase;
+
+    // --- breakdown: origin (agency vs lao) ---
+    const agencyCount = await this.projectGroupRepo
+      .createQueryBuilder('pg')
+      .innerJoin('pg.createdBy', 'wh')
+      .innerJoin('wh.amphoe', 'amp')
+      .innerJoin('wh.localAdministrativeOrganization', 'lao')
+      .where('pg.developmentPlan = :sourceId', { sourceId })
+      .andWhere('pg.deletedAt IS NULL')
+      .andWhere('amp.id = :amphoeId', { amphoeId: '3001' })
+      .andWhere('lao.id = :laoId', { laoId: '3001027' })
+      .getCount();
+
+    const laoCount = totalCount - agencyCount;
+
+    // --- breakdown: status counts via a single aggregation query ---
+    const statusRows: { statusName: string; cnt: string }[] = await this.projectGroupRepo
+      .createQueryBuilder('pg')
+      .select('status.name', 'statusName')
+      .addSelect('COUNT(pg.id)', 'cnt')
+      .innerJoin('pg.trackingStatus', 'ts')
+      .innerJoin('ts.statusId', 'status')
+      .where('pg.developmentPlan = :sourceId', { sourceId })
+      .andWhere('pg.deletedAt IS NULL')
+      .andWhere('ts.isLatest = :isLatest', { isLatest: true })
+      .groupBy('status.name')
+      .getRawMany();
+
+    const statusMap = this.buildStatusMap(statusRows);
+
+    const breakdown: ReadinessBreakdownDto = {
+      agencyCount,
+      laoCount,
+      pendingCount: statusMap['Pending'] ?? 0,
+      verifiedCount: statusMap['Verified'] ?? 0,
+      pendingApprovalCount: statusMap['Pending_Approval'] ?? 0,
+      approvedCount: statusMap['Approved'] ?? 0,
+      totalCount,
+    };
+
+    return { approvedCount, totalCount, isReady, hasOpenPhase, breakdown };
+  }
+
+  /**
+   * Converts a raw status aggregation result array into a lookup map.
+   * Input rows have { statusName: string; cnt: string } shape from getRawMany().
+   */
+  private buildStatusMap(rows: { statusName: string; cnt: string }[]): Record<string, number> {
+    const map: Record<string, number> = {};
+    for (const row of rows) {
+      map[row.statusName] = parseInt(row.cnt, 10);
+    }
+    return map;
   }
 
   // ===========================================================================
@@ -2294,25 +2427,6 @@ export class BookAssemblyService {
     this.logger.log(
       `Lineage restored for ${projectIds.length} projects after cancel of versionId=${cancelledVersionId}`,
     );
-  }
-
-  /**
-   * Synchronises the DevelopmentPlan.isFrozen cache after a cancel/rollback.
-   * Sets isFrozen = false if NO DevelopmentPlanRevision rows remain for the plan.
-   * Must be called OUTSIDE the main transaction (post-commit).
-   */
-  private async syncPlanFrozenCache(planId: string): Promise<void> {
-    try {
-      const count = await this.devPlanRevisionRepo.count({
-        where: { developmentPlan: { id: planId } },
-      });
-      if (count === 0) {
-        await this.devPlanRepo.update({ id: planId }, { isFrozen: false });
-        this.logger.log(`DevelopmentPlan ${planId} isFrozen cache reset to false (no revisions remain)`);
-      }
-    } catch (err) {
-      this.logger.warn(`syncPlanFrozenCache failed for plan ${planId}: ${err?.message}`);
-    }
   }
 
   /**

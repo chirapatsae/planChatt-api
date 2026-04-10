@@ -150,12 +150,9 @@ export class BookAssemblyController {
     @Param('sourceId') sourceId: string,
     @Req() req: Request & { user: JwtPayloadUser },
   ) {
+    // Returns 200 + null when no active draft exists (matches getCurrentVersion contract).
     const userId = req.user?.userId;
-    const draft = await this.bookAssemblyService.getActiveDraft(sourceType, sourceId, userId);
-    if (!draft) {
-      throw new NotFoundException('ไม่พบ draft ที่กำลังดำเนินการ');
-    }
-    return draft;
+    return this.bookAssemblyService.getActiveDraft(sourceType, sourceId, userId);
   }
 
   @Delete(':sourceType/:sourceId/draft')
@@ -175,12 +172,9 @@ export class BookAssemblyController {
     @Param('sourceId') sourceId: string,
     @Req() req: Request & { user: JwtPayloadUser },
   ) {
+    // Returns 200 + null when no canceled draft exists (matches getCurrentVersion contract).
     const userId = req.user?.userId;
-    const draft = await this.bookAssemblyService.getCanceledDraft(sourceType, sourceId, userId);
-    if (!draft) {
-      throw new NotFoundException('ไม่พบ draft ที่ถูกยกเลิก');
-    }
-    return draft;
+    return this.bookAssemblyService.getCanceledDraft(sourceType, sourceId, userId);
   }
 
   @Post(':sourceType/:sourceId/draft/restore')

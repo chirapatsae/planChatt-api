@@ -71,6 +71,9 @@ export interface IUnifiedProjectDisplay {
   // Additional fields for revised projects
   additionalDetail?: string | null;
   oldAdditionDetail?: string | null;
+
+  // Descendant flag: true if another RevisedProjectGroup references this project via prevProjectId
+  hasDescendant?: boolean;
 }
 
 /**
@@ -120,6 +123,7 @@ export class UnifiedProjectMapper {
    */
   static fromRevisedProjectGroup(
     revisedProject: RevisedProjectGroup,
+    hasDescendant?: boolean,
   ): IUnifiedProjectDisplay {
     return {
       id: revisedProject.id,
@@ -160,6 +164,7 @@ export class UnifiedProjectMapper {
       pageNumber: revisedProject.pageNumber,
       additionalDetail: revisedProject.additionalDetail,
       oldAdditionDetail: revisedProject.oldAdditionDetail,
+      hasDescendant: hasDescendant ?? false,
     };
   }
 

@@ -1,6 +1,7 @@
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   InternalServerErrorException,
@@ -965,6 +966,16 @@ export class TrackingStatusService {
         }
         if (dpr?.isBooked) {
           throw new BadRequestException('รอบการแก้ไข/เปลี่ยนแปลงถูกรวมเล่มแล้ว ไม่สามารถดึงกลับได้');
+        }
+
+        // 6.5 Guard: Descendant check — cannot rollback a non-leaf revision
+        const hasDescendant = await manager.exists(RevisedProjectGroup, {
+          where: { prevProjectId: revisionProjectGroupId },
+        });
+        if (hasDescendant) {
+          throw new ConflictException(
+            'REVISION_HAS_DESCENDANT: ไม่สามารถย้อนสถานะได้ เนื่องจากมีโครงการแก้ไข/เปลี่ยนแปลงอื่นที่อ้างอิงโครงการนี้อยู่ กรุณาย้อนสถานะโครงการที่อ้างอิงก่อน'
+          );
         }
 
         // 7. Status constraint — cannot rollback from Pull_Back or Ready

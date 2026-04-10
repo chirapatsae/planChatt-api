@@ -352,7 +352,11 @@ export class RevisedProjectGroupService {
         );
       }
 
-      return UnifiedProjectMapper.fromRevisedProjectGroup(revisedProject);
+      const hasDescendant = await this.revisedProjectGroupRepo.exists({
+        where: { prevProjectId: id },
+      });
+
+      return UnifiedProjectMapper.fromRevisedProjectGroup(revisedProject, hasDescendant);
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -715,7 +719,21 @@ export class RevisedProjectGroupService {
         return count;
       }
 
-      return await query.orderBy('rpg.created_at', 'DESC').getMany();
+      const results = await query.orderBy('rpg.created_at', 'DESC').getMany();
+
+      // Batch descendant check (avoid N+1)
+      if (results.length > 0) {
+        const ids = results.map((r) => r.id);
+        const rows = await this.revisedProjectGroupRepo
+          .createQueryBuilder('rpg')
+          .select('rpg.prevProjectId', 'parentId')
+          .where('rpg.prevProjectId IN (:...ids)', { ids })
+          .getRawMany();
+        const descendantSet = new Set(rows.map((r) => r.parentId));
+        return results.map((r) => Object.assign(r, { hasDescendant: descendantSet.has(r.id) }));
+      }
+
+      return results;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -780,7 +798,21 @@ export class RevisedProjectGroupService {
         return count;
       }
 
-      return await query.orderBy('rpg.created_at', 'DESC').getMany();
+      const results = await query.orderBy('rpg.created_at', 'DESC').getMany();
+
+      // Batch descendant check (avoid N+1)
+      if (results.length > 0) {
+        const ids = results.map((r) => r.id);
+        const rows = await this.revisedProjectGroupRepo
+          .createQueryBuilder('rpg')
+          .select('rpg.prevProjectId', 'parentId')
+          .where('rpg.prevProjectId IN (:...ids)', { ids })
+          .getRawMany();
+        const descendantSet = new Set(rows.map((r) => r.parentId));
+        return results.map((r) => Object.assign(r, { hasDescendant: descendantSet.has(r.id) }));
+      }
+
+      return results;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -869,7 +901,21 @@ export class RevisedProjectGroupService {
         return count;
       }
 
-      return await query.orderBy('rpg.created_at', 'DESC').getMany();
+      const results = await query.orderBy('rpg.created_at', 'DESC').getMany();
+
+      // Batch descendant check (avoid N+1)
+      if (results.length > 0) {
+        const ids = results.map((r) => r.id);
+        const rows = await this.revisedProjectGroupRepo
+          .createQueryBuilder('rpg')
+          .select('rpg.prevProjectId', 'parentId')
+          .where('rpg.prevProjectId IN (:...ids)', { ids })
+          .getRawMany();
+        const descendantSet = new Set(rows.map((r) => r.parentId));
+        return results.map((r) => Object.assign(r, { hasDescendant: descendantSet.has(r.id) }));
+      }
+
+      return results;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -932,7 +978,21 @@ export class RevisedProjectGroupService {
         return count;
       }
 
-      return await query.orderBy('rpg.created_at', 'DESC').getMany();
+      const results = await query.orderBy('rpg.created_at', 'DESC').getMany();
+
+      // Batch descendant check (avoid N+1)
+      if (results.length > 0) {
+        const ids = results.map((r) => r.id);
+        const rows = await this.revisedProjectGroupRepo
+          .createQueryBuilder('rpg')
+          .select('rpg.prevProjectId', 'parentId')
+          .where('rpg.prevProjectId IN (:...ids)', { ids })
+          .getRawMany();
+        const descendantSet = new Set(rows.map((r) => r.parentId));
+        return results.map((r) => Object.assign(r, { hasDescendant: descendantSet.has(r.id) }));
+      }
+
+      return results;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -996,7 +1056,21 @@ export class RevisedProjectGroupService {
         return count;
       }
 
-      return await query.orderBy('rpg.created_at', 'DESC').getMany();
+      const results = await query.orderBy('rpg.created_at', 'DESC').getMany();
+
+      // Batch descendant check (avoid N+1)
+      if (results.length > 0) {
+        const ids = results.map((r) => r.id);
+        const rows = await this.revisedProjectGroupRepo
+          .createQueryBuilder('rpg')
+          .select('rpg.prevProjectId', 'parentId')
+          .where('rpg.prevProjectId IN (:...ids)', { ids })
+          .getRawMany();
+        const descendantSet = new Set(rows.map((r) => r.parentId));
+        return results.map((r) => Object.assign(r, { hasDescendant: descendantSet.has(r.id) }));
+      }
+
+      return results;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -1064,7 +1138,21 @@ export class RevisedProjectGroupService {
         return count;
       }
 
-      return await query.orderBy('rpg.created_at', 'DESC').getMany();
+      const results = await query.orderBy('rpg.created_at', 'DESC').getMany();
+
+      // Batch descendant check (avoid N+1)
+      if (results.length > 0) {
+        const ids = results.map((r) => r.id);
+        const rows = await this.revisedProjectGroupRepo
+          .createQueryBuilder('rpg')
+          .select('rpg.prevProjectId', 'parentId')
+          .where('rpg.prevProjectId IN (:...ids)', { ids })
+          .getRawMany();
+        const descendantSet = new Set(rows.map((r) => r.parentId));
+        return results.map((r) => Object.assign(r, { hasDescendant: descendantSet.has(r.id) }));
+      }
+
+      return results;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -1128,7 +1216,21 @@ export class RevisedProjectGroupService {
         return count;
       }
 
-      return await query.orderBy('rpg.created_at', 'DESC').getMany();
+      const results = await query.orderBy('rpg.created_at', 'DESC').getMany();
+
+      // Batch descendant check (avoid N+1)
+      if (results.length > 0) {
+        const ids = results.map((r) => r.id);
+        const rows = await this.revisedProjectGroupRepo
+          .createQueryBuilder('rpg')
+          .select('rpg.prevProjectId', 'parentId')
+          .where('rpg.prevProjectId IN (:...ids)', { ids })
+          .getRawMany();
+        const descendantSet = new Set(rows.map((r) => r.parentId));
+        return results.map((r) => Object.assign(r, { hasDescendant: descendantSet.has(r.id) }));
+      }
+
+      return results;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -1192,7 +1294,21 @@ export class RevisedProjectGroupService {
         return count;
       }
 
-      return await query.orderBy('rpg.created_at', 'DESC').getMany();
+      const results = await query.orderBy('rpg.created_at', 'DESC').getMany();
+
+      // Batch descendant check (avoid N+1)
+      if (results.length > 0) {
+        const ids = results.map((r) => r.id);
+        const rows = await this.revisedProjectGroupRepo
+          .createQueryBuilder('rpg')
+          .select('rpg.prevProjectId', 'parentId')
+          .where('rpg.prevProjectId IN (:...ids)', { ids })
+          .getRawMany();
+        const descendantSet = new Set(rows.map((r) => r.parentId));
+        return results.map((r) => Object.assign(r, { hasDescendant: descendantSet.has(r.id) }));
+      }
+
+      return results;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -1256,7 +1372,21 @@ export class RevisedProjectGroupService {
         return count;
       }
 
-      return await query.orderBy('rpg.created_at', 'DESC').getMany();
+      const results = await query.orderBy('rpg.created_at', 'DESC').getMany();
+
+      // Batch descendant check (avoid N+1)
+      if (results.length > 0) {
+        const ids = results.map((r) => r.id);
+        const rows = await this.revisedProjectGroupRepo
+          .createQueryBuilder('rpg')
+          .select('rpg.prevProjectId', 'parentId')
+          .where('rpg.prevProjectId IN (:...ids)', { ids })
+          .getRawMany();
+        const descendantSet = new Set(rows.map((r) => r.parentId));
+        return results.map((r) => Object.assign(r, { hasDescendant: descendantSet.has(r.id) }));
+      }
+
+      return results;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -1477,6 +1607,18 @@ export class RevisedProjectGroupService {
       const projects = await query
         .orderBy('revisedProject.createdAt', 'DESC')
         .getMany();
+
+      // Batch descendant check (avoid N+1)
+      if (projects.length > 0) {
+        const ids = projects.map((r) => r.id);
+        const rows = await this.revisedProjectGroupRepo
+          .createQueryBuilder('rpg')
+          .select('rpg.prevProjectId', 'parentId')
+          .where('rpg.prevProjectId IN (:...ids)', { ids })
+          .getRawMany();
+        const descendantSet = new Set(rows.map((r) => r.parentId));
+        return projects.map((r) => Object.assign(r, { hasDescendant: descendantSet.has(r.id) }));
+      }
 
       return projects;
     } catch (error) {

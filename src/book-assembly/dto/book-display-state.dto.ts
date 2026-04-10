@@ -14,13 +14,6 @@ export class BookDisplayStateDto {
   sourceId: string;
 
   /**
-   * Denormalized cache value.
-   * For MAIN_PLAN: reflects DevelopmentPlan.isFrozen (true when any revision exists).
-   * For revision types: reflects DevelopmentPlanRevision.isOpen.
-   */
-  isFrozen: boolean;
-
-  /**
    * True if no descendant COMPLETED version exists for any project in this book.
    * Meaning this version is still the effective leaf for all its projects.
    */
