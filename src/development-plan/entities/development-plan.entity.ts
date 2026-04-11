@@ -77,5 +77,28 @@ export class DevelopmentPlan {
     onDelete: 'CASCADE',
   })
   planPhases: PlanPhase[];
+
+  /**
+   * CLAUDE.md §15 Book Lineage Immutability.
+   *
+   * Runtime-only flag populated by
+   * `DevelopmentPlanService.decorateBookLockFlags` (and by `findOne`
+   * via `BookLockService.hasNewerRevision`). NOT a database column.
+   *
+   * Declared as a plain class field so that:
+   *   1. `class-transformer` (`ClassSerializerInterceptor` in main.ts)
+   *      reliably preserves the property during JSON serialization of
+   *      the response body — dynamic `(obj as any).x = …` assignments
+   *      are brittle under strict / grouped transform configurations.
+   *   2. TypeScript understands the field exists on the entity and
+   *      downstream callers no longer need `as any` casts.
+   *
+   * `true` when this plan has at least one non-soft-deleted revision or
+   * supplement child (i.e. the plan itself has become a locked, historical
+   * root per §15.3). The write paths enforce the invariant via
+   * `BookLockService.assertEditable`; this flag only surfaces the state to
+   * the UI.
+   */
+  hasNewerRevision?: boolean;
 }
 

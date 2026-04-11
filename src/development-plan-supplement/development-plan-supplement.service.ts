@@ -14,6 +14,7 @@ import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { handleException } from 'src/util/handleException';
 import { UsersService } from 'src/users/users.service';
+import { BookLockService } from 'src/common/book-lock/book-lock.service';
 
 @Injectable()
 export class DevelopmentPlanSupplementService {
@@ -29,6 +30,7 @@ export class DevelopmentPlanSupplementService {
     @InjectRepository(WorkHistory)
     private readonly workHistoryRepository: Repository<WorkHistory>,
     private readonly usersService: UsersService,
+    private readonly bookLockService: BookLockService,
   ) {}
 
   async create(
@@ -158,6 +160,17 @@ export class DevelopmentPlanSupplementService {
     try {
       const supplement = await this.findOne(id);
 
+      // CLAUDE.md §15 — Book Lineage Immutability (GLOBAL timeline).
+      // A supplement is locked iff ANY strictly-newer non-soft-deleted
+      // sibling child of the same plan exists, across BOTH revisions
+      // and supplements (OQ-2=(B) linear across types — a newer edit
+      // revision locks this supplement and vice versa).
+      await this.bookLockService.assertEditable(
+        id,
+        'development_plan_supplement',
+        this.supplementRepository.manager,
+      );
+
       const startDate =
         updateDto.startDate !== undefined
           ? updateDto.startDate
@@ -271,6 +284,15 @@ export class DevelopmentPlanSupplementService {
         );
       }
 
+      // CLAUDE.md §15 — Book Lineage Immutability (GLOBAL timeline).
+      // Guard runs BEFORE softDelete so the lock is enforced even
+      // when the supplement is already non-latest.
+      await this.bookLockService.assertDeletable(
+        id,
+        'development_plan_supplement',
+        this.supplementRepository.manager,
+      );
+
       const result = await this.supplementRepository.softDelete(id);
       if (result.affected === 0) {
         throw new NotFoundException(
@@ -297,6 +319,15 @@ export class DevelopmentPlanSupplementService {
           `DevelopmentPlanSupplement with ID ${id} not found`,
         );
       }
+
+      // CLAUDE.md §15 — `isOpen` is a field mutation on the supplement
+      // row and MUST obey the book-lineage lock. A locked (non-head)
+      // supplement cannot be re-opened or closed.
+      await this.bookLockService.assertEditable(
+        id,
+        'development_plan_supplement',
+        this.supplementRepository.manager,
+      );
 
       if (isOpen && !supplement.isOpen) {
         await this.supplementRepository.update(

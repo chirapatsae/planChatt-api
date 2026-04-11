@@ -76,4 +76,27 @@ export class DevelopmentPlanRevision {
 
   @OneToMany(() => PdfRevisionChangeApprovedDocument, (pdfRevisionChangeApprovedDocument) => pdfRevisionChangeApprovedDocument.developmentPlanRevision)
   pdfRevisionChangeApprovedDocuments: PdfRevisionChangeApprovedDocument[];
+
+  /**
+   * CLAUDE.md §15 Book Lineage Immutability.
+   *
+   * Runtime-only flag populated by
+   * `DevelopmentPlanService.decorateBookLockFlags`. NOT a database column.
+   *
+   * Declared as a plain class field so that:
+   *   1. `class-transformer` (`ClassSerializerInterceptor` in main.ts)
+   *      reliably preserves the property during JSON serialization of
+   *      the response body — dynamic `(obj as any).x = …` assignments
+   *      are brittle under strict / grouped transform configurations.
+   *   2. TypeScript understands the field exists on the entity and
+   *      downstream callers no longer need `as any` casts.
+   *
+   * `true` when ANY other non-soft-deleted revision or supplement of the
+   * same `DevelopmentPlan` has a strictly-newer `createdAt` — OQ-2=(B)
+   * global timeline across BOTH collections. The write paths enforce the
+   * invariant via `BookLockService.assertEditable`; this flag only
+   * surfaces the state to the UI (disable "แก้ไขเล่ม" / "ยกเลิกเล่ม",
+   * show the "เล่มเก่า (ถูกล็อก)" badge).
+   */
+  hasNewerRevision?: boolean;
 }

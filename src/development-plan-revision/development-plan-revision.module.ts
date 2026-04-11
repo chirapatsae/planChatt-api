@@ -10,6 +10,7 @@ import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-
 import { UsersModule } from 'src/users/users.module';
 import { PdfModule } from 'src/pdf/pdf.module';
 import { WebsocketModule } from 'src/websocket/websocket.module';
+import { BookLockModule } from 'src/common/book-lock/book-lock.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { WebsocketModule } from 'src/websocket/websocket.module';
     UsersModule,
     PdfModule,
     WebsocketModule,
+    BookLockModule,
   ],
   controllers: [DevelopmentPlanRevisionController],
   providers: [DevelopmentPlanRevisionService],

@@ -20,6 +20,7 @@ import { UsersService } from 'src/users/users.service';
 import { PdfService } from 'src/pdf/pdf.service';
 import { WebsocketService } from 'src/websocket/websocket/websocket.service';
 import { UnifiedProjectMapper } from 'src/project-groups/dto/unified-project-display.dto';
+import { BookLockService } from 'src/common/book-lock/book-lock.service';
 
 @Injectable()
 export class DevelopmentPlanRevisionService {
@@ -44,6 +45,7 @@ export class DevelopmentPlanRevisionService {
     private readonly usersService: UsersService,
     private readonly pdfService: PdfService,
     private readonly websocketService: WebsocketService,
+    private readonly bookLockService: BookLockService,
   ) { }
 
   // ===================================================================
@@ -197,6 +199,16 @@ export class DevelopmentPlanRevisionService {
     try {
       const revision = await this.findOne(id);
 
+      // CLAUDE.md §15 — Book Lineage Immutability (GLOBAL timeline).
+      // A revision is locked iff ANY strictly-newer non-soft-deleted
+      // sibling child of the same plan exists, across BOTH revisions
+      // and supplements (OQ-2=(B) linear across types).
+      await this.bookLockService.assertEditable(
+        id,
+        'development_plan_revision',
+        this.revisionRepository.manager,
+      );
+
       const startDate =
         updateDto.startDate !== undefined
           ? updateDto.startDate
@@ -317,6 +329,18 @@ export class DevelopmentPlanRevisionService {
         );
       }
 
+      // CLAUDE.md §15 — Book Lineage Immutability (GLOBAL timeline).
+      // A revision is locked iff ANY strictly-newer non-soft-deleted
+      // sibling child of the same plan exists. Guard runs BEFORE any
+      // write — critical because the subsequent `isLatest` pivot
+      // mutates another revision row and must not occur on a locked
+      // lineage.
+      await this.bookLockService.assertDeletable(
+        id,
+        'development_plan_revision',
+        this.revisionRepository.manager,
+      );
+
       // ถ้าที่ลบเป็น isLatest ให้ตั้งอันก่อนหน้า (จัดกลุ่ม revisionType เดียวกัน เรียงตามวันที่ เอาอันที่ล่าสุด) เป็น isLatest
       // ถ้าไม่ใช่ isLatest ไม่ต้อง set อะไร
       if (revision.isLatest) {
@@ -370,6 +394,15 @@ export class DevelopmentPlanRevisionService {
         );
       }
 
+      // CLAUDE.md §15 — `isOpen` is a field mutation on the revision
+      // row and MUST obey the book-lineage lock. A locked (non-head)
+      // revision cannot be re-opened or closed.
+      await this.bookLockService.assertEditable(
+        id,
+        'development_plan_revision',
+        this.revisionRepository.manager,
+      );
+
       if (isOpen && !revision.isOpen) {
         await this.revisionRepository.update(
           {
@@ -404,6 +437,16 @@ export class DevelopmentPlanRevisionService {
       if (!revision) {
         throw new NotFoundException(`Development Plan Revision with ID ${developmentPlanRevisionId} not found`);
       }
+
+      // CLAUDE.md §15 / OQ-8 — legacy generateApprovedBookForEditRevision
+      // is defensively guarded. Producing an approved book for a
+      // non-head revision would create a stale book under an already
+      // superseded lineage node.
+      await this.bookLockService.assertEditable(
+        developmentPlanRevisionId,
+        'development_plan_revision',
+        this.revisionRepository.manager,
+      );
 
       const developmentPlanId = revision.developmentPlan.id;
 
@@ -601,6 +644,15 @@ export class DevelopmentPlanRevisionService {
         throw new NotFoundException(`Development Plan Revision with ID ${developmentPlanRevisionId} not found`);
       }
 
+      // CLAUDE.md §15 / OQ-8 — legacy generateApprovedBookForChangeRevision
+      // is defensively guarded. Same rationale as the edit-revision
+      // variant: a non-head change revision cannot mint a new book.
+      await this.bookLockService.assertEditable(
+        developmentPlanRevisionId,
+        'development_plan_revision',
+        this.revisionRepository.manager,
+      );
+
       const developmentPlanId = revision.developmentPlan.id;
 
       // Send progress: Starting (10%)
@@ -780,6 +832,17 @@ export class DevelopmentPlanRevisionService {
       if (!revision.isBooked) {
         throw new BadRequestException(`Development Plan Revision with ID ${developmentPlanRevisionId} is not booked yet`);
       }
+
+      // CLAUDE.md §15 / OQ-7 — legacy rollbackBook is defensively
+      // guarded. Rolling back a non-head revision is never valid:
+      // newer siblings in the same plan's global timeline depend on
+      // this revision being in its booked state when they were
+      // created.
+      await this.bookLockService.assertEditable(
+        developmentPlanRevisionId,
+        'development_plan_revision',
+        this.revisionRepository.manager,
+      );
 
       const developmentPlanId = revision.developmentPlan.id;
 

@@ -274,7 +274,14 @@ export class RevisedProjectGroupController {
       return { count: result as number };
     }
 
-    return UnifiedProjectMapper.mapMany(result as any[]);
+    // CLAUDE.md §14 — the service already performs a batched descendant
+    // lookup and decorates each entity with `hasDescendant` (see
+    // RevisedProjectGroupService.findRevisionProjects). Propagate that flag
+    // through the unified DTO so FE-LOCK-06 can disable edit/delete in the
+    // EditRevision wizard. Do NOT revert to `mapMany` — it drops the flag.
+    return (result as any[]).map((r) =>
+      UnifiedProjectMapper.fromRevisedProjectGroup(r, r.hasDescendant === true),
+    );
   }
 
   /**

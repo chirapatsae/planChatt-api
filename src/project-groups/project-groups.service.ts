@@ -597,6 +597,18 @@ export class ProjectGroupsService {
       .orderBy('projectGroup.createdAt', 'DESC')
       .getMany();
 
+    // CLAUDE.md §14 — decorate raw PG entities with `hasDescendant` so the
+    // FE lock UI (draft / ready / edit / pending / verified / pull_back list
+    // pages) can disable edit/delete actions. Single batched query.
+    if (projects.length > 0) {
+      const lockedPgIds = await this.findProjectGroupIdsWithDescendants(
+        projects.map((p) => p.id),
+      );
+      projects.forEach((p) => {
+        (p as any).hasDescendant = lockedPgIds.has(p.id);
+      });
+    }
+
     return projects;
   }
   async bulkAssignAgency(dto: BulkAssignAgencyDto[], userId: string) {
@@ -1420,6 +1432,33 @@ export class ProjectGroupsService {
   }
 
   /**
+   * CLAUDE.md §14 — Batched lineage-lock lookup for RevisedProjectGroup rows.
+   *
+   * Given a list of RevisedProjectGroup IDs, returns a Set containing the
+   * subset that have at least one non-soft-deleted RevisedProjectGroup
+   * descendant (prev_project_type = 'revised'). Used by list endpoints that
+   * mix PG and RPG rows to populate `hasDescendant` without N+1 queries.
+   *
+   * Matches LineageLockService.hasNonDeletedDescendant semantics exactly.
+   */
+  private async findRevisedProjectGroupIdsWithDescendants(
+    revisedProjectGroupIds: string[],
+  ): Promise<Set<string>> {
+    if (!revisedProjectGroupIds || revisedProjectGroupIds.length === 0)
+      return new Set();
+
+    const rows = await this.revisedProjectGroupRepo
+      .createQueryBuilder('r')
+      .select('DISTINCT r.prev_project_id', 'parentId')
+      .where('r.prev_project_id IN (:...ids)', { ids: revisedProjectGroupIds })
+      .andWhere('r.prev_project_type = :t', { t: 'revised' })
+      .andWhere('r.deleted_at IS NULL')
+      .getRawMany<{ parentId: string }>();
+
+    return new Set(rows.map((r) => r.parentId));
+  }
+
+  /**
    * Query original projects (ProjectGroup) ที่ไม่มี active revision และ status = Approved
    */
   private async findOriginalApprovedProjects(
@@ -1715,12 +1754,19 @@ export class ProjectGroupsService {
 
     if (countOnly) return latestRevised.length + original.length;
 
+    // CLAUDE.md §14 — batched lineage-lock lookups for both sides so the UI
+    // can lock any row that already has a descendant version.
+    const [lockedPgIds, lockedRpgIds] = await Promise.all([
+      this.findProjectGroupIdsWithDescendants(original.map((p) => p.id)),
+      this.findRevisedProjectGroupIdsWithDescendants(latestRevised.map((r) => r.id)),
+    ]);
+
     const unified = [
       ...latestRevised.map((x) =>
-        UnifiedProjectMapper.fromRevisedProjectGroup(x)
+        UnifiedProjectMapper.fromRevisedProjectGroup(x, lockedRpgIds.has(x.id))
       ),
       ...original.map((x) =>
-        UnifiedProjectMapper.fromProjectGroup(x)
+        UnifiedProjectMapper.fromProjectGroup(x, lockedPgIds.has(x.id))
       ),
     ];
 
@@ -1805,12 +1851,18 @@ export class ProjectGroupsService {
 
     if (countOnly) return latestRevised.length + original.length;
 
+    // CLAUDE.md §14 — batched lineage-lock lookups for both sides.
+    const [lockedPgIds, lockedRpgIds] = await Promise.all([
+      this.findProjectGroupIdsWithDescendants(original.map((p) => p.id)),
+      this.findRevisedProjectGroupIdsWithDescendants(latestRevised.map((r) => r.id)),
+    ]);
+
     const unified = [
       ...latestRevised.map((x) =>
-        UnifiedProjectMapper.fromRevisedProjectGroup(x)
+        UnifiedProjectMapper.fromRevisedProjectGroup(x, lockedRpgIds.has(x.id))
       ),
       ...original.map((x) =>
-        UnifiedProjectMapper.fromProjectGroup(x)
+        UnifiedProjectMapper.fromProjectGroup(x, lockedPgIds.has(x.id))
       ),
     ];
 
@@ -1913,12 +1965,19 @@ export class ProjectGroupsService {
 
     if (countOnly) return totalCount;
 
+    // CLAUDE.md §14 — batched lineage-lock lookups for both sides (aggregated
+    // across all plans in one round-trip each).
+    const [lockedPgIds, lockedRpgIds] = await Promise.all([
+      this.findProjectGroupIdsWithDescendants(allOriginal.map((p) => p.id)),
+      this.findRevisedProjectGroupIdsWithDescendants(allLatestRevised.map((r) => r.id)),
+    ]);
+
     const unified = [
       ...allLatestRevised.map((x) =>
-        UnifiedProjectMapper.fromRevisedProjectGroup(x)
+        UnifiedProjectMapper.fromRevisedProjectGroup(x, lockedRpgIds.has(x.id))
       ),
       ...allOriginal.map((x) =>
-        UnifiedProjectMapper.fromProjectGroup(x)
+        UnifiedProjectMapper.fromProjectGroup(x, lockedPgIds.has(x.id))
       ),
     ];
 
@@ -1968,12 +2027,18 @@ export class ProjectGroupsService {
 
     if (countOnly) return latestRevised.length + original.length;
 
+    // CLAUDE.md §14 — batched lineage-lock lookups for both sides.
+    const [lockedPgIds, lockedRpgIds] = await Promise.all([
+      this.findProjectGroupIdsWithDescendants(original.map((p) => p.id)),
+      this.findRevisedProjectGroupIdsWithDescendants(latestRevised.map((r) => r.id)),
+    ]);
+
     const unified = [
       ...latestRevised.map((x) =>
-        UnifiedProjectMapper.fromRevisedProjectGroup(x)
+        UnifiedProjectMapper.fromRevisedProjectGroup(x, lockedRpgIds.has(x.id))
       ),
       ...original.map((x) =>
-        UnifiedProjectMapper.fromProjectGroup(x)
+        UnifiedProjectMapper.fromProjectGroup(x, lockedPgIds.has(x.id))
       ),
     ];
 
@@ -2049,12 +2114,20 @@ export class ProjectGroupsService {
 
     if (countOnly) return latestRevised.length + original.length;
 
+    // CLAUDE.md §14 — batched lineage-lock lookups. This endpoint powers the
+    // Revision picker; an approved PG that already has a descendant must
+    // surface as locked so FE-LOCK-06 can disable fork actions.
+    const [lockedPgIds, lockedRpgIds] = await Promise.all([
+      this.findProjectGroupIdsWithDescendants(original.map((p) => p.id)),
+      this.findRevisedProjectGroupIdsWithDescendants(latestRevised.map((r) => r.id)),
+    ]);
+
     const unified = [
       ...latestRevised.map((x) =>
-        UnifiedProjectMapper.fromRevisedProjectGroup(x)
+        UnifiedProjectMapper.fromRevisedProjectGroup(x, lockedRpgIds.has(x.id))
       ),
       ...original.map((x) =>
-        UnifiedProjectMapper.fromProjectGroup(x)
+        UnifiedProjectMapper.fromProjectGroup(x, lockedPgIds.has(x.id))
       ),
     ];
 
@@ -2466,12 +2539,18 @@ export class ProjectGroupsService {
       (project) => !parentIdsWithChildren.has(project.id),
     );
 
+    // CLAUDE.md §14 — batched lineage-lock lookups for both sides.
+    const [lockedPgIds, lockedRpgIds] = await Promise.all([
+      this.findProjectGroupIdsWithDescendants(parentsWithoutChildren.map((p) => p.id)),
+      this.findRevisedProjectGroupIdsWithDescendants(latestRevisedProjects.map((r) => r.id)),
+    ]);
+
     // Map to unified format
     const unifiedOriginals = parentsWithoutChildren.map((project) =>
-      UnifiedProjectMapper.fromProjectGroup(project),
+      UnifiedProjectMapper.fromProjectGroup(project, lockedPgIds.has(project.id)),
     );
     const unifiedRevised = latestRevisedProjects.map((project) =>
-      UnifiedProjectMapper.fromRevisedProjectGroup(project),
+      UnifiedProjectMapper.fromRevisedProjectGroup(project, lockedRpgIds.has(project.id)),
     );
 
     // Combine and sort by created date (newest first)

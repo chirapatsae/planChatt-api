@@ -13,9 +13,25 @@ import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
 import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entities/development-plan-supplement.entity';
 import { UsersModule } from 'src/users/users.module';
+import { BookLockModule } from 'src/common/book-lock/book-lock.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([DevelopmentPlan, WorkHistory, PlanPhase, ProjectGroup, RevisedProjectGroup, DevelopmentPlanRevision, DevelopmentPlanSupplement]), PdfModule, ProjectGroupsModule, WebsocketModule, UsersModule],
+  imports: [
+    TypeOrmModule.forFeature([
+      DevelopmentPlan,
+      WorkHistory,
+      PlanPhase,
+      ProjectGroup,
+      RevisedProjectGroup,
+      DevelopmentPlanRevision,
+      DevelopmentPlanSupplement,
+    ]),
+    PdfModule,
+    ProjectGroupsModule,
+    WebsocketModule,
+    UsersModule,
+    BookLockModule,
+  ],
   controllers: [DevelopmentPlanController],
   providers: [DevelopmentPlanService],
 })

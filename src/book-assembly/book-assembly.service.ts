@@ -48,6 +48,10 @@ import { ProjectLineageNodeDto } from './dto/project-lineage-node.dto';
 import { RevisionReadinessDto, ReadinessBreakdownDto } from './dto/revision-readiness.dto';
 import { BookProjectLineage } from './entities/book-project-lineage.entity';
 import { BookProjectType } from './enums/book-assembly.enums';
+import {
+  BookLockService,
+  BOOK_HAS_NEWER_REVISION,
+} from 'src/common/book-lock/book-lock.service';
 
 /** Roles permitted to perform assembly write actions (Spec Section 10.1) */
 const ADMIN_ROLES = ['admin', 'super-admin'];
@@ -110,6 +114,7 @@ export class BookAssemblyService {
     private readonly websocketService: WebsocketService,
     private readonly fileService: BookAssemblyFileService,
     private readonly dataSource: DataSource,
+    private readonly bookLockService: BookLockService,
   ) {}
 
   // ===========================================================================
@@ -130,6 +135,13 @@ export class BookAssemblyService {
 
       // Rule 1: Main book freeze guard — block any write action on a frozen main plan
       await this.assertMainBookNotFrozen(sourceType, sourceId);
+
+      // CLAUDE.md §15 — Revision-scoped lineage lock. Block createDraft
+      // against a revision that has a strictly-newer sibling child on
+      // the same plan timeline (OQ-2=(B) global lineage). Emits the
+      // canonical BOOK_HAS_NEWER_REVISION 409 which the frontend axios
+      // interceptor converts into the §15 lock toast.
+      await this.assertRevisionBookNotFrozen(sourceType, sourceId);
 
       // Reject if an active draft already exists
       const existingDraft = await this.draftRepo.findOne({
@@ -624,6 +636,12 @@ export class BookAssemblyService {
       // Fix V3: defense-in-depth — validate PDF magic bytes in addition to MIME type
       this.validatePdfContent(file.buffer, file.originalname);
 
+      // CLAUDE.md §15 — block uploads against a revision that has been
+      // superseded by a newer sibling child. Catches the race where a
+      // draft was started before the newer revision appeared.
+      await this.assertMainBookNotFrozen(sourceType, sourceId);
+      await this.assertRevisionBookNotFrozen(sourceType, sourceId);
+
       const draft = await this.loadActiveDraft(sourceType, sourceId);
 
       // Save file to versioned folder
@@ -670,6 +688,12 @@ export class BookAssemblyService {
   ): Promise<BookAssemblyDraft> {
     try {
       await this.loadAndValidateWorkHistory(userId, ADMIN_ROLES);
+
+      // CLAUDE.md §15 — block Part 3 generation against a revision that
+      // has been superseded by a newer sibling child (global timeline).
+      await this.assertMainBookNotFrozen(sourceType, sourceId);
+      await this.assertRevisionBookNotFrozen(sourceType, sourceId);
+
       const draft = await this.loadActiveDraft(sourceType, sourceId);
 
       // Send progress
@@ -898,6 +922,13 @@ export class BookAssemblyService {
         // Rule 1: Main book freeze guard (inside transaction — uses manager)
         await this.assertMainBookNotFrozen(sourceType, sourceId, manager);
 
+        // CLAUDE.md §15 — Revision-scoped lineage lock. Merge finalises
+        // a new COMPLETED version and MUST be blocked when a
+        // strictly-newer sibling child of the same plan exists. This
+        // catches the race where a draft was created before the newer
+        // revision appeared and the user tries to finalise it late.
+        await this.assertRevisionBookNotFrozen(sourceType, sourceId, manager);
+
         // 1. Load and validate draft
         const draft = await manager.findOne(BookAssemblyDraft, {
           where: {
@@ -1071,6 +1102,14 @@ export class BookAssemblyService {
         // defence-in-depth in case sourceType logic changes).
         await this.assertMainBookNotFrozen(sourceType, sourceId, manager);
 
+        // CLAUDE.md §15 — Revision-scoped lineage lock. Cancel() is a
+        // write action (deprecates the completed version + resets
+        // bookings) and MUST be blocked when a strictly-newer sibling
+        // child of the same plan exists. The existing Rule 4 "descendant
+        // published books" guard is a different layer (project lineage)
+        // and does not cover the book-aggregation invariant.
+        await this.assertRevisionBookNotFrozen(sourceType, sourceId, manager);
+
         // 1-4. Validate operator (role, workStatus, confirmation, identity)
         const { workHistory, identityMasked } = await this.validateDeprecationAuth(
           dto.confirmed,
@@ -1167,6 +1206,14 @@ export class BookAssemblyService {
       return await this.dataSource.transaction(async (manager) => {
         // Rule 1: Main book freeze guard (inside transaction — uses manager)
         await this.assertMainBookNotFrozen(sourceType, sourceId, manager);
+
+        // CLAUDE.md §15 — Revision-scoped lineage lock. correct() is the
+        // primary write path for the "แก้ไขเล่ม" admin action on an
+        // edit/change revision book. It MUST be blocked when the target
+        // revision has a strictly-newer sibling child on the same plan
+        // timeline. The project-level "BOOK_HAS_DESCENDANT_PUBLISHED"
+        // guard below is a different (project-lineage) invariant.
+        await this.assertRevisionBookNotFrozen(sourceType, sourceId, manager);
 
         // 1-4. Validate operator
         const { workHistory, identityMasked } = await this.validateDeprecationAuth(
@@ -2068,11 +2115,22 @@ export class BookAssemblyService {
 
   /**
    * Rule 1: Asserts that the main plan book is NOT frozen.
-   * Authoritative check: counts DevelopmentPlanRevision rows for the plan.
+   *
+   * Under CLAUDE.md §15 / BE-BOOK-05 this helper delegates to
+   * `BookLockService.assertEditable('development_plan', …)` — the
+   * single source of truth for book-lineage immutability. This replaces
+   * the previous inline `COUNT(*)` against `development_plan_revision`,
+   * which ignored `development_plan_supplement` children entirely.
+   *
+   * The public `MAIN_BOOK_FROZEN` error code is preserved for backward
+   * compatibility with existing book-assembly clients: any
+   * `BOOK_HAS_NEWER_REVISION` raised by the delegated call is caught
+   * internally and rethrown as the legacy ForbiddenException shape.
+   *
    * Only applies when sourceType === MAIN_PLAN; silently passes otherwise.
    *
    * @param manager Optional EntityManager for use inside an existing transaction.
-   *                When omitted, falls back to the injected repository.
+   *                When omitted, falls back to the injected repository manager.
    */
   private async assertMainBookNotFrozen(
     sourceType: BookAssemblySourceType,
@@ -2081,21 +2139,78 @@ export class BookAssemblyService {
   ): Promise<void> {
     if (sourceType !== BookAssemblySourceType.MAIN_PLAN) return;
 
-    const repo = manager
-      ? manager.getRepository(DevelopmentPlanRevision)
-      : this.devPlanRevisionRepo;
+    const em = manager ?? this.devPlanRevisionRepo.manager;
 
-    const count = await repo.count({
-      where: { developmentPlan: { id: sourceId } },
-    });
-
-    if (count > 0) {
-      throw new ForbiddenException({
-        code: 'MAIN_BOOK_FROZEN',
-        message:
-          'เล่มแผนหลักนี้ถูกตรึงแล้ว เนื่องจากมีรอบแก้ไข/เปลี่ยนแปลงที่เชื่อมโยงอยู่',
-      });
+    try {
+      await this.bookLockService.assertEditable(
+        sourceId,
+        'development_plan',
+        em,
+      );
+    } catch (err) {
+      // Translate the canonical BOOK_HAS_NEWER_REVISION into the legacy
+      // public error contract consumed by book-assembly clients. Any
+      // other error bubbles unchanged.
+      const msg =
+        err instanceof Error && typeof err.message === 'string'
+          ? err.message
+          : '';
+      if (msg.startsWith(BOOK_HAS_NEWER_REVISION)) {
+        throw new ForbiddenException({
+          code: 'MAIN_BOOK_FROZEN',
+          message:
+            'เล่มแผนหลักนี้ถูกตรึงแล้ว เนื่องจากมีรอบแก้ไข/เปลี่ยนแปลง/เพิ่มเติมที่เชื่อมโยงอยู่',
+        });
+      }
+      throw err;
     }
+  }
+
+  /**
+   * CLAUDE.md §15 Book Lineage Immutability — revision-scoped guard.
+   *
+   * Asserts that the target DevelopmentPlanRevision referenced by
+   * `sourceId` has NO strictly-newer non-soft-deleted sibling child of
+   * its parent plan (across BOTH development_plan_revision AND
+   * development_plan_supplement, per OQ-2=(B) global lineage).
+   *
+   * This is the revision-level counterpart to
+   * `assertMainBookNotFrozen` and MUST be called before any book-assembly
+   * mutation that targets an EDIT_REVISION or CHANGE_REVISION source
+   * (createDraft, cancel, correct). Without this guard a user who
+   * bypasses the frontend could still deprecate / rewrite a book for a
+   * revision that has already been superseded by a newer revision or
+   * supplement on the same plan, silently breaking the audit trail.
+   *
+   * The canonical `BOOK_HAS_NEWER_REVISION` ConflictException is
+   * allowed to propagate unchanged — the frontend's shared 409
+   * interceptor (`frontend/src/api/axios.tsx`) detects the exact
+   * `BOOK_HAS_NEWER_REVISION:` prefix and fires the §15 lock toast. We
+   * deliberately do NOT translate it into a legacy code like
+   * `MAIN_BOOK_FROZEN` because revision-scoped mutations have never
+   * claimed that shape before.
+   *
+   * Silently passes for MAIN_PLAN — use `assertMainBookNotFrozen` there.
+   */
+  private async assertRevisionBookNotFrozen(
+    sourceType: BookAssemblySourceType,
+    sourceId: string,
+    manager?: any,
+  ): Promise<void> {
+    if (
+      sourceType !== BookAssemblySourceType.EDIT_REVISION &&
+      sourceType !== BookAssemblySourceType.CHANGE_REVISION
+    ) {
+      return;
+    }
+
+    const em = manager ?? this.devPlanRevisionRepo.manager;
+
+    await this.bookLockService.assertEditable(
+      sourceId,
+      'development_plan_revision',
+      em,
+    );
   }
 
   /**

@@ -20,6 +20,7 @@ import { PlanPhase } from 'src/plan-phase/entities/plan-phase.entity';
 import { PdfModule } from 'src/pdf/pdf.module';
 import { UsersModule } from 'src/users/users.module';
 import { WebsocketModule } from 'src/websocket/websocket.module';
+import { BookLockModule } from 'src/common/book-lock/book-lock.module';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { WebsocketModule } from 'src/websocket/websocket.module';
     PdfModule,
     UsersModule,
     WebsocketModule,
+    BookLockModule,
   ],
   controllers: [BookAssemblyController],
   providers: [BookAssemblyService, BookAssemblyFileService],

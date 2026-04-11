@@ -6,6 +6,7 @@ import { DevelopmentPlanSupplement } from './entities/development-plan-supplemen
 import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { UsersModule } from 'src/users/users.module';
+import { BookLockModule } from 'src/common/book-lock/book-lock.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { UsersModule } from 'src/users/users.module';
       WorkHistory,
     ]),
     UsersModule,
+    BookLockModule,
   ],
   controllers: [DevelopmentPlanSupplementController],
   providers: [DevelopmentPlanSupplementService],

@@ -65,6 +65,54 @@ export class RevisedProjectGroupService {
   ) { }
 
   // ========================================
+  // Lineage-lock batched helpers (CLAUDE.md §14)
+  // ========================================
+
+  /**
+   * Given a list of ProjectGroup IDs, returns a Set containing the subset
+   * that have at least one non-soft-deleted RevisedProjectGroup descendant
+   * (prev_project_type = 'original'). Matches LineageLockService semantics.
+   */
+  private async findProjectGroupIdsWithDescendants(
+    projectGroupIds: string[],
+  ): Promise<Set<string>> {
+    if (!projectGroupIds || projectGroupIds.length === 0) return new Set();
+
+    const rows = await this.revisedProjectGroupRepo
+      .createQueryBuilder('r')
+      .select('DISTINCT r.prev_project_id', 'parentId')
+      .where('r.prev_project_id IN (:...ids)', { ids: projectGroupIds })
+      .andWhere('r.prev_project_type = :t', { t: 'original' })
+      .andWhere('r.deleted_at IS NULL')
+      .getRawMany<{ parentId: string }>();
+
+    return new Set(rows.map((r) => r.parentId));
+  }
+
+  /**
+   * Given a list of RevisedProjectGroup IDs, returns a Set containing the
+   * subset that have at least one non-soft-deleted RevisedProjectGroup
+   * descendant (prev_project_type = 'revised'). Matches LineageLockService
+   * semantics.
+   */
+  private async findRevisedProjectGroupIdsWithDescendants(
+    revisedProjectGroupIds: string[],
+  ): Promise<Set<string>> {
+    if (!revisedProjectGroupIds || revisedProjectGroupIds.length === 0)
+      return new Set();
+
+    const rows = await this.revisedProjectGroupRepo
+      .createQueryBuilder('r')
+      .select('DISTINCT r.prev_project_id', 'parentId')
+      .where('r.prev_project_id IN (:...ids)', { ids: revisedProjectGroupIds })
+      .andWhere('r.prev_project_type = :t', { t: 'revised' })
+      .andWhere('r.deleted_at IS NULL')
+      .getRawMany<{ parentId: string }>();
+
+    return new Set(rows.map((r) => r.parentId));
+  }
+
+  // ========================================
   // CRUD Operations (Basic)
   // ========================================
 
@@ -1916,12 +1964,32 @@ export class RevisedProjectGroupService {
       },
     });
 
+    // CLAUDE.md §14 — batched lineage-lock lookups for the version chain.
+    // The original PG is locked iff it has any active descendant (when this
+    // method is reached via a revised project lookup, that's guaranteed
+    // true, but for a direct-original lookup allRevisions may be empty).
+    // Each revision is also independently checked to flag tip-of-chain
+    // locks (e.g., an intermediate revision that itself has a child).
+    const revisionIds = allRevisions.map((r) => r.id);
+    const [lockedPgIds, lockedRpgIds] = await Promise.all([
+      originalProject
+        ? this.findProjectGroupIdsWithDescendants([originalProject.id])
+        : Promise.resolve(new Set<string>()),
+      this.findRevisedProjectGroupIdsWithDescendants(revisionIds),
+    ]);
+
     const unifiedOriginal = originalProject
-      ? UnifiedProjectMapper.fromProjectGroup(originalProject)
+      ? UnifiedProjectMapper.fromProjectGroup(
+          originalProject,
+          lockedPgIds.has(originalProject.id),
+        )
       : null;
 
     const unifiedRevisions = allRevisions.map((revision) =>
-      UnifiedProjectMapper.fromRevisedProjectGroup(revision),
+      UnifiedProjectMapper.fromRevisedProjectGroup(
+        revision,
+        lockedRpgIds.has(revision.id),
+      ),
     );
 
     // Set currentProject from the list

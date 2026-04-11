@@ -27,6 +27,7 @@ import { CreateDevelopmentPlanWithPhaseDto } from './dto/create-development-plan
 import { UpdateDevelopmentPlanWithPhasesDto } from './dto/update-development-plan-with-phase.dto';
 import { UpdateDevelopmentPlanLatestStatusDto } from './dto/update-development-plan-latest-status.dto';
 import { UsersService } from 'src/users/users.service';
+import { BookLockService } from 'src/common/book-lock/book-lock.service';
 
 @Injectable()
 export class DevelopmentPlanService {
@@ -59,6 +60,7 @@ export class DevelopmentPlanService {
     private readonly projectGroupsService: ProjectGroupsService,
     private readonly websocketService: WebsocketService,
     private readonly usersService: UsersService,
+    private readonly bookLockService: BookLockService,
   ) { }
 
   private async validatePreviousPlanCompletion(manager: EntityManager): Promise<void> {
@@ -426,6 +428,11 @@ export class DevelopmentPlanService {
           throw new BadRequestException('Only the latest development plan can be updated');
         }
 
+        // CLAUDE.md §15 — Book Lineage Immutability. A plan with ANY
+        // non-soft-deleted revision or supplement is locked. Runs inside
+        // the caller transaction so the read matches the subsequent write.
+        await this.bookLockService.assertEditable(id, 'development_plan', manager);
+
         if (developmentPlanDto) {
           const startYear =
             developmentPlanDto.startYear ?? developmentPlan.startYear;
@@ -639,6 +646,19 @@ export class DevelopmentPlanService {
 
   async generateApprovedBookForPlan(developmentPlanId: string, userId: string) {
     try {
+      // CLAUDE.md §15 / OQ-8 — legacy generateApprovedBookForPlan is
+      // defensively guarded. Producing a new main-plan book for a
+      // plan that already has a revision or supplement would create
+      // a new head beneath the existing descendant and break lineage
+      // ordering. Guard BEFORE any websocket progress is emitted so
+      // the client does not see a bogus "starting" message on a
+      // locked plan.
+      await this.bookLockService.assertEditable(
+        developmentPlanId,
+        'development_plan',
+        this.developmentPlanRepository.manager,
+      );
+
       // Send progress: Starting (10%)
       await this.websocketService.notifyPdfGenerationProgress({
         userId,
@@ -912,6 +932,12 @@ export class DevelopmentPlanService {
           throw new NotFoundException(`Development Plan with ID ${id} not found`);
         }
 
+        // CLAUDE.md §15 / OQ-6 — updateLatestStatus is a plan field
+        // mutation and MUST obey the book-lineage lock. A plan with
+        // any non-soft-deleted revision or supplement cannot have its
+        // latest flag flipped.
+        await this.bookLockService.assertEditable(id, 'development_plan', manager);
+
         if (isLatest) {
           await developmentPlanRepository.update(
             { isLatest: true },
@@ -937,7 +963,9 @@ export class DevelopmentPlanService {
         order: { createAt: 'DESC' },
         where: { isLatest: true },
       });
-      return dv || [];
+      const plans = dv || [];
+      this.decorateBookLockFlags(plans);
+      return plans;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -945,7 +973,40 @@ export class DevelopmentPlanService {
 
   async findAllUnordered(): Promise<DevelopmentPlan[]> {
     try {
-      return await this.developmentPlanRepository.find({
+      // CLAUDE.md §15 Book Lineage Immutability.
+      //
+      // This endpoint is the ONLY source of `hasNewerRevision` flags for
+      // `/local-plan-book/assembly/edit` and `/local-plan-book/assembly/change`,
+      // so correctness of the nested `developmentPlanRevision` and
+      // `developmentPlanSupplements` collections is load-bearing for the UI
+      // lock. We intentionally keep the query simple:
+      //
+      //   - NO nested `where` on OneToMany relations. In TypeORM 0.3.x a
+      //     nested `where` adds a LEFT JOIN + AND filter against the main
+      //     query. Combined with the `relations` array loader it reliably
+      //     loads siblings, but any mismatch between the join filter and
+      //     the eager-load query risks dropping rows silently — which is
+      //     the exact symptom the UI lock was suffering from. Soft-deleted
+      //     children are already excluded at the entity level via
+      //     `@DeleteDateColumn` (TypeORM auto-filters soft-deleted rows
+      //     on eager relation loads), so the additional filter is
+      //     redundant AND fragile.
+      //
+      //   - NO nested `order` on OneToMany relations. TypeORM 0.3.x applies
+      //     nested relation ordering to the MAIN query's ORDER BY by adding
+      //     a second LEFT JOIN with `select: false`, which produces a
+      //     Cartesian product across `developmentPlanRevision` ×
+      //     `developmentPlanSupplements`. The raw-to-entity transformer
+      //     then dedupes by primary key, but the interaction with the
+      //     nested `where` above has been observed to drop revisions /
+      //     supplements in some topologies. We sort in memory below
+      //     instead — O(n log n) per plan, trivial compared to the
+      //     network round-trip.
+      //
+      // `decorateBookLockFlags` runs AFTER the in-memory sort so that the
+      // timestamp comparisons operate on the canonical global timeline,
+      // NOT on whatever order TypeORM happened to return.
+      const plans = await this.developmentPlanRepository.find({
         relations: [
           'createdBy',
           'createdBy.user',
@@ -958,33 +1019,117 @@ export class DevelopmentPlanService {
         ],
         where: {
           deletedAt: IsNull(),
-          developmentPlanRevision: {
-            deletedAt: IsNull()
-          },
-          developmentPlanSupplements: {
-            deletedAt: IsNull()
-          },
         },
         order: {
           createAt: 'DESC',
-          developmentPlanRevision: {
-            revisionNumber: 'DESC', // or 'createdAt', 'version', etc. — depends on your column name
-          },
-          developmentPlanSupplements: {
-            supplementNumber: 'DESC',
-          },
         },
       });
 
+      // Sort children in memory so the frontend sees the same ordering
+      // it used to get from the (fragile) nested `order` clauses. The
+      // lineage-lock flags are computed from `createdAt`, not this order,
+      // so this is purely cosmetic for the UI list rendering.
+      for (const plan of plans) {
+        if (Array.isArray(plan.developmentPlanRevision)) {
+          plan.developmentPlanRevision.sort(
+            (a, b) => (b?.revisionNumber ?? 0) - (a?.revisionNumber ?? 0),
+          );
+        }
+        if (Array.isArray(plan.developmentPlanSupplements)) {
+          plan.developmentPlanSupplements.sort(
+            (a, b) => (b?.supplementNumber ?? 0) - (a?.supplementNumber ?? 0),
+          );
+        }
+      }
+
+      this.decorateBookLockFlags(plans);
+      return plans;
     } catch (error) {
       handleException(this.logger, error);
     }
   }
 
+  /**
+   * CLAUDE.md §15 — attach `hasNewerRevision` flags to fetched plan,
+   * revision, and supplement rows so the frontend can render the
+   * book-lineage lock UI without a second round-trip.
+   *
+   * Detection semantics mirror `BookLockService` exactly but run
+   * entirely in memory, using the already-eager-loaded
+   * `developmentPlanRevision` and `developmentPlanSupplements` arrays
+   * attached to each plan. For read endpoints this is strictly cheaper
+   * than issuing a per-row subquery — no N+1 and no batched round-trip.
+   *
+   * The plan row itself is flagged `hasNewerRevision = true` as soon as
+   * it has ANY non-soft-deleted revision or supplement child (the
+   * `where: { deletedAt: IsNull() }` filters applied upstream already
+   * exclude soft-deleted children from the in-memory arrays).
+   *
+   * For each revision and each supplement row, the flag is set to
+   * `true` iff ANY other non-soft-deleted child of the same plan has a
+   * strictly-newer `createdAt`, across BOTH `developmentPlanRevision`
+   * and `developmentPlanSupplements` collections — OQ-2=(B) global
+   * lineage. Same-millisecond ties do NOT lock each other; they both
+   * still lock their parent plan (already covered by the plan-level
+   * predicate above).
+   *
+   * Note: `DevelopmentPlan` stores its own timestamp as `createAt`
+   * (sic — historical column name), while `DevelopmentPlanRevision`
+   * and `DevelopmentPlanSupplement` use `createdAt`. Only the child
+   * timestamps are compared here; the plan's own `createAt` is never
+   * part of the global lineage ordering.
+   */
+  private decorateBookLockFlags(plans: DevelopmentPlan[]): void {
+    if (!plans || plans.length === 0) return;
+
+    for (const plan of plans) {
+      const revisions: DevelopmentPlanRevision[] =
+        (plan.developmentPlanRevision ?? []).filter(
+          (r) => !r.deletedAt,
+        );
+      const supplements: DevelopmentPlanSupplement[] =
+        (plan.developmentPlanSupplements ?? []).filter(
+          (s) => !s.deletedAt,
+        );
+
+      const childTimestamps: number[] = [
+        ...revisions.map((r) => new Date(r.createdAt).getTime()),
+        ...supplements.map((s) => new Date(s.createdAt).getTime()),
+      ];
+
+      const planHasAnyChild = childTimestamps.length > 0;
+      // `hasNewerRevision` is declared as a plain field on the entity
+      // classes (see `DevelopmentPlan.hasNewerRevision` and siblings)
+      // precisely so we can assign it without an `as any` cast and so
+      // that `ClassSerializerInterceptor` deterministically preserves
+      // it in the JSON response.
+      plan.hasNewerRevision = planHasAnyChild;
+
+      if (!planHasAnyChild) continue;
+
+      const maxChildTs = Math.max(...childTimestamps);
+
+      for (const revision of revisions) {
+        const ts = new Date(revision.createdAt).getTime();
+        revision.hasNewerRevision = ts < maxChildTs;
+      }
+      for (const supplement of supplements) {
+        const ts = new Date(supplement.createdAt).getTime();
+        supplement.hasNewerRevision = ts < maxChildTs;
+      }
+    }
+  }
+
   async findOne(id: string): Promise<DevelopmentPlan> {
     try {
+      // CLAUDE.md §15 — historical (locked) plans MUST remain loadable
+      // for read so the frontend can render them as disabled/locked.
+      // Previously this method filtered `isLatest: true`, which made
+      // any plan with a newer revision permanently unreadable through
+      // this endpoint. The lock is enforced in the write paths, not
+      // by hiding rows from reads.
       const developmentPlan = await this.developmentPlanRepository.findOne({
-        where: { id, isLatest: true },
+        where: { id },
         relations: ['projectGroup', 'workHistory'],
       });
 
@@ -992,6 +1137,19 @@ export class DevelopmentPlanService {
         this.logger.warn(`DevelopmentPlan not found: ${id}`);
         throw new NotFoundException(`DevelopmentPlan with id ${id} not found`);
       }
+
+      // CLAUDE.md §15 — attach `hasNewerRevision` so single-row detail
+      // endpoints surface the same lock state as list endpoints.
+      // `findOne` does not eagerly load the child arrays, so we defer
+      // to the live BookLockService lookup rather than the in-memory
+      // helper used by findAll/findAllUnordered. The field is a plain
+      // class member on `DevelopmentPlan` (§15) — no cast required.
+      developmentPlan.hasNewerRevision =
+        await this.bookLockService.hasNewerRevision(
+          id,
+          'development_plan',
+          this.developmentPlanRepository.manager,
+        );
 
       return developmentPlan;
     } catch (error) {
@@ -1012,6 +1170,16 @@ export class DevelopmentPlanService {
           `Only the latest development plan can be updated`,
         );
       }
+
+      // CLAUDE.md §15 — Book Lineage Immutability. Guard BEFORE any
+      // mutation; the non-transactional path here uses the default
+      // entity manager. If the caller wraps this in its own transaction
+      // in the future, pass `manager` through instead.
+      await this.bookLockService.assertEditable(
+        id,
+        'development_plan',
+        this.developmentPlanRepository.manager,
+      );
 
       const startYear = dto.startYear ?? developmentPlan.startYear;
       const endYear = dto.endYear ?? developmentPlan.endYear;
@@ -1056,6 +1224,17 @@ export class DevelopmentPlanService {
 
   async remove(id: string): Promise<{ message: string }> {
     try {
+      // CLAUDE.md §15 — Book Lineage Immutability. Guard BEFORE any
+      // repository write. This is critical because the FK
+      // `development_plan_revision.development_plan_id` declares
+      // `onDelete: 'CASCADE'`, so a delayed guard on `.delete()` would
+      // silently cascade through children and bypass the invariant.
+      await this.bookLockService.assertDeletable(
+        id,
+        'development_plan',
+        this.developmentPlanRepository.manager,
+      );
+
       const result = await this.developmentPlanRepository.delete(id);
       if (result.affected === 0) {
         throw new NotFoundException(`DevelopmentPlan with ID ${id} not found`);
@@ -1091,6 +1270,15 @@ export class DevelopmentPlanService {
       if (!developmentPlan) {
         throw new NotFoundException(`DevelopmentPlan with ID ${id} not found`);
       }
+
+      // CLAUDE.md §15 — Book Lineage Immutability. Guard BEFORE any
+      // repository write. Runs before the `save(deletedBy)` step below
+      // so a locked plan never receives a partial mutation.
+      await this.bookLockService.assertDeletable(
+        id,
+        'development_plan',
+        this.developmentPlanRepository.manager,
+      );
 
       // Get workHistory for deletedBy
       const workHistory = await this.workHistoryRepository.findOne({
@@ -1153,6 +1341,19 @@ export class DevelopmentPlanService {
 
   async restore(id: string): Promise<{ message: string }> {
     try {
+      // CLAUDE.md §15 — Book Lineage Immutability. Restore of a
+      // soft-deleted plan is blocked when the plan still has any
+      // non-soft-deleted child (revision or supplement) — an unlocked
+      // restore would resurrect a dead parent beneath a live child.
+      // Guard operates on the raw table so soft-deleted rows are also
+      // visible for the detection lookup; the child count check in
+      // `hasAnyChildForPlan` is independent of the parent's lifecycle.
+      await this.bookLockService.assertEditable(
+        id,
+        'development_plan',
+        this.developmentPlanRepository.manager,
+      );
+
       const result = await this.developmentPlanRepository.restore(id);
       if (result.affected === 0) {
         throw new NotFoundException(
@@ -1175,6 +1376,17 @@ export class DevelopmentPlanService {
       if (!plan.isBooked) {
         throw new BadRequestException(`Development Plan with ID ${developmentPlanId} is not booked yet`);
       }
+
+      // CLAUDE.md §15 / OQ-7 — legacy rollbackBook is defensively
+      // guarded against the book-lineage lock. Rolling back a main
+      // plan that has ANY revision or supplement child is never
+      // valid: the child's lineage chain depends on the plan being
+      // booked at the time the child was created.
+      await this.bookLockService.assertEditable(
+        developmentPlanId,
+        'development_plan',
+        this.developmentPlanRepository.manager,
+      );
 
       // Get all ProjectGroups that are booked for this development plan
       // แต่ไม่เอาโครงการที่ Rejected (Out Authority)
