@@ -1,0 +1,40 @@
+{
+  "version": 2,
+  "sourceType": "change_revision",
+  "sourceId": "b9e60742-a50c-46e8-b411-66088183d12d",
+  "status": "completed",
+  "correctionMode": "correction_part3",
+  "correctionReason": "แก้ไขรายละเอียดส่วนที่ 3",
+  "parts": {
+    "part1": {
+      "source": "reused",
+      "originalFileName": "Lan-Wifi LayoutPlan à¸­à¸à¸.à¸à¸¡.pdf",
+      "uploadedBy": "1a0f8d63-69f3-4e06-a5d2-e7046d926d29",
+      "uploadedAt": "2026-04-10T14:19:58.329Z"
+    },
+    "part2": {
+      "source": "reused",
+      "originalFileName": "Lan-Wifi LayoutPlan à¸­à¸à¸.à¸à¸¡(1).pdf",
+      "uploadedBy": "1a0f8d63-69f3-4e06-a5d2-e7046d926d29",
+      "uploadedAt": "2026-04-10T14:19:58.331Z"
+    },
+    "part3": {
+      "source": "generated",
+      "projectCount": 1,
+      "projectIds": [
+        "ca62b5d0-9d4d-4943-8f28-d2abca3bfa15"
+      ],
+      "generatedAt": "2026-04-10T14:26:19.543Z"
+    }
+  },
+  "merged": {
+    "fileName": "official-book-v2.pdf",
+    "mergedAt": "2026-04-10T14:26:22.844Z",
+    "totalPages": 14
+  },
+  "createdBy": "1a0f8d63-69f3-4e06-a5d2-e7046d926d29",
+  "createdAt": "2026-04-10T14:26:22.731Z",
+  "deprecatedAt": null,
+  "deprecatedBy": null,
+  "deprecationReason": null
+}
