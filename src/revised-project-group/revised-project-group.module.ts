@@ -11,6 +11,7 @@ import { Tactic } from 'src/tactic/entities/tactic.entity';
 import { Plan } from 'src/plan/entities/plan.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { Budget } from 'src/budget/entities/budget.entity';
+import { LineageLockModule } from 'src/common/lineage-lock/lineage-lock.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { Budget } from 'src/budget/entities/budget.entity';
       WorkHistory,
       Budget,
     ]),
+    LineageLockModule,
   ],
   controllers: [RevisedProjectGroupController],
   providers: [RevisedProjectGroupService],

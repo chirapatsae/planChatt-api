@@ -26,6 +26,7 @@ import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
 import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
 import { GovernmentAgency } from 'src/government-agencies/entities/government-agency.entity';
 import { UnifiedProjectMapper, IUnifiedProjectDisplay } from 'src/project-groups/dto/unified-project-display.dto';
+import { LineageLockService } from 'src/common/lineage-lock/lineage-lock.service';
 
 @Injectable()
 export class RevisedProjectGroupService {
@@ -60,6 +61,7 @@ export class RevisedProjectGroupService {
     private readonly budgetRepo: Repository<Budget>,
 
     private readonly dataSource: DataSource,
+    private readonly lineageLockService: LineageLockService,
   ) { }
 
   // ========================================
@@ -401,6 +403,12 @@ export class RevisedProjectGroupService {
       const revisedProject = await this.findOneEntity(id);
 
       return await this.dataSource.transaction(async (manager) => {
+        // CLAUDE.md §14 — Version Lineage Immutability. A RevisedProjectGroup
+        // that already has a non-deleted child RevisedProjectGroup descendant
+        // (prev_project_type = 'revised') is locked and cannot be mutated.
+        // Guard MUST run BEFORE any repository write.
+        await this.lineageLockService.assertEditable(id, 'revised', manager);
+
         // Update foreign keys if provided
         if (dto.developmentPlanRevisionId) {
           const revision = await manager.findOne(DevelopmentPlanRevision, {
@@ -519,15 +527,21 @@ export class RevisedProjectGroupService {
    */
   async remove(id: string): Promise<{ message: string }> {
     try {
-      const result = await this.revisedProjectGroupRepo.delete(id);
-      if (result.affected === 0) {
-        throw new NotFoundException(
-          `RevisedProjectGroup with ID ${id} not found`,
-        );
-      }
-      return {
-        message: `RevisedProjectGroup with ID ${id} has been permanently removed.`,
-      };
+      return await this.dataSource.transaction(async (manager) => {
+        // CLAUDE.md §14 — guard BEFORE the delete so cascade cannot destroy
+        // child revised rows silently.
+        await this.lineageLockService.assertDeletable(id, 'revised', manager);
+
+        const result = await manager.delete(RevisedProjectGroup, id);
+        if (result.affected === 0) {
+          throw new NotFoundException(
+            `RevisedProjectGroup with ID ${id} not found`,
+          );
+        }
+        return {
+          message: `RevisedProjectGroup with ID ${id} has been permanently removed.`,
+        };
+      });
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -538,15 +552,20 @@ export class RevisedProjectGroupService {
    */
   async softRemove(id: string): Promise<{ message: string }> {
     try {
-      const result = await this.revisedProjectGroupRepo.softDelete(id);
-      if (result.affected === 0) {
-        throw new NotFoundException(
-          `RevisedProjectGroup with ID ${id} not found`,
-        );
-      }
-      return {
-        message: `RevisedProjectGroup with ID ${id} has been soft-removed.`,
-      };
+      return await this.dataSource.transaction(async (manager) => {
+        // CLAUDE.md §14 — guard BEFORE the soft-delete.
+        await this.lineageLockService.assertDeletable(id, 'revised', manager);
+
+        const result = await manager.softDelete(RevisedProjectGroup, id);
+        if (result.affected === 0) {
+          throw new NotFoundException(
+            `RevisedProjectGroup with ID ${id} not found`,
+          );
+        }
+        return {
+          message: `RevisedProjectGroup with ID ${id} has been soft-removed.`,
+        };
+      });
     } catch (error) {
       handleException(this.logger, error);
     }

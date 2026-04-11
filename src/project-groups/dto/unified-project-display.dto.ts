@@ -82,8 +82,13 @@ export interface IUnifiedProjectDisplay {
 export class UnifiedProjectMapper {
   /**
    * แปลง ProjectGroup เป็น IUnifiedProjectDisplay
+   * CLAUDE.md §14 — hasDescendant signals Version Lineage Immutability lock.
+   * When true, the UI MUST disable edit and delete actions.
    */
-  static fromProjectGroup(project: ProjectGroup): IUnifiedProjectDisplay {
+  static fromProjectGroup(
+    project: ProjectGroup,
+    hasDescendant?: boolean,
+  ): IUnifiedProjectDisplay {
     return {
       id: project.id,
       title: project.title,
@@ -115,6 +120,7 @@ export class UnifiedProjectMapper {
       amphoe: project.amphoe,
       localAdministrativeOrganization: project.localAdministrativeOrganization,
       attachments: project.attachments,
+      hasDescendant: hasDescendant ?? false,
     };
   }
 

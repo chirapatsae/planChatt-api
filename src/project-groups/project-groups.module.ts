@@ -17,6 +17,7 @@ import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
 import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
 import { PdfOutAuthorityDocument } from 'src/pdf/entities/pdf-out-authority-document.entity';
 import { GeoBoundaryService } from 'src/ai/geo-boundary.service';
+import { LineageLockModule } from 'src/common/lineage-lock/lineage-lock.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { GeoBoundaryService } from 'src/ai/geo-boundary.service';
       LocalAdministrativeOrganization,
       PdfOutAuthorityDocument,
     ]),
+    LineageLockModule,
   ],
   controllers: [ProjectGroupsController],
   providers: [ProjectGroupsService, GeoBoundaryService],

@@ -36,6 +36,7 @@ import { IProjectVersionsResponse } from './dto/project-versions.dto';
 import { PdfOutAuthorityDocument } from 'src/pdf/entities/pdf-out-authority-document.entity';
 import { PlanPhase, PhaseType } from 'src/plan-phase/entities/plan-phase.entity';
 import { GeoBoundaryService } from 'src/ai/geo-boundary.service';
+import { LineageLockService } from 'src/common/lineage-lock/lineage-lock.service';
 
 @Injectable()
 export class ProjectGroupsService {
@@ -86,6 +87,7 @@ export class ProjectGroupsService {
 
     private readonly dataSource: DataSource,
     private readonly geoBoundaryService: GeoBoundaryService,
+    private readonly lineageLockService: LineageLockService,
   ) { }
 
   async create(dto: CreateProjectGroupDto, userId: string) {
@@ -1389,6 +1391,34 @@ export class ProjectGroupsService {
     return projects;
 
   }
+
+  /**
+   * CLAUDE.md §14 — Batched lineage-lock lookup for ProjectGroup rows.
+   *
+   * Given a list of ProjectGroup IDs, returns a Set containing the subset
+   * that have at least one non-soft-deleted RevisedProjectGroup descendant
+   * (prev_project_type = 'original'). Used by list endpoints to populate
+   * the `hasDescendant` flag on unified DTOs without N+1 queries.
+   *
+   * Uses the partial index idx_rpg_prev_project_id
+   * ON (prev_project_id) WHERE deleted_at IS NULL.
+   */
+  private async findProjectGroupIdsWithDescendants(
+    projectGroupIds: string[],
+  ): Promise<Set<string>> {
+    if (!projectGroupIds || projectGroupIds.length === 0) return new Set();
+
+    const rows = await this.revisedProjectGroupRepo
+      .createQueryBuilder('r')
+      .select('DISTINCT r.prev_project_id', 'parentId')
+      .where('r.prev_project_id IN (:...ids)', { ids: projectGroupIds })
+      .andWhere('r.prev_project_type = :t', { t: 'original' })
+      .andWhere('r.deleted_at IS NULL')
+      .getRawMany<{ parentId: string }>();
+
+    return new Set(rows.map((r) => r.parentId));
+  }
+
   /**
    * Query original projects (ProjectGroup) ที่ไม่มี active revision และ status = Approved
    */
@@ -4261,9 +4291,17 @@ export class ProjectGroupsService {
       return originalProjects.length + revisedProjects.length;
     }
 
+    // CLAUDE.md §14 — Batched lineage-lock lookup for the main-plan PG rows.
+    // Approved PGs in this list MAY have existing RevisedProjectGroup
+    // descendants (revision/change workflow starts here). FE-01 relies on
+    // `hasDescendant` to disable edit/delete buttons.
+    const lockedPgIds = await this.findProjectGroupIdsWithDescendants(
+      originalProjects.map((p) => p.id),
+    );
+
     // Map to unified format
     const unifiedOriginals = originalProjects.map((project) =>
-      UnifiedProjectMapper.fromProjectGroup(project),
+      UnifiedProjectMapper.fromProjectGroup(project, lockedPgIds.has(project.id)),
     );
     const unifiedRevised = revisedProjects.map((project) =>
       UnifiedProjectMapper.fromRevisedProjectGroup(project),
@@ -4621,8 +4659,11 @@ export class ProjectGroupsService {
       },
     });
 
+    // CLAUDE.md §14 — In the version chain view, the original PG is locked
+    // iff any revision exists for it (allRevisions.length > 0). The chain is
+    // already loaded, so we can derive `hasDescendant` without another query.
     const unifiedOriginal = originalProject
-      ? UnifiedProjectMapper.fromProjectGroup(originalProject)
+      ? UnifiedProjectMapper.fromProjectGroup(originalProject, allRevisions.length > 0)
       : null;
 
     const unifiedRevisions = allRevisions.map((revision) =>
@@ -4782,6 +4823,12 @@ export class ProjectGroupsService {
       if (!projectGroup) {
         throw new NotFoundException(`ไม่พบข้อมูลของโครงการ ID ${id}`);
       }
+
+      // CLAUDE.md §14 — expose lineage-lock state for FE-01 so the detail
+      // view can disable edit/delete buttons consistently with list views.
+      const lockedSet = await this.findProjectGroupIdsWithDescendants([projectGroup.id]);
+      (projectGroup as any).hasDescendant = lockedSet.has(projectGroup.id);
+
       return projectGroup;
     } catch (error) {
       handleException(this.logger, error);
@@ -4795,6 +4842,14 @@ export class ProjectGroupsService {
     userId: string,
   ): Promise<ProjectGroup> {
     return await this.dataSource.transaction(async (manager) => {
+      // CLAUDE.md §14 — Version Lineage Immutability.
+      // A ProjectGroup that already has a non-deleted RevisedProjectGroup
+      // descendant (prev_project_type = 'original') is locked and cannot be
+      // mutated. This guard MUST run BEFORE any repository write so that the
+      // ON DELETE CASCADE on revised_project_groups.prev_project_id cannot
+      // silently destroy descendant rows.
+      await this.lineageLockService.assertEditable(id, 'original', manager);
+
       // 1. ตรวจสอบ workHistory
       const workHistory = await manager.findOne(WorkHistory, {
         where: { user: { id: userId } },
@@ -4918,13 +4973,19 @@ export class ProjectGroupsService {
 
   async remove(id: string): Promise<{ message: string }> {
     try {
-      const result = await this.projectGroupRepo.delete(id);
-      if (result.affected === 0) {
-        throw new NotFoundException(`projectGroup with ID ${id} not found`);
-      }
-      return {
-        message: `projectGroup with ID ${id} has been permanently removed.`,
-      };
+      return await this.dataSource.transaction(async (manager) => {
+        // CLAUDE.md §14 — guard BEFORE the delete so cascade cannot destroy
+        // descendants silently.
+        await this.lineageLockService.assertDeletable(id, 'original', manager);
+
+        const result = await manager.delete(ProjectGroup, id);
+        if (result.affected === 0) {
+          throw new NotFoundException(`projectGroup with ID ${id} not found`);
+        }
+        return {
+          message: `projectGroup with ID ${id} has been permanently removed.`,
+        };
+      });
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -4932,11 +4993,16 @@ export class ProjectGroupsService {
 
   async softRemove(id: string): Promise<{ message: string }> {
     try {
-      const result = await this.projectGroupRepo.softDelete(id);
-      if (result.affected === 0) {
-        throw new NotFoundException(`projectGroup with ID ${id} not found`);
-      }
-      return { message: `projectGroup with ID ${id} has been soft-removed.` };
+      return await this.dataSource.transaction(async (manager) => {
+        // CLAUDE.md §14 — guard BEFORE the soft-delete.
+        await this.lineageLockService.assertDeletable(id, 'original', manager);
+
+        const result = await manager.softDelete(ProjectGroup, id);
+        if (result.affected === 0) {
+          throw new NotFoundException(`projectGroup with ID ${id} not found`);
+        }
+        return { message: `projectGroup with ID ${id} has been soft-removed.` };
+      });
     } catch (error) {
       handleException(this.logger, error);
     }

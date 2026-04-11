@@ -25,6 +25,7 @@ import { Role } from 'src/roles/entities/role.entity';
 import { AnnouncementStatus, NotificationType } from 'src/announcements/entities/announcement.entity';
 import { WorkHistoryAmphoeResponsibility } from 'src/work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity';
 import { WorkHistoryGovernmentAgencyResponsibility } from 'src/work-history-government-agency-responsibility/entities/work-history-government-agency-responsibility.entity';
+import { LineageLockService } from 'src/common/lineage-lock/lineage-lock.service';
 
 @Injectable()
 export class TrackingStatusService {
@@ -50,6 +51,7 @@ export class TrackingStatusService {
 
     private readonly announcementsService: AnnouncementsService,
     private readonly dataSource: DataSource,
+    private readonly lineageLockService: LineageLockService,
   ) { }
 
   async create(dto: CreateTrackingStatusDto, userId: string): Promise<TrackingStatus> {
@@ -854,6 +856,15 @@ export class TrackingStatusService {
         if (!dp?.isLatest) throw new BadRequestException('แผนพัฒนาฯ ไม่ใช่แผนปัจจุบัน');
         if (dp?.isBooked) throw new BadRequestException('แผนพัฒนาฯ ถูกรวมเล่มแล้ว');
 
+        // 6.5 CLAUDE.md §14 — Version Lineage Immutability.
+        // A main-plan ProjectGroup that already has a non-deleted
+        // RevisedProjectGroup descendant (prev_project_type = 'original')
+        // cannot be rolled back. The guard rejects a non-leaf lineage.
+        // Because BE-04 now physically hard-deletes the rolled-back row at
+        // the end of this transaction, we must guarantee upstream that the
+        // row has no descendants at all.
+        await this.lineageLockService.assertDeletable(projectGroupId, 'original', manager);
+
         // 7. Status constraint — cannot rollback from Pull_Back or Ready
         const currentTracking = await manager.findOne(TrackingStatus, {
           where: { projectGroupId: { id: projectGroupId }, isLatest: true },
@@ -902,6 +913,19 @@ export class TrackingStatusService {
         // 10. True rollback: hard-delete current record, restore previous to latest
         await manager.delete(TrackingStatus, { id: currentTracking.id });
         await manager.update(TrackingStatus, { id: previousTracking.id }, { isLatest: true });
+
+        // 11. CLAUDE.md §14.6 — Rollback Ghost-Descendant Fix (BEHAVIORAL CHANGE).
+        // Hard-delete the rolled-back row itself so any upstream parent
+        // unlocks automatically under §14. After this line completes, no
+        // row in revised_project_groups may reference this projectGroupId
+        // via (prev_project_id, prev_project_type) — the lineage-lock guard
+        // above already confirmed no non-deleted descendants exist.
+        //
+        // The cascade FK on tracking_status.project_group_id will remove any
+        // remaining tracking history rows (older non-latest entries). This is
+        // the intentional rollback audit exception documented in §12 and the
+        // STAFF-LED ROLLBACK RULE.
+        await manager.delete(ProjectGroup, { id: projectGroupId });
 
         return { message: `ย้อนสถานะสำเร็จ (กลับไปเป็น "${previousTracking.statusId.name}")`, status: 'success' };
       });
@@ -968,15 +992,13 @@ export class TrackingStatusService {
           throw new BadRequestException('รอบการแก้ไข/เปลี่ยนแปลงถูกรวมเล่มแล้ว ไม่สามารถดึงกลับได้');
         }
 
-        // 6.5 Guard: Descendant check — cannot rollback a non-leaf revision
-        const hasDescendant = await manager.exists(RevisedProjectGroup, {
-          where: { prevProjectId: revisionProjectGroupId },
-        });
-        if (hasDescendant) {
-          throw new ConflictException(
-            'REVISION_HAS_DESCENDANT: ไม่สามารถย้อนสถานะได้ เนื่องจากมีโครงการแก้ไข/เปลี่ยนแปลงอื่นที่อ้างอิงโครงการนี้อยู่ กรุณาย้อนสถานะโครงการที่อ้างอิงก่อน'
-          );
-        }
+        // 6.5 CLAUDE.md §14 — Version Lineage Immutability.
+        // A RevisedProjectGroup that already has a non-deleted child
+        // RevisedProjectGroup descendant (prev_project_type = 'revised')
+        // cannot be rolled back. This replaces the former inline
+        // `manager.exists(RevisedProjectGroup, ...)` check and delegates to
+        // LineageLockService per §14.8.
+        await this.lineageLockService.assertDeletable(revisionProjectGroupId, 'revised', manager);
 
         // 7. Status constraint — cannot rollback from Pull_Back or Ready
         const currentTracking = await manager.findOne(TrackingStatus, {
@@ -1025,6 +1047,17 @@ export class TrackingStatusService {
         // 10. True rollback: hard-delete current record, restore previous to latest
         await manager.delete(TrackingStatus, { id: currentTracking.id });
         await manager.update(TrackingStatus, { id: previousTracking.id }, { isLatest: true });
+
+        // 11. CLAUDE.md §14.6 — Rollback Ghost-Descendant Fix (BEHAVIORAL CHANGE).
+        // Hard-delete the rolled-back RevisedProjectGroup row itself so the
+        // upstream parent (either a ProjectGroup or a previous
+        // RevisedProjectGroup in the chain) unlocks automatically under §14.
+        // The lineage-lock guard at step 6.5 already confirmed this row has
+        // no non-deleted child descendants. The cascade FK on
+        // tracking_status.revised_project_group_id removes any remaining
+        // older tracking rows as part of the same transaction — the
+        // intentional rollback audit exception (§12 + STAFF-LED ROLLBACK RULE).
+        await manager.delete(RevisedProjectGroup, { id: revisionProjectGroupId });
 
         return { message: `ย้อนสถานะสำเร็จ (กลับไปเป็น "${previousTracking.statusId.name}")`, status: 'success' };
       });
