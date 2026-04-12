@@ -10,6 +10,8 @@ import { Tactic } from 'src/tactic/entities/tactic.entity';
 import { Plan } from 'src/plan/entities/plan.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { Budget } from 'src/budget/entities/budget.entity';
+import { ProjectClassificationModule } from 'src/common/project-classification/project-classification.module';
+import { DevelopmentIssue } from 'src/development-issue/entities/development-issue.entity';
 
 @Module({
   imports: [
@@ -22,7 +24,9 @@ import { Budget } from 'src/budget/entities/budget.entity';
       Plan,
       WorkHistory,
       Budget,
+      DevelopmentIssue,
     ]),
+    ProjectClassificationModule,
   ],
   controllers: [SupplementProjectGroupController],
   providers: [SupplementProjectGroupService],

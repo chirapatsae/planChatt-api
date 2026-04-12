@@ -15,6 +15,7 @@ import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
 import { AttachmentProjectGroup } from 'src/attachment-project-groups/entities/attachment-project-group.entity';
 import { AttachmentRevisedProjectGroup } from 'src/attachment-revised-project-groups/entities/attachment-revised-project-group.entity';
+import { DevelopmentIssue } from 'src/development-issue/entities/development-issue.entity';
 
 /**
  * Interface สำหรับแสดงโครงการแบบ unified
@@ -29,7 +30,8 @@ export interface IUnifiedProjectDisplay {
   startLng: number | null;
   endLat: number | null;
   endLng: number | null;
-  indicator: string;
+  /** §16 — nullable under ISSUE_BASED projects */
+  indicator: string | null;
   expected: string;
   projectYear: number;
   isDraft?: boolean; // Only for original projects, not revised
@@ -53,10 +55,13 @@ export interface IUnifiedProjectDisplay {
     changedFields: string[];  // รายการ field ที่เปลี่ยน เช่น ["title", "objective", "budgets"]
   };
 
-  // Relations
-  strategy?: Strategy;
-  tactic?: Tactic;
-  plan?: Plan;
+  // Relations — §16 classification is nullable: EXACTLY one of
+  // {strategy + tactic + plan + indicator} or {developmentIssue} is populated.
+  strategy?: Strategy | null;
+  tactic?: Tactic | null;
+  plan?: Plan | null;
+  /** §16 — populated only on ISSUE_BASED projects */
+  developmentIssue?: DevelopmentIssue | null;
   developmentPlan?: DevelopmentPlan;
   createdBy?: WorkHistory;
   responsibleBy?: WorkHistory;
@@ -106,6 +111,7 @@ export class UnifiedProjectMapper {
       strategy: project.strategy,
       tactic: project.tactic,
       plan: project.plan,
+      developmentIssue: project.developmentIssue,
       developmentPlan: project.developmentPlan,
       createdBy: project.createdBy,
       originAgencyId: project.originAgencyId,
@@ -156,6 +162,7 @@ export class UnifiedProjectMapper {
       strategy: revisedProject.strategy,
       tactic: revisedProject.tactic,
       plan: revisedProject.plan,
+      developmentIssue: revisedProject.developmentIssue,
       developmentPlan: revisedProject.developmentPlan ?? revisedProject.developmentPlanRevision?.developmentPlan,
       createdBy: revisedProject.createdBy,
       originAgencyId: revisedProject.originAgencyId,

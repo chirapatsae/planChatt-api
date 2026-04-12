@@ -21,6 +21,7 @@ import { GovernmentAgency } from 'src/government-agencies/entities/government-ag
 import { Favorite } from 'src/favorite/entities/favorite.entity';
 import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
+import { DevelopmentIssue } from 'src/development-issue/entities/development-issue.entity';
 
 @Entity('project_groups')
 export class ProjectGroup {
@@ -48,8 +49,13 @@ export class ProjectGroup {
   @Column('decimal', { precision: 10, scale: 7, nullable: true })
   endLng: number | null;
 
-  @Column('text')
-  indicator: string;
+  /**
+   * CLAUDE.md §16.5 — nullable for ISSUE_BASED plans.
+   * A DB CHECK constraint enforces exactly-one-shape together with
+   * strategy_id / tactic_id / plan_id / development_issue_id.
+   */
+  @Column('text', { nullable: true })
+  indicator: string | null;
 
   @Column('text')
   expected: string;
@@ -72,23 +78,40 @@ export class ProjectGroup {
   @ManyToOne(() => Strategy, (strategy) => strategy.projectGroup, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',
+    nullable: true,
   })
   @JoinColumn({ name: 'strategy_id' })
-  strategy: Strategy;
+  strategy: Strategy | null;
 
   @ManyToOne(() => Tactic, (tactic) => tactic.projectGroup, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',
+    nullable: true,
   })
   @JoinColumn({ name: 'tactic_id' })
-  tactic: Tactic;
+  tactic: Tactic | null;
 
   @ManyToOne(() => Plan, (plan) => plan.projectGroup, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',
+    nullable: true,
   })
   @JoinColumn({ name: 'plan_id' })
-  plan: Plan;
+  plan: Plan | null;
+
+  /**
+   * CLAUDE.md §16 Multi-Format Reporting — ISSUE_BASED classification.
+   * Mutually exclusive with (strategy, tactic, plan, indicator) per the
+   * §16.5 shape invariant and the `chk_project_groups_classification_shape`
+   * DB CHECK constraint.
+   */
+  @ManyToOne(() => DevelopmentIssue, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+    nullable: true,
+  })
+  @JoinColumn({ name: 'development_issue_id' })
+  developmentIssue: DevelopmentIssue | null;
 
   @ManyToOne(() => DevelopmentPlan, (developmentPlan) => developmentPlan.projectGroup, {
     onDelete: 'CASCADE',

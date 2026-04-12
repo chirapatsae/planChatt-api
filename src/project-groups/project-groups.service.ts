@@ -37,6 +37,14 @@ import { PdfOutAuthorityDocument } from 'src/pdf/entities/pdf-out-authority-docu
 import { PlanPhase, PhaseType } from 'src/plan-phase/entities/plan-phase.entity';
 import { GeoBoundaryService } from 'src/ai/geo-boundary.service';
 import { LineageLockService } from 'src/common/lineage-lock/lineage-lock.service';
+import { ProjectClassificationValidator } from 'src/common/project-classification/project-classification.validator';
+import { BookFormatResolver } from 'src/common/project-classification/book-format.resolver';
+import { DevelopmentIssue } from 'src/development-issue/entities/development-issue.entity';
+import { ReportFormat } from 'src/development-plan/types/report-format.enum';
+import {
+  ERROR_CODES,
+  ERROR_MESSAGES,
+} from 'src/common/project-classification/constants';
 
 @Injectable()
 export class ProjectGroupsService {
@@ -88,7 +96,60 @@ export class ProjectGroupsService {
     private readonly dataSource: DataSource,
     private readonly geoBoundaryService: GeoBoundaryService,
     private readonly lineageLockService: LineageLockService,
+    private readonly classificationValidator: ProjectClassificationValidator,
+    private readonly bookFormatResolver: BookFormatResolver,
   ) { }
+
+  /**
+   * CLAUDE.md §16.5 — invokes the shared ProjectClassificationValidator
+   * for the supplied plan id + DTO. Additionally enforces the
+   * service-layer "issue belongs to the same plan" guard that the
+   * standalone validator intentionally leaves out (see §16 note on
+   * plan-awareness).
+   *
+   * MUST be called from every create/update/publishDraft path BEFORE
+   * any repository write.
+   */
+  private async validateClassificationShape(
+    manager: EntityManager,
+    planId: string,
+    dto: {
+      strategyId?: string | null;
+      tacticId?: string | null;
+      planId?: string | null;
+      developmentIssueId?: string | null;
+      indicator?: string | null;
+    },
+  ): Promise<ReportFormat> {
+    const format = await this.bookFormatResolver.resolveByPlan(planId, manager);
+    this.classificationValidator.validate(format, {
+      strategyId: dto.strategyId,
+      tacticId: dto.tacticId,
+      planId: dto.planId,
+      developmentIssueId: dto.developmentIssueId,
+      indicator: dto.indicator,
+    });
+
+    if (format === ReportFormat.ISSUE_BASED && dto.developmentIssueId) {
+      // Issue-belongs-to-plan check (plan-aware guard, §16 note).
+      const issue = await manager.findOne(DevelopmentIssue, {
+        where: { id: dto.developmentIssueId },
+        relations: ['developmentPlan'],
+      });
+      if (!issue) {
+        throw new NotFoundException(
+          `${ERROR_CODES.DEVELOPMENT_ISSUE_NOT_FOUND}: ${ERROR_MESSAGES.DEVELOPMENT_ISSUE_NOT_FOUND}`,
+        );
+      }
+      if (issue.developmentPlan?.id !== planId) {
+        throw new BadRequestException(
+          `${ERROR_CODES.DEVELOPMENT_ISSUE_PLAN_MISMATCH}: ${ERROR_MESSAGES.DEVELOPMENT_ISSUE_PLAN_MISMATCH}`,
+        );
+      }
+    }
+
+    return format;
+  }
 
   async create(dto: CreateProjectGroupDto, userId: string) {
     try {
@@ -96,9 +157,42 @@ export class ProjectGroupsService {
         const workHistory = await this.getWorkHistory(manager, userId);
         this.assertWorkStatusApproved(workHistory);
         await this.ensureNoDuplicateTitle(manager, dto.title, workHistory.id, undefined);
-        const [developmentPlan, strategy, tactic, plan] = await this.validateForeignKeys(manager, dto);
+
+        // CLAUDE.md §16.5 — validate classification shape BEFORE the
+        // repository write and BEFORE any format-specific FK lookup so
+        // a mismatched DTO never consumes a strategy/tactic/plan
+        // lookup slot that would otherwise NotFound-fail confusingly.
+        const format = await this.validateClassificationShape(
+          manager,
+          dto.developmentPlanId,
+          dto,
+        );
+
+        const [developmentPlan, strategy, tactic, plan] =
+          await this.validateForeignKeys(manager, dto, format);
         await this.validatePlanPhase(manager, developmentPlan as DevelopmentPlan, workHistory);
         const agencyData = this.getAgencyData(workHistory);
+
+        // §16.5 — for ISSUE_BASED plans we clear the strategy/tactic/plan
+        // tuple and the indicator, and attach the issue FK. For
+        // STRATEGY_BASED plans we clear the issue FK (defensive — the
+        // validator already rejected it).
+        const classificationColumns =
+          format === ReportFormat.ISSUE_BASED
+            ? {
+                strategy: null,
+                tactic: null,
+                plan: null,
+                indicator: null,
+                developmentIssue: { id: dto.developmentIssueId } as DevelopmentIssue,
+              }
+            : {
+                strategy,
+                tactic,
+                plan,
+                indicator: dto.indicator,
+                developmentIssue: null,
+              };
 
         const group = manager.create(ProjectGroup, {
           title: dto.title,
@@ -108,13 +202,10 @@ export class ProjectGroupsService {
           startLng: dto.startLng,
           endLat: dto.endLat,
           endLng: dto.endLng,
-          indicator: dto.indicator,
           expected: dto.expected,
           projectYear: dto.projectYear,
           isBooked: dto.isBooked ?? false,
-          strategy,
-          tactic,
-          plan,
+          ...classificationColumns,
           developmentPlan,
           createdBy: workHistory,
           originAgencyId: workHistory.localAdministrativeOrganization.id === '3001027' ? null : { id: workHistory.localAdministrativeOrganization.id },
@@ -179,16 +270,54 @@ export class ProjectGroupsService {
         const workHistory = await this.getWorkHistory(manager, userId);
         this.assertWorkStatusApproved(workHistory);
         await this.ensureNoDuplicateTitle(manager, dto.title, workHistory.id, undefined);
+
+        // CLAUDE.md §16.5 — draft classification shape validation.
+        // Drafts are allowed to omit classification entirely (both slots
+        // empty); but if EITHER slot has data, it must satisfy the shape
+        // invariant for the resolved plan format. When the draft has no
+        // developmentPlanId yet we skip shape validation — the publish
+        // step will enforce it.
+        if (dto.developmentPlanId) {
+          const format = await this.bookFormatResolver.resolveByPlan(
+            dto.developmentPlanId,
+            manager,
+          );
+          // Drafts MAY be partial, so we only enforce when ANY
+          // classification slot is populated.
+          const hasAnyClassification =
+            !!dto.strategyId ||
+            !!dto.tacticId ||
+            !!dto.planId ||
+            !!dto.developmentIssueId ||
+            (typeof dto.indicator === 'string' && dto.indicator.trim() !== '');
+          if (hasAnyClassification) {
+            this.classificationValidator.validate(format, {
+              strategyId: dto.strategyId,
+              tacticId: dto.tacticId,
+              planId: dto.planId,
+              developmentIssueId: dto.developmentIssueId,
+              indicator: dto.indicator,
+            });
+          }
+        }
+
         // Validate only strategy, tactic, plan for draft (skip developmentPlan validation)
-        const [strategy, tactic, plan] = await Promise.all([
+        const [strategy, tactic, plan, developmentIssue] = await Promise.all([
           dto.strategyId ? manager.findOne(Strategy, { where: { id: dto.strategyId } }) : null,
           dto.tacticId ? manager.findOne(Tactic, { where: { id: dto.tacticId } }) : null,
           dto.planId ? manager.findOne(Plan, { where: { id: dto.planId } }) : null,
+          dto.developmentIssueId
+            ? manager.findOne(DevelopmentIssue, { where: { id: dto.developmentIssueId } })
+            : null,
         ]);
 
         if (dto.strategyId && !strategy) throw new NotFoundException(`Strategy ID not found: ${dto.strategyId}`);
         if (dto.tacticId && !tactic) throw new NotFoundException(`Tactic ID not found: ${dto.tacticId}`);
         if (dto.planId && !plan) throw new NotFoundException(`Plan ID not found: ${dto.planId}`);
+        if (dto.developmentIssueId && !developmentIssue)
+          throw new NotFoundException(
+            `${ERROR_CODES.DEVELOPMENT_ISSUE_NOT_FOUND}: ${ERROR_MESSAGES.DEVELOPMENT_ISSUE_NOT_FOUND}`,
+          );
 
         const agencyData = this.getAgencyData(workHistory);
 
@@ -204,7 +333,13 @@ export class ProjectGroupsService {
           startLng: dto.startLng ?? null,
           endLat: dto.endLat ?? null,
           endLng: dto.endLng ?? null,
-          indicator: dto.indicator || '',
+          // CLAUDE.md §16.5 — indicator is nullable for ISSUE_BASED.
+          // An empty string here is coerced to null so the CHECK
+          // constraint `indicator <> ''` doesn't reject the insert.
+          indicator:
+            dto.indicator && dto.indicator.trim() !== ''
+              ? dto.indicator
+              : null,
           expected: dto.expected || '',
           ...agencyData,
         }
@@ -212,6 +347,7 @@ export class ProjectGroupsService {
         if (strategy) projectGroupData.strategy = strategy;
         if (tactic) projectGroupData.tactic = tactic;
         if (plan) projectGroupData.plan = plan;
+        if (developmentIssue) projectGroupData.developmentIssue = developmentIssue;
 
         const group = manager.create(
           ProjectGroup,
@@ -274,12 +410,40 @@ export class ProjectGroupsService {
         }
 
         await this.ensureNoDuplicateTitle(manager, dto.title, workHistory.id, id);
-        const [developmentPlan, strategy, tactic, plan] = await this.validateForeignKeys(manager, dto);
+
+        // CLAUDE.md §16.5 — publish path: shape is now required.
+        const format = await this.validateClassificationShape(
+          manager,
+          dto.developmentPlanId,
+          dto,
+        );
+
+        const [developmentPlan, strategy, tactic, plan] =
+          await this.validateForeignKeys(manager, dto, format);
 
         // 6-7. PlanPhase scope
         await this.validatePlanPhase(manager, developmentPlan as DevelopmentPlan, workHistory);
 
         const agencyData = this.getAgencyData(workHistory);
+
+        const classificationColumns =
+          format === ReportFormat.ISSUE_BASED
+            ? {
+                strategy: null,
+                tactic: null,
+                plan: null,
+                indicator: null,
+                developmentIssue: {
+                  id: dto.developmentIssueId,
+                } as DevelopmentIssue,
+              }
+            : {
+                strategy,
+                tactic,
+                plan,
+                indicator: dto.indicator,
+                developmentIssue: null,
+              };
 
         // อัพเดท project group data
         const projectGroupData: any = {
@@ -290,13 +454,10 @@ export class ProjectGroupsService {
           startLng: dto.startLng,
           endLat: dto.endLat,
           endLng: dto.endLng,
-          indicator: dto.indicator,
           expected: dto.expected,
           projectYear: dto.projectYear,
           isBooked: dto.isBooked ?? false,
-          strategy,
-          tactic,
-          plan,
+          ...classificationColumns,
           developmentPlan,
           amphoe: { id: workHistory.amphoe.id },
           localAdministrativeOrganization: { id: workHistory.localAdministrativeOrganization.id },
@@ -369,16 +530,49 @@ export class ProjectGroupsService {
         }
 
         await this.ensureNoDuplicateTitle(manager, dto.title, workHistory.id, id);
+
+        // CLAUDE.md §16.5 — same soft rule as createDraft: if ANY
+        // classification slot is populated AND the draft has a
+        // developmentPlanId, validate the shape.
+        if (dto.developmentPlanId) {
+          const format = await this.bookFormatResolver.resolveByPlan(
+            dto.developmentPlanId,
+            manager,
+          );
+          const hasAnyClassification =
+            !!dto.strategyId ||
+            !!dto.tacticId ||
+            !!dto.planId ||
+            !!dto.developmentIssueId ||
+            (typeof dto.indicator === 'string' && dto.indicator.trim() !== '');
+          if (hasAnyClassification) {
+            this.classificationValidator.validate(format, {
+              strategyId: dto.strategyId,
+              tacticId: dto.tacticId,
+              planId: dto.planId,
+              developmentIssueId: dto.developmentIssueId,
+              indicator: dto.indicator,
+            });
+          }
+        }
+
         // Validate only strategy, tactic, plan for draft (skip developmentPlan validation)
-        const [strategy, tactic, plan] = await Promise.all([
+        const [strategy, tactic, plan, developmentIssue] = await Promise.all([
           dto.strategyId ? manager.findOne(Strategy, { where: { id: dto.strategyId } }) : null,
           dto.tacticId ? manager.findOne(Tactic, { where: { id: dto.tacticId } }) : null,
           dto.planId ? manager.findOne(Plan, { where: { id: dto.planId } }) : null,
+          dto.developmentIssueId
+            ? manager.findOne(DevelopmentIssue, { where: { id: dto.developmentIssueId } })
+            : null,
         ]);
 
         if (dto.strategyId && !strategy) throw new NotFoundException(`Strategy ID not found: ${dto.strategyId}`);
         if (dto.tacticId && !tactic) throw new NotFoundException(`Tactic ID not found: ${dto.tacticId}`);
         if (dto.planId && !plan) throw new NotFoundException(`Plan ID not found: ${dto.planId}`);
+        if (dto.developmentIssueId && !developmentIssue)
+          throw new NotFoundException(
+            `${ERROR_CODES.DEVELOPMENT_ISSUE_NOT_FOUND}: ${ERROR_MESSAGES.DEVELOPMENT_ISSUE_NOT_FOUND}`,
+          );
 
         // อัพเดท project group data
         const projectGroupData: any = {
@@ -389,13 +583,19 @@ export class ProjectGroupsService {
           startLng: dto.startLng ?? null,
           endLat: dto.endLat ?? null,
           endLng: dto.endLng ?? null,
-          indicator: dto.indicator || '',
+          // §16.5 — empty-string indicator coerced to null so the
+          // CHECK constraint accepts ISSUE_BASED drafts cleanly.
+          indicator:
+            dto.indicator && dto.indicator.trim() !== ''
+              ? dto.indicator
+              : null,
           expected: dto.expected || '',
           projectYear: dto.projectYear,
           isBooked: dto.isBooked ?? false,
           strategy,
           tactic,
           plan,
+          developmentIssue: developmentIssue ?? null,
           isDraft: true,
         };
 
@@ -512,6 +712,7 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('projectGroup.strategy', 'strategy')
       .leftJoinAndSelect('projectGroup.tactic', 'tactic')
       .leftJoinAndSelect('projectGroup.plan', 'plan')
+      .leftJoinAndSelect('projectGroup.developmentIssue', 'developmentIssue')
       .leftJoinAndSelect('projectGroup.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('projectGroup.budgets', 'budgets')
       .leftJoinAndSelect('projectGroup.trackingStatus', 'trackingStatus')
@@ -1587,6 +1788,7 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('projectGroup.strategy', 'strategy')
       .leftJoinAndSelect('projectGroup.tactic', 'tactic')
       .leftJoinAndSelect('projectGroup.plan', 'plan')
+      .leftJoinAndSelect('projectGroup.developmentIssue', 'developmentIssue')
       .leftJoinAndSelect('projectGroup.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('projectGroup.budgets', 'budgets')
       .leftJoinAndSelect('projectGroup.trackingStatus', 'trackingStatus')
@@ -1654,6 +1856,7 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('revisedProject.strategy', 'strategy')
       .leftJoinAndSelect('revisedProject.tactic', 'tactic')
       .leftJoinAndSelect('revisedProject.plan', 'plan')
+      .leftJoinAndSelect('revisedProject.developmentIssue', 'developmentIssue')
       .leftJoinAndSelect('revisedProject.budgets', 'budgets')
       .leftJoinAndSelect('revisedProject.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
@@ -2649,6 +2852,7 @@ export class ProjectGroupsService {
         developmentPlanName: developmentPlan.name,
         startYear: developmentPlan.startYear,
         endYear: developmentPlan.endYear,
+        reportFormat: developmentPlan.reportFormat,
         isUsingMainPlan,
         planType: isUsingMainPlan ? 'main' : 'revision'
       },
@@ -2667,11 +2871,21 @@ export class ProjectGroupsService {
       // Strategy statistics with projects
       strategyStatistics: strategyStats,
 
+      // Issue statistics (populated for ISSUE_BASED plans)
+      issueStatistics: developmentPlan.reportFormat === ReportFormat.ISSUE_BASED
+        ? this.getIssueStatistics(allProjects)
+        : [],
+
       // Budget allocation by year (for waterfall chart)
       budgetByYear: budgetByYear,
 
       // Budget allocation by strategy (for treemap)
       budgetByStrategy: budgetByStrategy,
+
+      // Budget allocation by issue (populated for ISSUE_BASED plans)
+      budgetByIssue: developmentPlan.reportFormat === ReportFormat.ISSUE_BASED
+        ? this.getBudgetByIssue(allProjects)
+        : [],
 
       // Budget allocation by government agencies
       budgetByAgencies: budgetByAgencies,
@@ -2751,6 +2965,7 @@ export class ProjectGroupsService {
         developmentPlanName: developmentPlan.name,
         startYear: developmentPlan.startYear,
         endYear: developmentPlan.endYear,
+        reportFormat: developmentPlan.reportFormat,
         isUsingMainPlan,
         planType: isUsingMainPlan ? 'main' : 'revision'
       },
@@ -2828,6 +3043,7 @@ export class ProjectGroupsService {
         developmentPlanName: developmentPlan.name,
         startYear: developmentPlan.startYear,
         endYear: developmentPlan.endYear,
+        reportFormat: developmentPlan.reportFormat,
         isUsingMainPlan,
         planType: isUsingMainPlan ? 'main' : 'revision'
       },
@@ -2924,6 +3140,7 @@ export class ProjectGroupsService {
         developmentPlanName: developmentPlan.name,
         startYear: developmentPlan.startYear,
         endYear: developmentPlan.endYear,
+        reportFormat: developmentPlan.reportFormat,
         isUsingMainPlan,
         planType: isUsingMainPlan ? 'main' : 'revision'
       },
@@ -2936,6 +3153,14 @@ export class ProjectGroupsService {
 
       // Plan comparison
       planComparison: planComparison,
+
+      // §16 ISSUE_BASED aggregation
+      issueStatistics: developmentPlan.reportFormat === ReportFormat.ISSUE_BASED
+        ? this.getIssueStatistics(allProjects)
+        : [],
+      budgetByIssue: developmentPlan.reportFormat === ReportFormat.ISSUE_BASED
+        ? this.getBudgetByIssue(allProjects)
+        : [],
 
       // All projects for reference
       projects: allProjects,
@@ -3023,6 +3248,7 @@ export class ProjectGroupsService {
         developmentPlanName: developmentPlan.name,
         startYear: developmentPlan.startYear,
         endYear: developmentPlan.endYear,
+        reportFormat: developmentPlan.reportFormat,
         isUsingMainPlan,
         planType: isUsingMainPlan ? 'main' : 'revision'
       },
@@ -3040,6 +3266,16 @@ export class ProjectGroupsService {
 
       // Strategy statistics
       strategyStatistics: strategyStats,
+
+      // Issue statistics (populated for ISSUE_BASED plans)
+      issueStatistics: developmentPlan.reportFormat === ReportFormat.ISSUE_BASED
+        ? this.getIssueStatistics(allProjects)
+        : [],
+
+      // Budget allocation by issue (populated for ISSUE_BASED plans)
+      budgetByIssue: developmentPlan.reportFormat === ReportFormat.ISSUE_BASED
+        ? this.getBudgetByIssue(allProjects)
+        : [],
 
       // All projects
       projects: allProjects,
@@ -3070,6 +3306,7 @@ export class ProjectGroupsService {
 
         const strategy = project.strategy || project.originalProject?.strategy;
         const plan = project.plan || project.originalProject?.plan;
+        const developmentIssue = project.developmentIssue || project.originalProject?.developmentIssue;
         const originAgency = project.originAgencyId || project.originalProject?.originAgencyId;
         const responsibleAgency = project.responsibleAgency || project.originalProject?.responsibleAgency;
 
@@ -3163,6 +3400,12 @@ export class ProjectGroupsService {
           plan: plan ? {
             id: plan.id,
             name: plan.name
+          } : null,
+
+          // Development Issue (ISSUE_BASED plans)
+          developmentIssue: developmentIssue ? {
+            id: developmentIssue.id,
+            name: developmentIssue.name
           } : null,
 
           // Agency info
@@ -3375,6 +3618,8 @@ export class ProjectGroupsService {
             statusCategory = this.mapStatusToCategory(statusName);
           }
 
+          const developmentIssue = project.developmentIssue || project.originalProject?.developmentIssue;
+
           return {
             projectId: project.id,
             title: project.title || project.originalProject?.title,
@@ -3407,6 +3652,12 @@ export class ProjectGroupsService {
             plan: plan ? {
               id: plan.id,
               name: plan.name
+            } : null,
+
+            // Development Issue (ISSUE_BASED plans)
+            developmentIssue: developmentIssue ? {
+              id: developmentIssue.id,
+              name: developmentIssue.name
             } : null,
 
             // Agency info
@@ -3511,6 +3762,7 @@ export class ProjectGroupsService {
             const tactic = project.tactic || project.originalProject?.tactic;
             const plan = project.plan || project.originalProject?.plan;
             const responsibleAgency = project.responsibleAgency || project.originalProject?.responsibleAgency;
+            const developmentIssue = project.developmentIssue || project.originalProject?.developmentIssue;
 
             const budgets = project.budgets || project.originalProject?.budgets || [];
             const totalBudget = budgets.reduce((sum: number, budget: any) => {
@@ -3553,6 +3805,12 @@ export class ProjectGroupsService {
               plan: plan ? {
                 id: plan.id,
                 name: plan.name
+              } : null,
+
+              // Development Issue (ISSUE_BASED plans)
+              developmentIssue: developmentIssue ? {
+                id: developmentIssue.id,
+                name: developmentIssue.name
               } : null,
 
               originAgency: {
@@ -3891,6 +4149,180 @@ export class ProjectGroupsService {
         }))
       };
     }).filter(strategy => strategy.totalBudget > 0); // Only include strategies with budget
+  }
+
+  /**
+   * Get statistics grouped by DevelopmentIssue (for ISSUE_BASED plans).
+   * Mirrors getStrategyStatistics but uses developmentIssue instead of strategy.
+   */
+  private getIssueStatistics(allProjects: any[]): any[] {
+    const issueMap = new Map<string, {
+      issueId: string;
+      issueName: string;
+      projects: any[];
+    }>();
+
+    allProjects.forEach(project => {
+      const issue = project.developmentIssue || project.originalProject?.developmentIssue;
+      if (!issue) return;
+
+      if (!issueMap.has(issue.id)) {
+        issueMap.set(issue.id, {
+          issueId: issue.id,
+          issueName: issue.name,
+          projects: [],
+        });
+      }
+      issueMap.get(issue.id)!.projects.push(project);
+    });
+
+    return Array.from(issueMap.values()).map(entry => {
+      const totalBudget = entry.projects.reduce((sum, project) => {
+        const budgets = project.budgets || project.originalProject?.budgets || [];
+        return sum + budgets.reduce((budgetSum: number, budget: any) => {
+          const quantity = typeof budget.quantity === 'string'
+            ? parseFloat(budget.quantity)
+            : (budget.quantity || 0);
+          return budgetSum + quantity;
+        }, 0);
+      }, 0);
+
+      const statusCounts = entry.projects.reduce((counts, project) => {
+        let statusName = 'Unknown';
+        if (project.trackingStatus && project.trackingStatus.length > 0) {
+          const latestTrackingStatus =
+            project.trackingStatus.find(ts => ts.isLatest) || project.trackingStatus[0];
+          statusName = latestTrackingStatus?.statusId?.name || 'Unknown';
+        }
+        const category = this.mapStatusToCategory(statusName);
+        counts[category] = (counts[category] || 0) + 1;
+        return counts;
+      }, {});
+
+      const projectsWithDetails = entry.projects.map(project => {
+        const budgets = project.budgets || project.originalProject?.budgets || [];
+        const projectBudget = budgets.reduce((sum: number, budget: any) => {
+          const quantity = typeof budget.quantity === 'string'
+            ? parseFloat(budget.quantity)
+            : (budget.quantity || 0);
+          return sum + quantity;
+        }, 0);
+
+        let statusName = 'Unknown';
+        let statusCategory = 'unknown';
+        if (project.trackingStatus && project.trackingStatus.length > 0) {
+          const latestTrackingStatus =
+            project.trackingStatus.find(ts => ts.isLatest) || project.trackingStatus[0];
+          statusName = latestTrackingStatus?.statusId?.name || 'Unknown';
+          statusCategory = this.mapStatusToCategory(statusName);
+        }
+
+        return {
+          id: project.id,
+          title: project.title || project.originalProject?.title,
+          objective: project.objective || project.originalProject?.objective,
+          projectYear: project.projectYear || project.originalProject?.projectYear,
+          budget: Math.round(projectBudget * 100) / 100,
+          status: statusName,
+          statusCategory,
+          isRevised: !!project.originalProject,
+          createdAt: project.createdAt || project.originalProject?.createdAt,
+        };
+      });
+
+      return {
+        issueId: entry.issueId,
+        issueName: entry.issueName,
+        totalProjects: entry.projects.length,
+        totalBudget: Math.round(totalBudget * 100) / 100,
+        approvedCount: statusCounts['approved'] || 0,
+        pendingCount: statusCounts['pending'] || 0,
+        rejectedCount: statusCounts['rejected'] || 0,
+        projects: projectsWithDetails,
+      };
+    });
+  }
+
+  /**
+   * Get budget allocation grouped by DevelopmentIssue (for ISSUE_BASED plans).
+   * Mirrors getBudgetByStrategy but uses developmentIssue instead of strategy.
+   */
+  private getBudgetByIssue(allProjects: any[]): any[] {
+    const issueMap = new Map<string, {
+      issueId: string;
+      issueName: string;
+      projects: any[];
+    }>();
+
+    allProjects.forEach(project => {
+      const issue = project.developmentIssue || project.originalProject?.developmentIssue;
+      if (!issue) return;
+
+      if (!issueMap.has(issue.id)) {
+        issueMap.set(issue.id, {
+          issueId: issue.id,
+          issueName: issue.name,
+          projects: [],
+        });
+      }
+      issueMap.get(issue.id)!.projects.push(project);
+    });
+
+    return Array.from(issueMap.values()).map(entry => {
+      const totalBudget = entry.projects.reduce((sum, project) => {
+        const budgets = project.budgets || project.originalProject?.budgets || [];
+        return sum + budgets.reduce((budgetSum: number, budget: any) => {
+          const quantity = typeof budget.quantity === 'string'
+            ? parseFloat(budget.quantity)
+            : (budget.quantity || 0);
+          return budgetSum + quantity;
+        }, 0);
+      }, 0);
+
+      const statusBreakdown = entry.projects.reduce((counts, project) => {
+        let statusName = 'Unknown';
+        if (project.trackingStatus && project.trackingStatus.length > 0) {
+          const latestTrackingStatus =
+            project.trackingStatus.find(ts => ts.isLatest) || project.trackingStatus[0];
+          statusName = latestTrackingStatus?.statusId?.name || 'Unknown';
+        }
+        const category = this.mapStatusToCategory(statusName);
+        counts[category] = (counts[category] || 0) + 1;
+        return counts;
+      }, {});
+
+      return {
+        issueId: entry.issueId,
+        issueName: entry.issueName,
+        totalBudget: Math.round(totalBudget * 100) / 100,
+        projectCount: entry.projects.length,
+        statusBreakdown: {
+          approved: statusBreakdown['approved'] || 0,
+          pending: statusBreakdown['pending'] || 0,
+          rejected: statusBreakdown['rejected'] || 0,
+        },
+        size: totalBudget,
+        children: entry.projects.map(project => ({
+          projectId: project.id,
+          projectTitle: project.title || project.originalProject?.title,
+          budget: Math.round(
+            (project.budgets || project.originalProject?.budgets || []).reduce(
+              (sum: number, budget: any) =>
+                sum +
+                (typeof budget.quantity === 'string'
+                  ? parseFloat(budget.quantity)
+                  : (budget.quantity || 0)),
+              0,
+            ) * 100,
+          ) / 100,
+          status:
+            project.trackingStatus?.find(ts => ts.isLatest)?.statusId?.name || 'Unknown',
+          statusCategory: this.mapStatusToCategory(
+            project.trackingStatus?.find(ts => ts.isLatest)?.statusId?.name || 'Unknown',
+          ),
+        })),
+      };
+    }).filter(entry => entry.totalBudget > 0);
   }
 
   /**
@@ -4960,29 +5392,79 @@ export class ProjectGroupsService {
           'Project group with this title already exists',
         );
 
-      // 3. ตรวจสอบ foreign key
-      const [strategy, tactic, plan] = await Promise.all([
-        manager.findOne(Strategy, {
-          where: { id: dto.strategyId },
-        }),
-        manager.findOne(Tactic, {
-          where: { id: dto.tacticId },
-        }),
-        manager.findOne(Plan, { where: { id: dto.planId } }),
-      ]);
-      if (!strategy)
-        throw new NotFoundException(`Strategy ID not found: ${dto.strategyId}`);
-      if (!tactic)
-        throw new NotFoundException(`Tactic ID not found: ${dto.tacticId}`);
-      if (!plan)
-        throw new NotFoundException(`Plan ID not found: ${dto.planId}`);
-
       // 5. ดึง group เดิม
       const group = await manager.findOne(ProjectGroup, {
         where: { id },
-        relations: ['strategy', 'tactic', 'plan', 'developmentPlan'],
+        relations: [
+          'strategy',
+          'tactic',
+          'plan',
+          'developmentPlan',
+          'developmentIssue',
+        ],
       });
       if (!group) throw new NotFoundException(`Project group ${id} not found`);
+      if (!group.developmentPlan) {
+        throw new BadRequestException(
+          'โครงการนี้ไม่มีแผนพัฒนาต้นทาง ไม่สามารถแก้ไขได้',
+        );
+      }
+
+      // CLAUDE.md §16.5 — validate classification shape against the
+      // plan the project already belongs to. The plan is immutable via
+      // §14, so we resolve the format from the loaded row and reject
+      // any cross-shape update attempt.
+      const format = await this.validateClassificationShape(
+        manager,
+        group.developmentPlan.id,
+        dto,
+      );
+
+      // 3. ตรวจสอบ foreign key (format-aware)
+      let strategy: Strategy | null = null;
+      let tactic: Tactic | null = null;
+      let plan: Plan | null = null;
+      let developmentIssue: DevelopmentIssue | null = null;
+      if (format === ReportFormat.STRATEGY_BASED) {
+        [strategy, tactic, plan] = await Promise.all([
+          manager.findOne(Strategy, { where: { id: dto.strategyId } }),
+          manager.findOne(Tactic, { where: { id: dto.tacticId } }),
+          manager.findOne(Plan, { where: { id: dto.planId } }),
+        ]);
+        if (!strategy)
+          throw new NotFoundException(
+            `Strategy ID not found: ${dto.strategyId}`,
+          );
+        if (!tactic)
+          throw new NotFoundException(`Tactic ID not found: ${dto.tacticId}`);
+        if (!plan)
+          throw new NotFoundException(`Plan ID not found: ${dto.planId}`);
+      } else {
+        developmentIssue = await manager.findOne(DevelopmentIssue, {
+          where: { id: dto.developmentIssueId },
+        });
+        if (!developmentIssue)
+          throw new NotFoundException(
+            `${ERROR_CODES.DEVELOPMENT_ISSUE_NOT_FOUND}: ${ERROR_MESSAGES.DEVELOPMENT_ISSUE_NOT_FOUND}`,
+          );
+      }
+
+      const classificationColumns =
+        format === ReportFormat.ISSUE_BASED
+          ? {
+              strategy: null,
+              tactic: null,
+              plan: null,
+              indicator: null,
+              developmentIssue,
+            }
+          : {
+              strategy,
+              tactic,
+              plan,
+              indicator: dto.indicator,
+              developmentIssue: null,
+            };
 
       // 6. อัปเดตข้อมูลหลัก
       Object.assign(group, {
@@ -4993,12 +5475,9 @@ export class ProjectGroupsService {
         startLng: dto.startLng,
         endLat: dto.endLat ?? null,
         endLng: dto.endLng ?? null,
-        indicator: dto.indicator,
         expected: dto.expected,
         isBooked: dto.isBooked,
-        strategy,
-        tactic,
-        plan,
+        ...classificationColumns,
       });
       await manager.save(group);
 
@@ -5202,22 +5681,47 @@ export class ProjectGroupsService {
     }
   }
 
-  private async validateForeignKeys(manager: EntityManager, dto: CreateProjectGroupDto) {
-    const [developmentPlan, strategy, tactic, plan] = await Promise.all([
-      manager.findOne(DevelopmentPlan, { where: { id: dto.developmentPlanId } }),
+  private async validateForeignKeys(
+    manager: EntityManager,
+    dto: CreateProjectGroupDto,
+    format?: ReportFormat,
+  ) {
+    const developmentPlan = await manager.findOne(DevelopmentPlan, {
+      where: { id: dto.developmentPlanId },
+    });
+
+    if (!developmentPlan)
+      throw new NotFoundException(
+        `Development Plan ID not found: ${dto.developmentPlanId}`,
+      );
+    if (!(developmentPlan as DevelopmentPlan).isLatest)
+      throw new BadRequestException('แผนพัฒนาฯ ที่ระบุไม่ใช่แผนปัจจุบัน');
+    if ((developmentPlan as DevelopmentPlan).isBooked)
+      throw new BadRequestException(
+        'แผนพัฒนาฯ ถูกรวมเล่มแล้ว ไม่สามารถดำเนินการได้',
+      );
+
+    // CLAUDE.md §16.5 — only STRATEGY_BASED plans resolve the
+    // Strategy/Tactic/Plan triple. ISSUE_BASED plans use the issue FK
+    // and we return null placeholders.
+    const resolvedFormat = format ?? developmentPlan.reportFormat;
+    if (resolvedFormat === ReportFormat.ISSUE_BASED) {
+      return [developmentPlan, null, null, null] as const;
+    }
+
+    const [strategy, tactic, plan] = await Promise.all([
       manager.findOne(Strategy, { where: { id: dto.strategyId } }),
       manager.findOne(Tactic, { where: { id: dto.tacticId } }),
       manager.findOne(Plan, { where: { id: dto.planId } }),
     ]);
 
-    if (!developmentPlan) throw new NotFoundException(`Development Plan ID not found: ${dto.developmentPlanId}`);
-    if (!(developmentPlan as DevelopmentPlan).isLatest) throw new BadRequestException('แผนพัฒนาฯ ที่ระบุไม่ใช่แผนปัจจุบัน');
-    if ((developmentPlan as DevelopmentPlan).isBooked) throw new BadRequestException('แผนพัฒนาฯ ถูกรวมเล่มแล้ว ไม่สามารถดำเนินการได้');
-    if (!strategy) throw new NotFoundException(`Strategy ID not found: ${dto.strategyId}`);
-    if (!tactic) throw new NotFoundException(`Tactic ID not found: ${dto.tacticId}`);
+    if (!strategy)
+      throw new NotFoundException(`Strategy ID not found: ${dto.strategyId}`);
+    if (!tactic)
+      throw new NotFoundException(`Tactic ID not found: ${dto.tacticId}`);
     if (!plan) throw new NotFoundException(`Plan ID not found: ${dto.planId}`);
 
-    return [developmentPlan, strategy, tactic, plan];
+    return [developmentPlan, strategy, tactic, plan] as const;
   }
 
   private getAgencyData(workHistory: WorkHistory): Partial<ProjectGroup> {

@@ -103,6 +103,8 @@ import { BookAssemblyDraft } from './book-assembly/entities/book-assembly-draft.
 import { BookAssemblyVersion } from './book-assembly/entities/book-assembly-version.entity';
 import { DeprecationAuditLog } from './book-assembly/entities/deprecation-audit-log.entity';
 import { BookProjectLineage } from './book-assembly/entities/book-project-lineage.entity';
+import { DevelopmentIssueModule } from './development-issue/development-issue.module';
+import { DevelopmentIssue } from './development-issue/entities/development-issue.entity';
 
 
 @Module({
@@ -183,6 +185,7 @@ import { BookProjectLineage } from './book-assembly/entities/book-project-lineag
         BookAssemblyVersion,
         DeprecationAuditLog,
         BookProjectLineage,
+        DevelopmentIssue,
       ],
       synchronize: true,
       extra: {
@@ -236,6 +239,7 @@ import { BookProjectLineage } from './book-assembly/entities/book-project-lineag
     AttachmentProjectGroupsModule,
     AttachmentRevisedProjectGroupsModule,
     BookAssemblyModule,
+    DevelopmentIssueModule,
   ],
   controllers: [AppController],
   providers: [AppService],

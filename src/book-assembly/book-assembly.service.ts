@@ -1444,9 +1444,8 @@ export class BookAssemblyService {
       await this.loadAndValidateWorkHistory(userId, READ_ROLES);
       const appUrl = process.env.APP_URL ?? baseUrl;
 
-      // Round 1: fetch all latest development plans
+      // Round 1: fetch all development plans
       const plans = await this.devPlanRepo.find({
-        where: { isLatest: true },
         order: { startYear: 'DESC' },
       });
 

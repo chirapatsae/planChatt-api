@@ -23,6 +23,7 @@ import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.
 import { PrevProjectType } from '../dto/create-revised-project-group.dto';
 import { AttachmentRevisedProjectGroup } from 'src/attachment-revised-project-groups/entities/attachment-revised-project-group.entity';
 import { Favorite } from 'src/favorite/entities/favorite.entity';
+import { DevelopmentIssue } from 'src/development-issue/entities/development-issue.entity';
 
 @Entity('revised_project_groups')
 export class RevisedProjectGroup {
@@ -73,8 +74,13 @@ export class RevisedProjectGroup {
   @Column('decimal', { precision: 10, scale: 7, nullable: true })
   endLng: number | null;
 
-  @Column('text')
-  indicator: string;
+  /**
+   * CLAUDE.md §16.5 — nullable for ISSUE_BASED plans.
+   * A DB CHECK constraint enforces exactly-one-shape together with
+   * strategy_id / tactic_id / plan_id / development_issue_id.
+   */
+  @Column('text', { nullable: true })
+  indicator: string | null;
 
   @Column('text')
   expected: string;
@@ -94,23 +100,40 @@ export class RevisedProjectGroup {
   @ManyToOne(() => Strategy, (strategy) => strategy.projectGroup, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',
+    nullable: true,
   })
   @JoinColumn({ name: 'strategy_id' })
-  strategy: Strategy;
+  strategy: Strategy | null;
 
   @ManyToOne(() => Tactic, (tactic) => tactic.projectGroup, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',
+    nullable: true,
   })
   @JoinColumn({ name: 'tactic_id' })
-  tactic: Tactic;
+  tactic: Tactic | null;
 
   @ManyToOne(() => Plan, (plan) => plan.projectGroup, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',
+    nullable: true,
   })
   @JoinColumn({ name: 'plan_id' })
-  plan: Plan;
+  plan: Plan | null;
+
+  /**
+   * CLAUDE.md §16 Multi-Format Reporting — ISSUE_BASED classification.
+   * Copy-on-fork (§16.6): when forking an ISSUE_BASED ProjectGroup into
+   * a RevisedProjectGroup the FK is copied unchanged — the referenced
+   * DevelopmentIssue row is NOT duplicated.
+   */
+  @ManyToOne(() => DevelopmentIssue, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+    nullable: true,
+  })
+  @JoinColumn({ name: 'development_issue_id' })
+  developmentIssue: DevelopmentIssue | null;
 
   @ManyToOne(
     () => WorkHistory,

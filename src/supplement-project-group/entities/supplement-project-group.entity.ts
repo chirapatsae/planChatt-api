@@ -17,6 +17,7 @@ import { Plan } from 'src/plan/entities/plan.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
 import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
 import { GovernmentAgency } from 'src/government-agencies/entities/government-agency.entity';
+import { DevelopmentIssue } from 'src/development-issue/entities/development-issue.entity';
 
 @Entity('supplement_project_groups')
 export class SupplementProjectGroup {
@@ -51,8 +52,13 @@ export class SupplementProjectGroup {
   @Column('decimal', { precision: 10, scale: 7, nullable: true })
   endLng: number | null;
 
-  @Column('text')
-  indicator: string;
+  /**
+   * CLAUDE.md §16.5 — nullable for ISSUE_BASED plans.
+   * A DB CHECK constraint enforces exactly-one-shape together with
+   * strategy_id / tactic_id / plan_id / development_issue_id.
+   */
+  @Column('text', { nullable: true })
+  indicator: string | null;
 
   @Column('text')
   expected: string;
@@ -69,23 +75,39 @@ export class SupplementProjectGroup {
   @ManyToOne(() => Strategy, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',
+    nullable: true,
   })
   @JoinColumn({ name: 'strategy_id' })
-  strategy: Strategy;
+  strategy: Strategy | null;
 
   @ManyToOne(() => Tactic, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',
+    nullable: true,
   })
   @JoinColumn({ name: 'tactic_id' })
-  tactic: Tactic;
+  tactic: Tactic | null;
 
   @ManyToOne(() => Plan, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',
+    nullable: true,
   })
   @JoinColumn({ name: 'plan_id' })
-  plan: Plan;
+  plan: Plan | null;
+
+  /**
+   * CLAUDE.md §16 Multi-Format Reporting — ISSUE_BASED classification.
+   * Mutually exclusive with (strategy, tactic, plan, indicator) per the
+   * §16.5 shape invariant.
+   */
+  @ManyToOne(() => DevelopmentIssue, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+    nullable: true,
+  })
+  @JoinColumn({ name: 'development_issue_id' })
+  developmentIssue: DevelopmentIssue | null;
 
   @ManyToOne(
     () => WorkHistory,

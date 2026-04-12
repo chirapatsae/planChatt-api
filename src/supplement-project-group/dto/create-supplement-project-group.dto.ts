@@ -60,6 +60,14 @@ export class CreateSupplementProjectGroupDto {
   @IsOptional()
   planId?: string;
 
+  /**
+   * CLAUDE.md §16 Multi-Format Reporting — ISSUE_BASED classification.
+   * Mutually exclusive with (strategyId, tacticId, planId, indicator).
+   */
+  @IsOptional()
+  @IsUUID()
+  developmentIssueId?: string;
+
   @IsOptional()
   @IsUUID()
   originAgencyId?: string | null;

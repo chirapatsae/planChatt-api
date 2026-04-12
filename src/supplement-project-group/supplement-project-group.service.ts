@@ -18,6 +18,14 @@ import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { Budget } from 'src/budget/entities/budget.entity';
 import { handleException } from 'src/util/handleException';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
+import { ProjectClassificationValidator } from 'src/common/project-classification/project-classification.validator';
+import { BookFormatResolver } from 'src/common/project-classification/book-format.resolver';
+import { DevelopmentIssue } from 'src/development-issue/entities/development-issue.entity';
+import { ReportFormat } from 'src/development-plan/types/report-format.enum';
+import {
+  ERROR_CODES,
+  ERROR_MESSAGES,
+} from 'src/common/project-classification/constants';
 
 @Injectable()
 export class SupplementProjectGroupService {
@@ -49,6 +57,8 @@ export class SupplementProjectGroupService {
     private readonly budgetRepo: Repository<Budget>,
 
     private readonly dataSource: DataSource,
+    private readonly classificationValidator: ProjectClassificationValidator,
+    private readonly bookFormatResolver: BookFormatResolver,
   ) {}
 
   async create(
@@ -57,6 +67,21 @@ export class SupplementProjectGroupService {
   ): Promise<SupplementProjectGroup> {
     try {
       return await this.dataSource.transaction(async (manager) => {
+        // CLAUDE.md §16.5 — resolve format from the supplement chain
+        // BEFORE validating foreign keys so we know which classification
+        // slots to require.
+        const format = await this.bookFormatResolver.resolveBySupplement(
+          dto.developmentPlanSupplementId,
+          manager,
+        );
+        this.classificationValidator.validate(format, {
+          strategyId: dto.strategyId,
+          tacticId: dto.tacticId,
+          planId: dto.planId,
+          developmentIssueId: dto.developmentIssueId,
+          indicator: dto.indicator,
+        });
+
         // Validate foreign keys
         const [
           developmentPlanSupplement,
@@ -74,6 +99,51 @@ export class SupplementProjectGroupService {
 
         const developmentPlan = developmentPlanSupplement.developmentPlan;
 
+        // §16.6 — ISSUE_BASED: resolve + validate the issue belongs to
+        // the parent plan.
+        let developmentIssue: DevelopmentIssue | null = null;
+        if (format === ReportFormat.ISSUE_BASED) {
+          if (!dto.developmentIssueId) {
+            // ProjectClassificationValidator already rejected this, but
+            // keep a belt-and-braces guard for readers of this function.
+            throw new BadRequestException(
+              `${ERROR_CODES.PROJECT_CLASSIFICATION_SHAPE_MISMATCH}: ${ERROR_MESSAGES.ISSUE_BASED_REQUIRES_ISSUE}`,
+            );
+          }
+          developmentIssue = await manager.findOne(DevelopmentIssue, {
+            where: { id: dto.developmentIssueId },
+            relations: ['developmentPlan'],
+          });
+          if (!developmentIssue) {
+            throw new NotFoundException(
+              `${ERROR_CODES.DEVELOPMENT_ISSUE_NOT_FOUND}: ${ERROR_MESSAGES.DEVELOPMENT_ISSUE_NOT_FOUND}`,
+            );
+          }
+          if (developmentIssue.developmentPlan?.id !== developmentPlan.id) {
+            throw new BadRequestException(
+              `${ERROR_CODES.DEVELOPMENT_ISSUE_PLAN_MISMATCH}: ${ERROR_MESSAGES.DEVELOPMENT_ISSUE_PLAN_MISMATCH}`,
+            );
+          }
+        }
+
+        // §16.5 — mutually exclusive classification columns.
+        const classificationColumns =
+          format === ReportFormat.ISSUE_BASED
+            ? {
+                strategy: null,
+                tactic: null,
+                plan: null,
+                indicator: null,
+                developmentIssue,
+              }
+            : {
+                strategy: strategy as any,
+                tactic: tactic as any,
+                plan: plan as any,
+                indicator: dto.indicator,
+                developmentIssue: null,
+              };
+
         const supplementProjectGroup = manager.create(SupplementProjectGroup, {
           developmentPlanSupplement: developmentPlanSupplement as any,
           title: dto.title,
@@ -83,13 +153,10 @@ export class SupplementProjectGroupService {
           startLng: dto.startLng,
           endLat: dto.endLat,
           endLng: dto.endLng,
-          indicator: dto.indicator,
           expected: dto.expected,
           projectYear: dto.projectYear,
           isDraft: dto.isDraft ?? false,
-          strategy: strategy as any,
-          tactic: tactic as any,
-          plan: plan as any,
+          ...classificationColumns,
           createdBy: workHistory,
           originAgencyId: dto.originAgencyId ? { id: dto.originAgencyId } as any : null,
           responsibleAgency: dto.responsibleAgency ? { id: dto.responsibleAgency } as any : null,
@@ -212,7 +279,13 @@ export class SupplementProjectGroupService {
       return await this.dataSource.transaction(async (manager) => {
         const existingProject = await manager.findOne(SupplementProjectGroup, {
           where: { id },
-          relations: ['developmentPlanSupplement'],
+          relations: [
+            'developmentPlanSupplement',
+            'strategy',
+            'tactic',
+            'plan',
+            'developmentIssue',
+          ],
         });
 
         if (!existingProject) {
@@ -220,6 +293,24 @@ export class SupplementProjectGroupService {
             `SupplementProjectGroup with ID ${id} not found`,
           );
         }
+
+        // CLAUDE.md §16.5 — validate classification shape against the
+        // parent plan resolved through the supplement chain.
+        const format =
+          await this.bookFormatResolver.resolveBySupplementProjectGroup(
+            id,
+            manager,
+          );
+        this.classificationValidator.validate(format, {
+          strategyId: dto.strategyId ?? existingProject.strategy?.id ?? null,
+          tacticId: dto.tacticId ?? existingProject.tactic?.id ?? null,
+          planId: dto.planId ?? existingProject.plan?.id ?? null,
+          developmentIssueId:
+            dto.developmentIssueId ??
+            existingProject.developmentIssue?.id ??
+            null,
+          indicator: dto.indicator ?? existingProject.indicator,
+        });
 
         // Validate foreign keys if provided
         const [
@@ -229,6 +320,23 @@ export class SupplementProjectGroupService {
           plan,
           workHistory,
         ] = await this.validateForeignKeys(manager, dto, userId, existingProject);
+
+        // Resolve developmentIssue FK if present on the update DTO.
+        let updatedDevelopmentIssue: DevelopmentIssue | null | undefined;
+        if (dto.developmentIssueId !== undefined) {
+          if (dto.developmentIssueId === null) {
+            updatedDevelopmentIssue = null;
+          } else {
+            updatedDevelopmentIssue = await manager.findOne(DevelopmentIssue, {
+              where: { id: dto.developmentIssueId },
+            });
+            if (!updatedDevelopmentIssue) {
+              throw new NotFoundException(
+                `${ERROR_CODES.DEVELOPMENT_ISSUE_NOT_FOUND}: ${ERROR_MESSAGES.DEVELOPMENT_ISSUE_NOT_FOUND}`,
+              );
+            }
+          }
+        }
 
         // Update fields
         if (developmentPlanSupplement) {
@@ -245,9 +353,22 @@ export class SupplementProjectGroupService {
         if (dto.expected !== undefined) existingProject.expected = dto.expected;
         if (dto.projectYear !== undefined) existingProject.projectYear = dto.projectYear;
         if (dto.isDraft !== undefined) existingProject.isDraft = dto.isDraft;
-        if (strategy) existingProject.strategy = strategy;
-        if (tactic) existingProject.tactic = tactic;
-        if (plan) existingProject.plan = plan;
+
+        if (format === ReportFormat.ISSUE_BASED) {
+          // §16.5 — clear the classic tuple + indicator, keep the issue FK
+          existingProject.strategy = null;
+          existingProject.tactic = null;
+          existingProject.plan = null;
+          existingProject.indicator = null;
+          if (updatedDevelopmentIssue !== undefined) {
+            existingProject.developmentIssue = updatedDevelopmentIssue;
+          }
+        } else {
+          if (strategy) existingProject.strategy = strategy;
+          if (tactic) existingProject.tactic = tactic;
+          if (plan) existingProject.plan = plan;
+          existingProject.developmentIssue = null;
+        }
         if (dto.originAgencyId !== undefined) {
           existingProject.originAgencyId = dto.originAgencyId ? { id: dto.originAgencyId } as any : null;
         }

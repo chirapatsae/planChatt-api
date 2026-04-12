@@ -28,6 +28,11 @@ import { UpdateDevelopmentPlanWithPhasesDto } from './dto/update-development-pla
 import { UpdateDevelopmentPlanLatestStatusDto } from './dto/update-development-plan-latest-status.dto';
 import { UsersService } from 'src/users/users.service';
 import { BookLockService } from 'src/common/book-lock/book-lock.service';
+import { ReportFormat } from './types/report-format.enum';
+import {
+  ERROR_CODES,
+  ERROR_MESSAGES,
+} from 'src/common/project-classification/constants';
 
 @Injectable()
 export class DevelopmentPlanService {
@@ -152,12 +157,17 @@ export class DevelopmentPlanService {
           { isLatest: false },
         );
 
+        // CLAUDE.md §16.3 / §16.4 — persist the chosen reportFormat at
+        // insertion. Default to STRATEGY_BASED when the caller omits it
+        // (legacy clients and backwards compat). The field becomes
+        // IMMUTABLE from this row onward.
         const newDevelopmentPlan = manager.create(DevelopmentPlan, {
           name,
           startYear,
           endYear,
           isLatest: true,
           isBooked: dto.isBooked ?? false,
+          reportFormat: dto.reportFormat ?? ReportFormat.STRATEGY_BASED,
           createdBy: { id: workHistory.id },
         });
 
@@ -276,12 +286,17 @@ export class DevelopmentPlanService {
           { isLatest: false },
         );
 
+        // CLAUDE.md §16.3 / §16.4 — persist reportFormat at insertion.
+        // Falls back to STRATEGY_BASED when the nested DTO omits it so
+        // older clients keep working.
         const newDevelopmentPlan = developmentPlanRepository.create({
           name,
           startYear,
           endYear,
           isLatest: true,
           isBooked: false,
+          reportFormat:
+            developmentPlanDto.reportFormat ?? ReportFormat.STRATEGY_BASED,
           createdBy: { id: workHistory.id },
         });
 
@@ -1130,7 +1145,7 @@ export class DevelopmentPlanService {
       // by hiding rows from reads.
       const developmentPlan = await this.developmentPlanRepository.findOne({
         where: { id },
-        relations: ['projectGroup', 'workHistory'],
+        relations: ['projectGroup', 'createdBy'],
       });
 
       if (!developmentPlan) {
@@ -1159,6 +1174,21 @@ export class DevelopmentPlanService {
 
   async update(id: string, dto: UpdateDevelopmentPlanDto): Promise<DevelopmentPlan> {
     try {
+      // CLAUDE.md §16.4 — reportFormat is IMMUTABLE after plan creation.
+      // The DTO already OMITs the field at the type level, but the HTTP
+      // pipeline (`class-transformer` + `ValidationPipe`) can still let
+      // an unknown property through if `forbidNonWhitelisted` is not
+      // enabled. This defensive check throws `REPORT_FORMAT_IMMUTABLE`
+      // whenever the field is present in the runtime payload.
+      const payload = dto as UpdateDevelopmentPlanDto & {
+        reportFormat?: unknown;
+      };
+      if (payload.reportFormat !== undefined) {
+        throw new BadRequestException(
+          `${ERROR_CODES.REPORT_FORMAT_IMMUTABLE}: ${ERROR_MESSAGES.REPORT_FORMAT_IMMUTABLE}`,
+        );
+      }
+
       const developmentPlan = await this.developmentPlanRepository.findOneBy({ id });
 
       if (!developmentPlan) {
@@ -1212,9 +1242,18 @@ export class DevelopmentPlanService {
         throw new BadRequestException('ช่วงปีซ้อนกับแผนพัฒนาอื่น');
       }
 
-      const updated = this.developmentPlanRepository.merge(developmentPlan, {
-        ...dto,
-      });
+      // CLAUDE.md §16.4 defensive strip — in case `...dto` is spread
+      // into merge without the explicit BadRequest guard above catching
+      // it, we remove the property here before the repository write.
+      const safeDto = { ...dto } as UpdateDevelopmentPlanDto & {
+        reportFormat?: unknown;
+      };
+      delete safeDto.reportFormat;
+
+      const updated = this.developmentPlanRepository.merge(
+        developmentPlan,
+        safeDto as UpdateDevelopmentPlanDto,
+      );
 
       return await this.developmentPlanRepository.save(updated);
     } catch (error) {

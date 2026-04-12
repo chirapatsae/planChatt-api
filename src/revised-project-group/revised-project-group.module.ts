@@ -12,6 +12,8 @@ import { Plan } from 'src/plan/entities/plan.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { Budget } from 'src/budget/entities/budget.entity';
 import { LineageLockModule } from 'src/common/lineage-lock/lineage-lock.module';
+import { ProjectClassificationModule } from 'src/common/project-classification/project-classification.module';
+import { DevelopmentIssue } from 'src/development-issue/entities/development-issue.entity';
 
 @Module({
   imports: [
@@ -25,8 +27,10 @@ import { LineageLockModule } from 'src/common/lineage-lock/lineage-lock.module';
       Plan,
       WorkHistory,
       Budget,
+      DevelopmentIssue,
     ]),
     LineageLockModule,
+    ProjectClassificationModule,
   ],
   controllers: [RevisedProjectGroupController],
   providers: [RevisedProjectGroupService],

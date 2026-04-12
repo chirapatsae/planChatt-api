@@ -56,6 +56,16 @@ export class CreateProjectGroupDto {
   @IsOptional()
   planId?: string;
 
+  /**
+   * CLAUDE.md §16 Multi-Format Reporting — ISSUE_BASED classification.
+   * Mutually exclusive with (strategyId, tacticId, planId, indicator).
+   * The shape invariant is enforced server-side by
+   * `ProjectClassificationValidator` before any repository write.
+   */
+  @IsOptional()
+  @IsUUID()
+  developmentIssueId?: string;
+
   @IsNotEmpty()
   @IsUUID()
   developmentPlanId: string;
@@ -110,6 +120,10 @@ export class CreateDraftProjectGroupDto {
   projectYear: number;
 
   @IsOptional()
+  @IsUUID()
+  developmentPlanId?: string;
+
+  @IsOptional()
   strategyId?: string;
 
   @IsOptional()
@@ -117,6 +131,14 @@ export class CreateDraftProjectGroupDto {
 
   @IsOptional()
   planId?: string;
+
+  /**
+   * CLAUDE.md §16 Multi-Format Reporting — ISSUE_BASED classification
+   * on draft creation. The validator still runs on drafts.
+   */
+  @IsOptional()
+  @IsUUID()
+  developmentIssueId?: string;
 
 
   @IsOptional()

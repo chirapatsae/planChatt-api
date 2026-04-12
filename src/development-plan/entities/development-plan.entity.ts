@@ -3,6 +3,7 @@ import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entit
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { PlanPhase } from 'src/plan-phase/entities/plan-phase.entity';
+import { ReportFormat } from '../types/report-format.enum';
 import {
   Column,
   CreateDateColumn,
@@ -33,6 +34,29 @@ export class DevelopmentPlan {
 
   @Column({ name: 'is_booked', default: false })
   isBooked: boolean;
+
+  /**
+   * CLAUDE.md §16.3 / §16.4 — Multi-Format Reporting
+   *
+   * Single source of truth for the plan's classification vocabulary.
+   * STRATEGY_BASED uses Strategy→Tactic→Plan + KPI. ISSUE_BASED uses
+   * DevelopmentIssue and omits KPI. Revisions and supplements inherit
+   * this value via JOIN — they MUST NOT own a `reportFormat` column.
+   *
+   * IMMUTABLE after row insertion. `DevelopmentPlanService.update` strips
+   * the field defensively and throws `REPORT_FORMAT_IMMUTABLE` if a
+   * caller attempts to change it.
+   *
+   * Default `STRATEGY_BASED` preserves backward compatibility for every
+   * pre-migration plan row.
+   */
+  @Column({
+    name: 'report_format',
+    type: 'enum',
+    enum: ReportFormat,
+    default: ReportFormat.STRATEGY_BASED,
+  })
+  reportFormat: ReportFormat;
 
   @CreateDateColumn({ name: 'create_at' })
   createAt: Date;

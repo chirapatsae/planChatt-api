@@ -51,13 +51,23 @@ export class UpdateSupplementProjectGroupDto {
   projectYear?: number;
 
   @IsOptional()
-  strategyId?: string;
+  strategyId?: string | null;
 
   @IsOptional()
-  tacticId?: string;
+  tacticId?: string | null;
 
   @IsOptional()
-  planId?: string;
+  planId?: string | null;
+
+  /**
+   * §16 Multi-Format Reporting — ISSUE_BASED classification.
+   * Exactly one of {strategyId+tacticId+planId+indicator} OR {developmentIssueId}
+   * must be populated, validated by ProjectClassificationValidator per the
+   * parent plan's reportFormat.
+   */
+  @IsOptional()
+  @IsUUID()
+  developmentIssueId?: string | null;
 
   @IsOptional()
   @IsUUID()

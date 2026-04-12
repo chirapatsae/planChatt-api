@@ -27,6 +27,14 @@ import { LocalAdministrativeOrganization } from 'src/local-administrative-organi
 import { GovernmentAgency } from 'src/government-agencies/entities/government-agency.entity';
 import { UnifiedProjectMapper, IUnifiedProjectDisplay } from 'src/project-groups/dto/unified-project-display.dto';
 import { LineageLockService } from 'src/common/lineage-lock/lineage-lock.service';
+import { ProjectClassificationValidator } from 'src/common/project-classification/project-classification.validator';
+import { BookFormatResolver } from 'src/common/project-classification/book-format.resolver';
+import { DevelopmentIssue } from 'src/development-issue/entities/development-issue.entity';
+import { ReportFormat } from 'src/development-plan/types/report-format.enum';
+import {
+  ERROR_CODES,
+  ERROR_MESSAGES,
+} from 'src/common/project-classification/constants';
 
 @Injectable()
 export class RevisedProjectGroupService {
@@ -62,6 +70,8 @@ export class RevisedProjectGroupService {
 
     private readonly dataSource: DataSource,
     private readonly lineageLockService: LineageLockService,
+    private readonly classificationValidator: ProjectClassificationValidator,
+    private readonly bookFormatResolver: BookFormatResolver,
   ) { }
 
   // ========================================
@@ -125,6 +135,22 @@ export class RevisedProjectGroupService {
   ): Promise<RevisedProjectGroup> {
     try {
       return await this.dataSource.transaction(async (manager) => {
+        // CLAUDE.md §16.5 — resolve format FIRST so validateForeignKeys
+        // can branch on it. The revision's parent plan is the source
+        // of truth (format cannot differ between a revision and its
+        // plan per §16.3).
+        const format = await this.bookFormatResolver.resolveByRevision(
+          dto.developmentPlanRevisionId,
+          manager,
+        );
+        this.classificationValidator.validate(format, {
+          strategyId: dto.strategyId,
+          tacticId: dto.tacticId,
+          planId: dto.planId,
+          developmentIssueId: dto.developmentIssueId,
+          indicator: dto.indicator,
+        });
+
         // Validate foreign keys
         const [
           developmentPlanRevision,
@@ -133,7 +159,33 @@ export class RevisedProjectGroupService {
           tactic,
           plan,
           workHistory,
-        ] = await this.validateForeignKeys(manager, dto, userId);
+        ] = await this.validateForeignKeys(manager, dto, userId, format);
+
+        // §16 — for ISSUE_BASED plans, resolve and validate the
+        // DevelopmentIssue FK now. Belt-and-braces plan scope check:
+        // the issue must belong to the same plan as the revision.
+        let developmentIssue: DevelopmentIssue | null = null;
+        if (format === ReportFormat.ISSUE_BASED && dto.developmentIssueId) {
+          developmentIssue = await manager.findOne(DevelopmentIssue, {
+            where: { id: dto.developmentIssueId },
+            relations: ['developmentPlan'],
+          });
+          if (!developmentIssue) {
+            throw new NotFoundException(
+              `${ERROR_CODES.DEVELOPMENT_ISSUE_NOT_FOUND}: ${ERROR_MESSAGES.DEVELOPMENT_ISSUE_NOT_FOUND}`,
+            );
+          }
+          const parentPlanId =
+            developmentPlanRevision.developmentPlan?.id;
+          if (
+            !parentPlanId ||
+            developmentIssue.developmentPlan?.id !== parentPlanId
+          ) {
+            throw new BadRequestException(
+              `${ERROR_CODES.DEVELOPMENT_ISSUE_PLAN_MISMATCH}: ${ERROR_MESSAGES.DEVELOPMENT_ISSUE_PLAN_MISMATCH}`,
+            );
+          }
+        }
 
         // Get developmentPlan if provided, otherwise use from developmentPlanRevision
         let developmentPlan: DevelopmentPlan | undefined;
@@ -197,6 +249,27 @@ export class RevisedProjectGroupService {
           );
         }
 
+        // CLAUDE.md §16.5 / §16.6 — classification columns are
+        // mutually exclusive. For ISSUE_BASED lineages the strategy /
+        // tactic / plan / indicator tuple is NULL and the developmentIssue
+        // FK is set (copy-on-fork).
+        const classificationColumns =
+          format === ReportFormat.ISSUE_BASED
+            ? {
+                strategy: null,
+                tactic: null,
+                plan: null,
+                indicator: null,
+                developmentIssue,
+              }
+            : {
+                strategy,
+                tactic,
+                plan,
+                indicator: dto.indicator,
+                developmentIssue: null,
+              };
+
         const revisedProjectGroup = manager.create(RevisedProjectGroup, {
           developmentPlanRevision,
           developmentPlan,
@@ -208,12 +281,9 @@ export class RevisedProjectGroupService {
           startLng: dto.startLng,
           endLat: dto.endLat,
           endLng: dto.endLng,
-          indicator: dto.indicator,
           expected: dto.expected,
           projectYear: dto.projectYear,
-          strategy,
-          tactic,
-          plan,
+          ...classificationColumns,
           createdBy: workHistory,
           originAgencyId: originAgency || undefined,
           responsibleAgency: responsibleAgency,
@@ -341,6 +411,7 @@ export class RevisedProjectGroupService {
         'strategy',
         'tactic',
         'plan',
+        'developmentIssue',
         'createdBy',
         'budgets',
         'trackingStatus',
@@ -457,6 +528,24 @@ export class RevisedProjectGroupService {
         // Guard MUST run BEFORE any repository write.
         await this.lineageLockService.assertEditable(id, 'revised', manager);
 
+        // CLAUDE.md §16.5 — validate classification shape against the
+        // parent plan (resolved through the revision chain). If the
+        // caller passes ANY classification slot, the shape must match
+        // the plan's reportFormat.
+        const format = await this.bookFormatResolver.resolveByRevisedProjectGroup(
+          id,
+          manager,
+        );
+        this.classificationValidator.validate(format, {
+          strategyId: dto.strategyId ?? (revisedProject.strategy?.id ?? null),
+          tacticId: dto.tacticId ?? (revisedProject.tactic?.id ?? null),
+          planId: dto.planId ?? (revisedProject.plan?.id ?? null),
+          developmentIssueId:
+            dto.developmentIssueId ??
+            (revisedProject.developmentIssue?.id ?? null),
+          indicator: dto.indicator ?? revisedProject.indicator,
+        });
+
         // Update foreign keys if provided
         if (dto.developmentPlanRevisionId) {
           const revision = await manager.findOne(DevelopmentPlanRevision, {
@@ -471,6 +560,22 @@ export class RevisedProjectGroupService {
             );
           }
           revisedProject.developmentPlanRevision = revision;
+        }
+
+        if (dto.developmentIssueId !== undefined) {
+          if (dto.developmentIssueId === null) {
+            revisedProject.developmentIssue = null;
+          } else {
+            const issue = await manager.findOne(DevelopmentIssue, {
+              where: { id: dto.developmentIssueId },
+            });
+            if (!issue) {
+              throw new NotFoundException(
+                `${ERROR_CODES.DEVELOPMENT_ISSUE_NOT_FOUND}: ${ERROR_MESSAGES.DEVELOPMENT_ISSUE_NOT_FOUND}`,
+              );
+            }
+            revisedProject.developmentIssue = issue;
+          }
         }
 
         // Update strategy, tactic, plan if provided
@@ -1704,23 +1809,18 @@ export class RevisedProjectGroupService {
     manager,
     dto: CreateRevisedProjectGroupDto,
     userId: string,
+    format?: ReportFormat,
   ): Promise<
     [
       DevelopmentPlanRevision,
       ProjectGroup | null,
-      Strategy,
-      Tactic,
-      Plan,
+      Strategy | null,
+      Tactic | null,
+      Plan | null,
       WorkHistory,
     ]
   > {
-    const [
-      developmentPlanRevision,
-      projectGroup,
-      strategy,
-      tactic,
-      plan,
-    ] = await Promise.all([
+    const [developmentPlanRevision, projectGroup] = await Promise.all([
       manager.findOne(DevelopmentPlanRevision, {
         where: { id: dto.developmentPlanRevisionId },
         relations: ['developmentPlan', 'revisionType'],
@@ -1728,13 +1828,6 @@ export class RevisedProjectGroupService {
       dto.projectGroupId
         ? manager.findOne(ProjectGroup, { where: { id: dto.projectGroupId } })
         : null,
-      dto.strategyId
-        ? manager.findOne(Strategy, { where: { id: dto.strategyId } })
-        : null,
-      dto.tacticId
-        ? manager.findOne(Tactic, { where: { id: dto.tacticId } })
-        : null,
-      dto.planId ? manager.findOne(Plan, { where: { id: dto.planId } }) : null,
     ]);
 
     if (!developmentPlanRevision) {
@@ -1747,15 +1840,39 @@ export class RevisedProjectGroupService {
         `ProjectGroup ID not found: ${dto.projectGroupId}`,
       );
     }
-    // budgetPlan is obtained from developmentPlanRevision
-    if (!strategy) {
-      throw new NotFoundException(`Strategy ID is required and not found: ${dto.strategyId}`);
-    }
-    if (!tactic) {
-      throw new NotFoundException(`Tactic ID is required and not found: ${dto.tacticId}`);
-    }
-    if (!plan) {
-      throw new NotFoundException(`Plan ID is required and not found: ${dto.planId}`);
+
+    // CLAUDE.md §16.5 — Strategy/Tactic/Plan are required ONLY for
+    // STRATEGY_BASED plans. For ISSUE_BASED plans they MUST be absent.
+    let strategy: Strategy | null = null;
+    let tactic: Tactic | null = null;
+    let plan: Plan | null = null;
+    if (format !== ReportFormat.ISSUE_BASED) {
+      [strategy, tactic, plan] = await Promise.all([
+        dto.strategyId
+          ? manager.findOne(Strategy, { where: { id: dto.strategyId } })
+          : null,
+        dto.tacticId
+          ? manager.findOne(Tactic, { where: { id: dto.tacticId } })
+          : null,
+        dto.planId
+          ? manager.findOne(Plan, { where: { id: dto.planId } })
+          : null,
+      ]);
+      if (!strategy) {
+        throw new NotFoundException(
+          `Strategy ID is required and not found: ${dto.strategyId}`,
+        );
+      }
+      if (!tactic) {
+        throw new NotFoundException(
+          `Tactic ID is required and not found: ${dto.tacticId}`,
+        );
+      }
+      if (!plan) {
+        throw new NotFoundException(
+          `Plan ID is required and not found: ${dto.planId}`,
+        );
+      }
     }
 
     // 1-3. WorkHistory with isCurrent=true + workStatus (CLAUDE.md validation order)

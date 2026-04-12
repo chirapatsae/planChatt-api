@@ -39,8 +39,12 @@ export class CreateRevisedProjectGroupDto {
   @IsNotEmpty()
   goal: string;
 
-  @IsNotEmpty()
-  indicator: string;
+  /**
+   * CLAUDE.md §16.5 — nullable for ISSUE_BASED. The service-layer
+   * `ProjectClassificationValidator` enforces the shape invariant.
+   */
+  @IsOptional()
+  indicator?: string;
 
   @IsNotEmpty()
   expected: string;
@@ -49,14 +53,22 @@ export class CreateRevisedProjectGroupDto {
   @IsInt()
   projectYear: number;
 
-  @IsNotEmpty()
-  strategyId: string;
+  @IsOptional()
+  strategyId?: string;
 
-  @IsNotEmpty()
-  tacticId: string;
+  @IsOptional()
+  tacticId?: string;
 
-  @IsNotEmpty()
-  planId: string;
+  @IsOptional()
+  planId?: string;
+
+  /**
+   * CLAUDE.md §16 Multi-Format Reporting — ISSUE_BASED classification.
+   * Mutually exclusive with (strategyId, tacticId, planId, indicator).
+   */
+  @IsOptional()
+  @IsUUID()
+  developmentIssueId?: string;
 
   @IsNotEmpty()
   prevProjectId: string;
