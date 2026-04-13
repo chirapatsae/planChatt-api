@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "sourceType": "main_plan",
+  "sourceId": "28473aef-f5a2-4e78-916f-460d6fc0c9eb",
+  "status": "completed",
+  "correctionMode": null,
+  "correctionReason": null,
+  "parts": {
+    "part1": {
+      "source": "uploaded",
+      "originalFileName": "à¹à¸­à¸à¸ªà¸²à¸£à¸à¸¸à¸à¸à¸´à¸à¸à¸±à¹à¸à¹à¸à¸´à¹à¸¡à¸à¹à¸­à¸à¹à¸¥à¸ 6 à¸à¸¸à¸ à¸à¸­à¸à¸à¸¥à¸±à¸ .pdf",
+      "uploadedBy": "1a0f8d63-69f3-4e06-a5d2-e7046d926d29",
+      "uploadedAt": "2026-04-13T05:21:49.305Z"
+    },
+    "part2": {
+      "source": "uploaded",
+      "originalFileName": "à¸à¸±à¸ªà¸à¸¸ L6.pdf",
+      "uploadedBy": "1a0f8d63-69f3-4e06-a5d2-e7046d926d29",
+      "uploadedAt": "2026-04-13T05:21:44.338Z"
+    },
+    "part3": {
+      "source": "generated",
+      "projectCount": 2,
+      "projectIds": [
+        "f4acabf4-b417-4ab8-ae6d-61237a9d77dd",
+        "f98ea71e-586e-4f85-8fb5-2ddd8da56ff6"
+      ],
+      "generatedAt": "2026-04-12T15:35:13.720Z"
+    }
+  },
+  "merged": {
+    "fileName": "official-book-v1.pdf",
+    "mergedAt": "2026-04-13T05:21:50.897Z",
+    "totalPages": 12
+  },
+  "createdBy": "1a0f8d63-69f3-4e06-a5d2-e7046d926d29",
+  "createdAt": "2026-04-13T05:21:50.811Z",
+  "deprecatedAt": null,
+  "deprecatedBy": null,
+  "deprecationReason": null
+}

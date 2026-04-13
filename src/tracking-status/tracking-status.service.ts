@@ -72,7 +72,7 @@ export class TrackingStatusService {
         // 4. Load project
         const projectGroup = await manager.findOne(ProjectGroup, {
           where: { id: dto.projectId },
-          relations: ['createdBy', 'developmentPlan'],
+          relations: ['createdBy', 'developmentPlan', 'amphoe'],
         });
         if (!projectGroup) {
           throw new NotFoundException(`ProjectGroup with ID ${dto.projectId} not found`);
@@ -92,19 +92,18 @@ export class TrackingStatusService {
 
         if (!allowedRoles.includes(userRole)) {
           if (userRole === 'user') {
-            // 5. Ownership (CLAUDE.md §4): createdBy.id === workHistory.id
-            if (projectGroup.createdBy?.id !== workHistory.id) {
-              throw new ForbiddenException('คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะโครงการนี้');
-            }
-
             // 8-9. Current status validation + allowed transitions for user role
             const currentTracking = await manager.findOne(TrackingStatus, {
               where: { projectGroupId: { id: projectGroup.id }, isLatest: true },
               relations: ['statusId'],
             });
-            const currentStatusName = currentTracking?.statusId?.name;
+            const currentStatusName: string = currentTracking?.statusId?.name ?? '';
 
             if (status.name === 'Pull_Back') {
+              // 5. Ownership (CLAUDE.md §4): createdBy.id === workHistory.id
+              if (projectGroup.createdBy?.id !== workHistory.id) {
+                throw new ForbiddenException('คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะโครงการนี้');
+              }
               // Pull-back allowed only from Pending or Verified
               if (currentStatusName !== 'Pending' && currentStatusName !== 'Verified') {
                 throw new BadRequestException(`ไม่สามารถดึงกลับได้จากสถานะ "${currentStatusName}"`);
@@ -120,11 +119,64 @@ export class TrackingStatusService {
               if (!openPhase) throw new BadRequestException('ระยะเวลายื่นโครงการปิดแล้ว ไม่สามารถดึงกลับได้');
 
             } else if (status.name === 'Pending') {
-              // Resubmit allowed only from Pull_Back
-              if (currentStatusName !== 'Pull_Back') {
-                throw new BadRequestException(`ไม่สามารถส่งใหม่ได้จากสถานะ "${currentStatusName}" (ต้องอยู่ในสถานะ Pull_Back)`);
+              // User submission/resubmission to Pending.
+              // Allowed source statuses: Ready, Pull_Back, Returned_For_Revision
+              // CLAUDE.md §4.2 (Ready → Pending: same-org scope), PERMISSION MODEL,
+              // Returned_For_Revision Rule (resubmission after staff rejection)
+              const allowedSources = ['Ready', 'Pull_Back', 'Returned_For_Revision'];
+              if (!allowedSources.includes(currentStatusName)) {
+                throw new BadRequestException(
+                  `ไม่สามารถส่งโครงการได้จากสถานะ "${currentStatusName}" ` +
+                  `(ต้องอยู่ในสถานะ Ready, Pull_Back หรือ Returned_For_Revision)`,
+                );
               }
-              // Scope: DevelopmentPlan active + PlanPhase open (resubmission re-validates scope)
+
+              if (currentStatusName === 'Ready') {
+                // Ready → Pending: same-organization scope per CLAUDE.md §4.2.
+                // Ownership is NOT strictly required — authority is granted to users
+                // in the same organizational scope as the project.
+
+                // Determine project type from creator's WorkHistory (CLAUDE.md §5)
+                const projectCreatorWh = await manager.findOne(WorkHistory, {
+                  where: { id: projectGroup.createdBy?.id },
+                  relations: ['amphoe', 'localAdministrativeOrganization'],
+                });
+                if (!projectCreatorWh) {
+                  throw new BadRequestException('ไม่พบข้อมูล WorkHistory ของผู้สร้างโครงการ');
+                }
+                const isProjectAgency =
+                  projectCreatorWh.amphoe?.id === '3001' &&
+                  projectCreatorWh.localAdministrativeOrganization?.id === '3001027';
+                const isRequesterAgency =
+                  workHistory.amphoe?.id === '3001' &&
+                  workHistory.localAdministrativeOrganization?.id === '3001027';
+
+                if (isProjectAgency) {
+                  // Agency-origin project: requester must be in same agency scope
+                  if (!isRequesterAgency) {
+                    throw new ForbiddenException('คุณไม่มีสิทธิ์ส่งโครงการนี้ (ต้องเป็นผู้ใช้ประเภท Agency เดียวกัน)');
+                  }
+                } else {
+                  // LAO-origin project: requester must have same LAO
+                  if (isRequesterAgency) {
+                    throw new ForbiddenException('คุณไม่มีสิทธิ์ส่งโครงการนี้ (ต้องเป็นผู้ใช้ประเภท LAO เดียวกัน)');
+                  }
+                  const requesterLaoId = workHistory.localAdministrativeOrganization?.id;
+                  const projectCreatorLaoId = projectCreatorWh.localAdministrativeOrganization?.id;
+                  if (!requesterLaoId || !projectCreatorLaoId || requesterLaoId !== projectCreatorLaoId) {
+                    throw new ForbiddenException('คุณไม่มีสิทธิ์ส่งโครงการนี้ (ต้องอยู่ในองค์กรปกครองส่วนท้องถิ่นเดียวกัน)');
+                  }
+                }
+              } else {
+                // Pull_Back → Pending or Returned_For_Revision → Pending:
+                // Strict ownership required (CLAUDE.md §4, PERMISSION MODEL)
+                if (projectGroup.createdBy?.id !== workHistory.id) {
+                  throw new ForbiddenException('คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะโครงการนี้');
+                }
+              }
+
+              // Scope: DevelopmentPlan active + PlanPhase open
+              // Re-validates scope on every submission/resubmission (RESUBMISSION CONSTRAINT)
               const dp = projectGroup.developmentPlan;
               if (!dp?.isLatest) throw new BadRequestException('แผนพัฒนาฯ ไม่ใช่แผนปัจจุบัน');
               if (dp?.isBooked) throw new BadRequestException('แผนพัฒนาฯ ถูกรวมเล่มแล้ว');
@@ -132,7 +184,7 @@ export class TrackingStatusService {
               const openPhase = await manager.findOne(PlanPhase, {
                 where: { developmentPlan: { id: dp.id }, phaseType: isAgency ? PhaseType.AGENCY : PhaseType.LAO, isOpen: true },
               });
-              if (!openPhase) throw new BadRequestException('ระยะเวลายื่นโครงการปิดแล้ว ไม่สามารถส่งใหม่ได้');
+              if (!openPhase) throw new BadRequestException('ระยะเวลายื่นโครงการปิดแล้ว ไม่สามารถส่งโครงการได้');
 
             } else {
               throw new ForbiddenException('คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะโครงการนี้ (อนุญาตเฉพาะ Pull_Back และ Pending เท่านั้น)');
@@ -144,7 +196,9 @@ export class TrackingStatusService {
           // Staff / Admin / Super-Admin branch
           // Per CLAUDE.md §3 + §4.1: staff must validate current status and transition rules.
           // Ownership is NOT required for staff-controlled workflow transitions.
-          // Valid staff transitions: Pending → Verified → Pending_Approval → Approved
+          // Valid staff transitions: Pending → Verified, Pending → Returned_For_Revision,
+          //   Verified → Pending_Approval, Verified → Returned_For_Revision,
+          //   Pending_Approval → Approved
 
           // Validate project scope against its own DevelopmentPlan (CLAUDE.md §10: scope binding)
           const dp = projectGroup.developmentPlan;
@@ -153,6 +207,24 @@ export class TrackingStatusService {
           }
           if (dp?.isBooked) {
             throw new ForbiddenException('แผนพัฒนาฯ ที่เชื่อมโยงกับโครงการนี้ถูกรวมเล่มแล้ว ไม่สามารถดำเนินการได้');
+          }
+
+          // Area responsibility check for staff role (mirrors rollback pattern in rollbackStatus)
+          // Staff must be responsible for the project's amphoe. Admin/super-admin bypass.
+          if (userRole === 'staff') {
+            const projectAmphoeId = projectGroup.amphoe?.id;
+            if (!projectAmphoeId) {
+              throw new BadRequestException('โครงการนี้ไม่มีข้อมูลอำเภอ ไม่สามารถตรวจสอบสิทธิ์ได้');
+            }
+            const hasResponsibility = await manager.findOne(WorkHistoryAmphoeResponsibility, {
+              where: {
+                workHistory: { id: workHistory.id },
+                amphoe: { id: projectAmphoeId },
+              },
+            });
+            if (!hasResponsibility) {
+              throw new ForbiddenException('คุณไม่มีสิทธิ์ดำเนินการกับโครงการนี้ (ไม่ได้รับผิดชอบอำเภอของโครงการ)');
+            }
           }
 
           // Load current latest TrackingStatus to enforce transition rules
@@ -172,17 +244,18 @@ export class TrackingStatusService {
             );
           }
 
-          // Strict staff transition map: only these sequences are allowed
-          const staffAllowedTransitions: Record<string, string> = {
-            Pending: 'Verified',
-            Verified: 'Pending_Approval',
-            Pending_Approval: 'Approved',
+          // Strict staff transition map: each source may have multiple valid destinations.
+          // CLAUDE.md Returned_For_Revision Rule: MUST originate from Pending or Verified.
+          const staffAllowedTransitions: Record<string, string[]> = {
+            Pending: ['Verified', 'Returned_For_Revision'],
+            Verified: ['Pending_Approval', 'Returned_For_Revision'],
+            Pending_Approval: ['Approved'],
           };
-          const allowedDestination = staffAllowedTransitions[staffCurrentStatusName];
-          if (!allowedDestination || allowedDestination !== status.name) {
+          const allowedDestinations = staffAllowedTransitions[staffCurrentStatusName];
+          if (!allowedDestinations || !allowedDestinations.includes(status.name)) {
             throw new ForbiddenException(
               `ไม่อนุญาตให้เปลี่ยนสถานะจาก "${staffCurrentStatusName}" เป็น "${status.name}" ` +
-              `(เส้นทางที่อนุญาต: ${staffCurrentStatusName} → ${allowedDestination ?? 'ไม่มี'})`,
+              `(เส้นทางที่อนุญาต: ${staffCurrentStatusName} → ${allowedDestinations?.join(', ') ?? 'ไม่มี'})`,
             );
           }
         }
@@ -634,7 +707,7 @@ export class TrackingStatusService {
         // 4. Load RevisedProjectGroup with revision scope
         const revisedProjectGroup = await manager.findOne(RevisedProjectGroup, {
           where: { id: dto.projectId },
-          relations: ['createdBy', 'developmentPlanRevision', 'developmentPlanRevision.developmentPlan'],
+          relations: ['createdBy', 'developmentPlanRevision', 'developmentPlanRevision.developmentPlan', 'responsibleAgency'],
         });
         if (!revisedProjectGroup) {
           throw new NotFoundException(`RevisedProjectGroup with ID ${dto.projectId} not found`);
@@ -693,8 +766,9 @@ export class TrackingStatusService {
                 throw new BadRequestException(`ไม่สามารถดึงกลับได้จากสถานะ "${currentStatusName}"`);
               }
             } else if (status.name === 'Pending') {
-              if (currentStatusName !== 'Pull_Back') {
-                throw new BadRequestException(`ไม่สามารถส่งใหม่ได้จากสถานะ "${currentStatusName}" (ต้องอยู่ในสถานะ Pull_Back)`);
+              // Resubmit allowed from Pull_Back or Returned_For_Revision (CLAUDE.md §Returned_For_Revision Rule, task §7.1)
+              if (currentStatusName !== 'Pull_Back' && currentStatusName !== 'Returned_For_Revision') {
+                throw new BadRequestException(`ไม่สามารถส่งใหม่ได้จากสถานะ "${currentStatusName}" (ต้องอยู่ในสถานะ Pull_Back หรือ Returned_For_Revision)`);
               }
             } else {
               throw new ForbiddenException('คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะโครงการนี้ (อนุญาตเฉพาะ Pull_Back และ Pending เท่านั้น)');
@@ -706,7 +780,8 @@ export class TrackingStatusService {
           // Staff / Admin / Super-Admin branch for RevisedProjectGroup
           // Per CLAUDE.md §3 + §4.1: staff must validate current status and transition rules.
           // Ownership is NOT required for staff-controlled workflow transitions.
-          // Valid staff transitions: Pending → Verified → Pending_Approval → Approved
+          // Valid staff transitions: Pending → Verified/Returned_For_Revision,
+          //   Verified → Pending_Approval/Returned_For_Revision, Pending_Approval → Approved
 
           // Validate DPR scope: DPR must be latest and not yet assembled
           // Per corrected domain: staff transitions are gated by DPR.isLatest + DPR.isBooked only.
@@ -718,6 +793,25 @@ export class TrackingStatusService {
           }
           if (staffDpr?.isBooked) {
             throw new ForbiddenException('รอบการแก้ไข/เปลี่ยนแปลงถูกรวมเล่มแล้ว ไม่สามารถดำเนินการได้');
+          }
+
+          // Area responsibility check for staff role (CLAUDE.md STAFF-LED ROLLBACK RULE §Area Responsibility)
+          // Staff must be responsible for the responsibleAgency of the revised project.
+          // Admin and super-admin bypass this check.
+          if (userRole === 'staff') {
+            const projectAgencyId = revisedProjectGroup.responsibleAgency?.id;
+            if (!projectAgencyId) {
+              throw new BadRequestException('โครงการนี้ยังไม่มีการกำหนดหน่วยงานรับผิดชอบ ไม่สามารถตรวจสอบสิทธิ์ได้');
+            }
+            const hasResponsibility = await manager.findOne(WorkHistoryGovernmentAgencyResponsibility, {
+              where: {
+                workHistory: { id: workHistory.id },
+                governmentAgency: { id: projectAgencyId },
+              },
+            });
+            if (!hasResponsibility) {
+              throw new ForbiddenException('คุณไม่มีสิทธิ์ดำเนินการกับโครงการนี้ (ไม่ได้รับผิดชอบหน่วยงานของโครงการ)');
+            }
           }
 
           // Load current latest TrackingStatus to enforce transition rules
@@ -737,17 +831,18 @@ export class TrackingStatusService {
             );
           }
 
-          // Strict staff transition map: only these sequences are allowed
-          const staffAllowedTransitions: Record<string, string> = {
-            Pending: 'Verified',
-            Verified: 'Pending_Approval',
-            Pending_Approval: 'Approved',
+          // Strict staff transition map: array-valued to support multiple destinations
+          // Pending/Verified may go to Returned_For_Revision (CLAUDE.md §Returned_For_Revision Rule)
+          const staffAllowedTransitions: Record<string, string[]> = {
+            Pending: ['Verified', 'Returned_For_Revision'],
+            Verified: ['Pending_Approval', 'Returned_For_Revision'],
+            Pending_Approval: ['Approved'],
           };
-          const allowedDestination = staffAllowedTransitions[staffCurrentStatusName];
-          if (!allowedDestination || allowedDestination !== status.name) {
+          const allowedDestinations = staffAllowedTransitions[staffCurrentStatusName];
+          if (!allowedDestinations || !allowedDestinations.includes(status.name)) {
             throw new ForbiddenException(
               `ไม่อนุญาตให้เปลี่ยนสถานะจาก "${staffCurrentStatusName}" เป็น "${status.name}" ` +
-              `(เส้นทางที่อนุญาต: ${staffCurrentStatusName} → ${allowedDestination ?? 'ไม่มี'})`,
+              `(เส้นทางที่อนุญาต: ${staffCurrentStatusName} → ${allowedDestinations?.join(', ') ?? 'ไม่มี'})`,
             );
           }
         }

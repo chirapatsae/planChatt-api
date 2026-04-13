@@ -37,6 +37,7 @@ import { UsersService } from 'src/users/users.service';
 import { PdfService } from 'src/pdf/pdf.service';
 import { WebsocketService } from 'src/websocket/websocket/websocket.service';
 import { UnifiedProjectMapper } from 'src/project-groups/dto/unified-project-display.dto';
+import { ReportFormat } from 'src/development-plan/types/report-format.enum';
 import { handleException } from 'src/util/handleException';
 
 import { BookAssemblyFileService } from './book-assembly-file.service';
@@ -2578,13 +2579,21 @@ export class BookAssemblyService {
 
   /**
    * Queries approved projects for Part 3 generation.
+   *
+   * CLAUDE.md §16 — format-aware: joins `developmentIssue` and sorts by
+   * `developmentIssue.sortOrder` for ISSUE_BASED plans, or by `strategy.id`
+   * for STRATEGY_BASED plans (the previous default).
    */
   private async queryApprovedProjects(
     sourceType: BookAssemblySourceType,
     sourceId: string,
   ): Promise<{ projects: any[]; projectIds: string[] }> {
+    // Resolve reportFormat from the plan associated with the source context.
+    // This drives the sort order (§16.2) without requiring a separate service.
+    const reportFormat = await this.resolveReportFormat(sourceType, sourceId);
+
     if (sourceType === BookAssemblySourceType.MAIN_PLAN) {
-      const rows = await this.projectGroupRepo
+      const qb = this.projectGroupRepo
         .createQueryBuilder('pg')
         .leftJoinAndSelect('pg.createdBy', 'createdBy')
         .leftJoinAndSelect('createdBy.user', 'createdByUser')
@@ -2593,6 +2602,7 @@ export class BookAssemblyService {
         .leftJoinAndSelect('pg.strategy', 'strategy')
         .leftJoinAndSelect('pg.tactic', 'tactic')
         .leftJoinAndSelect('pg.plan', 'plan')
+        .leftJoinAndSelect('pg.developmentIssue', 'developmentIssue')
         .leftJoinAndSelect('pg.developmentPlan', 'developmentPlan')
         .leftJoinAndSelect('pg.budgets', 'budgets')
         .leftJoinAndSelect('pg.trackingStatus', 'ts')
@@ -2608,16 +2618,22 @@ export class BookAssemblyService {
         .andWhere('pg.deletedAt IS NULL')
         .andWhere('ts.isLatest = :isLatest', { isLatest: true })
         .andWhere('status.name = :statusName', { statusName: 'Approved' })
-        .andWhere('rpg.id IS NULL')
-        .orderBy('strategy.id', 'ASC')
-        .getMany();
+        .andWhere('rpg.id IS NULL');
+
+      if (reportFormat === ReportFormat.ISSUE_BASED) {
+        qb.orderBy('developmentIssue.sortOrder', 'ASC');
+      } else {
+        qb.orderBy('strategy.id', 'ASC');
+      }
+
+      const rows = await qb.getMany();
 
       const projects = rows.map((p) => UnifiedProjectMapper.fromProjectGroup(p));
       const projectIds = projects.map((p) => p.id);
       return { projects, projectIds };
     } else {
       // edit_revision or change_revision
-      const rows = await this.revisedProjectGroupRepo
+      const qb = this.revisedProjectGroupRepo
         .createQueryBuilder('rp')
         .leftJoinAndSelect('rp.developmentPlanRevision', 'dpr')
         .leftJoinAndSelect('dpr.developmentPlan', 'dp')
@@ -2628,6 +2644,7 @@ export class BookAssemblyService {
         .leftJoinAndSelect('rp.strategy', 'strategy')
         .leftJoinAndSelect('rp.tactic', 'tactic')
         .leftJoinAndSelect('rp.plan', 'plan')
+        .leftJoinAndSelect('rp.developmentIssue', 'developmentIssue')
         .leftJoinAndSelect('rp.budgets', 'budgets')
         .leftJoinAndSelect('rp.trackingStatus', 'ts')
         .leftJoinAndSelect('ts.statusId', 'status')
@@ -2639,14 +2656,56 @@ export class BookAssemblyService {
         .andWhere('rp.isBooked = :isBooked', { isBooked: false })
         .andWhere('ts.isLatest = :isLatest', { isLatest: true })
         .andWhere('status.name = :statusName', { statusName: 'Approved' })
-        .andWhere('rp.deletedAt IS NULL')
-        .orderBy('strategy.id', 'ASC')
-        .getMany();
+        .andWhere('rp.deletedAt IS NULL');
+
+      if (reportFormat === ReportFormat.ISSUE_BASED) {
+        qb.orderBy('developmentIssue.sortOrder', 'ASC');
+      } else {
+        qb.orderBy('strategy.id', 'ASC');
+      }
+
+      const rows = await qb.getMany();
 
       const projects = rows.map((p) => UnifiedProjectMapper.fromRevisedProjectGroup(p));
       const projectIds = projects.map((p) => p.id);
       return { projects, projectIds };
     }
+  }
+
+  /**
+   * Resolves the DevelopmentPlan.reportFormat for a given source context.
+   *
+   * CLAUDE.md §16.3 / §10 — format is owned exclusively by DevelopmentPlan.
+   * For revisions the format is inherited from the parent plan via JOIN.
+   */
+  private async resolveReportFormat(
+    sourceType: BookAssemblySourceType,
+    sourceId: string,
+  ): Promise<ReportFormat> {
+    if (sourceType === BookAssemblySourceType.MAIN_PLAN) {
+      const dp = await this.devPlanRepo.findOne({
+        where: { id: sourceId },
+        select: ['id', 'reportFormat'],
+      });
+      if (!dp) {
+        throw new NotFoundException(
+          `DevelopmentPlan not found for sourceId=${sourceId}`,
+        );
+      }
+      return dp.reportFormat ?? ReportFormat.STRATEGY_BASED;
+    }
+
+    // edit_revision or change_revision — resolve via revision -> plan chain
+    const revision = await this.devPlanRevisionRepo.findOne({
+      where: { id: sourceId },
+      relations: ['developmentPlan'],
+    });
+    if (!revision || !revision.developmentPlan) {
+      throw new NotFoundException(
+        `DevelopmentPlanRevision or its parent plan not found for sourceId=${sourceId}`,
+      );
+    }
+    return revision.developmentPlan.reportFormat ?? ReportFormat.STRATEGY_BASED;
   }
 
   /**

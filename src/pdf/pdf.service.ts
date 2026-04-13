@@ -36,9 +36,14 @@ import {
   StrategySummary,
   PlanSummary,
   PdfReportType,
+  IssueSummary,
+  IssueBasedReportAggregations,
 } from './report.types';
 
-// --- Report Generators ---
+// --- Format Resolver ---
+import { ReportFormat } from 'src/development-plan/types/report-format.enum';
+
+// --- Report Generators (STRATEGY_BASED) ---
 import { createSummaryPartDocDefinition } from './report-summary.part';
 import {
   createProjectDetailPartDocDefinition,
@@ -53,6 +58,18 @@ import {
   createRevisionEditGroupDetailDocDefinitionUser
 } from './report-revision-edit-detail-user.part';
 import { createRevisionEditSummaryPartDocDefinition } from './report-revision-edit-summary.part';
+
+// --- Report Generators (ISSUE_BASED) ---
+import { createIssueBasedSummaryPartDocDefinition } from './report-summary-issue-based.part';
+import {
+  createIssueBasedGroupCoverPageDocDefinition,
+  createIssueBasedGroupDetailDocDefinition,
+} from './report-project-detail-issue-based.part';
+import { createIssueBasedRevisionEditSummaryPartDocDefinition } from './report-revision-edit-summary-issue-based.part';
+import {
+  createIssueBasedRevisionGroupCoverPageDocDefinition,
+  createIssueBasedRevisionGroupDetailDocDefinition,
+} from './report-revision-edit-detail-issue-based.part';
 
 type GenerateReportOptions = {
   developmentPlanId?: string;
@@ -320,6 +337,60 @@ export class PdfService {
     return { strategies, overallSum, overallCount, groupedProjects };
   }
 
+  /**
+   * ISSUE_BASED aggregation — parallel to prepareReportAggregations.
+   * Groups projects by developmentIssue instead of strategy/tactic/plan.
+   */
+  private prepareIssueBasedReportAggregations(
+    projects: any[],
+    years: number[],
+  ): IssueBasedReportAggregations {
+    const issues = new Map<string, IssueSummary>();
+    const groupedProjects = new Map<string, any[]>();
+    const yearSet = new Set(years);
+
+    for (const project of projects) {
+      const issueName = project.developmentIssue?.name ?? 'ไม่ระบุประเด็น';
+      const sortOrder = project.developmentIssue?.sortOrder ?? 999;
+
+      if (!issues.has(issueName)) {
+        issues.set(issueName, {
+          issueName,
+          sortOrder,
+          perYearSum: Object.fromEntries(years.map(year => [year, 0])),
+          perYearCount: Object.fromEntries(years.map(year => [year, 0])),
+        });
+      }
+
+      const issueSummary = issues.get(issueName)!;
+      for (const budget of project.budgets || []) {
+        const year = budget.year;
+        const quantity = parseFloat(budget.quantity);
+        if (!isNaN(quantity) && yearSet.has(year)) {
+          issueSummary.perYearSum[year] += quantity;
+          issueSummary.perYearCount[year] += 1;
+        }
+      }
+
+      if (!groupedProjects.has(issueName)) {
+        groupedProjects.set(issueName, []);
+      }
+      groupedProjects.get(issueName)!.push(project);
+    }
+
+    const overallSum = Object.fromEntries(years.map(year => [year, 0]));
+    const overallCount = Object.fromEntries(years.map(year => [year, 0]));
+
+    for (const issueSummary of issues.values()) {
+      for (const year of years) {
+        overallSum[year] += issueSummary.perYearSum[year];
+        overallCount[year] += issueSummary.perYearCount[year];
+      }
+    }
+
+    return { issues, overallSum, overallCount, groupedProjects };
+  }
+
   private async calculateRevisionCountByType(
     developmentPlanId: string,
     revisionTypeName: string,
@@ -350,7 +421,7 @@ export class PdfService {
       previous = await this.projectGroupRepo.findOne({
         where: { id: current.prevProjectId },
         relations: [
-          'developmentPlan', 'strategy', 'tactic', 'plan', 'createdBy', 'createdBy.user',
+          'developmentPlan', 'strategy', 'tactic', 'plan', 'developmentIssue', 'createdBy', 'createdBy.user',
           'budgets', 'trackingStatus', 'trackingStatus.statusId', 'trackingStatus.createdBy',
           'trackingStatus.createdBy.user', 'originAgencyId', 'responsibleAgency', 'amphoe',
         ],
@@ -360,9 +431,9 @@ export class PdfService {
         where: { id: current.prevProjectId },
         relations: [
           'developmentPlanRevision', 'developmentPlanRevision.revisionType', 'developmentPlanRevision.developmentPlan',
-          'developmentPlan', 'projectGroup', 'strategy', 'tactic', 'plan', 'createdBy', 'createdBy.user',
+          'developmentPlan', 'projectGroup', 'strategy', 'tactic', 'plan', 'developmentIssue', 'createdBy', 'createdBy.user',
           'budgets', 'trackingStatus', 'trackingStatus.statusId', 'trackingStatus.createdBy',
-          'trackingStatus.createdBy.user', 'originAgencyId', 'responsibleAgency', 'amphoe', 'amphoe',
+          'trackingStatus.createdBy.user', 'originAgencyId', 'responsibleAgency', 'amphoe',
         ],
       });
     }
@@ -396,6 +467,7 @@ export class PdfService {
       .leftJoinAndSelect('projectGroup.strategy', 'strategy')
       .leftJoinAndSelect('projectGroup.tactic', 'tactic')
       .leftJoinAndSelect('projectGroup.plan', 'plan')
+      .leftJoinAndSelect('projectGroup.developmentIssue', 'developmentIssue')
       .leftJoinAndSelect('projectGroup.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('projectGroup.budgets', 'budgets')
       .leftJoinAndSelect('projectGroup.trackingStatus', 'trackingStatus')
@@ -425,6 +497,7 @@ export class PdfService {
       .leftJoinAndSelect('revisedProject.strategy', 'strategy')
       .leftJoinAndSelect('revisedProject.tactic', 'tactic')
       .leftJoinAndSelect('revisedProject.plan', 'plan')
+      .leftJoinAndSelect('revisedProject.developmentIssue', 'developmentIssue')
       .leftJoinAndSelect('revisedProject.budgets', 'budgets')
       .leftJoinAndSelect('revisedProject.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
@@ -461,6 +534,7 @@ export class PdfService {
       .leftJoinAndSelect('revisedProject.strategy', 'strategy')
       .leftJoinAndSelect('revisedProject.tactic', 'tactic')
       .leftJoinAndSelect('revisedProject.plan', 'plan')
+      .leftJoinAndSelect('revisedProject.developmentIssue', 'developmentIssue')
       .leftJoinAndSelect('revisedProject.budgets', 'budgets')
       .leftJoinAndSelect('revisedProject.responsibleAgency', 'responsibleAgency')
       .leftJoinAndSelect('revisedProject.originAgencyId', 'originAgencyId')
@@ -485,6 +559,7 @@ export class PdfService {
       .leftJoinAndSelect('projectGroup.strategy', 'strategy')
       .leftJoinAndSelect('projectGroup.tactic', 'tactic')
       .leftJoinAndSelect('projectGroup.plan', 'plan')
+      .leftJoinAndSelect('projectGroup.developmentIssue', 'developmentIssue')
       .leftJoinAndSelect('projectGroup.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('projectGroup.budgets', 'budgets')
       .leftJoinAndSelect('projectGroup.trackingStatus', 'trackingStatus')
@@ -522,6 +597,7 @@ export class PdfService {
       .leftJoinAndSelect('projectGroup.strategy', 'strategy')
       .leftJoinAndSelect('projectGroup.tactic', 'tactic')
       .leftJoinAndSelect('projectGroup.plan', 'plan')
+      .leftJoinAndSelect('projectGroup.developmentIssue', 'developmentIssue')
       .leftJoinAndSelect('projectGroup.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('projectGroup.budgets', 'budgets')
       .leftJoinAndSelect('projectGroup.trackingStatus', 'trackingStatus')
@@ -558,6 +634,7 @@ export class PdfService {
       .leftJoinAndSelect('projectGroup.strategy', 'strategy')
       .leftJoinAndSelect('projectGroup.tactic', 'tactic')
       .leftJoinAndSelect('projectGroup.plan', 'plan')
+      .leftJoinAndSelect('projectGroup.developmentIssue', 'developmentIssue')
       .leftJoinAndSelect('projectGroup.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('projectGroup.budgets', 'budgets')
       .leftJoinAndSelect('projectGroup.trackingStatus', 'trackingStatus')
@@ -599,6 +676,7 @@ export class PdfService {
       .leftJoinAndSelect('revisedProject.strategy', 'strategy')
       .leftJoinAndSelect('revisedProject.tactic', 'tactic')
       .leftJoinAndSelect('revisedProject.plan', 'plan')
+      .leftJoinAndSelect('revisedProject.developmentIssue', 'developmentIssue')
       .leftJoinAndSelect('revisedProject.developmentPlan', 'revisedDevelopmentPlan')
       .leftJoinAndSelect('revisedProject.budgets', 'budgets')
       .leftJoinAndSelect('revisedProject.trackingStatus', 'trackingStatus')
@@ -635,6 +713,7 @@ export class PdfService {
       .leftJoinAndSelect('revisedProject.strategy', 'strategy')
       .leftJoinAndSelect('revisedProject.tactic', 'tactic')
       .leftJoinAndSelect('revisedProject.plan', 'plan')
+      .leftJoinAndSelect('revisedProject.developmentIssue', 'developmentIssue')
       .leftJoinAndSelect('revisedProject.developmentPlan', 'revisedDevelopmentPlan')
       .leftJoinAndSelect('revisedProject.budgets', 'budgets')
       .leftJoinAndSelect('revisedProject.trackingStatus', 'trackingStatus')
@@ -682,6 +761,9 @@ export class PdfService {
     if (!dp) throw new Error('DevelopmentPlan not found');
     const developmentPlanName = dp?.name ?? 'ไม่พบแผนพัฒนาจังหวัด';
 
+    // Resolve reportFormat from the plan
+    const reportFormat = dp.reportFormat ?? ReportFormat.STRATEGY_BASED;
+
     const columnMap: Record<string, { text: string; key: string }> = {
       index: { text: 'ที่', key: 'index' },
       title: { text: 'โครงการ', key: 'title' },
@@ -695,56 +777,59 @@ export class PdfService {
       coordinates: { text: 'พิกัดทาง \nภูมิศาสตร์', key: 'coordinates' },
     };
 
-    const availableColumns = selectedColumns.filter(col => columnMap[col] && col !== 'amphoe' && col !== 'coordinates');
+    const baseFilteredColumns = selectedColumns.filter(col => columnMap[col] && col !== 'amphoe' && col !== 'coordinates');
+    const availableColumns = reportFormat === ReportFormat.ISSUE_BASED
+      ? baseFilteredColumns.filter(col => col !== 'kpi')
+      : baseFilteredColumns;
     const fonts = this.getPdfFonts();
     const years = Array.from({ length: dp.endYear - dp.startYear + 1 }, (_, index) => dp.startYear + index);
-    const { strategies, overallSum, overallCount, groupedProjects } = this.prepareReportAggregations(projects, years);
 
     const pageMargins: [number, number, number, number] = [15, 60, 15, 40];
     const pageOrientation: 'portrait' | 'landscape' = 'landscape';
 
-    let coverSummaryDoc: TDocumentDefinitions | null = null;
-    if (reportType !== 'outAuthority') {
-      coverSummaryDoc = createSummaryPartDocDefinition({
-        developmentPlanName, years, strategies, overallSum, overallCount,
-        pageMargins, pageOrientation, newWord: this.newWord.bind(this),
-      });
-    }
-
     const pdfBuffers: Buffer[] = [];
     let pageOffset = 0;
 
-    if (coverSummaryDoc) {
-      const summaryBuffer = await this.createPdfBuffer(coverSummaryDoc, fonts);
-      pdfBuffers.push(summaryBuffer);
-      const summaryPdf = await PDFDocument.load(summaryBuffer);
-      pageOffset += summaryPdf.getPageCount();
-    }
+    if (reportFormat === ReportFormat.ISSUE_BASED) {
+      // --- ISSUE_BASED path ---
+      const { issues, overallSum, overallCount, groupedProjects } = this.prepareIssueBasedReportAggregations(projects, years);
 
-    const strategyGroups = new Map<string, Array<{ groupKey: string, projects: any[] }>>();
-    for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
-      const [strategyName] = groupKey.split('||');
-      if (!strategyGroups.has(strategyName)) strategyGroups.set(strategyName, []);
-      strategyGroups.get(strategyName)!.push({ groupKey, projects: groupProjectsValue });
-    }
-
-    for (const [strategyName, subGroups] of strategyGroups.entries()) {
-      const coverPageDoc = createGroupCoverPageDocDefinition(
-        strategyName, developmentPlanName, pageMargins, pageOrientation,
-        this.newWord.bind(this), pageOffset,
-      );
-      const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
-      pdfBuffers.push(coverPageBuffer);
-      const coverPagePdf = await PDFDocument.load(coverPageBuffer);
-      pageOffset += coverPagePdf.getPageCount();
-
-      for (const group of subGroups) {
-        const { groupKey, projects: groupProjectsValue } = group;
-        const [, tacticName, planName] = groupKey.split('||');
-        const detailDoc = createGroupDetailDocDefinition({
-          developmentPlanName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
+      let coverSummaryDoc: TDocumentDefinitions | null = null;
+      if (reportType !== 'outAuthority') {
+        coverSummaryDoc = createIssueBasedSummaryPartDocDefinition({
+          developmentPlanName, years, issues, overallSum, overallCount,
           pageMargins, pageOrientation, newWord: this.newWord.bind(this),
-          reportType, strategyName, tacticName, planName, pageOffset,
+        });
+      }
+
+      if (coverSummaryDoc) {
+        const summaryBuffer = await this.createPdfBuffer(coverSummaryDoc, fonts);
+        pdfBuffers.push(summaryBuffer);
+        const summaryPdf = await PDFDocument.load(summaryBuffer);
+        pageOffset += summaryPdf.getPageCount();
+      }
+
+      // Sort issue groups by sortOrder
+      const sortedIssueEntries = [...groupedProjects.entries()].sort((a, b) => {
+        const sortA = issues.get(a[0])?.sortOrder ?? 999;
+        const sortB = issues.get(b[0])?.sortOrder ?? 999;
+        return sortA - sortB;
+      });
+
+      for (const [issueName, issueProjects] of sortedIssueEntries) {
+        const coverPageDoc = createIssueBasedGroupCoverPageDocDefinition(
+          issueName, developmentPlanName, pageMargins, pageOrientation,
+          this.newWord.bind(this), pageOffset,
+        );
+        const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
+        pdfBuffers.push(coverPageBuffer);
+        const coverPagePdf = await PDFDocument.load(coverPageBuffer);
+        pageOffset += coverPagePdf.getPageCount();
+
+        const detailDoc = createIssueBasedGroupDetailDocDefinition({
+          developmentPlanName, years, groupProjects: issueProjects, availableColumns, columnMap,
+          pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+          reportType, issueName, pageOffset,
         });
 
         if (detailDoc) {
@@ -752,6 +837,59 @@ export class PdfService {
           pdfBuffers.push(detailBuffer);
           const detailPdf = await PDFDocument.load(detailBuffer);
           pageOffset += detailPdf.getPageCount();
+        }
+      }
+    } else {
+      // --- STRATEGY_BASED path (existing logic) ---
+      const { strategies, overallSum, overallCount, groupedProjects } = this.prepareReportAggregations(projects, years);
+
+      let coverSummaryDoc: TDocumentDefinitions | null = null;
+      if (reportType !== 'outAuthority') {
+        coverSummaryDoc = createSummaryPartDocDefinition({
+          developmentPlanName, years, strategies, overallSum, overallCount,
+          pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+        });
+      }
+
+      if (coverSummaryDoc) {
+        const summaryBuffer = await this.createPdfBuffer(coverSummaryDoc, fonts);
+        pdfBuffers.push(summaryBuffer);
+        const summaryPdf = await PDFDocument.load(summaryBuffer);
+        pageOffset += summaryPdf.getPageCount();
+      }
+
+      const strategyGroups = new Map<string, Array<{ groupKey: string, projects: any[] }>>();
+      for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
+        const [strategyName] = groupKey.split('||');
+        if (!strategyGroups.has(strategyName)) strategyGroups.set(strategyName, []);
+        strategyGroups.get(strategyName)!.push({ groupKey, projects: groupProjectsValue });
+      }
+
+      for (const [strategyName, subGroups] of strategyGroups.entries()) {
+        const coverPageDoc = createGroupCoverPageDocDefinition(
+          strategyName, developmentPlanName, pageMargins, pageOrientation,
+          this.newWord.bind(this), pageOffset,
+        );
+        const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
+        pdfBuffers.push(coverPageBuffer);
+        const coverPagePdf = await PDFDocument.load(coverPageBuffer);
+        pageOffset += coverPagePdf.getPageCount();
+
+        for (const group of subGroups) {
+          const { groupKey, projects: groupProjectsValue } = group;
+          const [, tacticName, planName] = groupKey.split('||');
+          const detailDoc = createGroupDetailDocDefinition({
+            developmentPlanName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
+            pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+            reportType, strategyName, tacticName, planName, pageOffset,
+          });
+
+          if (detailDoc) {
+            const detailBuffer = await this.createPdfBuffer(detailDoc, fonts);
+            pdfBuffers.push(detailBuffer);
+            const detailPdf = await PDFDocument.load(detailBuffer);
+            pageOffset += detailPdf.getPageCount();
+          }
         }
       }
     }
@@ -774,6 +912,9 @@ export class PdfService {
     if (!dp) throw new Error('DevelopmentPlan not found');
     const developmentPlanName = dp?.name ?? 'ไม่พบแผนพัฒนาจังหวัด';
 
+    // Resolve reportFormat from the plan
+    const reportFormat = dp.reportFormat ?? ReportFormat.STRATEGY_BASED;
+
     const columnMap: Record<string, { text: string; key: string }> = {
       index: { text: 'ที่', key: 'index' },
       title: { text: 'โครงการ', key: 'title' },
@@ -787,68 +928,127 @@ export class PdfService {
       coordinates: { text: 'พิกัดทาง \nภูมิศาสตร์', key: 'coordinates' },
     };
 
-    const availableColumns = selectedColumns.filter(col => columnMap[col] && col !== 'amphoe' && col !== 'coordinates');
+    const baseFilteredColumns = selectedColumns.filter(col => columnMap[col] && col !== 'amphoe' && col !== 'coordinates');
+    const availableColumns = reportFormat === ReportFormat.ISSUE_BASED
+      ? baseFilteredColumns.filter(col => col !== 'kpi')
+      : baseFilteredColumns;
     const fonts = this.getPdfFonts();
     const years = Array.from({ length: dp.endYear - dp.startYear + 1 }, (_, index) => dp.startYear + index);
-    const { strategies, overallSum, overallCount, groupedProjects } = this.prepareReportAggregations(projects, years);
 
     const pageMargins: [number, number, number, number] = [15, 60, 15, 40];
     const pageOrientation: 'portrait' | 'landscape' = 'landscape';
-
-    let coverSummaryDoc: TDocumentDefinitions | null = null;
-    if (reportType !== 'outAuthority') {
-      coverSummaryDoc = createSummaryPartDocDefinition({
-        developmentPlanName, years, strategies, overallSum, overallCount,
-        pageMargins, pageOrientation, newWord: this.newWord.bind(this),
-      });
-    }
 
     const pdfBuffers: Buffer[] = [];
     const pageMap = new Map<string, number>();
     let pageOffset = 0;
 
-    if (coverSummaryDoc) {
-      const summaryBuffer = await this.createPdfBuffer(coverSummaryDoc, fonts);
-      pdfBuffers.push(summaryBuffer);
-      const summaryPdf = await PDFDocument.load(summaryBuffer);
-      pageOffset += summaryPdf.getPageCount();
-    }
+    if (reportFormat === ReportFormat.ISSUE_BASED) {
+      // --- ISSUE_BASED path with page tracking ---
+      const { issues, overallSum, overallCount, groupedProjects } = this.prepareIssueBasedReportAggregations(projects, years);
 
-    const strategyGroups = new Map<string, Array<{ groupKey: string, projects: any[] }>>();
-    for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
-      const [strategyName] = groupKey.split('||');
-      if (!strategyGroups.has(strategyName)) strategyGroups.set(strategyName, []);
-      strategyGroups.get(strategyName)!.push({ groupKey, projects: groupProjectsValue });
-    }
+      let coverSummaryDoc: TDocumentDefinitions | null = null;
+      if (reportType !== 'outAuthority') {
+        coverSummaryDoc = createIssueBasedSummaryPartDocDefinition({
+          developmentPlanName, years, issues, overallSum, overallCount,
+          pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+        });
+      }
 
-    for (const [strategyName, subGroups] of strategyGroups.entries()) {
-      const coverPageDoc = createGroupCoverPageDocDefinition(
-        strategyName, developmentPlanName, pageMargins, pageOrientation,
-        this.newWord.bind(this), pageOffset,
-      );
-      const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
-      pdfBuffers.push(coverPageBuffer);
-      const coverPagePdf = await PDFDocument.load(coverPageBuffer);
-      pageOffset += coverPagePdf.getPageCount();
+      if (coverSummaryDoc) {
+        const summaryBuffer = await this.createPdfBuffer(coverSummaryDoc, fonts);
+        pdfBuffers.push(summaryBuffer);
+        const summaryPdf = await PDFDocument.load(summaryBuffer);
+        pageOffset += summaryPdf.getPageCount();
+      }
 
-      for (const group of subGroups) {
-        const { groupKey, projects: groupProjectsValue } = group;
-        const [, tacticName, planName] = groupKey.split('||');
+      const sortedIssueEntries = [...groupedProjects.entries()].sort((a, b) => {
+        const sortA = issues.get(a[0])?.sortOrder ?? 999;
+        const sortB = issues.get(b[0])?.sortOrder ?? 999;
+        return sortA - sortB;
+      });
 
-        for (const project of groupProjectsValue) {
-          const projectDetailDoc = createGroupDetailDocDefinition({
+      for (const [issueName, issueProjects] of sortedIssueEntries) {
+        const coverPageDoc = createIssueBasedGroupCoverPageDocDefinition(
+          issueName, developmentPlanName, pageMargins, pageOrientation,
+          this.newWord.bind(this), pageOffset,
+        );
+        const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
+        pdfBuffers.push(coverPageBuffer);
+        const coverPagePdf = await PDFDocument.load(coverPageBuffer);
+        pageOffset += coverPagePdf.getPageCount();
+
+        for (const project of issueProjects) {
+          const projectDetailDoc = createIssueBasedGroupDetailDocDefinition({
             developmentPlanName, years, groupProjects: [project], availableColumns, columnMap,
             pageMargins, pageOrientation, newWord: this.newWord.bind(this),
-            reportType, strategyName, tacticName, planName, pageOffset,
+            reportType, issueName, pageOffset,
           });
 
           if (projectDetailDoc) {
             const projectBuffer = await this.createPdfBuffer(projectDetailDoc, fonts);
             pdfBuffers.push(projectBuffer);
             const projectPdf = await PDFDocument.load(projectBuffer);
-            
+
             pageMap.set(project.id, pageOffset + 1);
             pageOffset += projectPdf.getPageCount();
+          }
+        }
+      }
+    } else {
+      // --- STRATEGY_BASED path (existing logic) ---
+      const { strategies, overallSum, overallCount, groupedProjects } = this.prepareReportAggregations(projects, years);
+
+      let coverSummaryDoc: TDocumentDefinitions | null = null;
+      if (reportType !== 'outAuthority') {
+        coverSummaryDoc = createSummaryPartDocDefinition({
+          developmentPlanName, years, strategies, overallSum, overallCount,
+          pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+        });
+      }
+
+      if (coverSummaryDoc) {
+        const summaryBuffer = await this.createPdfBuffer(coverSummaryDoc, fonts);
+        pdfBuffers.push(summaryBuffer);
+        const summaryPdf = await PDFDocument.load(summaryBuffer);
+        pageOffset += summaryPdf.getPageCount();
+      }
+
+      const strategyGroups = new Map<string, Array<{ groupKey: string, projects: any[] }>>();
+      for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
+        const [strategyName] = groupKey.split('||');
+        if (!strategyGroups.has(strategyName)) strategyGroups.set(strategyName, []);
+        strategyGroups.get(strategyName)!.push({ groupKey, projects: groupProjectsValue });
+      }
+
+      for (const [strategyName, subGroups] of strategyGroups.entries()) {
+        const coverPageDoc = createGroupCoverPageDocDefinition(
+          strategyName, developmentPlanName, pageMargins, pageOrientation,
+          this.newWord.bind(this), pageOffset,
+        );
+        const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
+        pdfBuffers.push(coverPageBuffer);
+        const coverPagePdf = await PDFDocument.load(coverPageBuffer);
+        pageOffset += coverPagePdf.getPageCount();
+
+        for (const group of subGroups) {
+          const { groupKey, projects: groupProjectsValue } = group;
+          const [, tacticName, planName] = groupKey.split('||');
+
+          for (const project of groupProjectsValue) {
+            const projectDetailDoc = createGroupDetailDocDefinition({
+              developmentPlanName, years, groupProjects: [project], availableColumns, columnMap,
+              pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+              reportType, strategyName, tacticName, planName, pageOffset,
+            });
+
+            if (projectDetailDoc) {
+              const projectBuffer = await this.createPdfBuffer(projectDetailDoc, fonts);
+              pdfBuffers.push(projectBuffer);
+              const projectPdf = await PDFDocument.load(projectBuffer);
+
+              pageMap.set(project.id, pageOffset + 1);
+              pageOffset += projectPdf.getPageCount();
+            }
           }
         }
       }
@@ -856,7 +1056,7 @@ export class PdfService {
 
     if (pdfBuffers.length === 0) throw new Error('No PDF documents could be generated');
     const mergedBuffer = await this.mergePdfBuffers(pdfBuffers);
-    
+
     return { buffer: mergedBuffer, pageMap };
   }
 
@@ -887,13 +1087,18 @@ export class PdfService {
       coordinates: { text: 'พิกัดทาง \nภูมิศาสตร์', key: 'coordinates' },
     };
 
+    // Resolve reportFormat from the plan
+    const reportFormat = dp.reportFormat ?? ReportFormat.STRATEGY_BASED;
+
     const defaultColumns = ['index', 'title', 'objective', 'target', 'budget', 'kpi', 'expectedResult', 'mainAgency'];
     const columnsToUse = selectedColumns || defaultColumns;
-    const availableColumns = columnsToUse.filter(col => columnMap[col] && col !== 'amphoe' && col !== 'coordinates');
+    const baseFilteredColumns = columnsToUse.filter(col => columnMap[col] && col !== 'amphoe' && col !== 'coordinates');
+    const availableColumns = reportFormat === ReportFormat.ISSUE_BASED
+      ? baseFilteredColumns.filter(col => col !== 'kpi')
+      : baseFilteredColumns;
 
     const fonts = this.getPdfFonts();
     const years = Array.from({ length: dp.endYear - dp.startYear + 1 }, (_, index) => dp.startYear + index);
-    const { groupedProjects } = this.prepareReportAggregations(projects, years);
 
     const pageMargins: [number, number, number, number] = [15, 60, 15, 40];
     const pageOrientation: 'portrait' | 'landscape' = 'landscape';
@@ -901,23 +1106,21 @@ export class PdfService {
     const pdfBuffers: Buffer[] = [];
     let pageOffset = 0;
 
-    // จัดกลุ่มตาม strategy
-    const strategyGroups = new Map<string, Array<{ groupKey: string, projects: any[] }>>();
-    for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
-      const [strategyName] = groupKey.split('||');
-      if (!strategyGroups.has(strategyName)) strategyGroups.set(strategyName, []);
-      strategyGroups.get(strategyName)!.push({ groupKey, projects: groupProjectsValue });
-    }
+    if (reportFormat === ReportFormat.ISSUE_BASED) {
+      // --- ISSUE_BASED path: details only ---
+      const { issues, groupedProjects } = this.prepareIssueBasedReportAggregations(projects, years);
 
-    // สร้างรายละเอียดโครงการเรียงลำดับตาม strategy, tactic, plan
-    for (const [strategyName, subGroups] of strategyGroups.entries()) {
-      for (const group of subGroups) {
-        const { groupKey, projects: groupProjectsValue } = group;
-        const [, tacticName, planName] = groupKey.split('||');
-        const detailDoc = createGroupDetailDocDefinition({
-          developmentPlanName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
+      const sortedIssueEntries = [...groupedProjects.entries()].sort((a, b) => {
+        const sortA = issues.get(a[0])?.sortOrder ?? 999;
+        const sortB = issues.get(b[0])?.sortOrder ?? 999;
+        return sortA - sortB;
+      });
+
+      for (const [issueName, issueProjects] of sortedIssueEntries) {
+        const detailDoc = createIssueBasedGroupDetailDocDefinition({
+          developmentPlanName, years, groupProjects: issueProjects, availableColumns, columnMap,
           pageMargins, pageOrientation, newWord: this.newWord.bind(this),
-          reportType, strategyName, tacticName, planName, pageOffset,
+          reportType, issueName, pageOffset,
         });
 
         if (detailDoc) {
@@ -925,6 +1128,35 @@ export class PdfService {
           pdfBuffers.push(detailBuffer);
           const detailPdf = await PDFDocument.load(detailBuffer);
           pageOffset += detailPdf.getPageCount();
+        }
+      }
+    } else {
+      // --- STRATEGY_BASED path (existing logic) ---
+      const { groupedProjects } = this.prepareReportAggregations(projects, years);
+
+      const strategyGroups = new Map<string, Array<{ groupKey: string, projects: any[] }>>();
+      for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
+        const [strategyName] = groupKey.split('||');
+        if (!strategyGroups.has(strategyName)) strategyGroups.set(strategyName, []);
+        strategyGroups.get(strategyName)!.push({ groupKey, projects: groupProjectsValue });
+      }
+
+      for (const [strategyName, subGroups] of strategyGroups.entries()) {
+        for (const group of subGroups) {
+          const { groupKey, projects: groupProjectsValue } = group;
+          const [, tacticName, planName] = groupKey.split('||');
+          const detailDoc = createGroupDetailDocDefinition({
+            developmentPlanName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
+            pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+            reportType, strategyName, tacticName, planName, pageOffset,
+          });
+
+          if (detailDoc) {
+            const detailBuffer = await this.createPdfBuffer(detailDoc, fonts);
+            pdfBuffers.push(detailBuffer);
+            const detailPdf = await PDFDocument.load(detailBuffer);
+            pageOffset += detailPdf.getPageCount();
+          }
         }
       }
     }
@@ -1363,6 +1595,7 @@ export class PdfService {
         .leftJoinAndSelect('revisedProject.strategy', 'strategy')
         .leftJoinAndSelect('revisedProject.tactic', 'tactic')
         .leftJoinAndSelect('revisedProject.plan', 'plan')
+        .leftJoinAndSelect('revisedProject.developmentIssue', 'developmentIssue')
         .leftJoinAndSelect('revisedProject.budgets', 'budgets')
         .leftJoinAndSelect('revisedProject.responsibleAgency', 'responsibleAgency')
         .leftJoinAndSelect('revisedProject.originAgencyId', 'originAgencyId')
@@ -1378,6 +1611,9 @@ export class PdfService {
     }
 
     if (revisedProjects.length === 0) throw new Error('No projects found with status Pending_Approval or Approved');
+
+    // Resolve reportFormat from the parent plan
+    const reportFormat = dp.reportFormat ?? ReportFormat.STRATEGY_BASED;
 
     const projectsWithComparison = await Promise.all(
       revisedProjects.map(async (current) => this.findProjectComparisonForRevisionEdit(current, developmentPlanId))
@@ -1397,58 +1633,118 @@ export class PdfService {
       coordinates: { text: 'พิกัดทาง \nภูมิศาสตร์', key: 'coordinates' },
     };
 
-    const availableColumns = selectedColumns.filter(col => columnMap[col]);
+    const availableColumns = reportFormat === ReportFormat.ISSUE_BASED
+      ? selectedColumns.filter(col => columnMap[col] && col !== 'kpi')
+      : selectedColumns.filter(col => columnMap[col]);
     const fonts = this.getPdfFonts();
     const years = Array.from({ length: dp.endYear - dp.startYear + 1 }, (_, index) => dp.startYear + index);
-    const { strategies, overallSum, overallCount } = this.prepareReportAggregations(unifiedProjects, years);
     const pageMargins: [number, number, number, number] = [15, 60, 15, 40];
     const pageOrientation = 'landscape';
-
-    const summaryDoc = createRevisionEditSummaryPartDocDefinition({
-      developmentPlanRevisionName, years, strategies, overallSum, overallCount,
-      pageMargins, pageOrientation, newWord: this.newWord.bind(this),
-    });
-
-    const groupedProjects = new Map<string, typeof projectsWithComparison>();
-    for (const project of projectsWithComparison) {
-      const current = project.current;
-      const groupKey = `${current.strategy?.name || '-'}||${current.tactic?.name || '-'}||${current.plan?.name || '-'}`;
-      if (!groupedProjects.has(groupKey)) groupedProjects.set(groupKey, []);
-      groupedProjects.get(groupKey)!.push(project);
-    }
 
     const pdfBuffers: Buffer[] = [];
     let pageOffset = 0;
 
-    if (summaryDoc) {
-      const summaryBuffer = await this.createPdfBuffer(summaryDoc, fonts);
-      pdfBuffers.push(summaryBuffer);
-      const summaryPdf = await PDFDocument.load(summaryBuffer);
-      pageOffset += summaryPdf.getPageCount();
-    }
+    if (reportFormat === ReportFormat.ISSUE_BASED) {
+      // --- ISSUE_BASED path ---
+      const { issues, overallSum, overallCount } = this.prepareIssueBasedReportAggregations(unifiedProjects, years);
 
-    for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
-      const [strategyName, tacticName, planName] = groupKey.split('||');
-      const coverPageDoc = createRevisionEditGroupCoverPageDocDefinition(
-        strategyName, developmentPlanRevisionName, pageMargins, pageOrientation,
-        this.newWord.bind(this), pageOffset,
-      );
-      const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
-      pdfBuffers.push(coverPageBuffer);
-      const coverPagePdf = await PDFDocument.load(coverPageBuffer);
-      pageOffset += coverPagePdf.getPageCount();
-
-      const detailDoc = createRevisionEditGroupDetailDocDefinition({
-        developmentPlanRevisionName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
+      const summaryDoc = createIssueBasedRevisionEditSummaryPartDocDefinition({
+        developmentPlanRevisionName, years, issues, overallSum, overallCount,
         pageMargins, pageOrientation, newWord: this.newWord.bind(this),
-        reportType: 'inAuthority', strategyName, tacticName, planName, pageOffset,
       });
 
-      if (detailDoc) {
-        const detailBuffer = await this.createPdfBuffer(detailDoc, fonts);
-        pdfBuffers.push(detailBuffer);
-        const detailPdf = await PDFDocument.load(detailBuffer);
-        pageOffset += detailPdf.getPageCount();
+      const groupedByIssue = new Map<string, typeof projectsWithComparison>();
+      for (const project of projectsWithComparison) {
+        const current = project.current;
+        const issueName = current.developmentIssue?.name ?? 'ไม่ระบุประเด็น';
+        if (!groupedByIssue.has(issueName)) groupedByIssue.set(issueName, []);
+        groupedByIssue.get(issueName)!.push(project);
+      }
+
+      if (summaryDoc) {
+        const summaryBuffer = await this.createPdfBuffer(summaryDoc, fonts);
+        pdfBuffers.push(summaryBuffer);
+        const summaryPdf = await PDFDocument.load(summaryBuffer);
+        pageOffset += summaryPdf.getPageCount();
+      }
+
+      // Sort issue groups by sortOrder
+      const sortedIssueEntries = [...groupedByIssue.entries()].sort((a, b) => {
+        const sortA = issues.get(a[0])?.sortOrder ?? 999;
+        const sortB = issues.get(b[0])?.sortOrder ?? 999;
+        return sortA - sortB;
+      });
+
+      for (const [issueName, groupProjectsValue] of sortedIssueEntries) {
+        const coverPageDoc = createIssueBasedRevisionGroupCoverPageDocDefinition(
+          issueName, developmentPlanRevisionName, pageMargins, pageOrientation,
+          this.newWord.bind(this), pageOffset,
+        );
+        const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
+        pdfBuffers.push(coverPageBuffer);
+        const coverPagePdf = await PDFDocument.load(coverPageBuffer);
+        pageOffset += coverPagePdf.getPageCount();
+
+        const detailDoc = createIssueBasedRevisionGroupDetailDocDefinition({
+          developmentPlanRevisionName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
+          pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+          reportType: 'inAuthority', issueName, pageOffset,
+        });
+
+        if (detailDoc) {
+          const detailBuffer = await this.createPdfBuffer(detailDoc, fonts);
+          pdfBuffers.push(detailBuffer);
+          const detailPdf = await PDFDocument.load(detailBuffer);
+          pageOffset += detailPdf.getPageCount();
+        }
+      }
+    } else {
+      // --- STRATEGY_BASED path (existing logic) ---
+      const { strategies, overallSum, overallCount } = this.prepareReportAggregations(unifiedProjects, years);
+
+      const summaryDoc = createRevisionEditSummaryPartDocDefinition({
+        developmentPlanRevisionName, years, strategies, overallSum, overallCount,
+        pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+      });
+
+      const groupedProjects = new Map<string, typeof projectsWithComparison>();
+      for (const project of projectsWithComparison) {
+        const current = project.current;
+        const groupKey = `${current.strategy?.name || '-'}||${current.tactic?.name || '-'}||${current.plan?.name || '-'}`;
+        if (!groupedProjects.has(groupKey)) groupedProjects.set(groupKey, []);
+        groupedProjects.get(groupKey)!.push(project);
+      }
+
+      if (summaryDoc) {
+        const summaryBuffer = await this.createPdfBuffer(summaryDoc, fonts);
+        pdfBuffers.push(summaryBuffer);
+        const summaryPdf = await PDFDocument.load(summaryBuffer);
+        pageOffset += summaryPdf.getPageCount();
+      }
+
+      for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
+        const [strategyName, tacticName, planName] = groupKey.split('||');
+        const coverPageDoc = createRevisionEditGroupCoverPageDocDefinition(
+          strategyName, developmentPlanRevisionName, pageMargins, pageOrientation,
+          this.newWord.bind(this), pageOffset,
+        );
+        const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
+        pdfBuffers.push(coverPageBuffer);
+        const coverPagePdf = await PDFDocument.load(coverPageBuffer);
+        pageOffset += coverPagePdf.getPageCount();
+
+        const detailDoc = createRevisionEditGroupDetailDocDefinition({
+          developmentPlanRevisionName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
+          pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+          reportType: 'inAuthority', strategyName, tacticName, planName, pageOffset,
+        });
+
+        if (detailDoc) {
+          const detailBuffer = await this.createPdfBuffer(detailDoc, fonts);
+          pdfBuffers.push(detailBuffer);
+          const detailPdf = await PDFDocument.load(detailBuffer);
+          pageOffset += detailPdf.getPageCount();
+        }
       }
     }
 
@@ -1474,6 +1770,9 @@ export class PdfService {
     const revisionTypeName = developmentPlanRevision.description || 'ไม่ระบุ';
     const developmentPlanRevisionName = `${dp.name} ${revisionTypeName}`;
 
+    // Resolve reportFormat from the parent plan
+    const reportFormat = dp.reportFormat ?? ReportFormat.STRATEGY_BASED;
+
     let revisedProjects: RevisedProjectGroup[] = [];
 
     if (existingProjects) {
@@ -1487,6 +1786,7 @@ export class PdfService {
         .leftJoinAndSelect('revisedProject.strategy', 'strategy')
         .leftJoinAndSelect('revisedProject.tactic', 'tactic')
         .leftJoinAndSelect('revisedProject.plan', 'plan')
+        .leftJoinAndSelect('revisedProject.developmentIssue', 'developmentIssue')
         .leftJoinAndSelect('revisedProject.budgets', 'budgets')
         .leftJoinAndSelect('revisedProject.responsibleAgency', 'responsibleAgency')
         .leftJoinAndSelect('revisedProject.originAgencyId', 'originAgencyId')
@@ -1523,38 +1823,76 @@ export class PdfService {
       coordinates: { text: 'พิกัดทาง \nภูมิศาสตร์', key: 'coordinates' },
     };
 
-    const availableColumns = columnsToUse.filter(col => columnMap[col]);
+    const availableColumns = reportFormat === ReportFormat.ISSUE_BASED
+      ? columnsToUse.filter(col => columnMap[col] && col !== 'kpi')
+      : columnsToUse.filter(col => columnMap[col]);
     const fonts = this.getPdfFonts();
     const years = Array.from({ length: dp.endYear - dp.startYear + 1 }, (_, index) => dp.startYear + index);
     const pageMargins: [number, number, number, number] = [15, 60, 15, 40];
     const pageOrientation = 'landscape';
 
-    const groupedProjects = new Map<string, typeof projectsWithComparison>();
-    for (const project of projectsWithComparison) {
-      const current = project.current;
-      const groupKey = `${current.strategy?.name || '-'}||${current.tactic?.name || '-'}||${current.plan?.name || '-'}`;
-      if (!groupedProjects.has(groupKey)) groupedProjects.set(groupKey, []);
-      groupedProjects.get(groupKey)!.push(project);
-    }
-
     const pdfBuffers: Buffer[] = [];
     let pageOffset = 0;
 
-    // สร้างเฉพาะ detail pages (ไม่สร้าง summary และ cover page)
-    for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
-      const [strategyName, tacticName, planName] = groupKey.split('||');
+    if (reportFormat === ReportFormat.ISSUE_BASED) {
+      // --- ISSUE_BASED path: details only (no summary, no cover page) ---
+      const groupedByIssue = new Map<string, typeof projectsWithComparison>();
+      const issueSortOrders = new Map<string, number>();
+      for (const project of projectsWithComparison) {
+        const current = project.current;
+        const issueName = current.developmentIssue?.name ?? 'ไม่ระบุประเด็น';
+        if (!groupedByIssue.has(issueName)) {
+          groupedByIssue.set(issueName, []);
+          issueSortOrders.set(issueName, current.developmentIssue?.sortOrder ?? 999);
+        }
+        groupedByIssue.get(issueName)!.push(project);
+      }
 
-      const detailDoc = createRevisionEditGroupDetailDocDefinitionUser({
-        developmentPlanRevisionName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
-        pageMargins, pageOrientation, newWord: this.newWord.bind(this),
-        reportType: 'inAuthority', strategyName, tacticName, planName, pageOffset,
+      const sortedIssueEntries = [...groupedByIssue.entries()].sort((a, b) => {
+        const sortA = issueSortOrders.get(a[0]) ?? 999;
+        const sortB = issueSortOrders.get(b[0]) ?? 999;
+        return sortA - sortB;
       });
 
-      if (detailDoc) {
-        const detailBuffer = await this.createPdfBuffer(detailDoc, fonts);
-        pdfBuffers.push(detailBuffer);
-        const detailPdf = await PDFDocument.load(detailBuffer);
-        pageOffset += detailPdf.getPageCount();
+      for (const [issueName, groupProjectsValue] of sortedIssueEntries) {
+        const detailDoc = createIssueBasedRevisionGroupDetailDocDefinition({
+          developmentPlanRevisionName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
+          pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+          reportType: 'inAuthority', issueName, pageOffset,
+        });
+
+        if (detailDoc) {
+          const detailBuffer = await this.createPdfBuffer(detailDoc, fonts);
+          pdfBuffers.push(detailBuffer);
+          const detailPdf = await PDFDocument.load(detailBuffer);
+          pageOffset += detailPdf.getPageCount();
+        }
+      }
+    } else {
+      // --- STRATEGY_BASED path (existing logic) ---
+      const groupedProjects = new Map<string, typeof projectsWithComparison>();
+      for (const project of projectsWithComparison) {
+        const current = project.current;
+        const groupKey = `${current.strategy?.name || '-'}||${current.tactic?.name || '-'}||${current.plan?.name || '-'}`;
+        if (!groupedProjects.has(groupKey)) groupedProjects.set(groupKey, []);
+        groupedProjects.get(groupKey)!.push(project);
+      }
+
+      for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
+        const [strategyName, tacticName, planName] = groupKey.split('||');
+
+        const detailDoc = createRevisionEditGroupDetailDocDefinitionUser({
+          developmentPlanRevisionName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
+          pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+          reportType: 'inAuthority', strategyName, tacticName, planName, pageOffset,
+        });
+
+        if (detailDoc) {
+          const detailBuffer = await this.createPdfBuffer(detailDoc, fonts);
+          pdfBuffers.push(detailBuffer);
+          const detailPdf = await PDFDocument.load(detailBuffer);
+          pageOffset += detailPdf.getPageCount();
+        }
       }
     }
 
@@ -1712,6 +2050,9 @@ export class PdfService {
     const revisionTypeName = developmentPlanRevision.description || 'เปลี่ยนแปลง';
     const developmentPlanRevisionName = `${dp.name} ${revisionTypeName}`;
 
+    // Resolve reportFormat from the parent plan
+    const reportFormat = dp.reportFormat ?? ReportFormat.STRATEGY_BASED;
+
     let revisedProjects: RevisedProjectGroup[] = [];
 
     if (existingProjects) {
@@ -1725,6 +2066,7 @@ export class PdfService {
         .leftJoinAndSelect('revisedProject.strategy', 'strategy')
         .leftJoinAndSelect('revisedProject.tactic', 'tactic')
         .leftJoinAndSelect('revisedProject.plan', 'plan')
+        .leftJoinAndSelect('revisedProject.developmentIssue', 'developmentIssue')
         .leftJoinAndSelect('revisedProject.budgets', 'budgets')
         .leftJoinAndSelect('revisedProject.responsibleAgency', 'responsibleAgency')
         .leftJoinAndSelect('revisedProject.originAgencyId', 'originAgencyId')
@@ -1759,58 +2101,117 @@ export class PdfService {
       coordinates: { text: 'พิกัดทาง \nภูมิศาสตร์', key: 'coordinates' },
     };
 
-    const availableColumns = selectedColumns.filter(col => columnMap[col]);
+    const availableColumns = reportFormat === ReportFormat.ISSUE_BASED
+      ? selectedColumns.filter(col => columnMap[col] && col !== 'kpi')
+      : selectedColumns.filter(col => columnMap[col]);
     const fonts = this.getPdfFonts();
     const years = Array.from({ length: dp.endYear - dp.startYear + 1 }, (_, index) => dp.startYear + index);
-    const { strategies, overallSum, overallCount } = this.prepareReportAggregations(unifiedProjects, years);
     const pageMargins: [number, number, number, number] = [15, 60, 15, 40];
     const pageOrientation = 'landscape';
-
-    const summaryDoc = createRevisionEditSummaryPartDocDefinition({
-      developmentPlanRevisionName, years, strategies, overallSum, overallCount,
-      pageMargins, pageOrientation, newWord: this.newWord.bind(this),
-    });
-
-    const groupedProjects = new Map<string, typeof projectsWithComparison>();
-    for (const project of projectsWithComparison) {
-      const current = project.current;
-      const groupKey = `${current.strategy?.name || '-'}||${current.tactic?.name || '-'}||${current.plan?.name || '-'}`;
-      if (!groupedProjects.has(groupKey)) groupedProjects.set(groupKey, []);
-      groupedProjects.get(groupKey)!.push(project);
-    }
 
     const pdfBuffers: Buffer[] = [];
     let pageOffset = 0;
 
-    if (summaryDoc) {
-      const summaryBuffer = await this.createPdfBuffer(summaryDoc, fonts);
-      pdfBuffers.push(summaryBuffer);
-      const summaryPdf = await PDFDocument.load(summaryBuffer);
-      pageOffset += summaryPdf.getPageCount();
-    }
+    if (reportFormat === ReportFormat.ISSUE_BASED) {
+      // --- ISSUE_BASED path ---
+      const { issues, overallSum, overallCount } = this.prepareIssueBasedReportAggregations(unifiedProjects, years);
 
-    for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
-      const [strategyName, tacticName, planName] = groupKey.split('||');
-      const coverPageDoc = createRevisionEditGroupCoverPageDocDefinition(
-        strategyName, developmentPlanRevisionName, pageMargins, pageOrientation,
-        this.newWord.bind(this), pageOffset,
-      );
-      const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
-      pdfBuffers.push(coverPageBuffer);
-      const coverPagePdf = await PDFDocument.load(coverPageBuffer);
-      pageOffset += coverPagePdf.getPageCount();
-
-      const detailDoc = createRevisionEditGroupDetailDocDefinition({
-        developmentPlanRevisionName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
+      const summaryDoc = createIssueBasedRevisionEditSummaryPartDocDefinition({
+        developmentPlanRevisionName, years, issues, overallSum, overallCount,
         pageMargins, pageOrientation, newWord: this.newWord.bind(this),
-        reportType: 'inAuthority', strategyName, tacticName, planName, pageOffset,
       });
 
-      if (detailDoc) {
-        const detailBuffer = await this.createPdfBuffer(detailDoc, fonts);
-        pdfBuffers.push(detailBuffer);
-        const detailPdf = await PDFDocument.load(detailBuffer);
-        pageOffset += detailPdf.getPageCount();
+      const groupedByIssue = new Map<string, typeof projectsWithComparison>();
+      for (const project of projectsWithComparison) {
+        const current = project.current;
+        const issueName = current.developmentIssue?.name ?? 'ไม่ระบุประเด็น';
+        if (!groupedByIssue.has(issueName)) groupedByIssue.set(issueName, []);
+        groupedByIssue.get(issueName)!.push(project);
+      }
+
+      if (summaryDoc) {
+        const summaryBuffer = await this.createPdfBuffer(summaryDoc, fonts);
+        pdfBuffers.push(summaryBuffer);
+        const summaryPdf = await PDFDocument.load(summaryBuffer);
+        pageOffset += summaryPdf.getPageCount();
+      }
+
+      const sortedIssueEntries = [...groupedByIssue.entries()].sort((a, b) => {
+        const sortA = issues.get(a[0])?.sortOrder ?? 999;
+        const sortB = issues.get(b[0])?.sortOrder ?? 999;
+        return sortA - sortB;
+      });
+
+      for (const [issueName, groupProjectsValue] of sortedIssueEntries) {
+        const coverPageDoc = createIssueBasedRevisionGroupCoverPageDocDefinition(
+          issueName, developmentPlanRevisionName, pageMargins, pageOrientation,
+          this.newWord.bind(this), pageOffset,
+        );
+        const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
+        pdfBuffers.push(coverPageBuffer);
+        const coverPagePdf = await PDFDocument.load(coverPageBuffer);
+        pageOffset += coverPagePdf.getPageCount();
+
+        const detailDoc = createIssueBasedRevisionGroupDetailDocDefinition({
+          developmentPlanRevisionName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
+          pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+          reportType: 'inAuthority', issueName, pageOffset,
+        });
+
+        if (detailDoc) {
+          const detailBuffer = await this.createPdfBuffer(detailDoc, fonts);
+          pdfBuffers.push(detailBuffer);
+          const detailPdf = await PDFDocument.load(detailBuffer);
+          pageOffset += detailPdf.getPageCount();
+        }
+      }
+    } else {
+      // --- STRATEGY_BASED path (existing logic) ---
+      const { strategies, overallSum, overallCount } = this.prepareReportAggregations(unifiedProjects, years);
+
+      const summaryDoc = createRevisionEditSummaryPartDocDefinition({
+        developmentPlanRevisionName, years, strategies, overallSum, overallCount,
+        pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+      });
+
+      const groupedProjects = new Map<string, typeof projectsWithComparison>();
+      for (const project of projectsWithComparison) {
+        const current = project.current;
+        const groupKey = `${current.strategy?.name || '-'}||${current.tactic?.name || '-'}||${current.plan?.name || '-'}`;
+        if (!groupedProjects.has(groupKey)) groupedProjects.set(groupKey, []);
+        groupedProjects.get(groupKey)!.push(project);
+      }
+
+      if (summaryDoc) {
+        const summaryBuffer = await this.createPdfBuffer(summaryDoc, fonts);
+        pdfBuffers.push(summaryBuffer);
+        const summaryPdf = await PDFDocument.load(summaryBuffer);
+        pageOffset += summaryPdf.getPageCount();
+      }
+
+      for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
+        const [strategyName, tacticName, planName] = groupKey.split('||');
+        const coverPageDoc = createRevisionEditGroupCoverPageDocDefinition(
+          strategyName, developmentPlanRevisionName, pageMargins, pageOrientation,
+          this.newWord.bind(this), pageOffset,
+        );
+        const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
+        pdfBuffers.push(coverPageBuffer);
+        const coverPagePdf = await PDFDocument.load(coverPageBuffer);
+        pageOffset += coverPagePdf.getPageCount();
+
+        const detailDoc = createRevisionEditGroupDetailDocDefinition({
+          developmentPlanRevisionName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
+          pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+          reportType: 'inAuthority', strategyName, tacticName, planName, pageOffset,
+        });
+
+        if (detailDoc) {
+          const detailBuffer = await this.createPdfBuffer(detailDoc, fonts);
+          pdfBuffers.push(detailBuffer);
+          const detailPdf = await PDFDocument.load(detailBuffer);
+          pageOffset += detailPdf.getPageCount();
+        }
       }
     }
 
@@ -2102,6 +2503,9 @@ export class PdfService {
     const dp = await this.developmentPlanRepo.findOne({ where: { id: developmentPlanId } });
     if (!dp) throw new Error('DevelopmentPlan not found');
 
+    // Resolve reportFormat from the parent plan
+    const reportFormat = dp.reportFormat ?? ReportFormat.STRATEGY_BASED;
+
     const revisionTypeName = developmentPlanRevision.description || developmentPlanRevision.revisionType?.name || 'แก้ไข';
     const developmentPlanRevisionName = `${dp.name} ${revisionTypeName}`;
 
@@ -2113,6 +2517,7 @@ export class PdfService {
       .leftJoinAndSelect('revisedProject.strategy', 'strategy')
       .leftJoinAndSelect('revisedProject.tactic', 'tactic')
       .leftJoinAndSelect('revisedProject.plan', 'plan')
+      .leftJoinAndSelect('revisedProject.developmentIssue', 'developmentIssue')
       .leftJoinAndSelect('revisedProject.budgets', 'budgets')
       .leftJoinAndSelect('revisedProject.responsibleAgency', 'responsibleAgency')
       .leftJoinAndSelect('revisedProject.originAgencyId', 'originAgencyId')
@@ -2144,58 +2549,117 @@ export class PdfService {
       coordinates: { text: 'พิกัดทาง \nภูมิศาสตร์', key: 'coordinates' },
     };
 
-    const availableColumns = selectedColumns.filter(col => columnMap[col]);
+    const availableColumns = reportFormat === ReportFormat.ISSUE_BASED
+      ? selectedColumns.filter(col => columnMap[col] && col !== 'kpi')
+      : selectedColumns.filter(col => columnMap[col]);
     const fonts = this.getPdfFonts();
     const years = Array.from({ length: dp.endYear - dp.startYear + 1 }, (_, index) => dp.startYear + index);
-    const { strategies, overallSum, overallCount } = this.prepareReportAggregations(unifiedProjects, years);
     const pageMargins: [number, number, number, number] = [15, 60, 15, 40];
     const pageOrientation = 'landscape';
-
-    const summaryDoc = createRevisionEditSummaryPartDocDefinition({
-      developmentPlanRevisionName, years, strategies, overallSum, overallCount,
-      pageMargins, pageOrientation, newWord: this.newWord.bind(this),
-    });
-
-    const groupedProjects = new Map<string, typeof projectsWithComparison>();
-    for (const project of projectsWithComparison) {
-      const current = project.current;
-      const groupKey = `${current.strategy?.name || '-'}||${current.tactic?.name || '-'}||${current.plan?.name || '-'}`;
-      if (!groupedProjects.has(groupKey)) groupedProjects.set(groupKey, []);
-      groupedProjects.get(groupKey)!.push(project);
-    }
 
     const pdfBuffers: Buffer[] = [];
     let pageOffset = 0;
 
-    if (summaryDoc) {
-      const summaryBuffer = await this.createPdfBuffer(summaryDoc, fonts);
-      pdfBuffers.push(summaryBuffer);
-      const summaryPdf = await PDFDocument.load(summaryBuffer);
-      pageOffset += summaryPdf.getPageCount();
-    }
+    if (reportFormat === ReportFormat.ISSUE_BASED) {
+      // --- ISSUE_BASED path ---
+      const { issues, overallSum, overallCount } = this.prepareIssueBasedReportAggregations(unifiedProjects, years);
 
-    for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
-      const [strategyName, tacticName, planName] = groupKey.split('||');
-      const coverPageDoc = createRevisionEditGroupCoverPageDocDefinition(
-        strategyName, developmentPlanRevisionName, pageMargins, pageOrientation,
-        this.newWord.bind(this), pageOffset,
-      );
-      const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
-      pdfBuffers.push(coverPageBuffer);
-      const coverPagePdf = await PDFDocument.load(coverPageBuffer);
-      pageOffset += coverPagePdf.getPageCount();
-
-      const detailDoc = createRevisionEditGroupDetailDocDefinition({
-        developmentPlanRevisionName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
+      const summaryDoc = createIssueBasedRevisionEditSummaryPartDocDefinition({
+        developmentPlanRevisionName, years, issues, overallSum, overallCount,
         pageMargins, pageOrientation, newWord: this.newWord.bind(this),
-        reportType: 'inAuthority', strategyName, tacticName, planName, pageOffset,
       });
 
-      if (detailDoc) {
-        const detailBuffer = await this.createPdfBuffer(detailDoc, fonts);
-        pdfBuffers.push(detailBuffer);
-        const detailPdf = await PDFDocument.load(detailBuffer);
-        pageOffset += detailPdf.getPageCount();
+      const groupedByIssue = new Map<string, typeof projectsWithComparison>();
+      for (const project of projectsWithComparison) {
+        const current = project.current;
+        const issueName = current.developmentIssue?.name ?? 'ไม่ระบุประเด็น';
+        if (!groupedByIssue.has(issueName)) groupedByIssue.set(issueName, []);
+        groupedByIssue.get(issueName)!.push(project);
+      }
+
+      if (summaryDoc) {
+        const summaryBuffer = await this.createPdfBuffer(summaryDoc, fonts);
+        pdfBuffers.push(summaryBuffer);
+        const summaryPdf = await PDFDocument.load(summaryBuffer);
+        pageOffset += summaryPdf.getPageCount();
+      }
+
+      const sortedIssueEntries = [...groupedByIssue.entries()].sort((a, b) => {
+        const sortA = issues.get(a[0])?.sortOrder ?? 999;
+        const sortB = issues.get(b[0])?.sortOrder ?? 999;
+        return sortA - sortB;
+      });
+
+      for (const [issueName, groupProjectsValue] of sortedIssueEntries) {
+        const coverPageDoc = createIssueBasedRevisionGroupCoverPageDocDefinition(
+          issueName, developmentPlanRevisionName, pageMargins, pageOrientation,
+          this.newWord.bind(this), pageOffset,
+        );
+        const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
+        pdfBuffers.push(coverPageBuffer);
+        const coverPagePdf = await PDFDocument.load(coverPageBuffer);
+        pageOffset += coverPagePdf.getPageCount();
+
+        const detailDoc = createIssueBasedRevisionGroupDetailDocDefinition({
+          developmentPlanRevisionName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
+          pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+          reportType: 'inAuthority', issueName, pageOffset,
+        });
+
+        if (detailDoc) {
+          const detailBuffer = await this.createPdfBuffer(detailDoc, fonts);
+          pdfBuffers.push(detailBuffer);
+          const detailPdf = await PDFDocument.load(detailBuffer);
+          pageOffset += detailPdf.getPageCount();
+        }
+      }
+    } else {
+      // --- STRATEGY_BASED path (existing logic) ---
+      const { strategies, overallSum, overallCount } = this.prepareReportAggregations(unifiedProjects, years);
+
+      const summaryDoc = createRevisionEditSummaryPartDocDefinition({
+        developmentPlanRevisionName, years, strategies, overallSum, overallCount,
+        pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+      });
+
+      const groupedProjects = new Map<string, typeof projectsWithComparison>();
+      for (const project of projectsWithComparison) {
+        const current = project.current;
+        const groupKey = `${current.strategy?.name || '-'}||${current.tactic?.name || '-'}||${current.plan?.name || '-'}`;
+        if (!groupedProjects.has(groupKey)) groupedProjects.set(groupKey, []);
+        groupedProjects.get(groupKey)!.push(project);
+      }
+
+      if (summaryDoc) {
+        const summaryBuffer = await this.createPdfBuffer(summaryDoc, fonts);
+        pdfBuffers.push(summaryBuffer);
+        const summaryPdf = await PDFDocument.load(summaryBuffer);
+        pageOffset += summaryPdf.getPageCount();
+      }
+
+      for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
+        const [strategyName, tacticName, planName] = groupKey.split('||');
+        const coverPageDoc = createRevisionEditGroupCoverPageDocDefinition(
+          strategyName, developmentPlanRevisionName, pageMargins, pageOrientation,
+          this.newWord.bind(this), pageOffset,
+        );
+        const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
+        pdfBuffers.push(coverPageBuffer);
+        const coverPagePdf = await PDFDocument.load(coverPageBuffer);
+        pageOffset += coverPagePdf.getPageCount();
+
+        const detailDoc = createRevisionEditGroupDetailDocDefinition({
+          developmentPlanRevisionName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
+          pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+          reportType: 'inAuthority', strategyName, tacticName, planName, pageOffset,
+        });
+
+        if (detailDoc) {
+          const detailBuffer = await this.createPdfBuffer(detailDoc, fonts);
+          pdfBuffers.push(detailBuffer);
+          const detailPdf = await PDFDocument.load(detailBuffer);
+          pageOffset += detailPdf.getPageCount();
+        }
       }
     }
 
@@ -2218,6 +2682,9 @@ export class PdfService {
     const dp = await this.developmentPlanRepo.findOne({ where: { id: developmentPlanId } });
     if (!dp) throw new Error('DevelopmentPlan not found');
 
+    // Resolve reportFormat from the parent plan
+    const reportFormat = dp.reportFormat ?? ReportFormat.STRATEGY_BASED;
+
     const revisionTypeName = developmentPlanRevision.description || developmentPlanRevision.revisionType?.name || 'แก้ไข';
     const developmentPlanRevisionName = `${dp.name} ${revisionTypeName}`;
 
@@ -2229,6 +2696,7 @@ export class PdfService {
       .leftJoinAndSelect('revisedProject.strategy', 'strategy')
       .leftJoinAndSelect('revisedProject.tactic', 'tactic')
       .leftJoinAndSelect('revisedProject.plan', 'plan')
+      .leftJoinAndSelect('revisedProject.developmentIssue', 'developmentIssue')
       .leftJoinAndSelect('revisedProject.budgets', 'budgets')
       .leftJoinAndSelect('revisedProject.responsibleAgency', 'responsibleAgency')
       .leftJoinAndSelect('revisedProject.originAgencyId', 'originAgencyId')
@@ -2260,63 +2728,126 @@ export class PdfService {
       coordinates: { text: 'พิกัดทาง \nภูมิศาสตร์', key: 'coordinates' },
     };
 
-    const availableColumns = selectedColumns.filter(col => columnMap[col]);
+    const availableColumns = reportFormat === ReportFormat.ISSUE_BASED
+      ? selectedColumns.filter(col => columnMap[col] && col !== 'kpi')
+      : selectedColumns.filter(col => columnMap[col]);
     const fonts = this.getPdfFonts();
     const years = Array.from({ length: dp.endYear - dp.startYear + 1 }, (_, index) => dp.startYear + index);
-    const { strategies, overallSum, overallCount } = this.prepareReportAggregations(unifiedProjects, years);
     const pageMargins: [number, number, number, number] = [15, 60, 15, 40];
     const pageOrientation = 'landscape';
-
-    const summaryDoc = createRevisionEditSummaryPartDocDefinition({
-      developmentPlanRevisionName, years, strategies, overallSum, overallCount,
-      pageMargins, pageOrientation, newWord: this.newWord.bind(this),
-    });
-
-    const groupedProjects = new Map<string, typeof projectsWithComparison>();
-    for (const project of projectsWithComparison) {
-      const current = project.current;
-      const groupKey = `${current.strategy?.name || '-'}||${current.tactic?.name || '-'}||${current.plan?.name || '-'}`;
-      if (!groupedProjects.has(groupKey)) groupedProjects.set(groupKey, []);
-      groupedProjects.get(groupKey)!.push(project);
-    }
 
     const pdfBuffers: Buffer[] = [];
     const pageMap = new Map<string, number>();
     let pageOffset = 0;
 
-    if (summaryDoc) {
-      const summaryBuffer = await this.createPdfBuffer(summaryDoc, fonts);
-      pdfBuffers.push(summaryBuffer);
-      const summaryPdf = await PDFDocument.load(summaryBuffer);
-      pageOffset += summaryPdf.getPageCount();
-    }
+    if (reportFormat === ReportFormat.ISSUE_BASED) {
+      // --- ISSUE_BASED path with page tracking ---
+      const { issues, overallSum, overallCount } = this.prepareIssueBasedReportAggregations(unifiedProjects, years);
 
-    for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
-      const [strategyName, tacticName, planName] = groupKey.split('||');
-      
-      const coverPageDoc = createRevisionEditGroupCoverPageDocDefinition(
-        strategyName, developmentPlanRevisionName, pageMargins, pageOrientation,
-        this.newWord.bind(this), pageOffset,
-      );
-      const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
-      pdfBuffers.push(coverPageBuffer);
-      const coverPagePdf = await PDFDocument.load(coverPageBuffer);
-      pageOffset += coverPagePdf.getPageCount();
+      const summaryDoc = createIssueBasedRevisionEditSummaryPartDocDefinition({
+        developmentPlanRevisionName, years, issues, overallSum, overallCount,
+        pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+      });
 
-      for (const project of groupProjectsValue) {
-        pageMap.set(project.current.id, pageOffset + 1);
+      const groupedByIssue = new Map<string, typeof projectsWithComparison>();
+      for (const project of projectsWithComparison) {
+        const current = project.current;
+        const issueName = current.developmentIssue?.name ?? 'ไม่ระบุประเด็น';
+        if (!groupedByIssue.has(issueName)) groupedByIssue.set(issueName, []);
+        groupedByIssue.get(issueName)!.push(project);
+      }
 
-        const detailDoc = createRevisionEditGroupDetailDocDefinition({
-          developmentPlanRevisionName, years, groupProjects: [project], availableColumns, columnMap,
-          pageMargins, pageOrientation, newWord: this.newWord.bind(this),
-          reportType: 'inAuthority', strategyName, tacticName, planName, pageOffset,
-        });
+      if (summaryDoc) {
+        const summaryBuffer = await this.createPdfBuffer(summaryDoc, fonts);
+        pdfBuffers.push(summaryBuffer);
+        const summaryPdf = await PDFDocument.load(summaryBuffer);
+        pageOffset += summaryPdf.getPageCount();
+      }
 
-        if (detailDoc) {
-          const detailBuffer = await this.createPdfBuffer(detailDoc, fonts);
-          pdfBuffers.push(detailBuffer);
-          const detailPdf = await PDFDocument.load(detailBuffer);
-          pageOffset += detailPdf.getPageCount();
+      const sortedIssueEntries = [...groupedByIssue.entries()].sort((a, b) => {
+        const sortA = issues.get(a[0])?.sortOrder ?? 999;
+        const sortB = issues.get(b[0])?.sortOrder ?? 999;
+        return sortA - sortB;
+      });
+
+      for (const [issueName, groupProjectsValue] of sortedIssueEntries) {
+        const coverPageDoc = createIssueBasedRevisionGroupCoverPageDocDefinition(
+          issueName, developmentPlanRevisionName, pageMargins, pageOrientation,
+          this.newWord.bind(this), pageOffset,
+        );
+        const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
+        pdfBuffers.push(coverPageBuffer);
+        const coverPagePdf = await PDFDocument.load(coverPageBuffer);
+        pageOffset += coverPagePdf.getPageCount();
+
+        for (const project of groupProjectsValue) {
+          pageMap.set(project.current.id, pageOffset + 1);
+
+          const detailDoc = createIssueBasedRevisionGroupDetailDocDefinition({
+            developmentPlanRevisionName, years, groupProjects: [project], availableColumns, columnMap,
+            pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+            reportType: 'inAuthority', issueName, pageOffset,
+          });
+
+          if (detailDoc) {
+            const detailBuffer = await this.createPdfBuffer(detailDoc, fonts);
+            pdfBuffers.push(detailBuffer);
+            const detailPdf = await PDFDocument.load(detailBuffer);
+            pageOffset += detailPdf.getPageCount();
+          }
+        }
+      }
+    } else {
+      // --- STRATEGY_BASED path (existing logic) ---
+      const { strategies, overallSum, overallCount } = this.prepareReportAggregations(unifiedProjects, years);
+
+      const summaryDoc = createRevisionEditSummaryPartDocDefinition({
+        developmentPlanRevisionName, years, strategies, overallSum, overallCount,
+        pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+      });
+
+      const groupedProjects = new Map<string, typeof projectsWithComparison>();
+      for (const project of projectsWithComparison) {
+        const current = project.current;
+        const groupKey = `${current.strategy?.name || '-'}||${current.tactic?.name || '-'}||${current.plan?.name || '-'}`;
+        if (!groupedProjects.has(groupKey)) groupedProjects.set(groupKey, []);
+        groupedProjects.get(groupKey)!.push(project);
+      }
+
+      if (summaryDoc) {
+        const summaryBuffer = await this.createPdfBuffer(summaryDoc, fonts);
+        pdfBuffers.push(summaryBuffer);
+        const summaryPdf = await PDFDocument.load(summaryBuffer);
+        pageOffset += summaryPdf.getPageCount();
+      }
+
+      for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
+        const [strategyName, tacticName, planName] = groupKey.split('||');
+
+        const coverPageDoc = createRevisionEditGroupCoverPageDocDefinition(
+          strategyName, developmentPlanRevisionName, pageMargins, pageOrientation,
+          this.newWord.bind(this), pageOffset,
+        );
+        const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
+        pdfBuffers.push(coverPageBuffer);
+        const coverPagePdf = await PDFDocument.load(coverPageBuffer);
+        pageOffset += coverPagePdf.getPageCount();
+
+        for (const project of groupProjectsValue) {
+          pageMap.set(project.current.id, pageOffset + 1);
+
+          const detailDoc = createRevisionEditGroupDetailDocDefinition({
+            developmentPlanRevisionName, years, groupProjects: [project], availableColumns, columnMap,
+            pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+            reportType: 'inAuthority', strategyName, tacticName, planName, pageOffset,
+          });
+
+          if (detailDoc) {
+            const detailBuffer = await this.createPdfBuffer(detailDoc, fonts);
+            pdfBuffers.push(detailBuffer);
+            const detailPdf = await PDFDocument.load(detailBuffer);
+            pageOffset += detailPdf.getPageCount();
+          }
         }
       }
     }
