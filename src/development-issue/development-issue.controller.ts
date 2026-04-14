@@ -15,6 +15,7 @@ import { Request } from 'express';
 import { DevelopmentIssueService } from './development-issue.service';
 import { CreateDevelopmentIssueDto } from './dto/create-development-issue.dto';
 import { UpdateDevelopmentIssueDto } from './dto/update-development-issue.dto';
+import { CopyDevelopmentIssuesDto } from './dto/copy-development-issues.dto';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 
@@ -51,6 +52,23 @@ export class DevelopmentIssueController {
   async findAllByPlan(@Query('planId') planId: string) {
     this.logger.log(`Listing development issues for plan ${planId}`);
     return this.developmentIssueService.findAllByPlan(planId);
+  }
+
+  @Post('copy-from-plan')
+  async copyFromPlan(
+    @Body() dto: CopyDevelopmentIssuesDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    const userId = req.user?.userId;
+    this.logger.log(
+      `Copying development issues from plan ${dto.sourcePlanId} to plan ${dto.targetPlanId} by user ${userId}`,
+    );
+    return this.developmentIssueService.copyFromPlan(
+      dto.targetPlanId,
+      dto.sourcePlanId,
+      userId,
+      dto.issueIds,
+    );
   }
 
   @Patch(':id')

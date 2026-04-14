@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -92,10 +93,38 @@ export class DevelopmentIssueService {
           );
         }
 
+        // Duplicate name check within the same plan
+        const trimmedName = dto.name.trim();
+        const existingByName = await manager.findOne(DevelopmentIssue, {
+          where: {
+            developmentPlan: { id: plan.id },
+            name: trimmedName,
+          },
+        });
+        if (existingByName) {
+          throw new ConflictException(
+            `ชื่อประเด็นการพัฒนา "${trimmedName}" ซ้ำกับที่มีอยู่แล้วในแผนนี้`,
+          );
+        }
+
+        // Duplicate sortOrder check within the same plan
+        const sortOrderValue = dto.sortOrder ?? 0;
+        const existingBySortOrder = await manager.findOne(DevelopmentIssue, {
+          where: {
+            developmentPlan: { id: plan.id },
+            sortOrder: sortOrderValue,
+          },
+        });
+        if (existingBySortOrder) {
+          throw new ConflictException(
+            `ลำดับ ${sortOrderValue} ซ้ำกับประเด็น "${existingBySortOrder.name}" ที่มีอยู่แล้ว`,
+          );
+        }
+
         const issue = manager.create(DevelopmentIssue, {
           developmentPlan: { id: plan.id } as DevelopmentPlan,
-          name: dto.name.trim(),
-          sortOrder: dto.sortOrder ?? 0,
+          name: trimmedName,
+          sortOrder: sortOrderValue,
           createdBy: { id: workHistory.id } as WorkHistory,
         });
 
@@ -113,6 +142,14 @@ export class DevelopmentIssueService {
           developmentPlan: { id: planId },
           deletedAt: IsNull(),
         },
+        relations: [
+          'createdBy',
+          'createdBy.user',
+          'updatedBy',
+          'updatedBy.user',
+          'deletedBy',
+          'deletedBy.user',
+        ],
         order: { sortOrder: 'ASC', createdAt: 'ASC' },
       });
     } catch (error) {
@@ -124,7 +161,7 @@ export class DevelopmentIssueService {
   async update(id: string, dto: UpdateDevelopmentIssueDto, userId: string) {
     try {
       return await this.dataSource.transaction(async (manager) => {
-        await this.assertStaffLead(manager, userId);
+        const workHistory = await this.assertStaffLead(manager, userId);
 
         const issue = await manager.findOne(DevelopmentIssue, {
           where: { id },
@@ -143,8 +180,40 @@ export class DevelopmentIssueService {
           manager,
         );
 
-        if (dto.name !== undefined) issue.name = dto.name.trim();
-        if (dto.sortOrder !== undefined) issue.sortOrder = dto.sortOrder;
+        // Duplicate name check (exclude self)
+        if (dto.name !== undefined) {
+          const trimmedName = dto.name.trim();
+          const existingByName = await manager.findOne(DevelopmentIssue, {
+            where: {
+              developmentPlan: { id: issue.developmentPlan.id },
+              name: trimmedName,
+            },
+          });
+          if (existingByName && existingByName.id !== id) {
+            throw new ConflictException(
+              `ชื่อประเด็นการพัฒนา "${trimmedName}" ซ้ำกับที่มีอยู่แล้วในแผนนี้`,
+            );
+          }
+          issue.name = trimmedName;
+        }
+
+        // Duplicate sortOrder check (exclude self)
+        if (dto.sortOrder !== undefined) {
+          const existingBySortOrder = await manager.findOne(DevelopmentIssue, {
+            where: {
+              developmentPlan: { id: issue.developmentPlan.id },
+              sortOrder: dto.sortOrder,
+            },
+          });
+          if (existingBySortOrder && existingBySortOrder.id !== id) {
+            throw new ConflictException(
+              `ลำดับ ${dto.sortOrder} ซ้ำกับประเด็น "${existingBySortOrder.name}" ที่มีอยู่แล้ว`,
+            );
+          }
+          issue.sortOrder = dto.sortOrder;
+        }
+
+        issue.updatedBy = workHistory;
 
         return await manager.save(DevelopmentIssue, issue);
       });
@@ -156,7 +225,7 @@ export class DevelopmentIssueService {
   async softRemove(id: string, userId: string) {
     try {
       return await this.dataSource.transaction(async (manager) => {
-        await this.assertStaffLead(manager, userId);
+        const workHistory = await this.assertStaffLead(manager, userId);
 
         const issue = await manager.findOne(DevelopmentIssue, {
           where: { id },
@@ -178,11 +247,120 @@ export class DevelopmentIssueService {
         // references the issue. We scan all three project tables.
         await this.assertNoActiveReferences(id, manager);
 
+        issue.deletedBy = workHistory;
+        await manager.save(DevelopmentIssue, issue);
         await manager.softRemove(DevelopmentIssue, issue);
         return { message: 'ลบประเด็นการพัฒนาสำเร็จ' };
       });
     } catch (error) {
       handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * Copies all non-deleted DevelopmentIssues from a source plan into a
+   * target plan. Both plans must be ISSUE_BASED. The target plan must be
+   * unlocked per §15.
+   *
+   * Copied issues receive:
+   *   - the target plan as their parent
+   *   - the requester's WorkHistory as createdBy
+   *   - sortOrder offset by the max existing sortOrder in the target plan
+   *     to prevent collisions
+   *
+   * Runs entirely within a single transaction.
+   */
+  async copyFromPlan(
+    targetPlanId: string,
+    sourcePlanId: string,
+    userId: string,
+    issueIds?: string[],
+  ): Promise<{ copied: DevelopmentIssue[]; count: number }> {
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        // 1. Validate requester is staff-lead with approved workStatus
+        const workHistory = await this.assertStaffLead(manager, userId);
+
+        // 2. Load and validate target plan
+        const targetPlan = await manager.findOne(DevelopmentPlan, {
+          where: { id: targetPlanId },
+        });
+        if (!targetPlan) {
+          throw new NotFoundException(
+            `${ERROR_MESSAGES.PARENT_PLAN_NOT_FOUND}: DevelopmentPlan(${targetPlanId})`,
+          );
+        }
+        if (targetPlan.reportFormat !== ReportFormat.ISSUE_BASED) {
+          throw new BadRequestException(
+            `${ERROR_CODES.PROJECT_CLASSIFICATION_SHAPE_MISMATCH}: แผนเป้าหมายต้องเป็นแบบประเด็นการพัฒนา`,
+          );
+        }
+
+        // 3. Assert target plan is unlocked per §15
+        await this.bookLockService.assertEditable(
+          targetPlan.id,
+          'development_plan',
+          manager,
+        );
+
+        // 4. Load and validate source plan
+        const sourcePlan = await manager.findOne(DevelopmentPlan, {
+          where: { id: sourcePlanId },
+        });
+        if (!sourcePlan) {
+          throw new NotFoundException(
+            `${ERROR_MESSAGES.PARENT_PLAN_NOT_FOUND}: DevelopmentPlan(${sourcePlanId})`,
+          );
+        }
+        if (sourcePlan.reportFormat !== ReportFormat.ISSUE_BASED) {
+          throw new BadRequestException(
+            `${ERROR_CODES.PROJECT_CLASSIFICATION_SHAPE_MISMATCH}: แผนต้นทางต้องเป็นแบบประเด็นการพัฒนา`,
+          );
+        }
+
+        // 5. Load non-deleted issues from source plan, ordered by sortOrder
+        let sourceIssues = await manager.find(DevelopmentIssue, {
+          where: {
+            developmentPlan: { id: sourcePlanId },
+          },
+          order: { sortOrder: 'ASC', createdAt: 'ASC' },
+        });
+
+        // 5b. If specific issueIds provided, filter to only those
+        if (issueIds && issueIds.length > 0) {
+          const issueIdSet = new Set(issueIds);
+          sourceIssues = sourceIssues.filter((i) => issueIdSet.has(i.id));
+        }
+
+        if (sourceIssues.length === 0) {
+          return { copied: [], count: 0 };
+        }
+
+        // 6. Determine sortOrder offset from existing issues in the target plan
+        const maxResult = await manager
+          .createQueryBuilder(DevelopmentIssue, 'di')
+          .select('MAX(di.sort_order)', 'maxSort')
+          .where('di.development_plan_id = :targetPlanId', { targetPlanId })
+          .getRawOne<{ maxSort: number | null }>();
+        const offset = (maxResult?.maxSort ?? -1) + 1;
+
+        // 7. Create new issues in the target plan
+        const newIssues = sourceIssues.map((source, index) =>
+          manager.create(DevelopmentIssue, {
+            developmentPlan: { id: targetPlan.id } as DevelopmentPlan,
+            name: source.name,
+            sortOrder: offset + index,
+            createdBy: { id: workHistory.id } as WorkHistory,
+          }),
+        );
+
+        // 8. Save all in a single batch
+        const saved = await manager.save(DevelopmentIssue, newIssues);
+        return { copied: saved, count: saved.length };
+      });
+    } catch (error) {
+      handleException(this.logger, error);
+      return { copied: [], count: 0 };
     }
   }
 
@@ -200,7 +378,7 @@ export class DevelopmentIssueService {
     userId: string,
   ): Promise<WorkHistory> {
     const workHistory = await manager.findOne(WorkHistory, {
-      where: { user: { id: userId } },
+      where: { user: { id: userId }, isCurrent: true },
       relations: ['workStatus', 'role', 'user'],
     });
 

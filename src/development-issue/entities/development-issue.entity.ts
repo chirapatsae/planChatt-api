@@ -6,6 +6,7 @@ import {
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
+  UpdateDateColumn,
 } from 'typeorm';
 import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
@@ -55,6 +56,9 @@ export class DevelopmentIssue {
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
+  @UpdateDateColumn({ name: 'updated_at', type: 'timestamp', nullable: true })
+  updatedAt: Date | null;
+
   @DeleteDateColumn({ name: 'deleted_at', nullable: true })
   deletedAt?: Date;
 
@@ -64,4 +68,12 @@ export class DevelopmentIssue {
   })
   @JoinColumn({ name: 'created_by' })
   createdBy: WorkHistory;
+
+  @ManyToOne(() => WorkHistory, { onDelete: 'SET NULL', nullable: true, eager: false })
+  @JoinColumn({ name: 'updated_by' })
+  updatedBy: WorkHistory | null;
+
+  @ManyToOne(() => WorkHistory, { onDelete: 'SET NULL', nullable: true, eager: false })
+  @JoinColumn({ name: 'deleted_by' })
+  deletedBy: WorkHistory | null;
 }
