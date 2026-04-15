@@ -101,6 +101,68 @@ export class ProjectGroupsService {
   ) { }
 
   /**
+   * ADD_PROJECT_PREVENT_STEP_BYPASS — authoritative server-side gate
+   * against direct API bypass of the multi-step wizard. Returns a
+   * structured `VALIDATION_FAILED` error naming the incomplete semantic
+   * steps so the frontend (or any other caller) can point the user at
+   * the precise gap.
+   *
+   * This runs AFTER `assertWorkStatusApproved` so that authentication /
+   * authorization errors are never masked by completeness errors.
+   * It runs BEFORE classification shape validation so that a missing
+   * strategy-triple is reported as a wizard-completeness gap rather
+   * than a §16.5 shape mismatch.
+   *
+   * Draft paths MUST NOT call this — drafts are allowed to be partial.
+   */
+  private assertWizardCompleteness(dto: CreateProjectGroupDto): void {
+    const missingFields: string[] = [];
+
+    // step2 — project details (wizard UI index 2)
+    if (!dto.objective || dto.objective.trim() === '') missingFields.push('step2.objective');
+    if (!dto.goal || dto.goal.trim() === '') missingFields.push('step2.goal');
+    if (!dto.title || dto.title.trim() === '') missingFields.push('step2.title');
+
+    // step1 — coordinates (wizard UI index 1)
+    if (dto.startLat === undefined || dto.startLat === null) missingFields.push('step1.startLat');
+    if (dto.startLng === undefined || dto.startLng === null) missingFields.push('step1.startLng');
+
+    // step0 — classification (wizard UI index 0). Exactly ONE shape must
+    // be populated; the shape invariant is fully enforced later by
+    // `ProjectClassificationValidator`. Here we only verify that the
+    // caller supplied SOMETHING for classification — reporting an empty
+    // step0 as a "missing step" is more user-friendly than a downstream
+    // shape-mismatch error.
+    const hasStrategyTriple = !!dto.strategyId && !!dto.tacticId && !!dto.planId;
+    const hasIssue = !!dto.developmentIssueId;
+    if (!hasStrategyTriple && !hasIssue) missingFields.push('step0.classification');
+
+    // step3 — budget (wizard UI index 3). Empty budget is already caught
+    // by `ArrayMinSize(1)` on the DTO, but defence-in-depth: re-assert.
+    if (!Array.isArray(dto.budget) || dto.budget.length === 0) {
+      missingFields.push('step3.budget');
+    } else {
+      const hasPositive = dto.budget.some(
+        (b) => b && typeof b.quantity === 'number' && b.quantity > 0,
+      );
+      if (!hasPositive) missingFields.push('step3.budget');
+    }
+
+    // step4 — expected (always required). `indicator` is NOT listed
+    // here because §16.5 makes it conditional on the plan's
+    // reportFormat; the shape validator reports that gap downstream.
+    if (!dto.expected || dto.expected.trim() === '') missingFields.push('step4.expected');
+
+    if (missingFields.length > 0) {
+      throw new BadRequestException({
+        code: 'VALIDATION_FAILED',
+        message: 'Project submission is incomplete',
+        missingFields,
+      });
+    }
+  }
+
+  /**
    * CLAUDE.md §16.5 — invokes the shared ProjectClassificationValidator
    * for the supplied plan id + DTO. Additionally enforces the
    * service-layer "issue belongs to the same plan" guard that the
@@ -156,6 +218,13 @@ export class ProjectGroupsService {
       return await this.dataSource.transaction(async (manager) => {
         const workHistory = await this.getWorkHistory(manager, userId);
         this.assertWorkStatusApproved(workHistory);
+
+        // ADD_PROJECT_PREVENT_STEP_BYPASS — reject incomplete wizard
+        // submissions BEFORE any classification / FK lookup, so the
+        // caller receives a structured `VALIDATION_FAILED` with a
+        // `missingFields` array naming the incomplete semantic steps.
+        this.assertWizardCompleteness(dto);
+
         await this.ensureNoDuplicateTitle(manager, dto.title, workHistory.id, undefined);
 
         // CLAUDE.md §16.5 — validate classification shape BEFORE the
@@ -408,6 +477,11 @@ export class ProjectGroupsService {
         if (existingDraft.createdBy?.id !== workHistory.id) {
           throw new ForbiddenException('คุณไม่มีสิทธิ์ดำเนินการกับโครงการนี้');
         }
+
+        // ADD_PROJECT_PREVENT_STEP_BYPASS — publishing a draft MUST
+        // produce a complete submission. We reuse the same wizard
+        // completeness check that the non-draft create path uses.
+        this.assertWizardCompleteness(dto);
 
         await this.ensureNoDuplicateTitle(manager, dto.title, workHistory.id, id);
 

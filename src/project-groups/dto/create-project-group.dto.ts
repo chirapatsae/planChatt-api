@@ -8,17 +8,39 @@ import {
   IsArray,
   ValidateNested,
   IsBoolean,
+  IsString,
 } from 'class-validator';
 import { CreateBudgetDto } from 'src/budget/dto/create-budget.dto';
 
+// ADD_PROJECT_PREVENT_STEP_BYPASS
+//
+// CreateProjectGroupDto is the non-draft create / publish-draft payload.
+// Completeness of wizard fields is enforced at the SERVICE layer via
+// `ProjectGroupsService.assertWizardCompleteness`, which emits a
+// structured `VALIDATION_FAILED` response with a `missingFields` array.
+// The DTO therefore keeps the wizard fields `@IsOptional()` at the
+// class-validator layer — the service check is the single source of
+// truth and gives the frontend a richer error contract than the pipe's
+// default shape.
+//
+// `indicator` and the classification tuple remain `@IsOptional()`
+// because the shape invariant (CLAUDE.md §16.5) is enforced by
+// `ProjectClassificationValidator` — STRATEGY_BASED requires
+// `indicator`, ISSUE_BASED forbids it.
+//
+// The draft DTO (`CreateDraftProjectGroupDto`) MUST NOT be tightened —
+// drafts are allowed to be partial by design.
 export class CreateProjectGroupDto {
   @IsNotEmpty()
+  @IsString()
   title: string;
 
   @IsOptional()
+  @IsString()
   objective?: string;
 
   @IsOptional()
+  @IsString()
   goal?: string;
 
   @IsOptional()
@@ -37,10 +59,13 @@ export class CreateProjectGroupDto {
   @IsNumber()
   endLng?: number;
 
+  // Conditionally required by shape invariant (§16.5); see
+  // ProjectClassificationValidator.
   @IsOptional()
   indicator?: string;
 
   @IsOptional()
+  @IsString()
   expected?: string;
 
   @IsNotEmpty()
@@ -74,6 +99,7 @@ export class CreateProjectGroupDto {
   @IsBoolean()
   isBooked?: boolean;
 
+  // Budget completeness is enforced by assertWizardCompleteness (service).
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
