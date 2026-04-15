@@ -6,7 +6,9 @@ import {
   GenerateProjectDto,
   RegenerateFieldDto,
 } from './dto/generate-project.dto';
+import { PromptSuggestionsDto } from './dto/prompt-suggestions.dto';
 import { SmartApproveRequestDto } from './dto/smart-approve.dto';
+import { PreSubmitReviewDto } from './dto/pre-submit-review.dto';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 import { calculateAiCost } from './utils/cost-calculator';
 
@@ -52,13 +54,7 @@ export class AiController {
       throw new UnauthorizedException('User not authenticated');
     }
     const userId = req.user.userId;
-    const aiResponse = await this.aiService.generateProjectDetail(
-      body.strategy,
-      body.tactic,
-      body.plan,
-      userId,
-      body.userPrompt,
-    );
+    const aiResponse = await this.aiService.generateProjectDetail(body, userId);
 
     if (!aiResponse) {
       return { message: 'AI failed to generate a result.' };
@@ -70,20 +66,45 @@ export class AiController {
       return { message: 'AI failed to generate a result.' };
     }
 
-    // Debug: Log the raw result
-    console.log('Raw AI Result:', rawResult);
-
     // Calculate cost
     const cost = usage ? calculateAiCost('gpt-4o', usage) : 0;
+
+    const isIssueBased = body.reportFormat === 'ISSUE_BASED';
 
     const title = this.parseSection(rawResult, 'ชื่อโครงการ:');
     const objective = this.parseSection(rawResult, 'วัตถุประสงค์:');
     const goal = this.parseSection(rawResult, 'เป้าหมาย:');
     const expected = this.parseSection(rawResult, 'ผลที่คาดว่าจะได้รับ:');
-    const indicator = this.parseSection(rawResult, 'ตัวชี้วัด:');
+    // ISSUE_BASED: indicator is null per CLAUDE.md section 16.5
+    const indicator = isIssueBased
+      ? null
+      : this.parseSection(rawResult, 'ตัวชี้วัด:');
+    const existingContext = this.parseSection(rawResult, 'ข้อมูลที่มี:');
+    const projectRationale = this.parseSection(
+      rawResult,
+      'เหตุผลที่คิดโครงการนี้:',
+    );
+    const locationSuitabilityBriefing = this.parseSection(
+      rawResult,
+      'ความเหมาะสมของพื้นที่:',
+    );
+    const rawCoordinateAreaLabel = this.parseSection(
+      rawResult,
+      'ป้ายพื้นที่:',
+    );
 
-    // Debug: Log parsed results
-    console.log('Parsed Results:', { title, objective, goal, expected, indicator });
+    // Normalize label: trim to 32 chars, strip trailing punctuation,
+    // coerce empty to null.
+    let coordinateAreaLabel: string | null = null;
+    if (rawCoordinateAreaLabel) {
+      const cleaned = rawCoordinateAreaLabel
+        .trim()
+        .replace(/[\s\u00A0]+/g, ' ')
+        .replace(/[\.,;:!\?\-–—"'`“”‘’()[\]{}]+$/u, '')
+        .trim()
+        .slice(0, 32);
+      coordinateAreaLabel = cleaned.length > 0 ? cleaned : null;
+    }
 
     return {
       title,
@@ -91,6 +112,10 @@ export class AiController {
       goal,
       expected,
       indicator,
+      existingContext,
+      projectRationale,
+      locationSuitabilityBriefing,
+      coordinateAreaLabel,
       usage,
       cost,
     };
@@ -115,6 +140,50 @@ export class AiController {
     @Body() body: SmartApproveRequestDto,
     @Req() req: Request & { user: JwtPayloadUser },
   ) {
+    if (!req.user || !req.user.userId) {
+      throw new UnauthorizedException('User not authenticated');
+    }
     return this.aiService.analyzeProjectForSmartApprove(body, req.user.userId);
+  }
+
+  /**
+   * Holistic pre-submit quality review (owner-facing).
+   *
+   * Returns: overallScore (0–100), readinessLabel, rationale, strongPoint,
+   * suggestions (prioritised), checklistSummary (procedural checks).
+   *
+   * CLAUDE.md §13: advisory only — does NOT block submission.
+   * CLAUDE.md §16.5: ISSUE_BASED payloads must not send indicator.
+   */
+  @Post('pre-submit-review')
+  async preSubmitReview(
+    @Body() body: PreSubmitReviewDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    if (!req.user || !req.user.userId) {
+      throw new UnauthorizedException('User not authenticated');
+    }
+    return this.aiService.generatePreSubmitReview(body, req.user.userId);
+  }
+
+  /**
+   * Return 4-6 short Thai imperative prompt hints for the AI composer.
+   *
+   * Failure semantics: on any LLM error or empty parse result the service
+   * returns { suggestions: [] } with HTTP 200 — the frontend then falls
+   * back to its local pool. We deliberately do NOT surface 5xx here.
+   *
+   * §16.5: ISSUE_BASED suggestions never mention ตัวชี้วัด / KPI.
+   */
+  @Post('prompt-suggestions')
+  async promptSuggestions(
+    @Body() body: PromptSuggestionsDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    if (!req.user || !req.user.userId) {
+      throw new UnauthorizedException('User not authenticated');
+    }
+    const { suggestions } = await this.aiService.generatePromptSuggestions(body);
+    return { suggestions };
   }
 }

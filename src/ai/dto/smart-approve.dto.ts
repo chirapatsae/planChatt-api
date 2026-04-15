@@ -69,17 +69,28 @@ export class SmartApproveProjectDto {
 }
 
 export class SmartApproveRequestDto {
+  // STRATEGY_BASED classification fields (CLAUDE.md §16.5)
+  // Optional at the DTO layer because ISSUE_BASED payloads omit them.
+  // STRATEGY_BASED callers still supply all three; precheck logic treats
+  // missing names as non-matches, which is the correct behavior for both
+  // formats.
   @IsString()
-  @IsNotEmpty()
-  strategyName: string;
+  @IsOptional()
+  strategyName?: string;
 
   @IsString()
-  @IsNotEmpty()
-  tacticName: string;
+  @IsOptional()
+  tacticName?: string;
 
   @IsString()
-  @IsNotEmpty()
-  planName: string;
+  @IsOptional()
+  planName?: string;
+
+  // ISSUE_BASED classification field (CLAUDE.md §16.5)
+  // Present only for ISSUE_BASED payloads.
+  @IsString()
+  @IsOptional()
+  developmentIssueName?: string;
 
   @ValidateNested()
   @Type(() => SmartApproveProjectDto)

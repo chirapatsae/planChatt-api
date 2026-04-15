@@ -1,0 +1,114 @@
+{
+  "road": {
+    "label": "โครงสร้างพื้นฐาน - ถนน/การคมนาคม",
+    "keywords": [
+      "ถนน",
+      "ปรับปรุงถนน",
+      "ก่อสร้างถนน",
+      "ซ่อมแซมถนน",
+      "ลาดยาง",
+      "คอนกรีต",
+      "สะพาน",
+      "ทางเดิน",
+      "ฟุตบาท",
+      "ทางเท้า",
+      "ไหล่ทาง",
+      "ระบบระบายน้ำ"
+    ],
+    "expectedAreaTypes": ["community", "urban"],
+    "suspiciousAreaTypes": ["water", "forest"]
+  },
+  "water": {
+    "label": "โครงสร้างพื้นฐาน - แหล่งน้ำ",
+    "keywords": [
+      "แหล่งน้ำ",
+      "คลอง",
+      "ชลประทาน",
+      "ประปา",
+      "บ่อน้ำ",
+      "อ่างเก็บน้ำ",
+      "ฝาย",
+      "ขุดลอก",
+      "บำบัดน้ำ",
+      "น้ำเสีย"
+    ],
+    "expectedAreaTypes": ["water", "agricultural"],
+    "suspiciousAreaTypes": ["urban"]
+  },
+  "community": {
+    "label": "กิจกรรมชุมชน",
+    "keywords": [
+      "อบรม",
+      "ส่งเสริม",
+      "กิจกรรม",
+      "ชุมชน",
+      "ผู้สูงอายุ",
+      "เด็ก",
+      "เยาวชน",
+      "อาสาสมัคร",
+      "สุขภาพ",
+      "รณรงค์",
+      "ประชาสัมพันธ์"
+    ],
+    "expectedAreaTypes": ["community", "urban"],
+    "suspiciousAreaTypes": ["water", "forest"]
+  },
+  "agriculture": {
+    "label": "เกษตรกรรม",
+    "keywords": [
+      "เกษตร",
+      "เพาะปลูก",
+      "ปลูกพืช",
+      "ข้าว",
+      "เลี้ยงสัตว์",
+      "ปศุสัตว์",
+      "ประมง",
+      "ปุ๋ย",
+      "กองทุนเกษตร"
+    ],
+    "expectedAreaTypes": ["agricultural"],
+    "suspiciousAreaTypes": ["urban", "water"]
+  },
+  "education": {
+    "label": "การศึกษา",
+    "keywords": [
+      "โรงเรียน",
+      "การศึกษา",
+      "ศูนย์พัฒนาเด็ก",
+      "ห้องสมุด",
+      "ทุนการศึกษา",
+      "อุปกรณ์การเรียน"
+    ],
+    "expectedAreaTypes": ["community", "urban"],
+    "suspiciousAreaTypes": ["water", "forest"]
+  },
+  "environment": {
+    "label": "สิ่งแวดล้อม",
+    "keywords": [
+      "ป่า",
+      "ต้นไม้",
+      "ปลูกป่า",
+      "อนุรักษ์",
+      "มลพิษ",
+      "ขยะ",
+      "รีไซเคิล",
+      "สิ่งแวดล้อม"
+    ],
+    "expectedAreaTypes": ["forest", "agricultural", "community"],
+    "suspiciousAreaTypes": []
+  },
+  "public_facility": {
+    "label": "อาคาร/สิ่งอำนวยความสะดวก",
+    "keywords": [
+      "อาคาร",
+      "ก่อสร้างอาคาร",
+      "ศาลา",
+      "สนามกีฬา",
+      "สวนสาธารณะ",
+      "ลานกีฬา",
+      "ห้องประชุม"
+    ],
+    "expectedAreaTypes": ["community", "urban"],
+    "suspiciousAreaTypes": ["water", "forest"]
+  }
+}

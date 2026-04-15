@@ -5,24 +5,61 @@ import {
   IsOptional,
   IsObject,
   ValidateNested,
+  IsIn,
 } from 'class-validator';
 
 export class GenerateProjectDto {
   @IsString()
-  @IsNotEmpty()
-  strategy: string;
+  @IsOptional()
+  strategy?: string;
 
   @IsString()
-  @IsNotEmpty()
-  tactic: string;
+  @IsOptional()
+  tactic?: string;
 
   @IsString()
-  @IsNotEmpty()
-  plan: string;
+  @IsOptional()
+  plan?: string;
 
   @IsString()
-  @IsOptional() // ระบุว่า field นี้ไม่จำเป็นต้องส่งมาก็ได้
-  userPrompt?: string; // แก้ typo เป็น userPrompt
+  @IsOptional()
+  userPrompt?: string;
+
+  // --- Enriched context fields (all optional for backward compatibility) ---
+
+  @IsString()
+  @IsOptional()
+  amphoeId?: string;
+
+  @IsString()
+  @IsOptional()
+  localAdministrativeOrganizationId?: string;
+
+  @IsString()
+  @IsOptional()
+  startLat?: string;
+
+  @IsString()
+  @IsOptional()
+  startLng?: string;
+
+  @IsString()
+  @IsOptional()
+  @IsIn(['STRATEGY_BASED', 'ISSUE_BASED'])
+  reportFormat?: string;
+
+  @IsString()
+  @IsOptional()
+  developmentIssueName?: string;
+
+  @IsString()
+  @IsOptional()
+  developmentIssueId?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn(['full', 'partial', 'minimal'])
+  contextQuality?: 'full' | 'partial' | 'minimal';
 }
 
 // DTO สำหรับข้อมูลโครงการปัจจุบัน (Nested DTO)
@@ -51,31 +88,51 @@ export class CurrentProjectDataDto {
 // DTO หลักสำหรับ Endpoint Regenerate
 export class RegenerateFieldDto {
   @IsString()
-  @IsNotEmpty()
-  strategy: string;
+  @IsOptional()
+  strategy?: string;
 
   @IsString()
-  @IsNotEmpty()
-  tactic: string;
+  @IsOptional()
+  tactic?: string;
 
   @IsString()
-  @IsNotEmpty()
-  plan: string;
+  @IsOptional()
+  plan?: string;
 
   @IsString()
   @IsOptional()
   initialPrompt?: string;
 
   @IsObject()
-  @ValidateNested() // สั่งให้ NestJS ตรวจสอบข้อมูลใน Object นี้ด้วย
-  @Type(() => CurrentProjectDataDto) // บอกให้ NestJS รู้ว่า Object นี้มีโครงสร้างแบบ CurrentProjectDataDto
+  @ValidateNested()
+  @Type(() => CurrentProjectDataDto)
   currentProjectData: CurrentProjectDataDto;
 
   @IsString()
   @IsNotEmpty()
+  @IsIn(['title', 'objective', 'goal', 'expected', 'indicator'])
   fieldToRegenerate: string;
 
   @IsString()
   @IsNotEmpty()
   modificationPrompt: string;
+
+  // --- Enriched context fields (all optional for backward compatibility) ---
+
+  @IsString()
+  @IsOptional()
+  @IsIn(['STRATEGY_BASED', 'ISSUE_BASED'])
+  reportFormat?: string;
+
+  @IsString()
+  @IsOptional()
+  developmentIssueName?: string;
+
+  @IsString()
+  @IsOptional()
+  amphoeId?: string;
+
+  @IsString()
+  @IsOptional()
+  localAdministrativeOrganizationId?: string;
 }

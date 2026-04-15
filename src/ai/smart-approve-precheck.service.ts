@@ -67,7 +67,28 @@ export class SmartApprovePrecheckService {
   private async evaluateStrategy(
     dto: SmartApproveRequestDto,
   ): Promise<SmartApproveCategoryResult> {
-    const { strategyName, tacticName, planName } = dto;
+    const { strategyName, tacticName, planName, developmentIssueName } = dto;
+
+    // CLAUDE.md §16.5 — ISSUE_BASED projects have no strategy/tactic/plan
+    // structure. Detect the ISSUE_BASED shape and short-circuit with a
+    // neutral result instead of emitting false-negative "ไม่พบ..." warnings
+    // from findStrategyByName(undefined) etc.
+    const hasStrategyTriplet = !!(
+      strategyName?.trim() ||
+      tacticName?.trim() ||
+      planName?.trim()
+    );
+    const hasDevelopmentIssue = !!developmentIssueName?.trim();
+
+    if (!hasStrategyTriplet && hasDevelopmentIssue) {
+      return {
+        status: 'ผ่าน',
+        details:
+          'รูปแบบ ISSUE_BASED — ไม่มีโครงสร้าง ยุทธศาสตร์/กลยุทธ์/แผนงาน',
+        suggestions: [],
+      };
+    }
+
     const issues: string[] = [];
     const suggestions: string[] = [];
     let hasCriticalIssue = false;

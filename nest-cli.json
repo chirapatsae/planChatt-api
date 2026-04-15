@@ -8,6 +8,11 @@
       {
         "include": "src/fonts/**/*",
         "outDir": "fonts"
+      },
+      {
+        "include": "src/ai/data/**/*.json",
+        "outDir": "ai/data",
+        "watchAssets": true
       }
     ]
   }
