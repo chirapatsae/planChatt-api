@@ -536,6 +536,73 @@ describe('ProjectGroupsService', () => {
         InternalServerErrorException,
       );
     });
+
+    // CLAUDE.md Core Status Machine + Status Naming Constraint:
+    // "Revision" is RESERVED and MUST NOT be used as a status value; the
+    // canonical literal is "Returned_For_Revision". This test pins the
+    // status literal bound by the type='edit' branch so any regression
+    // back to the reserved/stale name fails loudly. Regression anchor
+    // for bug report PROJECT_EDIT_EMPTY_LIST_INVESTIGATION.md.
+    it("binds canonical Returned_For_Revision status name for type='edit' (and uses workHistory.id ownership)", async () => {
+      const approvedWorkHistory = {
+        ...workHistory,
+        id: 'wh-uuid',
+        workStatus: { name: 'approved' },
+        role: { name: 'staff' }, // bypass the `user` role-scoping clause
+      } as unknown as WorkHistory;
+      workHistoryRepo.findOne.mockResolvedValue(approvedWorkHistory);
+
+      const mockQueryBuilder = {
+        leftJoinAndSelect: jest.fn().mockReturnThis(),
+        innerJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([]),
+        getCount: jest.fn().mockResolvedValue(0),
+      };
+      projectGroupRepo.createQueryBuilder.mockReturnValue(
+        mockQueryBuilder as any,
+      );
+
+      await service.findProjectsByStatus({ userId, type: 'edit' });
+
+      // (1) The status-name innerJoin MUST bind the canonical literal.
+      const statusInnerJoin = mockQueryBuilder.innerJoin.mock.calls.find(
+        (c) => c[1] === 'latestStatus',
+      );
+      expect(statusInnerJoin).toBeDefined();
+      expect(statusInnerJoin![3]).toEqual({
+        statusName: 'Returned_For_Revision',
+      });
+
+      // (2) No call may bind the reserved/stale literal 'Revision'.
+      const staleCalls = mockQueryBuilder.innerJoin.mock.calls.filter(
+        (c) =>
+          c[3] &&
+          typeof c[3] === 'object' &&
+          (c[3] as any).statusName === 'Revision',
+      );
+      expect(staleCalls).toHaveLength(0);
+
+      // (3) `isLatest = true` MUST be bound on the trackingStatus join
+      // (CLAUDE.md §12 Audit Rule).
+      const trackingInnerJoin = mockQueryBuilder.innerJoin.mock.calls.find(
+        (c) => c[1] === 'latestTrackingStatus',
+      );
+      expect(trackingInnerJoin).toBeDefined();
+      expect(trackingInnerJoin![3]).toEqual({ isLatest: true });
+
+      // (4) Ownership MUST be validated against WorkHistory.id, NOT user.id
+      // (CLAUDE.md §4 Ownership Model).
+      const ownershipCall = mockQueryBuilder.andWhere.mock.calls.find(
+        (c) =>
+          typeof c[0] === 'string' &&
+          c[0].includes('projectGroup.createdBy.id = :workHistoryId'),
+      );
+      expect(ownershipCall).toBeDefined();
+      expect(ownershipCall![1]).toEqual({ workHistoryId: 'wh-uuid' });
+    });
   });
 
   // --- findDelete ---
@@ -1267,6 +1334,94 @@ describe('ProjectGroupsService', () => {
       // Should not throw, but handle error gracefully
       const result = await service.handleProjectCleanUp();
       expect(result).toBeUndefined();
+    });
+  });
+
+  // --- findOriginalWithoutRevisionAllStatus ---
+  // CLAUDE.md Core Status Machine + Status Naming Constraint:
+  // `Ready` and `Returned_For_Revision` MUST be excluded from this helper.
+  // Regression anchor for FIX_FIND_ORIGINAL_WITHOUT_REVISION_STATUS_LITERAL:
+  //  - Defect A: the two `andWhere('status.name <> :statusName', ...)` calls
+  //    reused the same placeholder; the second binding silently overwrote the
+  //    first, effectively leaking `Ready` rows through the filter.
+  //  - Defect B: the second binding used the reserved stale literal 'Revision'
+  //    instead of the canonical 'Returned_For_Revision'.
+  describe('findOriginalWithoutRevisionAllStatus', () => {
+    it('binds BOTH Ready and Returned_For_Revision as DISTINCT named placeholders', async () => {
+      const mockQueryBuilder = {
+        leftJoin: jest.fn().mockReturnThis(),
+        leftJoinAndSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([]),
+      };
+      projectGroupRepo.createQueryBuilder.mockReturnValue(
+        mockQueryBuilder as any,
+      );
+
+      await (service as any).findOriginalWithoutRevisionAllStatus('dp-1');
+
+      // (1) Ready exclusion MUST be bound under a distinct placeholder name.
+      const readyCall = mockQueryBuilder.andWhere.mock.calls.find(
+        (c) =>
+          c[1] &&
+          typeof c[1] === 'object' &&
+          Object.values(c[1] as Record<string, unknown>).includes('Ready'),
+      );
+      expect(readyCall).toBeDefined();
+      const readyParamKey = Object.keys(readyCall![1] as object)[0];
+      expect((readyCall![0] as string)).toContain(`:${readyParamKey}`);
+
+      // (2) Returned_For_Revision exclusion MUST be bound under a DIFFERENT
+      // placeholder name, with the CANONICAL literal (NOT 'Revision').
+      const returnedCall = mockQueryBuilder.andWhere.mock.calls.find(
+        (c) =>
+          c[1] &&
+          typeof c[1] === 'object' &&
+          Object.values(c[1] as Record<string, unknown>).includes(
+            'Returned_For_Revision',
+          ),
+      );
+      expect(returnedCall).toBeDefined();
+      const returnedParamKey = Object.keys(returnedCall![1] as object)[0];
+      expect((returnedCall![0] as string)).toContain(`:${returnedParamKey}`);
+
+      // (3) CRITICAL: the two placeholder names MUST NOT collide (otherwise
+      // TypeORM silently overwrites the first binding — this is the root-cause
+      // of Defect A).
+      expect(readyParamKey).not.toEqual(returnedParamKey);
+    });
+
+    it('MUST NOT reuse the :statusName placeholder and MUST NOT bind the reserved stale literal "Revision"', async () => {
+      const mockQueryBuilder = {
+        leftJoin: jest.fn().mockReturnThis(),
+        leftJoinAndSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([]),
+      };
+      projectGroupRepo.createQueryBuilder.mockReturnValue(
+        mockQueryBuilder as any,
+      );
+
+      await (service as any).findOriginalWithoutRevisionAllStatus('dp-1');
+
+      // No andWhere fragment in this helper may still reference the shared
+      // `:statusName` placeholder (guards against re-regression of Defect A).
+      const collidingCalls = mockQueryBuilder.andWhere.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && c[0].includes(':statusName'),
+      );
+      expect(collidingCalls).toHaveLength(0);
+
+      // No binding may carry the reserved stale literal 'Revision'
+      // (guards against re-regression of Defect B).
+      const staleCalls = mockQueryBuilder.andWhere.mock.calls.filter(
+        (c) =>
+          c[1] &&
+          typeof c[1] === 'object' &&
+          Object.values(c[1] as Record<string, unknown>).includes('Revision'),
+      );
+      expect(staleCalls).toHaveLength(0);
     });
   });
 });

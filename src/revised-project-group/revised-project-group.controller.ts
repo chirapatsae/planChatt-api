@@ -245,7 +245,7 @@ export class RevisedProjectGroupController {
   }
 
   /**
- * ดึงโครงการประเภท "แก้ไข" ที่มีสถานะ "Revision "
+ * ดึงโครงการประเภท "แก้ไข" ที่มีสถานะ "Returned_For_Revision"
  * @param developmentPlanId - ID ของ DevelopmentPlan (optional)
  * @param developmentPlanRevisionId - ID ของ DevelopmentPlanRevision (optional)
  * @param countOnly - ถ้าเป็น true จะ return จำนวนโครงการแทน array (optional)

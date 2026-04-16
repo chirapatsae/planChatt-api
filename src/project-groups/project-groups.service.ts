@@ -828,9 +828,14 @@ export class ProjectGroupsService {
             .andWhere('developmentPlan.isBooked = :isBooked', { isBooked: false })
           break;
         case 'edit':
+          // CLAUDE.md Core Status Machine + Status Naming Constraint:
+          // "Revision" is RESERVED and MUST NOT be used as a status value.
+          // The canonical staff-reject status is "Returned_For_Revision"
+          // (seeded by migration 1744761600000-SeedReturnedForRevisionStatus).
+          // The `/project/edit` list and sidebar badge rely on this literal.
           query.andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
             .innerJoin('projectGroup.trackingStatus', 'latestTrackingStatus', 'latestTrackingStatus.isLatest = :isLatest', { isLatest: true })
-            .innerJoin('latestTrackingStatus.statusId', 'latestStatus', 'latestStatus.name = :statusName', { statusName: 'Revision' })
+            .innerJoin('latestTrackingStatus.statusId', 'latestStatus', 'latestStatus.name = :statusName', { statusName: 'Returned_For_Revision' })
             .andWhere('projectGroup.createdBy.id = :workHistoryId', { workHistoryId: workHistory.id })
             .andWhere('developmentPlan.isLatest = :developmentPlanIsLatest', { developmentPlanIsLatest: true })
             .andWhere('developmentPlan.isBooked = :isBooked', { isBooked: false })
@@ -2629,8 +2634,11 @@ export class ProjectGroupsService {
       .andWhere('rev.id IS NULL')   // ไม่มี revision
       .andWhere('pg.isDraft = false')
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-      .andWhere('status.name <> :statusName', { statusName: 'Ready' })
-      .andWhere('status.name <> :statusName', { statusName: 'Revision' })
+      // CLAUDE.md Core Status Machine: exclude pre-submission `Ready` and the
+      // canonical rejected state `Returned_For_Revision`. Placeholders MUST be
+      // distinct — TypeORM silently overwrites reused named parameters.
+      .andWhere('status.name <> :excludeReadyName', { excludeReadyName: 'Ready' })
+      .andWhere('status.name <> :excludeReturnedName', { excludeReturnedName: 'Returned_For_Revision' })
     // .andWhere('pg.isBooked = :isBooked', { isBooked: true });
 
     return await queryBuilder.getMany();

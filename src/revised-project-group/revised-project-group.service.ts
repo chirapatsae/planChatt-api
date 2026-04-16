@@ -1046,7 +1046,7 @@ export class RevisedProjectGroupService {
         .leftJoinAndSelect('trackingStatusCreatedBy.localAdministrativeOrganization', 'trackingStatusCreatedByLocalAdministrativeOrganization')
         .leftJoinAndSelect('trackingStatusCreatedBy.user', 'trackingStatusCreatedByUser')
         .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-        .andWhere('status.name = :statusName', { statusName: 'Revision' })
+        .andWhere('status.name = :statusName', { statusName: 'Returned_For_Revision' })
         .andWhere('dpr.isLatest = :isLatestRevision', { isLatestRevision: true })
         .andWhere('dpr.isBooked = :isBooked', { isBooked: false });
 

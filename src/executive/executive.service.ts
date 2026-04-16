@@ -6,6 +6,7 @@ import { UpdateExecutiveDto } from './dto/update-executive.dto';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
+import { STATUS_NAMES } from 'src/common/status-names';
 
 @Injectable()
 export class ExecutiveService {
@@ -128,7 +129,7 @@ export class ExecutiveService {
             const counts = {
               Pending: 0,
               Rejected: 0,
-              Revision: 0,
+              [STATUS_NAMES.RETURNED_FOR_REVISION]: 0,
               Approved: 0,
               Pending_Approval: 0,
               Verified: 0
@@ -136,7 +137,7 @@ export class ExecutiveService {
             const aging = {
               Pending: { total: 0, count: 0, details: [] },
               Rejected: { total: 0, count: 0, details: [] },
-              Revision: { total: 0, count: 0, details: [] },
+              [STATUS_NAMES.RETURNED_FOR_REVISION]: { total: 0, count: 0, details: [] },
               Approved: { total: 0, count: 0, details: [] },
               Pending_Approval: { total: 0, count: 0, details: [] },
               Verified: { total: 0, count: 0, details: [] }
@@ -194,7 +195,7 @@ export class ExecutiveService {
             const counts = {
               Pending: 0,
               Rejected: 0,
-              Revision: 0,
+              [STATUS_NAMES.RETURNED_FOR_REVISION]: 0,
               Approved: 0,
               Pending_Approval: 0,
               Verified: 0
@@ -202,7 +203,7 @@ export class ExecutiveService {
             const aging = {
               Pending: { total: 0, count: 0, details: [] },
               Rejected: { total: 0, count: 0, details: [] },
-              Revision: { total: 0, count: 0, details: [] },
+              [STATUS_NAMES.RETURNED_FOR_REVISION]: { total: 0, count: 0, details: [] },
               Approved: { total: 0, count: 0, details: [] },
               Pending_Approval: { total: 0, count: 0, details: [] },
               Verified: { total: 0, count: 0, details: [] }

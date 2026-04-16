@@ -1,12 +1,14 @@
 import { Type } from 'class-transformer';
 import {
   IsBoolean,
+  IsInt,
   IsNotEmpty,
-  IsNumber,
   IsOptional,
   IsString,
   IsUUID,
+  Max,
   MaxLength,
+  Min,
   ValidateNested,
 } from 'class-validator';
 
@@ -56,10 +58,12 @@ export class CreateTrackingStatusDto {
 }
 
 export class CreateComments {
+  @IsString()
   @IsNotEmpty()
   detail: string;
 
-  @IsNumber()
-  @IsNotEmpty()
+  @IsInt()
+  @Min(1)
+  @Max(6)
   step: number;
 }
