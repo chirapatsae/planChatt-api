@@ -53,6 +53,7 @@ import {
   BookLockService,
   BOOK_HAS_NEWER_REVISION,
 } from 'src/common/book-lock/book-lock.service';
+import { STATUS_NAMES } from '../common/status-names';
 
 /** Roles permitted to perform assembly write actions (Spec Section 10.1) */
 const ADMIN_ROLES = ['admin', 'super-admin'];
@@ -1899,8 +1900,12 @@ export class BookAssemblyService {
     // --- scalar counts ---
     const totalCount = await this.revisedProjectGroupRepo
       .createQueryBuilder('rp')
+      .innerJoin('rp.trackingStatus', 'ts')
+      .innerJoin('ts.statusId', 'status')
       .where('rp.developmentPlanRevision = :sourceId', { sourceId })
       .andWhere('rp.deletedAt IS NULL')
+      .andWhere('ts.isLatest = :isLatest', { isLatest: true })
+      .andWhere('status.name <> :excludeReady', { excludeReady: STATUS_NAMES.READY })
       .getCount();
 
     const approvedCount = await this.revisedProjectGroupRepo
@@ -1927,8 +1932,12 @@ export class BookAssemblyService {
       .innerJoin('rp.createdBy', 'wh')
       .innerJoin('wh.amphoe', 'amp')
       .innerJoin('wh.localAdministrativeOrganization', 'lao')
+      .innerJoin('rp.trackingStatus', 'ts')
+      .innerJoin('ts.statusId', 'status')
       .where('rp.developmentPlanRevision = :sourceId', { sourceId })
       .andWhere('rp.deletedAt IS NULL')
+      .andWhere('ts.isLatest = :isLatest', { isLatest: true })
+      .andWhere('status.name <> :excludeReady', { excludeReady: STATUS_NAMES.READY })
       .andWhere('amp.id = :amphoeId', { amphoeId: '3001' })
       .andWhere('lao.id = :laoId', { laoId: '3001027' })
       .getCount();
@@ -1971,8 +1980,13 @@ export class BookAssemblyService {
     // --- scalar counts ---
     const totalCount = await this.projectGroupRepo
       .createQueryBuilder('pg')
+      .innerJoin('pg.trackingStatus', 'ts')
+      .innerJoin('ts.statusId', 'status')
       .where('pg.developmentPlan = :sourceId', { sourceId })
       .andWhere('pg.deletedAt IS NULL')
+      .andWhere('pg.isDraft = :isDraft', { isDraft: false })
+      .andWhere('ts.isLatest = :isLatest', { isLatest: true })
+      .andWhere('status.name <> :excludeReady', { excludeReady: STATUS_NAMES.READY })
       .getCount();
 
     const approvedCount = await this.projectGroupRepo
@@ -2001,8 +2015,13 @@ export class BookAssemblyService {
       .innerJoin('pg.createdBy', 'wh')
       .innerJoin('wh.amphoe', 'amp')
       .innerJoin('wh.localAdministrativeOrganization', 'lao')
+      .innerJoin('pg.trackingStatus', 'ts')
+      .innerJoin('ts.statusId', 'status')
       .where('pg.developmentPlan = :sourceId', { sourceId })
       .andWhere('pg.deletedAt IS NULL')
+      .andWhere('pg.isDraft = :isDraft', { isDraft: false })
+      .andWhere('ts.isLatest = :isLatest', { isLatest: true })
+      .andWhere('status.name <> :excludeReady', { excludeReady: STATUS_NAMES.READY })
       .andWhere('amp.id = :amphoeId', { amphoeId: '3001' })
       .andWhere('lao.id = :laoId', { laoId: '3001027' })
       .getCount();
