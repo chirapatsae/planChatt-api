@@ -301,14 +301,12 @@ export class ProjectGroupsController {
     return this.projectGroupsService.findExecutivePlanAnalysis(req.user.userId);
   }
 
-  @Get('/executive/map')
-  async getExecutiveMapData(@Req() req: Request & { user: JwtPayloadUser }) {
-    return this.projectGroupsService.findExecutiveMapData(req.user.userId);
-  }
-
   @Get('/executive/map-district')
-  async getExecutiveMapDistrictData(@Req() req: Request & { user: JwtPayloadUser }) {
-    return this.projectGroupsService.findExecutiveMapDistrictData(req.user.userId);
+  async getExecutiveMapDistrictData(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('planId', new ParseUUIDPipe({ optional: true })) planId?: string,
+  ) {
+    return this.projectGroupsService.findExecutiveMapDistrictData(req.user.userId, planId);
   }
 
   // --- Other Queries ---

@@ -2983,7 +2983,7 @@ export class ProjectGroupsService {
     };
   }
 
-  async findExecutiveMapDistrictData(userId: string): Promise<any> {
+  async findExecutiveMapDistrictData(userId: string, planId?: string): Promise<any> {
     const workHistory = await this.workHistoryRepo.findOne({
       where: { user: { id: userId } },
       relations: ['workStatus', 'role'],
@@ -2997,22 +2997,37 @@ export class ProjectGroupsService {
     if (!allowedRoles.includes(workHistory.role.name))
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
 
-    // Find development plan
-    let developmentPlan = await this.developmentPlanRepo.findOne({
-      where: { isLatest: true }
-    });
-
+    // Resolve the target DevelopmentPlan.
+    //  - If planId is provided, load it directly (CLAUDE.md §10 Scope Binding:
+    //    NEVER silently fall back to `isLatest = true` when the supplied plan
+    //    does not exist — that would mislead the executive).
+    //  - If planId is omitted, keep the legacy behaviour (load isLatest,
+    //    fall back to the latest DevelopmentPlanRevision's parent plan).
+    let developmentPlan: DevelopmentPlan | null = null;
     let isUsingMainPlan = true;
-    if (!developmentPlan || developmentPlan.id === null) {
-      const developmentPlanRevision = await this.developmentPlanRevisionRepo.findOne({
-        where: { isLatest: true },
-        relations: ['developmentPlan']
-      });
-      if (!developmentPlanRevision) {
-        throw new NotFoundException('Development plan revision not found');
+
+    if (planId) {
+      developmentPlan = await this.developmentPlanRepo.findOne({ where: { id: planId } });
+      if (!developmentPlan) {
+        throw new NotFoundException('DevelopmentPlan not found: ' + planId);
       }
-      developmentPlan = developmentPlanRevision.developmentPlan;
-      isUsingMainPlan = false;
+      // Plan loaded directly — no revision fallback path is taken. We still
+      // report isUsingMainPlan=true because the response contract uses it to
+      // signal "this is a root DevelopmentPlan", not "this is the latest".
+      isUsingMainPlan = true;
+    } else {
+      developmentPlan = await this.developmentPlanRepo.findOne({ where: { isLatest: true } });
+      if (!developmentPlan || developmentPlan.id === null) {
+        const developmentPlanRevision = await this.developmentPlanRevisionRepo.findOne({
+          where: { isLatest: true },
+          relations: ['developmentPlan'],
+        });
+        if (!developmentPlanRevision) {
+          throw new NotFoundException('Development plan revision not found');
+        }
+        developmentPlan = developmentPlanRevision.developmentPlan;
+        isUsingMainPlan = false;
+      }
     }
 
     // Get all amphoes
@@ -3064,101 +3079,6 @@ export class ProjectGroupsService {
       totalAmphoes: amphoes.length,
       totalLocalOrgs: localOrgs.length,
       totalProjects: allProjects.length
-    };
-  }
-
-  async findExecutiveMapData(userId: string): Promise<any> {
-    const workHistory = await this.workHistoryRepo.findOne({
-      where: { user: { id: userId } },
-      relations: ['workStatus', 'role'],
-    });
-
-    if (!workHistory) return [];
-    if (workHistory.workStatus.name !== 'approved')
-      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
-
-    const allowedRoles = ['staff', 'admin', 'super-admin', 'c-level'];
-    if (!allowedRoles.includes(workHistory.role.name))
-      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
-
-    // Find development plan
-    let developmentPlan = await this.developmentPlanRepo.findOne({
-      where: { isLatest: true }
-    });
-
-    let isUsingMainPlan = true;
-    if (!developmentPlan || developmentPlan.id === null) {
-      const developmentPlanRevision = await this.developmentPlanRevisionRepo.findOne({
-        where: { isLatest: true },
-        relations: ['developmentPlan']
-      });
-      if (!developmentPlanRevision) {
-        throw new NotFoundException('Development plan revision not found');
-      }
-      developmentPlan = developmentPlanRevision.developmentPlan;
-      isUsingMainPlan = false;
-    }
-
-    // Query all projects with location data
-    const [originalProjects, revisedProjects] = await Promise.all([
-      this.findOriginalLatestProjects(developmentPlan.id),
-      this.findRevisedLatestProjects(developmentPlan.id),
-    ]);
-    const allProjects = [...originalProjects, ...revisedProjects];
-
-    // Get strategies for marker customization
-    const strategies = await this.strategyRepo.find({
-      where: { deletedAt: IsNull() }
-    });
-
-    // Transform projects to map markers
-    const markers = this.transformProjectsToMarkers(allProjects);
-
-    // Group markers by amphoe
-    const markersByAmphoe = this.groupMarkersByAmphoe(markers);
-
-    // Get map statistics
-    const mapStatistics = this.calculateMapStatistics(markers);
-
-    return {
-      // Plan information
-      planInfo: {
-        developmentPlanId: developmentPlan.id,
-        developmentPlanName: developmentPlan.name,
-        startYear: developmentPlan.startYear,
-        endYear: developmentPlan.endYear,
-        reportFormat: developmentPlan.reportFormat,
-        isUsingMainPlan,
-        planType: isUsingMainPlan ? 'main' : 'revision'
-      },
-
-      // Map center (Nakhon Ratchasima province center)
-      mapCenter: {
-        latitude: 14.9799,
-        longitude: 102.0977,
-        zoom: 9
-      },
-
-      // All markers for the map
-      markers: markers,
-
-      // Markers grouped by amphoe for clustering
-      markersByAmphoe: markersByAmphoe,
-
-      // Statistics
-      statistics: mapStatistics,
-
-      // Strategy colors for custom markers
-      strategyColors: strategies.map(strategy => ({
-        strategyId: strategy.id,
-        strategyName: strategy.name,
-        color: this.getStrategyColor(strategy.id)
-      })),
-
-      // Total counts
-      totalProjects: allProjects.length,
-      projectsWithLocation: markers.length,
-      projectsWithoutLocation: allProjects.length - markers.length
     };
   }
 
@@ -3369,229 +3289,11 @@ export class ProjectGroupsService {
 
 
   /**
-   * Transform projects to map markers
-   */
-  private transformProjectsToMarkers(projects: any[]): any[] {
-    return projects
-      .filter(project => {
-        // Filter projects that have location data
-        const hasStartLocation = (project.startLat !== null && project.startLng !== null) ||
-          (project.originalProject?.startLat !== null && project.originalProject?.startLng !== null);
-        const hasEndLocation = (project.endLat !== null && project.endLng !== null) ||
-          (project.originalProject?.endLat !== null && project.originalProject?.endLng !== null);
-        return hasStartLocation || hasEndLocation;
-      })
-      .map(project => {
-        // Get project details
-        const startLat = project.startLat || project.originalProject?.startLat;
-        const startLng = project.startLng || project.originalProject?.startLng;
-        const endLat = project.endLat || project.originalProject?.endLat;
-        const endLng = project.endLng || project.originalProject?.endLng;
-
-        const strategy = project.strategy || project.originalProject?.strategy;
-        const plan = project.plan || project.originalProject?.plan;
-        const developmentIssue = project.developmentIssue || project.originalProject?.developmentIssue;
-        const originAgency = project.originAgencyId || project.originalProject?.originAgencyId;
-        const responsibleAgency = project.responsibleAgency || project.originalProject?.responsibleAgency;
-
-        // Calculate total budget
-        const budgets = project.budgets || project.originalProject?.budgets || [];
-        const totalBudget = budgets.reduce((sum: number, budget: any) => {
-          const quantity = typeof budget.quantity === 'string' ? parseFloat(budget.quantity) : (budget.quantity || 0);
-          return sum + quantity;
-        }, 0);
-
-        // Get status
-        let statusName = 'Unknown';
-        let statusCategory = 'unknown';
-        if (project.trackingStatus && project.trackingStatus.length > 0) {
-          const latestTrackingStatus = project.trackingStatus.find(ts => ts.isLatest) || project.trackingStatus[0];
-          statusName = latestTrackingStatus?.statusId?.name || 'Unknown';
-          statusCategory = this.mapStatusToCategory(statusName);
-        }
-
-        const tactic = project.tactic || project.originalProject?.tactic;
-        const goal = project.goal || project.originalProject?.goal;
-        const indicator = project.indicator || project.originalProject?.indicator;
-        const expected = project.expected || project.originalProject?.expected;
-
-        // Get budget breakdown by year
-        const budgetByYear = budgets.reduce((acc: any[], budget: any) => {
-          const quantity = typeof budget.quantity === 'string' ? parseFloat(budget.quantity) : (budget.quantity || 0);
-          const existing = acc.find(b => b.year === budget.year);
-          if (existing) {
-            existing.amount += quantity;
-          } else {
-            acc.push({
-              year: budget.year,
-              amount: quantity
-            });
-          }
-          return acc;
-        }, []).map(b => ({
-          year: b.year,
-          amount: Math.round(b.amount * 100) / 100
-        }));
-
-        return {
-          projectId: project.id,
-          title: project.title || project.originalProject?.title,
-          objective: project.objective || project.originalProject?.objective,
-          goal: goal,
-          indicator: indicator,
-          expected: expected,
-
-          // Location data
-          startLocation: startLat && startLng ? {
-            latitude: parseFloat(startLat.toString()),
-            longitude: parseFloat(startLng.toString()),
-            type: 'start'
-          } : null,
-
-          endLocation: endLat && endLng ? {
-            latitude: parseFloat(endLat.toString()),
-            longitude: parseFloat(endLng.toString()),
-            type: 'end'
-          } : null,
-
-          // Primary location (use start if available, otherwise end)
-          location: startLat && startLng ? {
-            latitude: parseFloat(startLat.toString()),
-            longitude: parseFloat(startLng.toString())
-          } : endLat && endLng ? {
-            latitude: parseFloat(endLat.toString()),
-            longitude: parseFloat(endLng.toString())
-          } : null,
-
-          // Project details
-          budget: Math.round(totalBudget * 100) / 100,
-          budgetByYear: budgetByYear,
-          status: statusName,
-          statusCategory: statusCategory,
-
-          // Strategy, Tactic & Plan
-          strategy: strategy ? {
-            id: strategy.id,
-            name: strategy.name,
-            color: this.getStrategyColor(strategy.id)
-          } : null,
-
-          tactic: tactic ? {
-            id: tactic.id,
-            name: tactic.name
-          } : null,
-
-          plan: plan ? {
-            id: plan.id,
-            name: plan.name
-          } : null,
-
-          // Development Issue (ISSUE_BASED plans)
-          developmentIssue: developmentIssue ? {
-            id: developmentIssue.id,
-            name: developmentIssue.name
-          } : null,
-
-          // Agency info
-          originAgency: originAgency ? {
-            id: originAgency.id,
-            name: originAgency.name,
-            type: originAgency.type,
-            amphoe: originAgency.amphoe?.name || null
-          } : null,
-
-          responsibleAgency: responsibleAgency ? {
-            id: responsibleAgency.id,
-            name: responsibleAgency.name || responsibleAgency.th_name
-          } : null,
-
-          // Metadata
-          isRevised: !!project.originalProject,
-          isDraft: project.isDraft || project.originalProject?.isDraft || false,
-          projectYear: project.projectYear || project.originalProject?.projectYear,
-          createdAt: project.createdAt || project.originalProject?.createdAt
-        };
-      })
-      .filter(marker => marker.location !== null); // Ensure we have at least one valid location
-  }
-
-  /**
-   * Group markers by amphoe for clustering
-   */
-  private groupMarkersByAmphoe(markers: any[]): any[] {
-    const amphoeMap = new Map();
-
-    markers.forEach(marker => {
-      const amphoeName = marker.originAgency?.amphoe || 'ไม่ระบุอำเภอ';
-
-      if (!amphoeMap.has(amphoeName)) {
-        amphoeMap.set(amphoeName, {
-          amphoeName: amphoeName,
-          projectCount: 0,
-          totalBudget: 0,
-          markers: [],
-          center: { latitude: 0, longitude: 0 } // Will calculate later
-        });
-      }
-
-      const amphoeData = amphoeMap.get(amphoeName);
-      amphoeData.projectCount += 1;
-      amphoeData.totalBudget += marker.budget;
-      amphoeData.markers.push(marker);
-    });
-
-    // Calculate center point for each amphoe
-    return Array.from(amphoeMap.values()).map(amphoe => {
-      const latSum = amphoe.markers.reduce((sum: number, m: any) => sum + m.location.latitude, 0);
-      const lngSum = amphoe.markers.reduce((sum: number, m: any) => sum + m.location.longitude, 0);
-
-      return {
-        amphoeName: amphoe.amphoeName,
-        projectCount: amphoe.projectCount,
-        totalBudget: Math.round(amphoe.totalBudget * 100) / 100,
-        center: {
-          latitude: latSum / amphoe.markers.length,
-          longitude: lngSum / amphoe.markers.length
-        },
-        markers: amphoe.markers
-      };
-    }).sort((a, b) => b.projectCount - a.projectCount);
-  }
-
-  /**
-   * Calculate map statistics
-   */
-  private calculateMapStatistics(markers: any[]): any {
-    const statusBreakdown = markers.reduce((counts, marker) => {
-      counts[marker.statusCategory] = (counts[marker.statusCategory] || 0) + 1;
-      return counts;
-    }, {});
-
-    const strategyBreakdown = markers.reduce((counts, marker) => {
-      const strategyName = marker.strategy?.name || 'ไม่ระบุยุทธศาสตร์';
-      counts[strategyName] = (counts[strategyName] || 0) + 1;
-      return counts;
-    }, {});
-
-    const totalBudget = markers.reduce((sum, marker) => sum + marker.budget, 0);
-
-    return {
-      totalBudget: Math.round(totalBudget * 100) / 100,
-      averageBudget: markers.length > 0 ? Math.round((totalBudget / markers.length) * 100) / 100 : 0,
-      statusBreakdown: {
-        approved: statusBreakdown['approved'] || 0,
-        pending: statusBreakdown['pending'] || 0,
-        rejected: statusBreakdown['rejected'] || 0
-      },
-      strategyBreakdown: strategyBreakdown,
-      projectsWithBothLocations: markers.filter(m => m.startLocation && m.endLocation).length,
-      projectsWithStartOnly: markers.filter(m => m.startLocation && !m.endLocation).length,
-      projectsWithEndOnly: markers.filter(m => !m.startLocation && m.endLocation).length
-    };
-  }
-
-  /**
-   * Get color for strategy (for custom marker icons)
+   * Get color for strategy (for custom marker icons).
+   *
+   * Note: the legacy executive project-map helpers were removed in
+   * REMOVE_EXEC_PROJECT_MAP. This helper is still used by
+   * the district-map and plan-analysis executive paths.
    */
   private getStrategyColor(strategyId: string): string {
     // Hash strategy ID to generate consistent color
