@@ -8,6 +8,7 @@ import { Response } from 'express';
 import { createReadStream } from 'fs';
 import { AttachmentProjectGroup } from './entities/attachment-project-group.entity';
 import { CreateAttachmentProjectGroupDto } from './dto/create-attachment-project-group.dto';
+import { DocumentAnalysisService } from 'src/document-analysis/document-analysis.service';
 
 @Injectable()
 export class AttachmentProjectGroupsService {
@@ -17,6 +18,7 @@ export class AttachmentProjectGroupsService {
   constructor(
     @InjectRepository(AttachmentProjectGroup)
     private readonly attachmentRepo: Repository<AttachmentProjectGroup>,
+    private readonly documentAnalysisService: DocumentAnalysisService,
   ) {}
 
   async create(
@@ -36,6 +38,7 @@ export class AttachmentProjectGroupsService {
   async uploadFile(
     file: Express.Multer.File,
     projectGroupId: string,
+    uploaderUserId?: string | null,
   ): Promise<AttachmentProjectGroup> {
     // สร้างโฟลเดอร์ย่อยตามวันที่: dd-mm-yyyy
     const now = new Date();
@@ -66,14 +69,29 @@ export class AttachmentProjectGroupsService {
     this.logger.log(
       `File uploaded for projectGroup ${projectGroupId}: ${filename}`,
     );
+
+    // Fire-and-forget AI analysis — non-blocking.
+    // Failures are captured per-row in ai_status ('failed' | 'unsupported').
+    void this.documentAnalysisService
+      .processAttachment('project-group', saved.id, uploaderUserId ?? null)
+      .catch((e) =>
+        this.logger.error(
+          `Document analysis failed for ${saved.id}: ${(e as Error).message}`,
+          (e as Error).stack,
+        ),
+      );
+
     return saved;
   }
 
   async uploadMultipleFiles(
     files: Express.Multer.File[],
     projectGroupId: string,
+    uploaderUserId?: string | null,
   ): Promise<AttachmentProjectGroup[]> {
-    const tasks = files.map((file) => this.uploadFile(file, projectGroupId));
+    const tasks = files.map((file) =>
+      this.uploadFile(file, projectGroupId, uploaderUserId),
+    );
     return Promise.all(tasks);
   }
 

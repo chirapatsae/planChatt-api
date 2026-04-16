@@ -9,6 +9,7 @@ import { createReadStream } from 'fs';
 import { AttachmentRevisedProjectGroup } from './entities/attachment-revised-project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { CreateAttachmentRevisedProjectGroupDto } from './dto/create-attachment-revised-project-group.dto';
+import { DocumentAnalysisService } from 'src/document-analysis/document-analysis.service';
 
 @Injectable()
 export class AttachmentRevisedProjectGroupsService {
@@ -18,6 +19,7 @@ export class AttachmentRevisedProjectGroupsService {
   constructor(
     @InjectRepository(AttachmentRevisedProjectGroup)
     private readonly attachmentRepo: Repository<AttachmentRevisedProjectGroup>,
+    private readonly documentAnalysisService: DocumentAnalysisService,
   ) {}
 
   async create(
@@ -37,6 +39,7 @@ export class AttachmentRevisedProjectGroupsService {
   async uploadFile(
     file: Express.Multer.File,
     revisedProjectGroupId: string,
+    uploaderUserId?: string | null,
   ): Promise<AttachmentRevisedProjectGroup> {
     const now = new Date();
     const day = String(now.getDate()).padStart(2, '0');
@@ -66,14 +69,32 @@ export class AttachmentRevisedProjectGroupsService {
     this.logger.log(
       `File uploaded for revisedProjectGroup ${revisedProjectGroupId}: ${filename}`,
     );
+
+    // Fire-and-forget AI analysis — non-blocking.
+    void this.documentAnalysisService
+      .processAttachment(
+        'revised-project-group',
+        saved.id,
+        uploaderUserId ?? null,
+      )
+      .catch((e) =>
+        this.logger.error(
+          `Document analysis failed for ${saved.id}: ${(e as Error).message}`,
+          (e as Error).stack,
+        ),
+      );
+
     return saved;
   }
 
   async uploadMultipleFiles(
     files: Express.Multer.File[],
     revisedProjectGroupId: string,
+    uploaderUserId?: string | null,
   ): Promise<AttachmentRevisedProjectGroup[]> {
-    const tasks = files.map((file) => this.uploadFile(file, revisedProjectGroupId));
+    const tasks = files.map((file) =>
+      this.uploadFile(file, revisedProjectGroupId, uploaderUserId),
+    );
     return Promise.all(tasks);
   }
 

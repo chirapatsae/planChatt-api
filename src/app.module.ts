@@ -105,6 +105,7 @@ import { DeprecationAuditLog } from './book-assembly/entities/deprecation-audit-
 import { BookProjectLineage } from './book-assembly/entities/book-project-lineage.entity';
 import { DevelopmentIssueModule } from './development-issue/development-issue.module';
 import { DevelopmentIssue } from './development-issue/entities/development-issue.entity';
+import { AdminDocumentAnalysisModule } from './admin-document-analysis/admin-document-analysis.module';
 
 
 @Module({
@@ -238,6 +239,7 @@ import { DevelopmentIssue } from './development-issue/entities/development-issue
     PlanPhaseModule,
     AttachmentProjectGroupsModule,
     AttachmentRevisedProjectGroupsModule,
+    AdminDocumentAnalysisModule,
     BookAssemblyModule,
     DevelopmentIssueModule,
   ],

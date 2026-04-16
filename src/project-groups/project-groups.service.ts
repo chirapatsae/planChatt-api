@@ -5363,6 +5363,12 @@ export class ProjectGroupsService {
           'strategy',
           'tactic',
           'plan',
+          // CLAUDE.md §16 — Multi-Format Reporting. ISSUE_BASED projects
+          // store their classification on `developmentIssue` (mutually
+          // exclusive with strategy/tactic/plan per §16.5). The edit form
+          // relies on this relation to prefill the "ประเด็นการพัฒนา"
+          // dropdown on Step 0 via `initialData.developmentIssue.id`.
+          'developmentIssue',
           'developmentPlan',
           'budgets',
           'trackingStatus',

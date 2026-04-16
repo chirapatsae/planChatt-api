@@ -318,7 +318,20 @@ export class AiUsageQuotasService {
   async checkAndLogUsage(
     userId: string,
     costUsd: number,
-    metadata?: { usageType: string, inputTokens: number, outputTokens: number }
+    metadata?: {
+      usageType: string;
+      inputTokens: number;
+      outputTokens: number;
+      /**
+       * Optional model attribution override.
+       * Back-compat: when undefined, defaults to 'gpt-4o' — keeps every
+       * existing call site (ai.service.ts PRE_SUBMIT_REVIEW, AI_PROJECT_ASSISTANT, etc.)
+       * logging `gpt-4o` exactly as before.
+       * New call sites (DOCUMENT_SUMMARY uses gpt-4o-mini) SHOULD pass the
+       * actual model name so dashboard cost attribution is accurate.
+       */
+      modelName?: string;
+    }
   ): Promise<void> {
     try {
       // 1. Fetch user's quota
@@ -377,7 +390,9 @@ export class AiUsageQuotasService {
       if (metadata) {
         const createLogDto: CreateAiUsageLogDto = {
           usageType: metadata.usageType,
-          modelName: 'gpt-4o',
+          // Back-compat: fall back to 'gpt-4o' for any caller that does not
+          // supply modelName. DOCUMENT_SUMMARY passes 'gpt-4o-mini'.
+          modelName: metadata.modelName ?? 'gpt-4o',
           inputTokens: metadata.inputTokens,
           outputTokens: metadata.outputTokens,
           inputTextLength: 0, // Optional or calculated if needed

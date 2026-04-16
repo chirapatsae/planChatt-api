@@ -106,7 +106,7 @@ export class AiUsageLogsService {
         .groupBy('log.usageType')
         .getRawMany();
 
-      const allusageTypes = ['PROJECT_GENERATION', 'FIELD_REGENERATION', 'SMART_APPROVE_ANALYSIS', 'PRE_SUBMIT_REVIEW'];
+      const allusageTypes = ['PROJECT_GENERATION', 'FIELD_REGENERATION', 'SMART_APPROVE_ANALYSIS', 'PRE_SUBMIT_REVIEW', 'DOCUMENT_SUMMARY'];
       const usageByTypeMap = new Map(usageByType.map(item => [item.usage_type, item]));
 
       const completeUsageByType = allusageTypes.map(type => {

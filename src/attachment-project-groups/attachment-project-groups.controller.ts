@@ -14,6 +14,9 @@ import {
   Query,
   UnauthorizedException,
   NotFoundException,
+  ForbiddenException,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
@@ -22,6 +25,9 @@ import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 import { AttachmentProjectGroupsService } from './attachment-project-groups.service';
 import { multerConfig } from 'src/attachment-event/multer.config';
 import { UrlSigningUtil } from 'src/util/url-signing.util';
+import { DocumentAnalysisService } from 'src/document-analysis/document-analysis.service';
+
+const STAFF_LEAD_ROLES = new Set(['staff', 'admin', 'super-admin']);
 
 @Controller({
   path: 'attachment-project-groups',
@@ -32,6 +38,7 @@ export class AttachmentProjectGroupsController {
 
   constructor(
     private readonly attachmentService: AttachmentProjectGroupsService,
+    private readonly documentAnalysisService: DocumentAnalysisService,
   ) { }
 
   // Public file viewing endpoint with URL signing
@@ -99,7 +106,11 @@ export class AttachmentProjectGroupsController {
       };
     });
 
-    return this.attachmentService.uploadMultipleFiles(fixedFiles, projectGroupId);
+    return this.attachmentService.uploadMultipleFiles(
+      fixedFiles,
+      projectGroupId,
+      req.user.userId,
+    );
   }
 
   @UseGuards(JwtAuthGuard)
@@ -108,6 +119,43 @@ export class AttachmentProjectGroupsController {
     @Param('projectGroupId', ParseUUIDPipe) projectGroupId: string,
   ) {
     return this.attachmentService.findByProjectGroupId(projectGroupId);
+  }
+
+  // AI analysis — read current status + summary
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/analysis')
+  async getAnalysis(
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const result = await this.documentAnalysisService.getAnalysis(
+      'project-group',
+      id,
+    );
+    if (!result) {
+      throw new NotFoundException(`Attachment with ID ${id} not found`);
+    }
+    return result;
+  }
+
+  // AI analysis — staff-lead retry for failed rows
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/analysis/retry')
+  @HttpCode(HttpStatus.ACCEPTED)
+  async retryAnalysis(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    if (!STAFF_LEAD_ROLES.has(req.user.role)) {
+      throw new ForbiddenException(
+        'เฉพาะเจ้าหน้าที่ (staff / admin / super-admin) เท่านั้นที่สามารถสั่งวิเคราะห์ใหม่ได้',
+      );
+    }
+    await this.documentAnalysisService.retry(
+      'project-group',
+      id,
+      req.user.userId,
+    );
+    return { status: 'processing', attachmentId: id };
   }
 
   @UseGuards(JwtAuthGuard)
@@ -136,5 +184,3 @@ export class AttachmentProjectGroupsController {
     return { message: 'File deleted successfully' };
   }
 }
-
-

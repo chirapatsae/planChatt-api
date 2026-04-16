@@ -49,8 +49,11 @@
     "dotenv": "^16.4.7",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
+    "mammoth": "^1.7.2",
     "nodemailer": "^7.0.3",
     "openai": "^5.1.1",
+    "pdf-parse": "^1.1.1",
+    "pdf-to-img": "^4.5.0",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "pdf-lib": "^1.17.1",
@@ -60,9 +63,11 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "socket.io": "^4.8.1",
+    "tesseract.js": "^5.1.1",
     "typeorm": "^0.3.21",
     "uuid": "^11.1.0",
-    "wordcut": "^0.9.1"
+    "wordcut": "^0.9.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
@@ -79,6 +84,7 @@
     "@types/node": "^22.10.7",
     "@types/nodemailer": "^6.4.17",
     "@types/passport-jwt": "^4.0.1",
+    "@types/pdf-parse": "^1.1.4",
     "@types/pdfmake": "^0.2.12",
     "@types/supertest": "^6.0.2",
     "copyfiles": "^2.4.1",
