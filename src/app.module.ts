@@ -106,6 +106,7 @@ import { BookProjectLineage } from './book-assembly/entities/book-project-lineag
 import { DevelopmentIssueModule } from './development-issue/development-issue.module';
 import { DevelopmentIssue } from './development-issue/entities/development-issue.entity';
 import { AdminDocumentAnalysisModule } from './admin-document-analysis/admin-document-analysis.module';
+import { AiPreSubmitSnapshot } from './ai/entities/ai-pre-submit-snapshot.entity';
 
 
 @Module({
@@ -158,6 +159,7 @@ import { AdminDocumentAnalysisModule } from './admin-document-analysis/admin-doc
         GovernmentAgency,
         AiUsageQuota,
         AiUsageLog,
+        AiPreSubmitSnapshot,
         ProjectType,
         Announcement,
         AnnouncementRole,

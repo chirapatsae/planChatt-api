@@ -15,9 +15,27 @@ import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
 import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
 import { DevelopmentIssue } from 'src/development-issue/entities/development-issue.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
+import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
+import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
+import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { Budget } from 'src/budget/entities/budget.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
+// RF5 — persisted user-side pre-submit AI score (CLAUDE.md §17.3 / §17.4).
+import { AiPreSubmitSnapshot } from './entities/ai-pre-submit-snapshot.entity';
+import { PreSubmitSnapshotService } from './pre-submit-snapshot.service';
+import { WorkHistoryGovernmentAgencyResponsibility } from 'src/work-history-government-agency-responsibility/entities/work-history-government-agency-responsibility.entity';
 import { AiUsageQuotasModule } from 'src/ai-usage-quotas/ai-usage-quotas.module';
+import { LineageLockModule } from 'src/common/lineage-lock/lineage-lock.module';
+import { BookLockModule } from 'src/common/book-lock/book-lock.module';
+// AI cooldown (CLAUDE.md §17.8) — additive registration, no DB coupling.
+import { AiCooldownGuard } from './guards/ai-cooldown.guard';
+import {
+  AI_COOLDOWN_STORE,
+  createAiCooldownStore,
+} from './stores/ai-cooldown.store';
+// Shared staleness-model foundation (CLAUDE.md §17). Read-only envelope
+// composer consumed by downstream RF2/RF5.
+import { AiResultEnvelopeService } from './ai-result-envelope.service';
 
 @Module({
   imports: [
@@ -30,10 +48,17 @@ import { AiUsageQuotasModule } from 'src/ai-usage-quotas/ai-usage-quotas.module'
       LocalAdministrativeOrganization,
       DevelopmentIssue,
       ProjectGroup,
+      RevisedProjectGroup,
+      SupplementProjectGroup,
+      WorkHistory,
       Budget,
       TrackingStatus,
+      AiPreSubmitSnapshot,
+      WorkHistoryGovernmentAgencyResponsibility,
     ]),
     AiUsageQuotasModule,
+    LineageLockModule,
+    BookLockModule,
   ],
   controllers: [AiController],
   providers: [
@@ -43,6 +68,18 @@ import { AiUsageQuotasModule } from 'src/ai-usage-quotas/ai-usage-quotas.module'
     GeoBoundaryService,
     CoordinateContextService,
     SmartApprovePrecheckService,
+    // AI cooldown wiring. Memory store by default;
+    // set AI_COOLDOWN_BACKEND=redis to swap to the Redis stub.
+    {
+      provide: AI_COOLDOWN_STORE,
+      useFactory: () => createAiCooldownStore(),
+    },
+    AiCooldownGuard,
+    // §17 shared staleness-model foundation (read-only helper).
+    AiResultEnvelopeService,
+    // RF5 — persisted pre-submit AI score (owner write + staff read).
+    PreSubmitSnapshotService,
   ],
+  exports: [AiResultEnvelopeService],
 })
 export class AiModule {}

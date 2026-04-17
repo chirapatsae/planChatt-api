@@ -1179,6 +1179,7 @@ ${formatRubricForReviewer({ isIssueBased })}
         // Belt-and-braces: clamp score even though json_schema enforces it
         overallScore: Math.min(100, Math.max(0, Math.round(aiResult.overallScore))),
         checklistSummary,
+        model: completion.model || 'gpt-4o',
         usage: {
           prompt_tokens: completion.usage?.prompt_tokens ?? 0,
           completion_tokens: completion.usage?.completion_tokens ?? 0,

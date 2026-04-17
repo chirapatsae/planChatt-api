@@ -1,4 +1,14 @@
-import { Controller, Post, Body, UseGuards, Req, UnauthorizedException } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Req,
+  UnauthorizedException,
+  UseGuards,
+} from '@nestjs/common';
 import { Request } from 'express';
 import { AiService } from './ai.service';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
@@ -9,8 +19,13 @@ import {
 import { PromptSuggestionsDto } from './dto/prompt-suggestions.dto';
 import { SmartApproveRequestDto } from './dto/smart-approve.dto';
 import { PreSubmitReviewDto } from './dto/pre-submit-review.dto';
+import { CreatePreSubmitSnapshotDto } from './dto/pre-submit-snapshot.dto';
+import { PreSubmitSnapshotService } from './pre-submit-snapshot.service';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 import { calculateAiCost } from './utils/cost-calculator';
+// AI cooldown (CLAUDE.md §17.8). Per-endpoint TTLs per task IMPL_STAFF_AI_RF9_COOLDOWN.
+import { AiCooldownGuard } from './guards/ai-cooldown.guard';
+import { AiCooldown } from './decorators/ai-cooldown.decorator';
 
 @Controller({
   version: '1',
@@ -18,7 +33,10 @@ import { calculateAiCost } from './utils/cost-calculator';
 })
 @UseGuards(JwtAuthGuard)
 export class AiController {
-  constructor(private readonly aiService: AiService) { }
+  constructor(
+    private readonly aiService: AiService,
+    private readonly preSubmitSnapshotService: PreSubmitSnapshotService,
+  ) { }
 
   private parseSection(text: string, keyword: string): string | null {
     const keyText = keyword.replace(':', '');
@@ -136,6 +154,8 @@ export class AiController {
   }
 
   @Post('smart-approve/analyze')
+  @UseGuards(AiCooldownGuard)
+  @AiCooldown('smart-approve', 10, 'body.projectId')
   async analyzeSmartApprove(
     @Body() body: SmartApproveRequestDto,
     @Req() req: Request & { user: JwtPayloadUser },
@@ -164,6 +184,119 @@ export class AiController {
       throw new UnauthorizedException('User not authenticated');
     }
     return this.aiService.generatePreSubmitReview(body, req.user.userId);
+  }
+
+  /**
+   * RF5 — Persist user-side pre-submit AI score for staff read.
+   *
+   * CLAUDE.md §17.3 — the row has NO FK to project tables; `target_id` is a
+   * plain uuid column so staff-led rollback (§14.6) cannot cascade-delete
+   * AI audit history.
+   *
+   * CLAUDE.md §17.4 — `staleness_policy = 'snapshot-only'`: the snapshot is
+   * a photograph at submit time. It is intentionally NEVER recomputed and
+   * `isStale` is ALWAYS false on the read side.
+   *
+   * Guard: JwtAuthGuard (controller-level). Owner-scope is enforced in the
+   * service against the caller's current WorkHistory.id (§4 ownership).
+   *
+   * Idempotency: identical content_hash returns the existing row without
+   * inserting a new one. Different hash soft-deletes the prior row and
+   * inserts a new one (§17.5 audit preservation).
+   */
+  @Post('pre-submit-review/snapshot')
+  async createPreSubmitSnapshot(
+    @Body() body: CreatePreSubmitSnapshotDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    if (!req.user || !req.user.userId) {
+      throw new UnauthorizedException('User not authenticated');
+    }
+    const snapshot = await this.preSubmitSnapshotService.createSnapshot(
+      req.user.userId,
+      body,
+    );
+    return {
+      id: snapshot.id,
+      targetKind: snapshot.targetKind,
+      targetId: snapshot.targetId,
+      computedAt: snapshot.computedAt,
+      contentHash: snapshot.contentHash,
+      score: snapshot.score0100,
+      band: snapshot.band,
+    };
+  }
+
+  /**
+   * RF5 — Staff-lead read for the active pre-submit snapshot.
+   *
+   * §17.4: response envelope always has `isStale: false` (snapshot-only).
+   * 404 when no active snapshot exists — FE renders subdued fallback
+   * "ไม่มีข้อมูลการตรวจก่อนส่ง".
+   */
+  @Get('pre-submit-review/snapshot/:targetKind/:targetId')
+  async getPreSubmitSnapshot(
+    @Param('targetKind') targetKind: string,
+    @Param('targetId', new ParseUUIDPipe()) targetId: string,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    if (!req.user || !req.user.userId) {
+      throw new UnauthorizedException('User not authenticated');
+    }
+    const { snapshot, envelope, result } =
+      await this.preSubmitSnapshotService.getActiveSnapshot(
+        req.user.userId,
+        targetKind,
+        targetId,
+      );
+    return {
+      envelope,
+      result,
+      workflow: snapshot.workflow,
+      submittedAt: snapshot.computedAt,
+    };
+  }
+
+  /**
+   * RF5 — Owner-gated read of the caller's OWN pre-submit AI snapshot.
+   *
+   * Unlike `pre-submit-review/snapshot/:...` (staff-lead read), this
+   * endpoint is scoped to the current user's WorkHistory. The service
+   * method `getOwnerSnapshot` enforces
+   * `submitted_by_work_history_id === caller.currentWorkHistory.id` and
+   * returns 403 on mismatch, 404 on missing.
+   *
+   * Designed for the ReadyToSendPage AI modal to reuse the canonical
+   * AddProject-time snapshot and save OpenAI tokens (§17.2 advisory —
+   * cache-reuse is a read, not a recompute).
+   *
+   * §17.3 audit separation preserved — read-only, no writes, no FK.
+   * §17.4 snapshot-only — envelope's `isStale` forced to false.
+   * §17.5 no auto-recompute — pure read, no mutations.
+   * §17.11 no role exemption — owner gate is a sibling to the
+   *   staff-lead gate, not an override of either.
+   */
+  @Get('pre-submit-review/my-snapshot/:targetKind/:targetId')
+  async getMyPreSubmitSnapshot(
+    @Param('targetKind') targetKind: string,
+    @Param('targetId', new ParseUUIDPipe()) targetId: string,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    if (!req.user || !req.user.userId) {
+      throw new UnauthorizedException('User not authenticated');
+    }
+    const { snapshot, envelope, result } =
+      await this.preSubmitSnapshotService.getOwnerSnapshot(
+        req.user.userId,
+        targetKind,
+        targetId,
+      );
+    return {
+      envelope,
+      result,
+      workflow: snapshot.workflow,
+      submittedAt: snapshot.computedAt,
+    };
   }
 
   /**

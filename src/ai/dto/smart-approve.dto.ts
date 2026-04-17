@@ -69,6 +69,15 @@ export class SmartApproveProjectDto {
 }
 
 export class SmartApproveRequestDto {
+  // Optional project identifier used ONLY for the AI cooldown key
+  // (CLAUDE.md §17.8). The cooldown guard reads this to build
+  // `(actor × projectId × endpoint)` granularity. It is NOT consumed
+  // by the underlying analyze logic, which runs purely on the payload
+  // snapshot below.
+  @IsString()
+  @IsOptional()
+  projectId?: string;
+
   // STRATEGY_BASED classification fields (CLAUDE.md §16.5)
   // Optional at the DTO layer because ISSUE_BASED payloads omit them.
   // STRATEGY_BASED callers still supply all three; precheck logic treats
