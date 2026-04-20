@@ -10,6 +10,8 @@ import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
 import { BookLockModule } from 'src/common/book-lock/book-lock.module';
 import { ProjectClassificationModule } from 'src/common/project-classification/project-classification.module';
+// Wave 24 N1 — criteria registry lookup for GET /criteria endpoint.
+import { CriteriaModule } from 'src/ai/criteria/criteria.module';
 
 /**
  * DevelopmentIssueModule — CLAUDE.md §16.6
@@ -35,6 +37,7 @@ import { ProjectClassificationModule } from 'src/common/project-classification/p
     ]),
     BookLockModule,
     ProjectClassificationModule,
+    CriteriaModule,
   ],
   controllers: [DevelopmentIssueController],
   providers: [DevelopmentIssueService],

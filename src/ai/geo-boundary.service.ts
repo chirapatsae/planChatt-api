@@ -85,6 +85,39 @@ export class GeoBoundaryService {
   }
 
   /**
+   * Wave 24 N4 — resolve which indexed amphoe contains a given lat/lng.
+   *
+   * Used by `IssueCriteriaGeoCheckService` to implement the
+   * `cross-amphoe` deterministic pre-check for `C3_2.a` / `C4_1to4.a`
+   * criteria. Pure read over the in-memory polygon index — no new
+   * geojson reads (architecture §7 invariant).
+   *
+   * @returns `{ amphoeCode }` when the point falls inside exactly one
+   *          indexed amphoe polygon (MultiPolygons collapse to their
+   *          owning amphoe code). `null` otherwise — caller treats a
+   *          `null` result as "no deterministic signal; let the LLM
+   *          decide" per §17.2 advisory-only semantics.
+   */
+  resolveAmphoeForPoint(
+    lat: number,
+    lng: number,
+  ): { amphoeCode: string } | null {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return null;
+    }
+    const lon = lng;
+    for (const [amphoeCode, features] of this.featuresByAmphoe.entries()) {
+      for (const feature of features) {
+        if (!feature.geometry) continue;
+        if (this.isPointInsideGeometry(lon, lat, feature.geometry)) {
+          return { amphoeCode };
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
    * @returns true  - จุดอยู่ในอำเภอ
    *          false - จุดอยู่นอกอำเภอ
    *          null  - ไม่พบข้อมูลอำเภอหรือพิกัดไม่ถูกต้อง

@@ -3,6 +3,9 @@ import { AiService } from './ai.service';
 import { SmartApprovePrecheckService } from './smart-approve-precheck.service';
 import { AiContextService } from './ai-context.service';
 import { AiUsageQuotasService } from 'src/ai-usage-quotas/ai-usage-quotas.service';
+import { IssueCriteriaRegistryService } from './criteria/issue-criteria-registry.service';
+import { IssueCriteriaGeoCheckService } from './criteria/issue-criteria-geo-check.service';
+import { IssueCriteriaEvidenceCheckService } from './criteria/issue-criteria-evidence-check.service';
 
 const mockOpenAI = {
   chat: {
@@ -27,6 +30,26 @@ describe('AiService.generatePromptSuggestions', () => {
   const mockPrecheckService = {} as unknown as SmartApprovePrecheckService;
   const mockContextService = {} as unknown as AiContextService;
   const mockQuotasService = {} as unknown as AiUsageQuotasService;
+  // Wave 24 N3 — registry is injected into AiService; supply a permissive
+  // stub so the existing `generatePromptSuggestions` suite remains green.
+  // The method under test never exercises the registry, so `findByIssueId`
+  // is unused, but Nest DI requires the provider to resolve.
+  const mockIssueCriteriaRegistry = {
+    findByIssueId: jest
+      .fn()
+      .mockResolvedValue({ issue: null, entry: null }),
+    findByIssueName: jest.fn().mockReturnValue(null),
+    listAllForProvince: jest.fn().mockReturnValue([]),
+    getCurrentRulesetVersion: jest.fn().mockReturnValue('2026-04-18'),
+  } as unknown as IssueCriteriaRegistryService;
+  // Wave 24 N4 — advisory pre-checks; generatePromptSuggestions does
+  // not touch them. Permissive stubs to satisfy DI.
+  const mockGeoCheck = {
+    evaluate: jest.fn().mockReturnValue([]),
+  } as unknown as IssueCriteriaGeoCheckService;
+  const mockEvidenceCheck = {
+    evaluate: jest.fn().mockReturnValue([]),
+  } as unknown as IssueCriteriaEvidenceCheckService;
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -39,6 +62,18 @@ describe('AiService.generatePromptSuggestions', () => {
         },
         { provide: AiUsageQuotasService, useValue: mockQuotasService },
         { provide: AiContextService, useValue: mockContextService },
+        {
+          provide: IssueCriteriaRegistryService,
+          useValue: mockIssueCriteriaRegistry,
+        },
+        {
+          provide: IssueCriteriaGeoCheckService,
+          useValue: mockGeoCheck,
+        },
+        {
+          provide: IssueCriteriaEvidenceCheckService,
+          useValue: mockEvidenceCheck,
+        },
       ],
     }).compile();
     service = module.get<AiService>(AiService);

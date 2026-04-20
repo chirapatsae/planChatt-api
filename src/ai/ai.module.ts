@@ -36,6 +36,13 @@ import {
 // Shared staleness-model foundation (CLAUDE.md §17). Read-only envelope
 // composer consumed by downstream RF2/RF5.
 import { AiResultEnvelopeService } from './ai-result-envelope.service';
+// Wave 24 N1 — issue-based criteria registry. Exported so N3/N4 prompt
+// injection can reuse the same lookup as the GET endpoint.
+import { CriteriaModule } from './criteria/criteria.module';
+// Wave 24 N4 — deterministic pre-checks feeding the pre-submit review
+// prompt. Both services are advisory-only (§17.2) and stateless.
+import { IssueCriteriaGeoCheckService } from './criteria/issue-criteria-geo-check.service';
+import { IssueCriteriaEvidenceCheckService } from './criteria/issue-criteria-evidence-check.service';
 
 @Module({
   imports: [
@@ -59,6 +66,7 @@ import { AiResultEnvelopeService } from './ai-result-envelope.service';
     AiUsageQuotasModule,
     LineageLockModule,
     BookLockModule,
+    CriteriaModule,
   ],
   controllers: [AiController],
   providers: [
@@ -79,7 +87,10 @@ import { AiResultEnvelopeService } from './ai-result-envelope.service';
     AiResultEnvelopeService,
     // RF5 — persisted pre-submit AI score (owner write + staff read).
     PreSubmitSnapshotService,
+    // Wave 24 N4 — criteria-aware pre-check services.
+    IssueCriteriaGeoCheckService,
+    IssueCriteriaEvidenceCheckService,
   ],
-  exports: [AiResultEnvelopeService],
+  exports: [AiResultEnvelopeService, CriteriaModule],
 })
 export class AiModule {}
