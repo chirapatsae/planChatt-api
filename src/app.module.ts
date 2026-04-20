@@ -63,6 +63,7 @@ import { AnnouncementRole } from './announcement-roles/entities/announcement-rol
 import { NotificationLogsModule } from './notification-logs/notification-logs.module';
 import { NotificationLog } from './notification-logs/entities/notification-log.entity';
 import { NotificationsModule } from './notifications/notifications.module';
+import { NotificationsEmailModule } from './notifications/email/notifications-email.module';
 import { UserNotificationsModule } from './user-notifications/user-notifications.module';
 import { UserNotification } from './user-notifications/entities/user-notification.entity';
 import { WebsocketModule } from './websocket/websocket.module';
@@ -226,6 +227,7 @@ import { AiPreSubmitSnapshot } from './ai/entities/ai-pre-submit-snapshot.entity
     AnnouncementRolesModule,
     NotificationLogsModule,
     NotificationsModule,
+    NotificationsEmailModule,
     UserNotificationsModule,
     WebsocketModule,
     EventsModule,

@@ -14,6 +14,7 @@ import { AnnouncementsModule } from 'src/announcements/announcements.module';
 import { WorkHistoryAmphoeResponsibility } from 'src/work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity';
 import { WorkHistoryGovernmentAgencyResponsibility } from 'src/work-history-government-agency-responsibility/entities/work-history-government-agency-responsibility.entity';
 import { LineageLockModule } from 'src/common/lineage-lock/lineage-lock.module';
+import { NotificationsEmailModule } from 'src/notifications/email/notifications-email.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { LineageLockModule } from 'src/common/lineage-lock/lineage-lock.module';
     ]),
     AnnouncementsModule,
     LineageLockModule,
+    NotificationsEmailModule,
   ],
   controllers: [TrackingStatusController],
   providers: [TrackingStatusService],

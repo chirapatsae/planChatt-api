@@ -15,11 +15,15 @@ import {
   MaxFileSizeValidator,
   FileTypeValidator,
   BadRequestException,
+  Req,
+  UsePipes,
+  ValidationPipe,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { UpdateMyPreferencesDto } from './dto/update-my-preferences.dto';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 
 @Controller({
@@ -43,6 +47,35 @@ export class UsersController {
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.usersService.findOne(id);
+  }
+
+  /**
+   * Wave 21 — Self-scoped preferences endpoint. MUST be declared BEFORE
+   * `@Patch(':id')` so `me/preferences` is not swallowed as a UUID param.
+   *
+   * Self-scope rule (EMAIL_NOTIFICATION.md §4.3):
+   *   - target userId is ALWAYS `req.user.userId`
+   *   - DTO is whitelisted + forbidNonWhitelisted — extra body fields return 400
+   *   - only the 3 preference fields may be mutated
+   */
+  @UseGuards(JwtAuthGuard)
+  @Patch('me/preferences')
+  @UsePipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  )
+  updateMyPreferences(
+    @Req() req: any,
+    @Body() dto: UpdateMyPreferencesDto,
+  ) {
+    const userId: string | undefined = req?.user?.userId;
+    if (!userId) {
+      throw new BadRequestException('Authenticated user context missing');
+    }
+    return this.usersService.updateMyPreferences(userId, dto);
   }
 
   @Patch(':id')

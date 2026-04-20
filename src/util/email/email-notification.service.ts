@@ -155,8 +155,7 @@ export class EmailNotificationService {
     // Process each list data item
     await this.sendNotification({
       type: type,
-      // to: emailAddresses,
-      to: ["skull.death1994@gmail.com"],
+      to: emailAddresses,
       data: listData,
       developmentPlan: developmentPlan,
       workHistory: organizationName,

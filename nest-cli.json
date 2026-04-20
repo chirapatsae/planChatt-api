@@ -13,6 +13,11 @@
         "include": "src/ai/data/**/*.json",
         "outDir": "ai/data",
         "watchAssets": true
+      },
+      {
+        "include": "src/notifications/templates/**/*.hbs",
+        "outDir": "notifications/templates",
+        "watchAssets": true
       }
     ]
   }

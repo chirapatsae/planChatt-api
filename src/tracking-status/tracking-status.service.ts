@@ -26,6 +26,13 @@ import { AnnouncementStatus, NotificationType } from 'src/announcements/entities
 import { WorkHistoryAmphoeResponsibility } from 'src/work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity';
 import { WorkHistoryGovernmentAgencyResponsibility } from 'src/work-history-government-agency-responsibility/entities/work-history-government-agency-responsibility.entity';
 import { LineageLockService } from 'src/common/lineage-lock/lineage-lock.service';
+import { NotificationsEmailService } from 'src/notifications/email/notifications-email.service';
+import { RecipientResolverService } from 'src/notifications/email/recipient-resolver.service';
+import {
+  ProjectNotificationEvent,
+  ProjectNotificationEventType,
+  ProjectNotificationRecipient,
+} from 'src/notifications/events/project-notification-event';
 
 @Injectable()
 export class TrackingStatusService {
@@ -52,11 +59,163 @@ export class TrackingStatusService {
     private readonly announcementsService: AnnouncementsService,
     private readonly dataSource: DataSource,
     private readonly lineageLockService: LineageLockService,
+    // Wave 21 N4 — email notification pipeline. Directly injected (not via
+    // EventEmitter2) because the existing codebase has no @OnEvent handlers
+    // for notifications and a direct call is simpler for QA to verify.
+    // All calls are wrapped in try/catch at the emit site so that an email
+    // failure NEVER propagates into the workflow transition path (§4.1,
+    // task §7 guardrail: "emit failure must NOT propagate to the transition
+    // path"). The call is POST-COMMIT — emitted strictly after the
+    // `this.dataSource.transaction(...)` callback has returned successfully.
+    private readonly notificationsEmailService: NotificationsEmailService,
+    private readonly recipientResolver: RecipientResolverService,
   ) { }
+
+  /**
+   * Wave 21 N4 — Map a canonical (fromStatus → toStatus) transition into an
+   * optional Phase-1 notification event type. Returns null when the transition
+   * is NOT a Phase-1 notification trigger (e.g. Pending → Verified, any
+   * Pull_Back, Ready → Draft). Phase-1 events (architecture §2.3):
+   *
+   *   * → Pending                          → PROJECT_SUBMITTED
+   *   Pending → Returned_For_Revision      → PROJECT_RETURNED_FOR_REVISION
+   *   Verified → Returned_For_Revision     → PROJECT_RETURNED_FOR_REVISION
+   *   Pending_Approval → Approved          → PROJECT_APPROVED
+   */
+  private resolveNotificationEventType(
+    fromStatus: string | undefined,
+    toStatus: string,
+  ): ProjectNotificationEventType | null {
+    if (toStatus === 'Pending') return 'PROJECT_SUBMITTED';
+    if (toStatus === 'Returned_For_Revision') {
+      if (fromStatus === 'Pending' || fromStatus === 'Verified') {
+        return 'PROJECT_RETURNED_FOR_REVISION';
+      }
+      return null;
+    }
+    if (toStatus === 'Approved' && fromStatus === 'Pending_Approval') {
+      return 'PROJECT_APPROVED';
+    }
+    return null;
+  }
+
+  /**
+   * Wave 21 N4 — POST-COMMIT notification dispatch. Called AFTER the
+   * `this.dataSource.transaction(...)` callback returns successfully. Wrapped
+   * entirely in try/catch so that ANY failure here — recipient resolution,
+   * queue add, template rendering, Redis outage — MUST NOT cascade into the
+   * workflow caller (§4.1 + task §7 guardrail).
+   *
+   * Recipient resolution rules (architecture §2.3):
+   *   - PROJECT_SUBMITTED (main plan)  → staff-lead by project.amphoe
+   *   - PROJECT_SUBMITTED (revision)   → staff-lead by project.responsibleAgency
+   *   - PROJECT_RETURNED_FOR_REVISION  → project owner (createdBy WorkHistory)
+   *   - PROJECT_APPROVED               → project owner (createdBy WorkHistory)
+   */
+  private async dispatchPhaseOneNotification(args: {
+    eventType: ProjectNotificationEventType;
+    fromStatus: string;
+    toStatus: string;
+    projectId: string;
+    projectKind: 'project-group' | 'revised-project-group';
+    projectTitle: string;
+    projectAmphoeId?: string | null;
+    projectResponsibleAgencyId?: string | null;
+    createdByWorkHistoryId?: string | null;
+    reason?: string | null;
+    planName?: string | null;
+    /**
+     * Wave 22 B1 — workflow-actor threading. The user (and their current
+     * WorkHistory) who performed the transition. These IDs are persisted
+     * onto every resulting `notification_email_logs` row so the
+     * super-admin stats surfaces can aggregate by actor. Advisory only
+     * (§4.1) — MUST NOT influence recipient resolution or gating.
+     */
+    actorUserId?: string | null;
+    actorWorkHistoryId?: string | null;
+  }): Promise<void> {
+    try {
+      let recipients: ProjectNotificationRecipient[] = [];
+      if (args.eventType === 'PROJECT_SUBMITTED') {
+        if (args.projectKind === 'project-group' && args.projectAmphoeId) {
+          recipients = await this.recipientResolver.resolveStaffLeadByAmphoe(
+            args.projectAmphoeId,
+          );
+        } else if (
+          args.projectKind === 'revised-project-group' &&
+          args.projectResponsibleAgencyId
+        ) {
+          recipients = await this.recipientResolver.resolveStaffLeadByAgency(
+            args.projectResponsibleAgencyId,
+          );
+        }
+      } else {
+        // PROJECT_RETURNED_FOR_REVISION + PROJECT_APPROVED → owner
+        if (args.createdByWorkHistoryId) {
+          recipients = await this.recipientResolver.resolveOwner(
+            args.createdByWorkHistoryId,
+          );
+        }
+      }
+
+      if (!recipients.length) {
+        this.logger.debug(
+          `[Notify] no-recipients event=${args.eventType} project=${args.projectId}`,
+        );
+        return;
+      }
+
+      const event: ProjectNotificationEvent =
+        this.notificationsEmailService.buildEvent({
+          eventType: args.eventType,
+          projectId: args.projectId,
+          projectName: args.projectTitle,
+          fromStatus: args.fromStatus,
+          toStatus: args.toStatus,
+          reason: args.reason ?? undefined,
+          recipients,
+          metadata: {
+            kind: args.projectKind,
+            planName: args.planName ?? null,
+          },
+          actorUserId: args.actorUserId ?? undefined,
+          actorWorkHistoryId: args.actorWorkHistoryId ?? undefined,
+        });
+
+      // queueEmail internally swallows all errors but we still wrap in
+      // try/catch as belt-and-braces in case the API contract regresses.
+      await this.notificationsEmailService.queueEmail(event);
+    } catch (err) {
+      this.logger.warn(
+        `[Notify] emit-failed event=${args.eventType} project=${args.projectId} err=${(err as Error).message}`,
+      );
+    }
+  }
 
   async create(dto: CreateTrackingStatusDto, userId: string): Promise<TrackingStatus> {
     try {
-      return await this.dataSource.transaction(async (manager) => {
+      // Wave 21 N4 — we need context (fromStatus, project amphoe + createdBy)
+      // for a POST-COMMIT notification emit. Capture it inside the transaction,
+      // return it alongside the saved tracking, then emit AFTER the transaction
+      // callback resolves so that the DB write has committed.
+      type TxResult = {
+        saved: TrackingStatus;
+        fromStatus: string;
+        toStatus: string;
+        project: {
+          id: string;
+          title: string;
+          amphoeId: string | null;
+          createdByWorkHistoryId: string | null;
+          planName: string | null;
+        };
+        // Wave 22 B1 — workflow-actor threading (null when userId not found;
+        // this cannot happen in practice here because we throw above, but
+        // keep nullable for type safety).
+        actorUserId: string | null;
+        actorWorkHistoryId: string | null;
+      };
+      const txResult = await this.dataSource.transaction<TxResult>(async (manager) => {
         // 1-3. WorkHistory + workStatus (CLAUDE.md validation order)
         const workHistory = await manager.findOne(WorkHistory, {
           where: { user: { id: userId }, isCurrent: true },
@@ -261,6 +420,16 @@ export class TrackingStatusService {
         }
         // ------------------------------
 
+        // Wave 21 N4 — capture fromStatus BEFORE the isLatest flip so we can
+        // include it in the post-commit notification payload. This is an
+        // in-transaction read only (§12 audit: no write); the actual emit
+        // happens after the transaction callback returns.
+        const emitFromTracking = await manager.findOne(TrackingStatus, {
+          where: { projectGroupId: { id: projectGroup.id }, isLatest: true },
+          relations: ['statusId'],
+        });
+        const emitFromStatus = emitFromTracking?.statusId?.name ?? '';
+
         // 10. Transition + Audit
         await manager.update(TrackingStatus, {
           projectGroupId: { id: projectGroup.id },
@@ -314,8 +483,49 @@ export class TrackingStatusService {
           }
         }
 
-        return savedTracking;
+        return {
+          saved: savedTracking,
+          fromStatus: emitFromStatus,
+          toStatus: status.name,
+          project: {
+            id: projectGroup.id,
+            title: projectGroup.title ?? '',
+            amphoeId: projectGroup.amphoe?.id ?? null,
+            createdByWorkHistoryId: projectGroup.createdBy?.id ?? null,
+            planName: projectGroup.developmentPlan?.name ?? null,
+          },
+          // Wave 22 B1 — workflow-actor threading.
+          actorUserId: workHistory.user?.id ?? null,
+          actorWorkHistoryId: workHistory.id ?? null,
+        };
       });
+
+      // POST-COMMIT emit — strictly after `this.dataSource.transaction(...)`
+      // resolves. Any thrown error here is caught INSIDE
+      // dispatchPhaseOneNotification so a notification failure can never fail
+      // the workflow transition (§4.1, task §7 guardrail).
+      const eventType = this.resolveNotificationEventType(
+        txResult.fromStatus,
+        txResult.toStatus,
+      );
+      if (eventType) {
+        await this.dispatchPhaseOneNotification({
+          eventType,
+          fromStatus: txResult.fromStatus,
+          toStatus: txResult.toStatus,
+          projectId: txResult.project.id,
+          projectKind: 'project-group',
+          projectTitle: txResult.project.title,
+          projectAmphoeId: txResult.project.amphoeId,
+          createdByWorkHistoryId: txResult.project.createdByWorkHistoryId,
+          reason: dto.comment ?? dto.staffRemark ?? null,
+          planName: txResult.project.planName,
+          actorUserId: txResult.actorUserId,
+          actorWorkHistoryId: txResult.actorWorkHistoryId,
+        });
+      }
+
+      return txResult.saved;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -325,7 +535,9 @@ export class TrackingStatusService {
     try {
       const workHistory = await this.workHistoryRepo.findOne({
         where: { user: { id: userId }, isCurrent: true },
-        relations: ['role', 'workStatus'],
+        // Wave 22 B1 — eager-load `user` so actorUserId can be threaded onto
+        // the post-commit notification emit audit rows.
+        relations: ['role', 'workStatus', 'user'],
       });
 
       if (!workHistory) {
@@ -349,8 +561,26 @@ export class TrackingStatusService {
         Pending_Approval: 'Approved',
       };
 
-      return this.dataSource.transaction(async (manager) => {
-        const results: TrackingStatus[] = [];
+      // Wave 21 N4 — collect post-commit emit descriptors inside the tx; emit
+      // after the transaction callback resolves.
+      type BulkEmitCtx = {
+        fromStatus: string;
+        toStatus: string;
+        projectId: string;
+        projectTitle: string;
+        projectAmphoeId: string | null;
+        createdByWorkHistoryId: string | null;
+        planName: string | null;
+        reason: string | null;
+        // Wave 22 B1 — workflow-actor threading. Uniform across the whole
+        // bulk call because createMany uses a single caller workHistory.
+        actorUserId: string | null;
+        actorWorkHistoryId: string | null;
+      };
+      const bulkEmits: BulkEmitCtx[] = [];
+
+      const results = await this.dataSource.transaction(async (manager) => {
+        const inner: TrackingStatus[] = [];
 
         for (const dto of dtos) {
           const { projectId, statusId } = dto;
@@ -358,7 +588,7 @@ export class TrackingStatusService {
           // Load project with DevelopmentPlan scope
           const projectGroup = await manager.findOne(ProjectGroup, {
             where: { id: projectId },
-            relations: ['developmentPlan'],
+            relations: ['developmentPlan', 'createdBy', 'amphoe'],
           });
           if (!projectGroup) {
             throw new NotFoundException(`ProjectGroup with ID ${projectId} not found`);
@@ -418,11 +648,48 @@ export class TrackingStatusService {
           });
 
           const savedTracking = await manager.save(TrackingStatus, tracking);
-          results.push(savedTracking);
+          inner.push(savedTracking);
+
+          // Queue post-commit notification context.
+          bulkEmits.push({
+            fromStatus: currentStatusName,
+            toStatus: targetStatus.name,
+            projectId: projectGroup.id,
+            projectTitle: projectGroup.title ?? '',
+            projectAmphoeId: projectGroup.amphoe?.id ?? null,
+            createdByWorkHistoryId: projectGroup.createdBy?.id ?? null,
+            planName: projectGroup.developmentPlan?.name ?? null,
+            reason: dto.staffRemark ?? null,
+            actorUserId: workHistory.user?.id ?? null,
+            actorWorkHistoryId: workHistory.id ?? null,
+          });
         }
 
-        return results;
+        return inner;
       });
+
+      // POST-COMMIT emits — one call per bulk item that maps to a Phase-1 event.
+      // Strictly after the transaction resolves.
+      for (const ctx of bulkEmits) {
+        const eventType = this.resolveNotificationEventType(ctx.fromStatus, ctx.toStatus);
+        if (!eventType) continue;
+        await this.dispatchPhaseOneNotification({
+          eventType,
+          fromStatus: ctx.fromStatus,
+          toStatus: ctx.toStatus,
+          projectId: ctx.projectId,
+          projectKind: 'project-group',
+          projectTitle: ctx.projectTitle,
+          projectAmphoeId: ctx.projectAmphoeId,
+          createdByWorkHistoryId: ctx.createdByWorkHistoryId,
+          reason: ctx.reason,
+          planName: ctx.planName,
+          actorUserId: ctx.actorUserId,
+          actorWorkHistoryId: ctx.actorWorkHistoryId,
+        });
+      }
+
+      return results;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -431,7 +698,9 @@ export class TrackingStatusService {
     try {
       const workHistory = await this.workHistoryRepo.findOne({
         where: { user: { id: userId }, isCurrent: true },
-        relations: ['role', 'workStatus'],
+        // Wave 22 B1 — eager-load `user` so actorUserId can be threaded onto
+        // the post-commit notification emit audit rows.
+        relations: ['role', 'workStatus', 'user'],
       });
 
       if (!workHistory) {
@@ -455,8 +724,24 @@ export class TrackingStatusService {
         Pending_Approval: 'Approved',
       };
 
-      return this.dataSource.transaction(async (manager) => {
-        const results: TrackingStatus[] = [];
+      // Wave 21 N4 — collect post-commit emit descriptors for RPG bulk.
+      type BulkRpgEmitCtx = {
+        fromStatus: string;
+        toStatus: string;
+        projectId: string;
+        projectTitle: string;
+        responsibleAgencyId: string | null;
+        createdByWorkHistoryId: string | null;
+        planName: string | null;
+        reason: string | null;
+        // Wave 22 B1 — workflow-actor threading.
+        actorUserId: string | null;
+        actorWorkHistoryId: string | null;
+      };
+      const bulkRpgEmits: BulkRpgEmitCtx[] = [];
+
+      const results = await this.dataSource.transaction(async (manager) => {
+        const inner: TrackingStatus[] = [];
 
         for (const dto of dtos) {
           const { projectId, statusId } = dto;
@@ -464,7 +749,12 @@ export class TrackingStatusService {
           // Load RPG with DPR + parent DPlan scope
           const revisedProjectGroup = await manager.findOne(RevisedProjectGroup, {
             where: { id: projectId },
-            relations: ['developmentPlanRevision', 'developmentPlanRevision.developmentPlan'],
+            relations: [
+              'developmentPlanRevision',
+              'developmentPlanRevision.developmentPlan',
+              'createdBy',
+              'responsibleAgency',
+            ],
           });
           if (!revisedProjectGroup) {
             throw new NotFoundException(`RevisedProjectGroup with ID ${projectId} not found`);
@@ -525,11 +815,46 @@ export class TrackingStatusService {
           });
 
           const savedTracking = await manager.save(TrackingStatus, tracking);
-          results.push(savedTracking);
+          inner.push(savedTracking);
+
+          bulkRpgEmits.push({
+            fromStatus: currentStatusName,
+            toStatus: targetStatus.name,
+            projectId: revisedProjectGroup.id,
+            projectTitle: revisedProjectGroup.title ?? '',
+            responsibleAgencyId: revisedProjectGroup.responsibleAgency?.id ?? null,
+            createdByWorkHistoryId: revisedProjectGroup.createdBy?.id ?? null,
+            planName: dpr?.developmentPlan?.name ?? null,
+            reason: dto.staffRemark ?? null,
+            actorUserId: workHistory.user?.id ?? null,
+            actorWorkHistoryId: workHistory.id ?? null,
+          });
         }
 
-        return results;
+        return inner;
       });
+
+      // POST-COMMIT emits — RPG bulk. Each item dispatched independently.
+      for (const ctx of bulkRpgEmits) {
+        const eventType = this.resolveNotificationEventType(ctx.fromStatus, ctx.toStatus);
+        if (!eventType) continue;
+        await this.dispatchPhaseOneNotification({
+          eventType,
+          fromStatus: ctx.fromStatus,
+          toStatus: ctx.toStatus,
+          projectId: ctx.projectId,
+          projectKind: 'revised-project-group',
+          projectTitle: ctx.projectTitle,
+          projectResponsibleAgencyId: ctx.responsibleAgencyId,
+          createdByWorkHistoryId: ctx.createdByWorkHistoryId,
+          reason: ctx.reason,
+          planName: ctx.planName,
+          actorUserId: ctx.actorUserId,
+          actorWorkHistoryId: ctx.actorWorkHistoryId,
+        });
+      }
+
+      return results;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -691,7 +1016,24 @@ export class TrackingStatusService {
 
   async createByRevisedProjectGroup(dto: CreateTrackingStatusDto, userId: string): Promise<TrackingStatus> {
     try {
-      return await this.dataSource.transaction(async (manager) => {
+      // Wave 21 N4 — capture context for post-commit notification emit (see
+      // the equivalent block in create() above for the rationale).
+      type TxResult = {
+        saved: TrackingStatus;
+        fromStatus: string;
+        toStatus: string;
+        project: {
+          id: string;
+          title: string;
+          responsibleAgencyId: string | null;
+          createdByWorkHistoryId: string | null;
+          planName: string | null;
+        };
+        // Wave 22 B1 — workflow-actor threading.
+        actorUserId: string | null;
+        actorWorkHistoryId: string | null;
+      };
+      const txResult = await this.dataSource.transaction<TxResult>(async (manager) => {
         // 1-3. WorkHistory + workStatus
         const workHistory = await manager.findOne(WorkHistory, {
           where: { user: { id: userId }, isCurrent: true },
@@ -854,6 +1196,14 @@ export class TrackingStatusService {
           await manager.save(RevisedProjectGroup, revisedProjectGroup);
         }
 
+        // Wave 21 N4 — capture fromStatus BEFORE flipping isLatest for the
+        // post-commit notification emit.
+        const emitFromTrackingRpg = await manager.findOne(TrackingStatus, {
+          where: { revisedProjectGroupId: { id: revisedProjectGroup.id }, isLatest: true },
+          relations: ['statusId'],
+        });
+        const emitFromStatusRpg = emitFromTrackingRpg?.statusId?.name ?? '';
+
         // อัปเดต TrackingStatus ตัวเก่าให้ isLatest = false
         await manager.update(TrackingStatus, {
           revisedProjectGroupId: { id: revisedProjectGroup.id },
@@ -891,8 +1241,48 @@ export class TrackingStatusService {
           await manager.save(Comment, commentEntities);
         }
 
-        return savedTracking;
+        return {
+          saved: savedTracking,
+          fromStatus: emitFromStatusRpg,
+          toStatus: status.name,
+          project: {
+            id: revisedProjectGroup.id,
+            title: revisedProjectGroup.title ?? '',
+            responsibleAgencyId: revisedProjectGroup.responsibleAgency?.id ?? null,
+            createdByWorkHistoryId: revisedProjectGroup.createdBy?.id ?? null,
+            planName:
+              revisedProjectGroup.developmentPlanRevision?.developmentPlan?.name ?? null,
+          },
+          // Wave 22 B1 — workflow-actor threading.
+          actorUserId: workHistory.user?.id ?? null,
+          actorWorkHistoryId: workHistory.id ?? null,
+        };
       });
+
+      // POST-COMMIT Phase-1 notification emit (§4.1 guardrail). See create()
+      // for the same pattern and rationale.
+      const eventType = this.resolveNotificationEventType(
+        txResult.fromStatus,
+        txResult.toStatus,
+      );
+      if (eventType) {
+        await this.dispatchPhaseOneNotification({
+          eventType,
+          fromStatus: txResult.fromStatus,
+          toStatus: txResult.toStatus,
+          projectId: txResult.project.id,
+          projectKind: 'revised-project-group',
+          projectTitle: txResult.project.title,
+          projectResponsibleAgencyId: txResult.project.responsibleAgencyId,
+          createdByWorkHistoryId: txResult.project.createdByWorkHistoryId,
+          reason: dto.comment ?? dto.staffRemark ?? null,
+          planName: txResult.project.planName,
+          actorUserId: txResult.actorUserId,
+          actorWorkHistoryId: txResult.actorWorkHistoryId,
+        });
+      }
+
+      return txResult.saved;
     } catch (error) {
       handleException(this.logger, error);
     }

@@ -8,6 +8,7 @@ import { Repository } from 'typeorm';
 import { User } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { UpdateMyPreferencesDto } from './dto/update-my-preferences.dto';
 import {
   decryption,
   encryption,
@@ -151,6 +152,80 @@ export class UsersService {
       const savedUser = await this.userRepository.save(userToUpdate);
       savedUser.citizenId = await decryption(savedUser.citizenId); // Decrypt for the response
       return savedUser;
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * Wave 21 — Self-scoped preferences update. Mutates ONLY the three
+   * notification preference fields (allowEmailNotification,
+   * allowLineNotification, lineId). Other User columns are never touched.
+   *
+   * `userId` MUST come from the authenticated JWT context — NEVER from the
+   * request body. This is enforced at the controller boundary.
+   *
+   * Returns a slim projection (not the full User entity) to avoid leaking
+   * other columns (citizenId, hashes, relations). Architecture §4.3.
+   */
+  async updateMyPreferences(
+    userId: string,
+    dto: UpdateMyPreferencesDto,
+  ): Promise<{
+    id: string;
+    allowEmailNotification: boolean | null;
+    allowLineNotification: boolean | null;
+    lineId: string | null;
+  }> {
+    try {
+      // Pick-list enforcement — defense in depth even if the validation pipe
+      // fails to reject extra fields. Only these three may reach the repo.
+      const patch: Partial<User> = {};
+      if (dto.allowEmailNotification !== undefined) {
+        patch.allowEmailNotification = dto.allowEmailNotification;
+      }
+      if (dto.allowLineNotification !== undefined) {
+        patch.allowLineNotification = dto.allowLineNotification;
+      }
+      if (dto.lineId !== undefined) {
+        patch.lineId = dto.lineId;
+      }
+
+      if (Object.keys(patch).length === 0) {
+        // No-op; still return the current slim projection for UI refresh.
+        const current = await this.userRepository.findOne({
+          where: { id: userId },
+          select: ['id', 'allowEmailNotification', 'allowLineNotification', 'lineId'],
+        });
+        if (!current) {
+          throw new NotFoundException(`User with ID ${userId} not found`);
+        }
+        return {
+          id: current.id,
+          allowEmailNotification: current.allowEmailNotification ?? null,
+          allowLineNotification: current.allowLineNotification ?? null,
+          lineId: current.lineId ?? null,
+        };
+      }
+
+      const updateResult = await this.userRepository.update({ id: userId }, patch);
+      if (!updateResult.affected) {
+        throw new NotFoundException(`User with ID ${userId} not found`);
+      }
+
+      const updated = await this.userRepository.findOne({
+        where: { id: userId },
+        select: ['id', 'allowEmailNotification', 'allowLineNotification', 'lineId'],
+      });
+      if (!updated) {
+        throw new NotFoundException(`User with ID ${userId} not found after update`);
+      }
+      return {
+        id: updated.id,
+        allowEmailNotification: updated.allowEmailNotification ?? null,
+        allowLineNotification: updated.allowLineNotification ?? null,
+        lineId: updated.lineId ?? null,
+      };
     } catch (error) {
       handleException(this.logger, error);
     }
