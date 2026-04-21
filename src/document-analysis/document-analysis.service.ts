@@ -5,6 +5,9 @@ import { readFile, stat } from 'fs/promises';
 import { OpenAI } from 'openai';
 import * as mammoth from 'mammoth';
 import { AiUsageQuotasService } from 'src/ai-usage-quotas/ai-usage-quotas.service';
+import { AiUsageLogsService } from 'src/ai-usage-logs/ai-usage-logs.service';
+import { composeSummaryTh } from 'src/ai-usage-logs/summary-th.util';
+import { sanitizeRequestPayload } from 'src/ai-usage-logs/sanitize-request-payload.util';
 import { calculateAiCost } from 'src/ai/utils/cost-calculator';
 import { AttachmentProjectGroup } from 'src/attachment-project-groups/entities/attachment-project-group.entity';
 import { AttachmentRevisedProjectGroup } from 'src/attachment-revised-project-groups/entities/attachment-revised-project-group.entity';
@@ -115,6 +118,11 @@ export class DocumentAnalysisService implements OnModuleInit {
     @InjectRepository(AttachmentRevisedProjectGroup)
     private readonly arpgRepo: Repository<AttachmentRevisedProjectGroup>,
     private readonly aiUsageQuotasService: AiUsageQuotasService,
+    // Wave 37 N2 — rich-detail usage log. Mirrors the classifier's
+    // pattern (LandUseClassifierService) but uses a direct import
+    // because `AiUsageLogsModule` is a leaf (no back-edge into
+    // document-analysis), so `forwardRef` is unnecessary.
+    private readonly aiUsageLogsService: AiUsageLogsService,
   ) {
     this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   }
@@ -306,6 +314,8 @@ export class DocumentAnalysisService implements OnModuleInit {
       };
 
       let completion;
+      // Wave 37 N2 — wall-clock span for the rich-detail log.
+      const startedAt = Date.now();
       await this.acquireOpenAiSlot();
       try {
         completion = await this.openai.chat.completions.create({
@@ -329,6 +339,43 @@ export class DocumentAnalysisService implements OnModuleInit {
         });
       } catch (e) {
         this.releaseOpenAiSlot();
+        // Wave 37 N2 — error-path rich log so the drawer can surface
+        // failed calls. Best-effort: never throw into the caller.
+        const durationMs = Date.now() - startedAt;
+        try {
+          await this.aiUsageLogsService.create({
+            usageType: 'DOCUMENT_SUMMARY',
+            modelName: this.model,
+            inputTokens: 0,
+            outputTokens: 0,
+            inputTextLength: typeof text === 'string' ? text.length : 0,
+            outputTextLength: 0,
+            costBaht: 0,
+            endpoint: 'document-summary',
+            summaryTh: composeSummaryTh({
+              endpoint: 'document-summary',
+              attachmentFileName: row.originalName,
+            }),
+            requestPayload: sanitizeRequestPayload({
+              attachmentId,
+              attachmentKind: kind,
+              fileName: row.originalName ?? null,
+              mimeType: row.mimetype ?? null,
+              ocrTextLength: typeof text === 'string' ? text.length : 0,
+            }),
+            responsePayload: { parseStatus: 'failed' },
+            targetKind:
+              kind === 'project-group'
+                ? 'project_group'
+                : 'revised_project_group',
+            durationMs,
+            error: String((e as Error).message ?? e).slice(0, 500),
+          });
+        } catch (logErr) {
+          this.logger.warn(
+            `[${kind}/${attachmentId}] rich-log (error-path) write failed: ${(logErr as Error).message}`,
+          );
+        }
         return this.markFailed(
           kind,
           attachmentId,
@@ -337,6 +384,8 @@ export class DocumentAnalysisService implements OnModuleInit {
         );
       }
       this.releaseOpenAiSlot();
+      // Wave 37 N2 — compute the success-path span exactly once.
+      const durationMs = Date.now() - startedAt;
 
       const content = completion.choices?.[0]?.message?.content;
       if (!content) {
@@ -370,21 +419,21 @@ export class DocumentAnalysisService implements OnModuleInit {
       // account for token cost. GPT has already been called at this
       // point; we must record the spend regardless of the downstream
       // outcome. Mirrors the PRE_SUBMIT_REVIEW precedent.
+      //
+      // Wave 37 N2 — the legacy thin `metadata` arg is DROPPED here to
+      // avoid §17.12 double-logging. `checkAndLogUsage` is now used
+      // strictly for quota deduction; the rich-detail log row is
+      // written separately via `aiUsageLogsService.create` below so
+      // every DOCUMENT_SUMMARY row carries the endpoint / summaryTh /
+      // request + response payload / durationMs columns that the
+      // Profile drawer consumes.
       if (completion.usage && uploaderUserId) {
         const costUsd = calculateAiCost(this.model, completion.usage);
         try {
           await this.aiUsageQuotasService.checkAndLogUsage(
             uploaderUserId,
             costUsd,
-            {
-              usageType: 'DOCUMENT_SUMMARY',
-              inputTokens: completion.usage.prompt_tokens,
-              outputTokens: completion.usage.completion_tokens,
-              // Phase 1: correct cost attribution in the dashboard.
-              // Without this, the log row would record 'gpt-4o' even though
-              // this service uses gpt-4o-mini (~17x cheaper).
-              modelName: this.model,
-            },
+            // Wave 37 N2 — metadata arg intentionally omitted.
           );
         } catch (e) {
           // Quota exhausted: mark failed with quota reason; upload already succeeded.
@@ -396,6 +445,79 @@ export class DocumentAnalysisService implements OnModuleInit {
             attachmentId,
             'failed',
             'ไม่มีโควตา AI เพียงพอสำหรับสรุปเอกสาร',
+          );
+        }
+
+        // Wave 37 N2 — rich-detail usage log. Best-effort: §17.2
+        // advisory, a log-write failure MUST NOT propagate to the
+        // caller (the document-analysis happy path continues). Length
+        // metrics only — raw OCR text and raw summary text are NEVER
+        // persisted (§17.9).
+        try {
+          const quotaId = await this.aiUsageQuotasService
+            .findQuotaIdByUserId(uploaderUserId)
+            .catch(() => null);
+          const ocrTextLength = typeof text === 'string' ? text.length : 0;
+          const summaryLength =
+            typeof parsed.summary === 'string' ? parsed.summary.length : 0;
+          // Best-effort project linkage for the detail drawer.
+          // §17.3 — bare UUID only, no FK.
+          let targetId: string | undefined;
+          try {
+            if (kind === 'project-group') {
+              const r = await this.apgRepo.findOne({
+                where: { id: attachmentId },
+                relations: { projectGroup: true },
+              });
+              targetId = r?.projectGroup?.id ?? undefined;
+            } else {
+              const r = await this.arpgRepo.findOne({
+                where: { id: attachmentId },
+                relations: { revisedProjectGroup: true },
+              });
+              targetId = r?.revisedProjectGroup?.id ?? undefined;
+            }
+          } catch {
+            targetId = undefined;
+          }
+
+          await this.aiUsageLogsService.create({
+            usageType: 'DOCUMENT_SUMMARY',
+            modelName: this.model,
+            inputTokens: completion.usage.prompt_tokens,
+            outputTokens: completion.usage.completion_tokens,
+            inputTextLength: ocrTextLength,
+            outputTextLength: summaryLength,
+            costBaht: costUsd * 34,
+            aiUsageQuotaId: quotaId ?? undefined,
+            endpoint: 'document-summary',
+            summaryTh: composeSummaryTh({
+              endpoint: 'document-summary',
+              attachmentFileName: row.originalName,
+            }),
+            requestPayload: sanitizeRequestPayload({
+              attachmentId,
+              attachmentKind: kind,
+              fileName: row.originalName ?? null,
+              mimeType: row.mimetype ?? null,
+              ocrTextLength,
+            }),
+            responsePayload: {
+              summaryLength,
+              docType: parsed.docType,
+              confidence: parsed.confidence,
+              parseStatus: 'success',
+            },
+            targetId,
+            targetKind:
+              kind === 'project-group'
+                ? 'project_group'
+                : 'revised_project_group',
+            durationMs,
+          });
+        } catch (logErr) {
+          this.logger.warn(
+            `[${kind}/${attachmentId}] rich-log write failed: ${(logErr as Error).message}`,
           );
         }
       }

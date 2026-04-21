@@ -12,6 +12,10 @@ import type { GeoAnalysisResult } from './conflict/geo-conflict.types';
 import { AdminBoundaryLookupService } from './admin-boundary-lookup.service';
 import type { ResolvedAdminBoundary } from './admin-boundary-lookup.service';
 import { LandUseClassifierService } from './land-use-classifier.service';
+// Wave 36 N2 — AiService now injects AiUsageLogsService for rich-detail
+// logging. Provide a permissive stub in every suite so DI resolves.
+import { AiUsageLogsService } from 'src/ai-usage-logs/ai-usage-logs.service';
+import { FeasibilityGateService } from './feasibility/feasibility-gate.service';
 
 const mockOpenAI = {
   chat: {
@@ -124,6 +128,14 @@ describe('AiService.generatePromptSuggestions', () => {
         {
           provide: LandUseClassifierService,
           useValue: mockLandUseClassifier,
+        },
+        {
+          provide: FeasibilityGateService,
+          useValue: { evaluate: jest.fn().mockReturnValue(null) },
+        },
+        {
+          provide: AiUsageLogsService,
+          useValue: { create: jest.fn().mockResolvedValue({}) },
         },
       ],
     }).compile();
@@ -367,6 +379,14 @@ describe('AiService — buildIssueBasedPrompt (Wave 30 N2 prompt blocks)', () =>
         {
           provide: LandUseClassifierService,
           useValue: mockLandUseClassifier,
+        },
+        {
+          provide: FeasibilityGateService,
+          useValue: { evaluate: jest.fn().mockReturnValue(null) },
+        },
+        {
+          provide: AiUsageLogsService,
+          useValue: { create: jest.fn().mockResolvedValue({}) },
         },
       ],
     }).compile();
@@ -959,6 +979,10 @@ describe('AiService — buildGeoPreview (Wave 35 N1)', () => {
         {
           provide: RealFeasibilityGateService,
           useValue: mockFeasibilityGate,
+        },
+        {
+          provide: AiUsageLogsService,
+          useValue: { create: jest.fn().mockResolvedValue({}) },
         },
       ],
     }).compile();

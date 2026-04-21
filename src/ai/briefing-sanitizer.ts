@@ -52,6 +52,19 @@ export const CRITERION_TITLE_MAP: Readonly<Record<string, string>> =
  * `[A-Z]` head + `[A-Z0-9_]*` tail allows single-letter markers like `[A]`
  * to be stripped as well; registry markers are always 2+ chars but the
  * broader pattern is defensive against future prompt additions.
+ *
+ * Covered markers (non-exhaustive, expands with each wave):
+ *   - `[ROLE]`, `[FORMAT]`, `[ISSUE]`, `[SUB_TYPES]`, `[SUB_TYPE_SCOPE]`
+ *   - `[CRITERIA]`, `[RULES]`, `[OUTPUT]`, `[OUTPUT_HYGIENE]`
+ *   - `[GEO_GROUND_TRUTH]`, `[END_GEO_GROUND_TRUTH]`
+ *   - `[CONFLICT_ASSESSMENT]`, `[END_CONFLICT_ASSESSMENT]`
+ *   - `[ADMIN_CONTEXT]`, `[END_ADMIN_CONTEXT]`
+ *   - `[LAND_USE_HINT]`, `[END_LAND_USE_HINT]`
+ *   - `[GEO_REASONING_RULES]`, `[END_GEO_REASONING_RULES]`
+ *   - `[CRITERIA_JSON]`, `[HINTS_JSON]`
+ *   - Wave 39 N2: `[EXAMPLES]`, `[END_EXAMPLES]` — the activity-template
+ *     block injected between `[SUB_TYPE_SCOPE]` and `[CRITERIA]` for
+ *     ISSUE_BASED prompts; MUST NOT leak into user-facing prose.
  */
 const BRACKETED_MARKER = /\[[A-Z][A-Z0-9_]*\]/g;
 

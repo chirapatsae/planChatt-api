@@ -315,6 +315,31 @@ export class AiUsageQuotasService {
     }
   }
 
+  /**
+   * Wave 36 N2 — helper for `AiService` / `LandUseClassifierService` to
+   * resolve the current quota row id for a user WITHOUT going through
+   * `checkAndLogUsage`. Used for the rich-detail `ai_usage_logs` writes
+   * added in Wave 36 so the detail row carries the correct
+   * `aiUsageQuotaId` FK (Wave 18 quota ownership).
+   *
+   * Returns `null` when the user has no active quota row — callers must
+   * treat logging as best-effort per §17.2 and must NOT throw.
+   */
+  async findQuotaIdByUserId(userId: string): Promise<string | null> {
+    try {
+      const quota = await this.aiUsageQuotaRepository.findOne({
+        where: { user: { id: userId }, deletedAt: undefined },
+        select: ['id'],
+      });
+      return quota?.id ?? null;
+    } catch (err) {
+      this.logger.warn(
+        `[ai-usage-quotas] findQuotaIdByUserId failed for userId=${userId}: ${err instanceof Error ? err.message : err}`,
+      );
+      return null;
+    }
+  }
+
   async checkAndLogUsage(
     userId: string,
     costUsd: number,

@@ -46,6 +46,26 @@ describe('sanitizeBriefingText — Pass A (bracketed markers)', () => {
   });
 });
 
+describe('sanitizeBriefingText — Wave 39 N2 [EXAMPLES] strip', () => {
+  it('strips [EXAMPLES] and [END_EXAMPLES] markers from prose', () => {
+    const input = 'จัดกิจกรรม [EXAMPLES] เวิร์กช็อป [END_EXAMPLES] ในตำบล';
+    const out = sanitizeBriefingText(input);
+    expect(out).not.toContain('[EXAMPLES]');
+    expect(out).not.toContain('[END_EXAMPLES]');
+    // Surrounding prose remains (whitespace normalized by Pass C).
+    expect(out).toContain('จัดกิจกรรม');
+    expect(out).toContain('เวิร์กช็อป');
+    expect(out).toContain('ในตำบล');
+  });
+
+  it('strips a standalone [EXAMPLES] marker anywhere in prose', () => {
+    const out = sanitizeBriefingText('เริ่ม [EXAMPLES] จบ');
+    expect(out).not.toContain('[EXAMPLES]');
+    expect(out).toContain('เริ่ม');
+    expect(out).toContain('จบ');
+  });
+});
+
 describe('sanitizeBriefingText — Pass B (criterion IDs)', () => {
   it('replaces C4_1to4.b with Thai title prefix', () => {
     const label = CRITERION_TITLE_MAP['C4_1to4.b'];

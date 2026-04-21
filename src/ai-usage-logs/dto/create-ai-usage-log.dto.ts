@@ -1,4 +1,12 @@
-import { IsString, IsNumber, IsOptional, IsUUID } from 'class-validator';
+import {
+  IsString,
+  IsNumber,
+  IsOptional,
+  IsUUID,
+  IsObject,
+  IsInt,
+  Min,
+} from 'class-validator';
 
 export class CreateAiUsageLogDto {
   @IsString()
@@ -27,4 +35,43 @@ export class CreateAiUsageLogDto {
   @IsOptional()
   @IsUUID()
   aiUsageQuotaId?: string;
+
+  // Wave 36 N1 — detail-log fields (all optional; §17.3 audit separation)
+
+  @IsOptional()
+  @IsString()
+  endpoint?: string;
+
+  @IsOptional()
+  @IsString()
+  summaryTh?: string;
+
+  @IsOptional()
+  @IsObject()
+  requestPayload?: any;
+
+  @IsOptional()
+  @IsObject()
+  responsePayload?: any;
+
+  @IsOptional()
+  @IsUUID()
+  targetId?: string;
+
+  @IsOptional()
+  @IsString()
+  targetKind?: string;
+
+  @IsOptional()
+  @IsUUID()
+  actorWorkHistoryId?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  durationMs?: number;
+
+  @IsOptional()
+  @IsString()
+  error?: string;
 }

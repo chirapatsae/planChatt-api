@@ -73,6 +73,17 @@ export interface IssueSubType {
   /** e.g. `1.1`, `3.2.1`. Stable within the regulation. */
   code: string;
   label: string;
+  // Wave 39 N1 — concrete activity templates per sub-type for the
+  // [EXAMPLES] prompt block injected into ISSUE_BASED generate calls.
+  // Advisory — LLM uses these as "วัตถุดิบทางเลือก" for drafting, not
+  // as mandatory content. 4-6 entries per sub-type; each ≤ 160 chars.
+  // Each entry should have at least 3 of 4 specificity attributes:
+  //   - activity name (verb + noun)
+  //   - location / target group with size
+  //   - frequency / duration
+  //   - budget hint OR measurement mechanism
+  // Entries use interpunct " · " as delimiter between attributes.
+  exampleActivities?: string[];
 }
 
 /**

@@ -1,6 +1,7 @@
 import { Logger, Module, OnModuleInit } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AiUsageQuotasModule } from 'src/ai-usage-quotas/ai-usage-quotas.module';
+import { AiUsageLogsModule } from 'src/ai-usage-logs/ai-usage-logs.module';
 import { AttachmentProjectGroup } from 'src/attachment-project-groups/entities/attachment-project-group.entity';
 import { AttachmentRevisedProjectGroup } from 'src/attachment-revised-project-groups/entities/attachment-revised-project-group.entity';
 import { DocumentAnalysisService } from './document-analysis.service';
@@ -26,6 +27,10 @@ const KNOWN_OCR_ERROR_PATTERNS =
       AttachmentRevisedProjectGroup,
     ]),
     AiUsageQuotasModule,
+    // Wave 37 N2 — rich-detail log writes for DOCUMENT_SUMMARY. Direct
+    // import is safe: `AiUsageLogsModule` is a leaf (no back-edge to
+    // document-analysis), so no forwardRef is required.
+    AiUsageLogsModule,
   ],
   providers: [DocumentAnalysisService],
   exports: [DocumentAnalysisService],

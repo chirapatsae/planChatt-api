@@ -33,9 +33,18 @@
  * path — the caller's `isIssueBased && adminBoundary` gate guarantees
  * we reach here only on the advisory path.
  */
-import { Injectable, Logger } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { OpenAI } from 'openai';
 import { sanitizeBriefingText } from './briefing-sanitizer';
+// Wave 36 N2 — resolve the Wave 32 circular-dep TODO. `AiUsageLogsService`
+// is pulled in via forwardRef so classifier runs under the shared
+// detail-log contract. §17.3 audit separation: bare uuid `targetId`,
+// no FK into project tables; log failure is best-effort and must
+// never throw into the classifier's fail-open path.
+import { AiUsageLogsService } from 'src/ai-usage-logs/ai-usage-logs.service';
+import { composeSummaryTh } from 'src/ai-usage-logs/summary-th.util';
+import { sanitizeRequestPayload } from 'src/ai-usage-logs/sanitize-request-payload.util';
+import { calculateAiCost } from './utils/cost-calculator';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -88,6 +97,20 @@ export interface ClassifyInput {
    * Structured enum, NOT user prose — safe to include.
    */
   subTypeCode?: string;
+  /**
+   * Wave 36 N2 — optional quota binding for `ai_usage_logs` detail
+   * rows. Resolved by the CALLER (e.g. `AiService`) via
+   * `AiUsageQuotasService.findQuotaIdByUserId(userId)` and threaded
+   * through ClassifyInput so classifier stays decoupled from the
+   * quota module. When omitted the log row is written without a
+   * quota binding (rare — ops-only cost tracking).
+   */
+  aiUsageQuotaId?: string;
+  /**
+   * Wave 36 N2 — optional acting work-history id for audit context.
+   * Bare uuid per §17.3 (no FK into `work_histories`).
+   */
+  actorWorkHistoryId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -175,7 +198,13 @@ export class LandUseClassifierService {
   // sooner than a solidly-unknown tambon.
   private readonly FAILURE_TTL_MS = 60 * 60 * 1000;
 
-  constructor() {
+  constructor(
+    // Wave 36 N2 — resolves the Wave 32 TODO. forwardRef defuses the
+    // theoretical `ai.module ↔ ai-usage-logs.module` cycle (one-sided
+    // today because AiUsageLogsModule is a leaf).
+    @Inject(forwardRef(() => AiUsageLogsService))
+    private readonly aiUsageLogsService: AiUsageLogsService,
+  ) {
     this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   }
 
@@ -208,6 +237,7 @@ export class LandUseClassifierService {
 
     // ---- OpenAI call ---------------------------------------------------
     let raw: string | null | undefined;
+    const startTime = Date.now();
     try {
       const completion = await this.openai.chat.completions.create({
         model: 'gpt-4o-mini',
@@ -220,23 +250,94 @@ export class LandUseClassifierService {
         ],
       });
       raw = completion.choices?.[0]?.message?.content;
-      // Best-effort cost logging. §17.3: no DB writes from this
-      // service. Quota is NOT deducted for classifier calls (ops-only
-      // cost tracking). Full `ai_usage_logs` wiring is deferred —
-      // plumbing AiUsageLogsService here creates circular-dep risk
-      // (ai.module ↔ ai-usage-logs.module) and requires a userId
-      // which is not in the ClassifyInput contract. TODO(wave 33):
-      // inject via ModuleRef with lazy resolution once the contract
-      // is extended.
       if (completion.usage) {
         this.logger.log(
           `[LandUseClassifier] openai usage promptTokens=${completion.usage.prompt_tokens} completionTokens=${completion.usage.completion_tokens} model=gpt-4o-mini`,
+        );
+      }
+      // Wave 36 N2 — rich-detail usage log. Resolves the Wave 32 TODO.
+      // §17.2 advisory: failure is swallowed so classifier stays
+      // fail-open. §17.3: `targetId` is a bare uuid (or undefined —
+      // classifier has no project row).
+      try {
+        const costUsd = completion.usage
+          ? calculateAiCost('gpt-4o-mini', completion.usage)
+          : 0;
+        const durationMs = Date.now() - startTime;
+        await this.aiUsageLogsService.create({
+          usageType: 'LAND_USE_CLASSIFY',
+          modelName: 'gpt-4o-mini',
+          inputTokens: completion.usage?.prompt_tokens ?? 0,
+          outputTokens: completion.usage?.completion_tokens ?? 0,
+          inputTextLength: SYSTEM_PROMPT.length + userPrompt.length,
+          outputTextLength: typeof raw === 'string' ? raw.length : 0,
+          costBaht: costUsd * 34,
+          aiUsageQuotaId: input.aiUsageQuotaId,
+          endpoint: 'land-use-classify',
+          summaryTh: composeSummaryTh({
+            endpoint: 'land-use-classify',
+            tambonName: input.adminBoundary.tambonName,
+            amphoeName: input.adminBoundary.amphoeName,
+          }),
+          requestPayload: sanitizeRequestPayload({
+            lat: input.lat,
+            lng: input.lng,
+            adminBoundary: input.adminBoundary,
+            geoFeature: input.geoFeature ?? null,
+            subTypeCode: input.subTypeCode,
+          }),
+          responsePayload: {
+            rawLength: typeof raw === 'string' ? raw.length : 0,
+          },
+          targetKind: 'none',
+          actorWorkHistoryId: input.actorWorkHistoryId,
+          durationMs,
+        });
+      } catch (logErr) {
+        this.logger.warn(
+          `[LandUseClassifier] ai-usage-log write failed (swallowed): ${logErr instanceof Error ? logErr.message : logErr}`,
         );
       }
     } catch (err) {
       this.logger.warn(
         `[LandUseClassifier] openai call failed (fail-open): ${err instanceof Error ? err.message : err}`,
       );
+      // Wave 36 N2 — error-path log so failures are visible in the
+      // detail view too. Same fail-open discipline applies.
+      try {
+        const durationMs = Date.now() - startTime;
+        await this.aiUsageLogsService.create({
+          usageType: 'LAND_USE_CLASSIFY',
+          modelName: 'gpt-4o-mini',
+          inputTokens: 0,
+          outputTokens: 0,
+          inputTextLength: SYSTEM_PROMPT.length + userPrompt.length,
+          outputTextLength: 0,
+          costBaht: 0,
+          aiUsageQuotaId: input.aiUsageQuotaId,
+          endpoint: 'land-use-classify',
+          summaryTh: composeSummaryTh({
+            endpoint: 'land-use-classify',
+            tambonName: input.adminBoundary.tambonName,
+            amphoeName: input.adminBoundary.amphoeName,
+          }),
+          requestPayload: sanitizeRequestPayload({
+            lat: input.lat,
+            lng: input.lng,
+            adminBoundary: input.adminBoundary,
+            geoFeature: input.geoFeature ?? null,
+            subTypeCode: input.subTypeCode,
+          }),
+          targetKind: 'none',
+          actorWorkHistoryId: input.actorWorkHistoryId,
+          durationMs,
+          error: err instanceof Error ? `${err.name}: ${err.message}`.slice(0, 500) : String(err).slice(0, 500),
+        });
+      } catch (logErr) {
+        this.logger.warn(
+          `[LandUseClassifier] error-path ai-usage-log write failed (swallowed): ${logErr instanceof Error ? logErr.message : logErr}`,
+        );
+      }
       this.storeInCache(cacheKey, null, now + this.FAILURE_TTL_MS);
       return null;
     }

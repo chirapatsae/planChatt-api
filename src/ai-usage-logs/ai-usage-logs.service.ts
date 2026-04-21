@@ -63,15 +63,62 @@ export class AiUsageLogsService {
     }
   }
 
+  /**
+   * Wave 36 N3 — owner-scoped detail lookup.
+   *
+   * Ownership chain: AiUsageLog → AiUsageQuota.user.id === userId.
+   * Mismatch returns 404 (NOT 403) to prevent enumeration of other
+   * users' log IDs. Missing row also returns 404. Both cases throw
+   * the same `NotFoundException` so the caller cannot distinguish
+   * "does not exist" from "exists but not yours".
+   *
+   * §17.2 advisory read / §17.3 audit separation preserved — this
+   * method does NOT mutate any row and does NOT touch tracking_status.
+   */
+  async findDetailForUser(id: string, userId: string): Promise<AiUsageLogResponseDto> {
+    const log = await this.aiUsageLogRepository.findOne({
+      where: { id },
+      relations: {
+        aiUsageQuota: {
+          user: true,
+        },
+      },
+    });
+    if (!log) {
+      throw new NotFoundException('Usage log not found');
+    }
+    // Ownership check — return 404 (not 403) to prevent enumeration.
+    if (log.aiUsageQuota?.user?.id !== userId) {
+      throw new NotFoundException('Usage log not found');
+    }
+    return this.mapToResponseDto(log);
+  }
+
   private mapToResponseDto(log: AiUsageLog): AiUsageLogResponseDto {
     return {
       id: log.id,
       usageType: log.usageType,
+      // Wave 37 hotfix — include fields that the entity always stored
+      // but the mapper previously omitted, so the FE drawer shows real
+      // values instead of placeholder "-".
+      modelName: log.modelName,
+      inputTokens: log.inputTokens,
+      outputTokens: log.outputTokens,
       inputTextLength: log.inputTextLength,
       outputTextLength: log.outputTextLength,
       costBaht: log.costBaht,
       usedAt: log.used_at,
       aiUsageQuota: log.aiUsageQuota,
+      // Wave 36 N1 — detail-log fields (nullable passthrough)
+      endpoint: log.endpoint ?? null,
+      summaryTh: log.summaryTh ?? null,
+      requestPayload: log.requestPayload ?? null,
+      responsePayload: log.responsePayload ?? null,
+      targetId: log.targetId ?? null,
+      targetKind: log.targetKind ?? null,
+      actorWorkHistoryId: log.actorWorkHistoryId ?? null,
+      durationMs: log.durationMs ?? null,
+      error: log.error ?? null,
     };
   }
 

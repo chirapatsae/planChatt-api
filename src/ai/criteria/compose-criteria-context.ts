@@ -66,6 +66,19 @@ export interface ComposeCriteriaContextOpts {
    * emitted (sourced from the in-repo registry), preserving §17.9.
    */
   userInputText?: string;
+  /**
+   * Wave 39 N2 — pre-composed `[EXAMPLES]` block from
+   * `composeExamplesSection`. Passed in by the caller so the block is
+   * positioned DETERMINISTICALLY between `[SUB_TYPE_SCOPE]` and
+   * `[CRITERIA]` inside the composed system-prompt string. Empty string
+   * (or omitted) produces no `[EXAMPLES]` section — byte-identical to
+   * pre-Wave-39 output for callers that don't opt in.
+   *
+   * The caller is responsible for resolving the same `subTypeCode` used
+   * for `[SUB_TYPE_SCOPE]` resolution so the two sections stay aligned.
+   * Static system content per §17.9 — MUST NOT contain user prose.
+   */
+  examplesBlock?: string;
 }
 
 function resolveSubType(
@@ -123,6 +136,15 @@ export function composeCriteriaContextBlock(
       ]
     : [];
 
+  // Wave 39 N2 — optional `[EXAMPLES]` block positioned AFTER
+  // `[SUB_TYPE_SCOPE]` and BEFORE `[CRITERIA]`. Caller pre-composes via
+  // `composeExamplesSection` and passes the string through
+  // `opts.examplesBlock`. Empty / missing → no emission.
+  const examplesLines =
+    opts?.examplesBlock && opts.examplesBlock.length > 0
+      ? [opts.examplesBlock, '']
+      : [];
+
   // Lines are concatenated without trailing blank lines inside each
   // section to keep the prompt compact; a single blank line separates
   // sections so the LLM parses them as distinct blocks.
@@ -145,6 +167,7 @@ export function composeCriteriaContextBlock(
     subTypeLines || '(ไม่มีประเภทย่อย)',
     '',
     ...subTypeScopeBlock,
+    ...examplesLines,
     '[CRITERIA]',
     criteriaLines || '(ไม่มีหลักเกณฑ์)',
     '',
@@ -164,4 +187,51 @@ export function composeCriteriaContextBlock(
     // field is a valid payload (schema validation marks it optional).
     'คุณสามารถแนบฟิลด์ "rationaleRefs" (object) เพิ่มเติมในผลลัพธ์ได้ (ไม่บังคับ) เพื่ออ้างอิงบริบทที่ใช้ประเมิน โดยมีรูปแบบดังนี้: { "issueKey"?: string, "subTypeCode"?: string, "criterionIds"?: string[] } — ฟิลด์ทั้งหมดเป็น optional และไม่ส่งผลต่อผลการตัดสินของเจ้าหน้าที่ (advisory metadata)',
   ].join('\n');
+}
+
+/**
+ * Wave 39 N2 — assemble the `[EXAMPLES]` prompt block.
+ *
+ * Emits concrete activity templates for the resolved sub-type (from
+ * Wave 24 registry / Wave 39 N1 seeding) as "วัตถุดิบทางเลือก" for LLM
+ * drafting. The block is positioned BETWEEN `[SUB_TYPE_SCOPE]` and
+ * `[CRITERIA]` inside `composeCriteriaContextBlock` — callers pass the
+ * returned string via `opts.examplesBlock`.
+ *
+ * Returns empty string (graceful fallback) when ANY of:
+ *   - `rule` is null
+ *   - `subTypeCode` is null / undefined / empty
+ *   - the resolved sub-type does not exist in `rule.subTypes`
+ *   - the sub-type has no `exampleActivities` (or the array is empty)
+ *
+ * §17.2 advisory — LLM treats entries as OPTIONAL inspiration, never
+ * mandatory copy-paste targets. §17.9 static system content sourced
+ * from in-repo registry; NO user prose enters this block.
+ */
+export function composeExamplesSection(
+  rule: IssueRuleEntry | null,
+  subTypeCode: string | null | undefined,
+): string {
+  if (!rule || !subTypeCode) return '';
+  const subType = rule.subTypes.find((s) => s.code === subTypeCode);
+  if (!subType) return '';
+  const activities = subType.exampleActivities ?? [];
+  if (activities.length === 0) return '';
+
+  const lines: string[] = [];
+  lines.push('[EXAMPLES]');
+  lines.push(
+    `ตัวอย่างกิจกรรมที่เป็นไปได้สำหรับประเภทย่อย "${subType.label}":`,
+  );
+  for (const a of activities) {
+    lines.push(`- ${a}`);
+  }
+  lines.push('');
+  lines.push('ให้ใช้ตัวอย่างเหล่านี้เป็น "วัตถุดิบทางเลือก" ในการเขียน');
+  lines.push('อาจเลือกบางข้อ ปรับรายละเอียด หรือเสนอกิจกรรมที่คล้ายกัน');
+  lines.push(
+    'แต่ทุกกิจกรรมที่ใช้ต้องมีรายละเอียด: ชื่อกิจกรรม · สถานที่/กลุ่มเป้าหมาย · ความถี่หรือระยะเวลา · ตัวเลขที่คาดการณ์',
+  );
+  lines.push('[END_EXAMPLES]');
+  return lines.join('\n');
 }

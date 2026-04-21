@@ -30,7 +30,16 @@ describe('DocumentAnalysisService system prompt', () => {
     // and does not depend on the repositories or the usage-quota service.
     const stubRepo = {} as any;
     const stubQuota = {} as any;
-    service = new DocumentAnalysisService(stubRepo, stubRepo, stubQuota);
+    // Wave 37 N2 — 4th constructor dep (AiUsageLogsService) added for
+    // rich-detail logging. Stubbed here because this test reads
+    // systemPrompt only and never invokes any logging path.
+    const stubAiUsageLogs = {} as any;
+    service = new DocumentAnalysisService(
+      stubRepo,
+      stubRepo,
+      stubQuota,
+      stubAiUsageLogs,
+    );
     // Access private readonly field for assertion purposes.
     prompt = (service as any).systemPrompt as string;
   });

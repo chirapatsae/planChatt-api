@@ -1,12 +1,20 @@
 import {
+  Inject,
   Injectable,
   InternalServerErrorException,
   BadRequestException,
   HttpException,
   Logger,
+  forwardRef,
 } from '@nestjs/common';
 import { OpenAI } from 'openai';
 import { AiUsageQuotasService } from 'src/ai-usage-quotas/ai-usage-quotas.service';
+// Wave 36 N2 — rich detail logging. One write per LLM call; isolated
+// in try/catch so logging failure NEVER aborts the user-facing AI
+// response. §17.3 audit separation: bare UUID `targetId`, no FK.
+import { AiUsageLogsService } from 'src/ai-usage-logs/ai-usage-logs.service';
+import { composeSummaryTh } from 'src/ai-usage-logs/summary-th.util';
+import { sanitizeRequestPayload } from 'src/ai-usage-logs/sanitize-request-payload.util';
 import {
   GenerateProjectDto,
   RegenerateFieldDto,
@@ -33,7 +41,10 @@ import { resolveBudgetFloor } from './budget/budget-rules';
 // user-controlled text stays inside USER_INPUT delimiters per §17.9;
 // output shape constrained by §16.5 classification invariant.
 import { IssueCriteriaRegistryService } from './criteria/issue-criteria-registry.service';
-import { composeCriteriaContextBlock } from './criteria/compose-criteria-context';
+import {
+  composeCriteriaContextBlock,
+  composeExamplesSection,
+} from './criteria/compose-criteria-context';
 import {
   CriteriaEvaluationPayload,
   CriterionHint,
@@ -151,10 +162,35 @@ export class AiService {
     // Gated to ISSUE_BASED at call site so STRATEGY_BASED path remains
     // byte-identical. Advisory per §17.2 (TOOL-BEHAVIOR gate only).
     private readonly feasibilityGate: FeasibilityGateService,
+    // Wave 36 N2 — detail-level AI usage logger. forwardRef to permit
+    // any future cycle without breaking module construction order.
+    @Inject(forwardRef(() => AiUsageLogsService))
+    private readonly aiUsageLogsService: AiUsageLogsService,
   ) {
     this.openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
     });
+  }
+
+  /**
+   * Wave 36 N2 — best-effort rich-detail write to `ai_usage_logs`.
+   *
+   * Failure discipline: any error inside this helper is caught and
+   * logged at WARN level. It MUST NEVER throw into the caller so a
+   * transient DB / serialization issue cannot break the user-facing
+   * AI response path. §17.2 keeps logging advisory; §17.3 mandates
+   * audit separation, so no `tracking_status` is ever touched here.
+   */
+  private async writeAiUsageDetailLog(
+    dto: Parameters<AiUsageLogsService['create']>[0],
+  ): Promise<void> {
+    try {
+      await this.aiUsageLogsService.create(dto);
+    } catch (err) {
+      this.logger.warn(
+        `[ai-usage-log] write failed endpoint=${dto.endpoint ?? '?'}: ${err instanceof Error ? err.message : err}`,
+      );
+    }
   }
 
   async generateProjectDetail(dto: GenerateProjectDto, userId: string) {
@@ -207,9 +243,21 @@ export class AiService {
           // Wave 28 N1 — thread sub-type hint + user input into the
           // composer so the `[SUB_TYPE_SCOPE]` anti-mix section emits
           // when resolvable. Invalid codes are dropped silently.
+          //
+          // Wave 39 N2 — compose `[EXAMPLES]` block and thread it into
+          // the composer via `opts.examplesBlock`. The composer positions
+          // it deterministically AFTER `[SUB_TYPE_SCOPE]` and BEFORE
+          // `[CRITERIA]`. Returns '' when no sub-type resolves OR the
+          // sub-type has no `exampleActivities`, in which case the block
+          // is OMITTED from the composed system prompt.
+          const examplesBlock = composeExamplesSection(
+            matchedRule,
+            dto.subTypeCode,
+          );
           criteriaBlock = composeCriteriaContextBlock(matchedRule, {
             subTypeCode: dto.subTypeCode,
             userInputText: dto.userPrompt,
+            examplesBlock,
           });
           // §17 logging discipline — log registry metadata ONLY, NEVER
           // user-supplied content or composed prompt text.
@@ -303,6 +351,12 @@ export class AiService {
         const latNum = parseFloat(dto.startLat ?? '');
         const lngNum = parseFloat(dto.startLng ?? '');
         if (Number.isFinite(latNum) && Number.isFinite(lngNum)) {
+          // Wave 36 N2 — thread quota binding through ClassifyInput so
+          // the classifier can stamp `aiUsageQuotaId` on its detail
+          // row. Fail-open per §17.2: if lookup returns null, classify
+          // still runs and the log row is written without quota FK.
+          const classifierQuotaId =
+            await this.aiUsageQuotasService.findQuotaIdByUserId(userId);
           landUseHint = await this.landUseClassifier.classify({
             lat: latNum,
             lng: lngNum,
@@ -314,6 +368,7 @@ export class AiService {
                 }
               : null,
             subTypeCode: dto.subTypeCode,
+            aiUsageQuotaId: classifierQuotaId ?? undefined,
           });
           if (landUseHint) {
             // §17 logging discipline — metadata only, no user prose.
@@ -466,6 +521,7 @@ export class AiService {
       );
     }
 
+    const startTime = Date.now();
     try {
       const completion = await this.openai.chat.completions.create({
         model: 'gpt-4o',
@@ -476,15 +532,17 @@ export class AiService {
           { role: 'user', content: mainPrompt },
         ],
       });
+      const durationMs = Date.now() - startTime;
 
-      // Calculate and deduct cost
+      // Calculate and deduct cost. Wave 36 N2: metadata arg intentionally
+      // omitted so `checkAndLogUsage` does NOT write a bare log row —
+      // the rich-detail write below is now the single source of truth
+      // for `ai_usage_logs` entries (single-row discipline).
+      let costThb = 0;
       if (completion.usage) {
         const costUsd = calculateAiCost('gpt-4o', completion.usage);
-        await this.aiUsageQuotasService.checkAndLogUsage(userId, costUsd, {
-          usageType: 'PROJECT_GENERATION',
-          inputTokens: completion.usage.prompt_tokens,
-          outputTokens: completion.usage.completion_tokens,
-        });
+        costThb = costUsd * 34;
+        await this.aiUsageQuotasService.checkAndLogUsage(userId, costUsd);
       }
 
       if (dto.contextQuality) {
@@ -492,6 +550,54 @@ export class AiService {
           `[AI-Telemetry] userId=${userId} contextQuality=${dto.contextQuality} usageType=PROJECT_GENERATION`,
         );
       }
+
+      // Wave 36 N2 — rich-detail log. User prose (`userPrompt`) is
+      // stripped by `sanitizeRequestPayload` before persistence; only
+      // `userPromptLength` survives. Failure is swallowed inside the
+      // helper (§17.2 advisory).
+      const rawContent = completion.choices[0]?.message?.content ?? '';
+      const quotaId = await this.aiUsageQuotasService.findQuotaIdByUserId(userId);
+      await this.writeAiUsageDetailLog({
+        usageType: 'PROJECT_GENERATION',
+        modelName: 'gpt-4o',
+        inputTokens: completion.usage?.prompt_tokens ?? 0,
+        outputTokens: completion.usage?.completion_tokens ?? 0,
+        inputTextLength: (systemPrompt?.length ?? 0) + (mainPrompt?.length ?? 0),
+        outputTextLength: rawContent.length,
+        costBaht: costThb,
+        aiUsageQuotaId: quotaId ?? undefined,
+        endpoint: 'generate-project-detail',
+        summaryTh: composeSummaryTh({
+          endpoint: 'generate-project-detail',
+          reportFormat: dto.reportFormat,
+        }),
+        requestPayload: sanitizeRequestPayload({
+          reportFormat: dto.reportFormat,
+          subTypeCode: dto.subTypeCode,
+          organizationType: dto.organizationType,
+          startLat: dto.startLat,
+          startLng: dto.startLng,
+          developmentIssueId: dto.developmentIssueId,
+          developmentIssueName: dto.developmentIssueName,
+          contextQuality: dto.contextQuality,
+          // Deny-listed fields — sanitizer strips these to *Length only.
+          userPrompt: dto.userPrompt ?? '',
+        }),
+        responsePayload: {
+          hasContent: Boolean(rawContent),
+          contentLength: rawContent.length,
+          geoFeatureResolved: Boolean(geoFeature),
+          geoAnalysisLevel: geoAnalysis?.conflictLevel ?? null,
+          adminBoundaryResolved: Boolean(adminBoundary),
+          landUsePrimaryUse: landUseHint?.primaryUse ?? null,
+          feasibilitySeverity: feasibility?.severity ?? null,
+        },
+        targetId: undefined,
+        targetKind: 'none',
+        actorWorkHistoryId: undefined,
+        durationMs,
+        error: undefined,
+      });
 
       return {
         content: completion.choices[0].message.content,
@@ -523,6 +629,38 @@ export class AiService {
         ...(feasibility ? { feasibility } : {}),
       };
     } catch (error) {
+      // Wave 36 N2 — persist an error-path row so the detail view
+      // surfaces failures too. Helper swallows its own exceptions so
+      // the existing error-rethrow below is unaffected.
+      const durationMs = Date.now() - startTime;
+      const quotaId = await this.aiUsageQuotasService.findQuotaIdByUserId(userId);
+      await this.writeAiUsageDetailLog({
+        usageType: 'PROJECT_GENERATION',
+        modelName: 'gpt-4o',
+        inputTokens: 0,
+        outputTokens: 0,
+        inputTextLength: (systemPrompt?.length ?? 0) + (mainPrompt?.length ?? 0),
+        outputTextLength: 0,
+        costBaht: 0,
+        aiUsageQuotaId: quotaId ?? undefined,
+        endpoint: 'generate-project-detail',
+        summaryTh: composeSummaryTh({
+          endpoint: 'generate-project-detail',
+          reportFormat: dto.reportFormat,
+        }),
+        requestPayload: sanitizeRequestPayload({
+          reportFormat: dto.reportFormat,
+          subTypeCode: dto.subTypeCode,
+          organizationType: dto.organizationType,
+          userPrompt: dto.userPrompt ?? '',
+        }),
+        responsePayload: undefined,
+        durationMs,
+        error:
+          error instanceof Error
+            ? `${error.name}: ${error.message}`.slice(0, 500)
+            : String(error).slice(0, 500),
+      });
       if (error instanceof HttpException) {
         throw error;
       }
@@ -636,19 +774,32 @@ export class AiService {
 [ชื่อโครงการที่เหมาะสมและสอดคล้องกับแผนงาน ยุทธศาสตร์ และกลยุทธ์ รวมถึงบริบทพื้นที่ ไม่เกิน 100 ตัวอักษร ชื่อสั้นกระชับ]
 
 **วัตถุประสงค์:**
-[วัตถุประสงค์ของโครงการที่ชัดเจน ครอบคลุม และมีรายละเอียดเชิงลึก 7–10 ประโยค (อย่างน้อย 180 คำ) โดยต้องครอบคลุมหัวข้อต่อไปนี้ให้ครบ:
-- ประโยคที่ 1–2: ระบุวัตถุประสงค์หลักและวัตถุประสงค์รอง พร้อมเป้าประสงค์เชิงลึก
-- ประโยคที่ 3–4: อธิบายเหตุผล ที่มา และความจำเป็นของโครงการ เชื่อมโยงกับบริบทพื้นที่จริง (ตำบล/อำเภอ) และประเด็นการพัฒนาที่เลือก
-- ประโยคที่ 5–6: บอกหลักการและแนวทางการดำเนินงาน ระบุกลุ่มเป้าหมายทางตรง/ทางอ้อม และขอบเขตพื้นที่
-- ประโยคที่ 7–8: ระบุประเด็นสำคัญที่ต้องการบรรลุและผลลัพธ์ที่คาดหวังในเชิงคุณภาพ
-- ประโยคที่ 9–10: เชื่อมโยงกับนโยบาย/ยุทธศาสตร์ในระดับท้องถิ่น จังหวัด หรือชาติ ที่เกี่ยวข้อง
-ใช้ภาษาราชการไทยที่สละสลวย มีความเป็นเหตุเป็นผล และอ่านแล้วเห็นภาพชัดเจนว่าโครงการจะทำอะไร เพื่อใคร เพราะอะไร]
+[ให้เขียน "วัตถุประสงค์" ตาม checklist ต่อไปนี้ (ประมาณ 7-10 ประโยค รวม ≥ 180 คำ):
+✓ ระบุวัตถุประสงค์หลัก 1 ข้อ + วัตถุประสงค์รอง 1-2 ข้อ
+✓ ระบุกิจกรรมเฉพาะเจาะจงอย่างน้อย 3 กิจกรรม (ชื่อกิจกรรม · สถานที่ · ความถี่หรือจำนวนครั้ง)
+✓ ระบุกลุ่มเป้าหมายทางตรงและทางอ้อม พร้อมตัวเลขประมาณการผู้ได้รับประโยชน์
+✓ ระบุระยะเวลาดำเนินโครงการ (เดือน/ปี เริ่ม–สิ้นสุด)
+✓ ระบุหน่วยงานหรือผู้ประสานงานที่เกี่ยวข้อง
+✓ ห้ามเขียนลอยๆ เช่น "ส่งเสริม...", "สนับสนุน..." โดยไม่มีรายละเอียด — ต้องระบุว่า "ส่งเสริมอะไร · ที่ไหน · กับใคร · อย่างไร"
+ใช้ภาษาราชการไทยที่สละสลวย อ่านแล้วเห็นภาพชัดเจนว่าโครงการจะทำอะไร เพื่อใคร เพราะอะไร ถ้าข้อมูลไม่เพียงพอให้เขียน "ไม่ระบุ" แทนการเดา]
 
 **เป้าหมาย:**
-[เป้าหมายของโครงการที่วัดผลได้ 5–7 ประโยค ที่ระบุเป้าหมายเชิงผลลัพธ์อย่างชัดเจน ต้องรวมตัวเลขหรือเกณฑ์วัดผลที่จับต้องได้ ระบุระยะเวลาดำเนินงานอย่างชัดเจน ครอบคลุมกลุ่มเป้าหมายที่เกี่ยวข้องทั้งทางตรงและทางอ้อม และระบุขอบเขตพื้นที่ดำเนินงาน]
+[ให้เขียน "เป้าหมาย" ตาม checklist ต่อไปนี้ (ประมาณ 5-7 ประโยค):
+✓ ระบุตัวเลขเป้าหมายที่วัดผลได้ เช่น จำนวนผู้เข้าร่วม, พื้นที่ครอบคลุม, ระยะทาง, จำนวนครั้ง
+✓ ระบุตัวชี้วัดความสำเร็จที่วัดได้ พร้อมค่าฐาน (baseline) และค่าเป้าหมาย (target)
+✓ ระบุกลุ่มผู้ได้รับประโยชน์ทั้งทางตรงและทางอ้อม พร้อมจำนวนประมาณการ
+✓ ระบุระยะเวลาการวัดผล (เช่น ภายใน 1 ปี / เมื่อสิ้นสุดโครงการ / ทุก 6 เดือน)
+✓ ระบุขอบเขตพื้นที่ดำเนินงานอย่างชัดเจน
+ห้ามใช้คำกว้างๆ แบบ "เพิ่มขึ้น" "ดีขึ้น" โดยไม่มีตัวเลขและระยะเวลา ถ้าข้อมูลไม่เพียงพอให้เขียน "ไม่ระบุ" แทนการเดา]
 
 **ผลที่คาดว่าจะได้รับ:**
-[ผลลัพธ์ที่คาดหวังจากโครงการ 5–7 ประโยค ต้องแยกผลประโยชน์ที่มีต่อผู้ได้รับประโยชน์ทางตรงและทางอ้อมอย่างชัดเจน ครอบคลุมทั้งผลลัพธ์ระยะสั้น ระยะกลาง และระยะยาว อธิบายผลกระทบต่อชุมชน/พื้นที่/กลุ่มเป้าหมาย ทั้งด้านเศรษฐกิจ สังคม สิ่งแวดล้อม หรือคุณภาพชีวิต พร้อมรายละเอียดของผลประโยชน์ที่จะเกิดขึ้นอย่างเป็นรูปธรรม]${budgetClause}
+[ให้เขียน "ผลที่คาดว่าจะได้รับ" ตาม checklist ต่อไปนี้ (ประมาณ 5-7 ประโยค):
+✓ ระบุกลไกที่ชัดเจนในการสร้างผลลัพธ์ เช่น การจัดเวิร์กช็อป · การอบรม · การติดตั้งอุปกรณ์ · การสร้างเครือข่าย — ห้ามระบุเพียง "ประชาชนได้รับประโยชน์" โดยไม่บอกกลไก
+✓ แยกผลประโยชน์ทางตรง (direct) และทางอ้อม (indirect)
+✓ ระบุระยะเวลาที่คาดว่าจะเห็นผล (ระยะสั้น / ระยะกลาง / ระยะยาว)
+✓ ครอบคลุมผลกระทบเชิงเศรษฐกิจ สังคม สิ่งแวดล้อม หรือคุณภาพชีวิต (อย่างน้อย 2 มิติ)
+✓ ระบุตัวชี้วัดความสำเร็จที่สามารถใช้ยืนยันผลได้
+ห้ามเขียนผลลัพธ์ที่ไม่มีกลไกอธิบาย เช่น "ชุมชนเข้มแข็ง" โดยไม่บอกว่า "ผ่านกิจกรรม X ทำให้ Y" ถ้าข้อมูลไม่เพียงพอให้เขียน "ไม่ระบุ" แทนการเดา]${budgetClause}
 
 **ตัวชี้วัด:**
 [ตัวชี้วัดความสำเร็จที่วัดผลได้ 4–6 ประโยค ระบุตัวชี้วัดเชิงปริมาณและคุณภาพ พร้อมเป้าหมายตัวเลขหรือร้อยละที่ชัดเจน ระบุค่าฐาน (baseline) และค่าเป้าหมาย (target) ของตัวชี้วัด อธิบายวิธีการวัดและแหล่งข้อมูล และครอบคลุมทั้งตัวชี้วัดผลผลิต (output) และผลลัพธ์ (outcome)]
@@ -1026,19 +1177,32 @@ ${formatRubricForGenerator({ isIssueBased: false })}
 [ชื่อโครงการที่เหมาะสมและสอดคล้องกับประเด็นการพัฒนาและบริบทพื้นที่ ไม่เกิน 100 ตัวอักษร ชื่อสั้นกระชับ]
 
 **วัตถุประสงค์:**
-[วัตถุประสงค์ของโครงการที่ชัดเจน ครอบคลุม และมีรายละเอียดเชิงลึก 7–10 ประโยค (อย่างน้อย 180 คำ) โดยต้องครอบคลุมหัวข้อต่อไปนี้ให้ครบ:
-- ประโยคที่ 1–2: ระบุวัตถุประสงค์หลักและวัตถุประสงค์รอง พร้อมเป้าประสงค์เชิงลึก
-- ประโยคที่ 3–4: อธิบายเหตุผล ที่มา และความจำเป็นของโครงการ เชื่อมโยงกับบริบทพื้นที่จริง (ตำบล/อำเภอ) และประเด็นการพัฒนาที่เลือก
-- ประโยคที่ 5–6: บอกหลักการและแนวทางการดำเนินงาน ระบุกลุ่มเป้าหมายทางตรง/ทางอ้อม และขอบเขตพื้นที่
-- ประโยคที่ 7–8: ระบุประเด็นสำคัญที่ต้องการบรรลุและผลลัพธ์ที่คาดหวังในเชิงคุณภาพ
-- ประโยคที่ 9–10: เชื่อมโยงกับนโยบาย/ยุทธศาสตร์ในระดับท้องถิ่น จังหวัด หรือชาติ ที่เกี่ยวข้อง
-ใช้ภาษาราชการไทยที่สละสลวย มีความเป็นเหตุเป็นผล และอ่านแล้วเห็นภาพชัดเจนว่าโครงการจะทำอะไร เพื่อใคร เพราะอะไร]
+[ให้เขียน "วัตถุประสงค์" ตาม checklist ต่อไปนี้ (ประมาณ 7-10 ประโยค รวม ≥ 180 คำ):
+✓ ระบุวัตถุประสงค์หลัก 1 ข้อ + วัตถุประสงค์รอง 1-2 ข้อ
+✓ ระบุกิจกรรมเฉพาะเจาะจงอย่างน้อย 3 กิจกรรม (ชื่อกิจกรรม · สถานที่ · ความถี่หรือจำนวนครั้ง)
+✓ ระบุกลุ่มเป้าหมายทางตรงและทางอ้อม พร้อมตัวเลขประมาณการผู้ได้รับประโยชน์
+✓ ระบุระยะเวลาดำเนินโครงการ (เดือน/ปี เริ่ม–สิ้นสุด)
+✓ ระบุหน่วยงานหรือผู้ประสานงานที่เกี่ยวข้อง
+✓ ห้ามเขียนลอยๆ เช่น "ส่งเสริม...", "สนับสนุน..." โดยไม่มีรายละเอียด — ต้องระบุว่า "ส่งเสริมอะไร · ที่ไหน · กับใคร · อย่างไร"
+ใช้ภาษาราชการไทยที่สละสลวย อ่านแล้วเห็นภาพชัดเจนว่าโครงการจะทำอะไร เพื่อใคร เพราะอะไร ถ้าข้อมูลไม่เพียงพอให้เขียน "ไม่ระบุ" แทนการเดา]
 
 **เป้าหมาย:**
-[เป้าหมายของโครงการที่วัดผลได้ 5–7 ประโยค ที่ระบุเป้าหมายเชิงผลลัพธ์อย่างชัดเจน ต้องรวมตัวเลขหรือเกณฑ์วัดผลที่จับต้องได้ ระบุระยะเวลาดำเนินงานอย่างชัดเจน ครอบคลุมกลุ่มเป้าหมายที่เกี่ยวข้องทั้งทางตรงและทางอ้อม และระบุขอบเขตพื้นที่ดำเนินงาน]
+[ให้เขียน "เป้าหมาย" ตาม checklist ต่อไปนี้ (ประมาณ 5-7 ประโยค):
+✓ ระบุตัวเลขเป้าหมายที่วัดผลได้ เช่น จำนวนผู้เข้าร่วม, พื้นที่ครอบคลุม, ระยะทาง, จำนวนครั้ง
+✓ ระบุตัวชี้วัดความสำเร็จที่วัดได้ พร้อมค่าฐาน (baseline) และค่าเป้าหมาย (target)
+✓ ระบุกลุ่มผู้ได้รับประโยชน์ทั้งทางตรงและทางอ้อม พร้อมจำนวนประมาณการ
+✓ ระบุระยะเวลาการวัดผล (เช่น ภายใน 1 ปี / เมื่อสิ้นสุดโครงการ / ทุก 6 เดือน)
+✓ ระบุขอบเขตพื้นที่ดำเนินงานอย่างชัดเจน
+ห้ามใช้คำกว้างๆ แบบ "เพิ่มขึ้น" "ดีขึ้น" โดยไม่มีตัวเลขและระยะเวลา ถ้าข้อมูลไม่เพียงพอให้เขียน "ไม่ระบุ" แทนการเดา]
 
 **ผลที่คาดว่าจะได้รับ:**
-[ผลลัพธ์ที่คาดหวังจากโครงการ 5–7 ประโยค ต้องแยกผลประโยชน์ที่มีต่อผู้ได้รับประโยชน์ทางตรงและทางอ้อมอย่างชัดเจน ครอบคลุมทั้งผลลัพธ์ระยะสั้น ระยะกลาง และระยะยาว อธิบายผลกระทบต่อชุมชน/พื้นที่/กลุ่มเป้าหมาย ทั้งด้านเศรษฐกิจ สังคม สิ่งแวดล้อม หรือคุณภาพชีวิต พร้อมรายละเอียดของผลประโยชน์ที่จะเกิดขึ้นอย่างเป็นรูปธรรม]${budgetClause}
+[ให้เขียน "ผลที่คาดว่าจะได้รับ" ตาม checklist ต่อไปนี้ (ประมาณ 5-7 ประโยค):
+✓ ระบุกลไกที่ชัดเจนในการสร้างผลลัพธ์ เช่น การจัดเวิร์กช็อป · การอบรม · การติดตั้งอุปกรณ์ · การสร้างเครือข่าย — ห้ามระบุเพียง "ประชาชนได้รับประโยชน์" โดยไม่บอกกลไก
+✓ แยกผลประโยชน์ทางตรง (direct) และทางอ้อม (indirect)
+✓ ระบุระยะเวลาที่คาดว่าจะเห็นผล (ระยะสั้น / ระยะกลาง / ระยะยาว)
+✓ ครอบคลุมผลกระทบเชิงเศรษฐกิจ สังคม สิ่งแวดล้อม หรือคุณภาพชีวิต (อย่างน้อย 2 มิติ)
+✓ ระบุตัวชี้วัดความสำเร็จที่สามารถใช้ยืนยันผลได้
+ห้ามเขียนผลลัพธ์ที่ไม่มีกลไกอธิบาย เช่น "ชุมชนเข้มแข็ง" โดยไม่บอกว่า "ผ่านกิจกรรม X ทำให้ Y" ถ้าข้อมูลไม่เพียงพอให้เขียน "ไม่ระบุ" แทนการเดา]${budgetClause}
 
 ${formatRubricForGenerator({ isIssueBased: true })}
 
@@ -1226,6 +1390,7 @@ ${formatRubricForGenerator({ isIssueBased: true })}
                 - ภาษาต้องเป็นภาษาไทยที่อ่านเข้าใจง่าย ไม่มี syntax หรือ token ของ prompt ในเนื้อหา
                 `;
 
+    const startTime = Date.now();
     try {
       const completion = await this.openai.chat.completions.create({
         model: 'gpt-4o',
@@ -1243,16 +1408,62 @@ ${formatRubricForGenerator({ isIssueBased: true })}
           },
         ],
       });
+      const durationMs = Date.now() - startTime;
 
-      // Calculate and deduct cost
+      // Wave 36 N2 — metadata arg omitted; rich-detail write below is
+      // the single source of truth for `ai_usage_logs`.
+      let costThb = 0;
       if (completion.usage) {
         const costUsd = calculateAiCost('gpt-4o', completion.usage);
-        await this.aiUsageQuotasService.checkAndLogUsage(userId, costUsd, {
-          usageType: 'FIELD_REGENERATION',
-          inputTokens: completion.usage.prompt_tokens,
-          outputTokens: completion.usage.completion_tokens,
-        });
+        costThb = costUsd * 34;
+        await this.aiUsageQuotasService.checkAndLogUsage(userId, costUsd);
       }
+
+      const rawNewContent = completion.choices[0]?.message?.content ?? '';
+
+      // Wave 36 N2 — detail log. User's `modificationPrompt` is a
+      // field inside `requestPayload`; sanitizer DOES NOT currently
+      // strip `modificationPrompt` (not in deny-list), so we pass a
+      // length substitute manually. Same treatment for project title.
+      const quotaId = await this.aiUsageQuotasService.findQuotaIdByUserId(userId);
+      await this.writeAiUsageDetailLog({
+        usageType: 'FIELD_REGENERATION',
+        modelName: 'gpt-4o',
+        inputTokens: completion.usage?.prompt_tokens ?? 0,
+        outputTokens: completion.usage?.completion_tokens ?? 0,
+        inputTextLength: prompt.length,
+        outputTextLength: rawNewContent.length,
+        costBaht: costThb,
+        aiUsageQuotaId: quotaId ?? undefined,
+        endpoint: 'regenerate-one-field',
+        summaryTh: composeSummaryTh({
+          endpoint: 'regenerate-one-field',
+          fieldName: targetFieldName,
+          title: currentProjectData?.title,
+        }),
+        requestPayload: sanitizeRequestPayload({
+          reportFormat: dto.reportFormat,
+          fieldToRegenerate: dto.fieldToRegenerate,
+          fieldNameTh: targetFieldName,
+          modificationPromptLength:
+            typeof dto.modificationPrompt === 'string'
+              ? dto.modificationPrompt.length
+              : 0,
+          hasClassification: isIssueBased
+            ? Boolean(developmentIssueName)
+            : Boolean(strategy && tactic && plan),
+          currentTitleLength:
+            typeof currentProjectData?.title === 'string'
+              ? currentProjectData.title.length
+              : 0,
+        }),
+        responsePayload: {
+          hasContent: Boolean(rawNewContent),
+          newContentLength: rawNewContent.length,
+        },
+        targetKind: 'none',
+        durationMs,
+      });
 
       if (completion.choices[0].message?.content) {
         return {
@@ -1264,6 +1475,33 @@ ${formatRubricForGenerator({ isIssueBased: true })}
         'AI response is invalid or incomplete.',
       );
     } catch (error) {
+      const durationMs = Date.now() - startTime;
+      const quotaId = await this.aiUsageQuotasService.findQuotaIdByUserId(userId);
+      await this.writeAiUsageDetailLog({
+        usageType: 'FIELD_REGENERATION',
+        modelName: 'gpt-4o',
+        inputTokens: 0,
+        outputTokens: 0,
+        inputTextLength: prompt.length,
+        outputTextLength: 0,
+        costBaht: 0,
+        aiUsageQuotaId: quotaId ?? undefined,
+        endpoint: 'regenerate-one-field',
+        summaryTh: composeSummaryTh({
+          endpoint: 'regenerate-one-field',
+          fieldName: targetFieldName,
+          title: currentProjectData?.title,
+        }),
+        requestPayload: sanitizeRequestPayload({
+          reportFormat: dto.reportFormat,
+          fieldToRegenerate: dto.fieldToRegenerate,
+        }),
+        durationMs,
+        error:
+          error instanceof Error
+            ? `${error.name}: ${error.message}`.slice(0, 500)
+            : String(error).slice(0, 500),
+      });
       if (error instanceof HttpException) {
         throw error;
       }
@@ -1511,6 +1749,7 @@ ${instructions}`.trim();
       },
     };
 
+    const startTime = Date.now();
     try {
       const completion = await this.openai.chat.completions.create({
         model: 'gpt-4o',
@@ -1522,6 +1761,7 @@ ${instructions}`.trim();
           { role: 'user', content: userPrompt },
         ],
       });
+      const durationMs = Date.now() - startTime;
 
       const content = completion.choices[0].message?.content;
       if (!content) {
@@ -1530,18 +1770,96 @@ ${instructions}`.trim();
         );
       }
 
-      // Calculate and Log Usage
+      // Wave 36 N2 — metadata omitted; rich-detail write below.
+      let costThb = 0;
       if (completion.usage) {
         const costUsd = calculateAiCost('gpt-4o', completion.usage);
-        await this.aiUsageQuotasService.checkAndLogUsage(userId, costUsd, {
-          usageType: 'SMART_APPROVE_ANALYSIS',
-          inputTokens: completion.usage.prompt_tokens,
-          outputTokens: completion.usage.completion_tokens,
-        });
+        costThb = costUsd * 34;
+        await this.aiUsageQuotasService.checkAndLogUsage(userId, costUsd);
       }
+
+      // Wave 36 N2 — rich-detail log. Smart-approve endpoint is NOT
+      // in the four "public" summary endpoints, but we still persist
+      // a detail row so the admin view observes it. Falls through
+      // to the default summary label.
+      const quotaId = await this.aiUsageQuotasService.findQuotaIdByUserId(userId);
+      let parsedScores: Record<string, string> | null = null;
+      try {
+        const parsed = JSON.parse(content);
+        parsedScores = {
+          overallResult: parsed?.summary?.overallResult ?? '',
+        };
+      } catch {
+        parsedScores = null;
+      }
+      await this.writeAiUsageDetailLog({
+        usageType: 'SMART_APPROVE_ANALYSIS',
+        modelName: 'gpt-4o',
+        inputTokens: completion.usage?.prompt_tokens ?? 0,
+        outputTokens: completion.usage?.completion_tokens ?? 0,
+        inputTextLength: (systemPrompt?.length ?? 0) + (userPrompt?.length ?? 0),
+        outputTextLength: content.length,
+        costBaht: costThb,
+        aiUsageQuotaId: quotaId ?? undefined,
+        endpoint: 'pre-submit-review',
+        summaryTh: composeSummaryTh({
+          endpoint: 'pre-submit-review',
+          title: dto.project?.title,
+        }),
+        requestPayload: sanitizeRequestPayload({
+          strategyName: dto.strategyName,
+          tacticName: dto.tacticName,
+          planName: dto.planName,
+          titleLength:
+            typeof dto.project?.title === 'string'
+              ? dto.project.title.length
+              : 0,
+          // Deny-listed fields — sanitizer strips these to *Length only.
+          additionalContext: dto.additionalContext ?? '',
+          objective: dto.project?.objective ?? '',
+          description: '',
+        }),
+        responsePayload: parsedScores
+          ? {
+              overallResult: parsedScores.overallResult,
+              contentLength: content.length,
+            }
+          : { contentLength: content.length },
+        targetId: dto.projectId ?? undefined,
+        targetKind: dto.projectId ? 'project_group' : 'none',
+        durationMs,
+      });
 
       return JSON.parse(content);
     } catch (error) {
+      const durationMs = Date.now() - startTime;
+      const quotaId = await this.aiUsageQuotasService.findQuotaIdByUserId(userId);
+      await this.writeAiUsageDetailLog({
+        usageType: 'SMART_APPROVE_ANALYSIS',
+        modelName: 'gpt-4o',
+        inputTokens: 0,
+        outputTokens: 0,
+        inputTextLength: (systemPrompt?.length ?? 0) + (userPrompt?.length ?? 0),
+        outputTextLength: 0,
+        costBaht: 0,
+        aiUsageQuotaId: quotaId ?? undefined,
+        endpoint: 'pre-submit-review',
+        summaryTh: composeSummaryTh({
+          endpoint: 'pre-submit-review',
+          title: dto.project?.title,
+        }),
+        requestPayload: sanitizeRequestPayload({
+          strategyName: dto.strategyName,
+          additionalContext: dto.additionalContext ?? '',
+        }),
+        targetId: dto.projectId ?? undefined,
+        targetKind: dto.projectId ? 'project_group' : 'none',
+        durationMs,
+        error:
+          error instanceof Error
+            ? `${error.name}: ${error.message}`.slice(0, 500)
+            : String(error).slice(0, 500),
+      });
       // If it is an HttpException (like Quota exceeded), rethrow it
       if (error instanceof HttpException) {
         throw error;
@@ -1853,6 +2171,7 @@ ${instructions}`.trim();
       'โปรดสร้างคำสั่งสั้นภาษาไทย 5 บรรทัดตามกติกาในข้อความระบบ',
     ].join('\n');
 
+    const startTime = Date.now();
     try {
       const completion = await this.openai.chat.completions.create({
         model: 'gpt-4o-mini',
@@ -1863,6 +2182,7 @@ ${instructions}`.trim();
           { role: 'user', content: userMessage },
         ],
       });
+      const durationMs = Date.now() - startTime;
 
       const raw = completion.choices?.[0]?.message?.content ?? '';
       const usage = completion.usage
@@ -1875,8 +2195,66 @@ ${instructions}`.trim();
 
       const suggestions = this.parsePromptSuggestions(raw, isIssueBased);
 
+      // Wave 36 N2 — detail log. `generatePromptSuggestions` has no
+      // userId in its DTO (invoked from a prompt-builder helper), so
+      // `aiUsageQuotaId` is left undefined. Cost is recorded in baht
+      // on the detail row for ops observability without quota
+      // deduction (existing behavior preserved).
+      await this.writeAiUsageDetailLog({
+        usageType: 'PROMPT_SUGGESTIONS',
+        modelName: 'gpt-4o-mini',
+        inputTokens: usage?.prompt_tokens ?? 0,
+        outputTokens: usage?.completion_tokens ?? 0,
+        inputTextLength: (systemPrompt?.length ?? 0) + (userMessage?.length ?? 0),
+        outputTextLength: raw.length,
+        costBaht: cost * 34,
+        endpoint: 'generate-project-detail',
+        summaryTh: composeSummaryTh({
+          endpoint: 'generate-project-detail',
+          reportFormat: dto.reportFormat,
+        }),
+        requestPayload: sanitizeRequestPayload({
+          reportFormat: dto.reportFormat,
+          strategyName: dto.strategyName,
+          tacticName: dto.tacticName,
+          planName: dto.planName,
+          developmentIssueName: dto.developmentIssueName,
+          amphoeName: dto.amphoeName,
+          organizationName: dto.organizationName,
+        }),
+        responsePayload: {
+          suggestionsCount: suggestions.length,
+          rawLength: raw.length,
+        },
+        targetKind: 'none',
+        durationMs,
+      });
+
       return { suggestions, usage, cost };
     } catch (error) {
+      const durationMs = Date.now() - startTime;
+      await this.writeAiUsageDetailLog({
+        usageType: 'PROMPT_SUGGESTIONS',
+        modelName: 'gpt-4o-mini',
+        inputTokens: 0,
+        outputTokens: 0,
+        inputTextLength: (systemPrompt?.length ?? 0) + (userMessage?.length ?? 0),
+        outputTextLength: 0,
+        costBaht: 0,
+        endpoint: 'generate-project-detail',
+        summaryTh: composeSummaryTh({
+          endpoint: 'generate-project-detail',
+          reportFormat: dto.reportFormat,
+        }),
+        requestPayload: sanitizeRequestPayload({
+          reportFormat: dto.reportFormat,
+        }),
+        durationMs,
+        error:
+          error instanceof Error
+            ? `${error.name}: ${error.message}`.slice(0, 500)
+            : String(error).slice(0, 500),
+      });
       this.logger.warn(
         `generatePromptSuggestions failed, returning empty pool: ${
           error instanceof Error ? error.message : error
@@ -2213,6 +2591,7 @@ ${formatRubricForReviewer({ isIssueBased })}
       },
     };
 
+    const startTime = Date.now();
     try {
       const completion = await this.openai.chat.completions.create({
         model: 'gpt-4o',
@@ -2224,6 +2603,7 @@ ${formatRubricForReviewer({ isIssueBased })}
           { role: 'user', content: userPrompt },
         ],
       });
+      const durationMs = Date.now() - startTime;
 
       const content = completion.choices[0].message?.content;
       if (!content) {
@@ -2232,14 +2612,80 @@ ${formatRubricForReviewer({ isIssueBased })}
         );
       }
 
+      // Wave 36 N2 — metadata omitted; rich-detail write below.
+      let costThb = 0;
       if (completion.usage) {
         const costUsd = calculateAiCost('gpt-4o', completion.usage);
-        await this.aiUsageQuotasService.checkAndLogUsage(userId, costUsd, {
-          usageType: 'PRE_SUBMIT_REVIEW',
-          inputTokens: completion.usage.prompt_tokens,
-          outputTokens: completion.usage.completion_tokens,
-        });
+        costThb = costUsd * 34;
+        await this.aiUsageQuotasService.checkAndLogUsage(userId, costUsd);
       }
+
+      // Wave 36 N2 — rich detail log. Pre-submit review has an owner
+      // `userId` but no target project row (AddProject flow runs
+      // pre-submit BEFORE the row exists). Independent of the Wave 24
+      // `ai_pre_submit_snapshots` write: failure here MUST NOT
+      // rollback the snapshot (each has its own try/catch — §17.3
+      // audit separation).
+      let parsedScore: number | null = null;
+      let parsedLabel: string | null = null;
+      let parsedStrongLen = 0;
+      let suggestionsCount = 0;
+      try {
+        const p = JSON.parse(content);
+        parsedScore = typeof p?.overallScore === 'number' ? p.overallScore : null;
+        parsedLabel =
+          typeof p?.readinessLabel === 'string' ? p.readinessLabel : null;
+        parsedStrongLen =
+          typeof p?.strongPoint === 'string' ? p.strongPoint.length : 0;
+        suggestionsCount = Array.isArray(p?.suggestions)
+          ? p.suggestions.length
+          : 0;
+      } catch {
+        /* tolerate malformed content for log purposes */
+      }
+      const quotaId = await this.aiUsageQuotasService.findQuotaIdByUserId(userId);
+      await this.writeAiUsageDetailLog({
+        usageType: 'PRE_SUBMIT_REVIEW',
+        modelName: 'gpt-4o',
+        inputTokens: completion.usage?.prompt_tokens ?? 0,
+        outputTokens: completion.usage?.completion_tokens ?? 0,
+        inputTextLength: (systemPrompt?.length ?? 0) + (userPrompt?.length ?? 0),
+        outputTextLength: content.length,
+        costBaht: costThb,
+        aiUsageQuotaId: quotaId ?? undefined,
+        endpoint: 'pre-submit-review',
+        summaryTh: composeSummaryTh({
+          endpoint: 'pre-submit-review',
+          title: project?.title,
+        }),
+        requestPayload: sanitizeRequestPayload({
+          reportFormat: dto.reportFormat,
+          subTypeCode: dto.subTypeCode,
+          developmentIssueId: dto.developmentIssueId,
+          developmentIssueName: dto.developmentIssueName,
+          strategyName: dto.strategyName,
+          tacticName: dto.tacticName,
+          planName: dto.planName,
+          hasAttachments: Array.isArray(dto.attachments)
+            ? dto.attachments.length
+            : 0,
+          titleLength:
+            typeof project?.title === 'string' ? project.title.length : 0,
+          // Deny-listed fields — sanitizer strips these to *Length only.
+          additionalContext: dto.additionalContext ?? '',
+          objective: project?.objective ?? '',
+        }),
+        responsePayload: {
+          overallScore: parsedScore,
+          readinessLabel: parsedLabel,
+          strongPointLength: parsedStrongLen,
+          suggestionsCount,
+          contentLength: content.length,
+          matchedRule: Boolean(matchedRule),
+        },
+        targetKind: 'none',
+        durationMs,
+      });
 
       const aiResult = JSON.parse(content) as {
         overallScore: number;
@@ -2304,6 +2750,33 @@ ${formatRubricForReviewer({ isIssueBased })}
         },
       };
     } catch (error) {
+      const durationMs = Date.now() - startTime;
+      const quotaId = await this.aiUsageQuotasService.findQuotaIdByUserId(userId);
+      await this.writeAiUsageDetailLog({
+        usageType: 'PRE_SUBMIT_REVIEW',
+        modelName: 'gpt-4o',
+        inputTokens: 0,
+        outputTokens: 0,
+        inputTextLength: (systemPrompt?.length ?? 0) + (userPrompt?.length ?? 0),
+        outputTextLength: 0,
+        costBaht: 0,
+        aiUsageQuotaId: quotaId ?? undefined,
+        endpoint: 'pre-submit-review',
+        summaryTh: composeSummaryTh({
+          endpoint: 'pre-submit-review',
+          title: project?.title,
+        }),
+        requestPayload: sanitizeRequestPayload({
+          reportFormat: dto.reportFormat,
+          additionalContext: dto.additionalContext ?? '',
+        }),
+        targetKind: 'none',
+        durationMs,
+        error:
+          error instanceof Error
+            ? `${error.name}: ${error.message}`.slice(0, 500)
+            : String(error).slice(0, 500),
+      });
       if (error instanceof HttpException) throw error;
       this.logger.error('generatePreSubmitReview failed:', error);
       throw new InternalServerErrorException(

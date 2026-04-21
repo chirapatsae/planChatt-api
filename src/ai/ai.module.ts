@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AiController } from './ai.controller';
 import { AiService } from './ai.service';
@@ -44,6 +44,11 @@ import { AiPreSubmitSnapshot } from './entities/ai-pre-submit-snapshot.entity';
 import { PreSubmitSnapshotService } from './pre-submit-snapshot.service';
 import { WorkHistoryGovernmentAgencyResponsibility } from 'src/work-history-government-agency-responsibility/entities/work-history-government-agency-responsibility.entity';
 import { AiUsageQuotasModule } from 'src/ai-usage-quotas/ai-usage-quotas.module';
+// Wave 36 N2 — rich detail logging for every LLM call site.
+// Imported via forwardRef to defuse any future cycle when
+// AiUsageLogsModule needs to import from AiModule. One-sided ref is
+// sufficient today because AiUsageLogsModule is a leaf.
+import { AiUsageLogsModule } from 'src/ai-usage-logs/ai-usage-logs.module';
 import { LineageLockModule } from 'src/common/lineage-lock/lineage-lock.module';
 import { BookLockModule } from 'src/common/book-lock/book-lock.module';
 // AI cooldown (CLAUDE.md §17.8) — additive registration, no DB coupling.
@@ -83,6 +88,7 @@ import { IssueCriteriaEvidenceCheckService } from './criteria/issue-criteria-evi
       WorkHistoryGovernmentAgencyResponsibility,
     ]),
     AiUsageQuotasModule,
+    forwardRef(() => AiUsageLogsModule),
     LineageLockModule,
     BookLockModule,
     CriteriaModule,

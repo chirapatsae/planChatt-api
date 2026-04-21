@@ -69,7 +69,12 @@ describe('LandUseClassifierService', () => {
 
   beforeEach(() => {
     mockCreate.mockReset();
-    service = new LandUseClassifierService();
+    // Wave 36 N2 — pass a no-op AiUsageLogsService mock so the
+    // constructor's new injection (detail-log write) is satisfied.
+    // `create` returns any value — behavior is fire-and-forget.
+    service = new LandUseClassifierService({
+      create: jest.fn().mockResolvedValue({}),
+    } as any);
   });
 
   // -------------------------------------------------------------------
