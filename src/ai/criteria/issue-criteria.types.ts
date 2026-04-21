@@ -162,6 +162,27 @@ export interface CriteriaEvaluationPayload {
   issueKey: string;
   results: CriterionResult[];
   overallAlignment: 'aligned' | 'partially-aligned' | 'misaligned';
+  /**
+   * Wave 28 N1 — OPTIONAL advisory metadata used by the FE to highlight
+   * which sub-type / criteria were cited in the rationale. Rides inside
+   * the existing Wave 13 opaque `categories` envelope; it is NOT a new
+   * top-level DTO field and does NOT require a schema migration.
+   *
+   * Validation discipline: payloads that OMIT `rationaleRefs` MUST
+   * validate successfully (backward compatible). Payloads that include
+   * it are advisory-only per §17.2 — the FE MAY use it for chip
+   * highlighting but MUST NOT treat it as a workflow gate.
+   *
+   * Shape is intentionally loose (all fields optional) so the LLM can
+   * populate any subset without triggering §17.9 schema drift. The
+   * service layer MAY additionally sanitize `criterionIds` against the
+   * registry whitelist before returning it to the caller.
+   */
+  rationaleRefs?: {
+    issueKey?: string;
+    subTypeCode?: string;
+    criterionIds?: string[];
+  };
 }
 
 /**

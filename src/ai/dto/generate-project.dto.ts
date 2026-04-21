@@ -35,6 +35,20 @@ export class GenerateProjectDto {
   @IsOptional()
   localAdministrativeOrganizationId?: string;
 
+  /**
+   * Wave 34 N1 — caller's LAO type label (e.g. "เทศบาลนคร",
+   * "องค์การบริหารส่วนตำบล"). When supplied AND matches the
+   * `BUDGET_FLOOR_BY_LAO_TYPE` registry, the prompt composer emits a
+   * budget clause with the resolved floor and the controller clamps the
+   * parsed LLM output defensively. Unrecognised / missing values mean
+   * "no floor" (agency path) — prompt is byte-identical to pre-Wave-34
+   * and envelope returns `budget: null`. §17.2 advisory; §17.11 no role
+   * exemption.
+   */
+  @IsOptional()
+  @IsString()
+  organizationType?: string;
+
   @IsString()
   @IsOptional()
   startLat?: string;
@@ -60,6 +74,18 @@ export class GenerateProjectDto {
   @IsString()
   @IsIn(['full', 'partial', 'minimal'])
   contextQuality?: 'full' | 'partial' | 'minimal';
+
+  /**
+   * Wave 28 N1 — optional clicked sub-type code (e.g. "2.1"). When
+   * supplied AND reportFormat === ISSUE_BASED AND the registry entry
+   * resolves, the prompt composer emits a `[SUB_TYPE_SCOPE]` section
+   * so the LLM stays within the chosen sub-type frame. Invalid or
+   * unmatched values are silently dropped by the composer (§17.9).
+   * Additive; omitting is byte-identical to pre-Wave-28 behavior.
+   */
+  @IsOptional()
+  @IsString()
+  subTypeCode?: string;
 }
 
 // DTO สำหรับข้อมูลโครงการปัจจุบัน (Nested DTO)

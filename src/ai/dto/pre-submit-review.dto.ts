@@ -78,4 +78,16 @@ export class PreSubmitReviewDto {
     aiSummary?: string | null;
     evidenceLink?: string | null;
   }>;
+
+  /**
+   * Wave 28 N1 — optional clicked sub-type code used to tighten the
+   * criteria-aware prompt. When supplied AND the registry matches, the
+   * composer emits a `[SUB_TYPE_SCOPE]` section so the LLM stays within
+   * the chosen sub-type frame. Invalid / unmatched values are silently
+   * dropped by the composer (§17.9). Additive; omitting preserves
+   * pre-Wave-28 prompt output.
+   */
+  @IsString()
+  @IsOptional()
+  subTypeCode?: string;
 }

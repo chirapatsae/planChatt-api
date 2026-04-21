@@ -6,6 +6,25 @@ import { AiContextService } from './ai-context.service';
 import { SmartApproveReferenceService } from './smart-approve-reference.service';
 import { SmartApprovePrecheckService } from './smart-approve-precheck.service';
 import { GeoBoundaryService } from './geo-boundary.service';
+// Wave 29 N1 — deterministic land-use ground-truth lookup for ISSUE_BASED
+// LAO AI generate. Advisory per §17.2; no FK into project tables (§17.3).
+import { GeoFeatureLookupService } from './geo-feature-lookup.service';
+// Wave 31 N2 — deterministic reverse-geocoder (pin -> tambon / amphoe /
+// changwat triple) for NR. Advisory per §17.2; fails open on missing
+// or malformed GeoJSON; no FK into project tables (§17.3).
+import { AdminBoundaryLookupService } from './admin-boundary-lookup.service';
+// Wave 32 N1 — two-LLM chain pre-classifier for ISSUE_BASED LAO AI
+// generate. Advisory per §17.2; in-memory cache only (§17.3); strict
+// schema-validated output (§17.9); structured-only input (§17.9).
+import { LandUseClassifierService } from './land-use-classifier.service';
+// Wave 30 N1 — deterministic feature × project-type conflict engine.
+// Advisory per §17.2; pure, no I/O, no FK into project tables (§17.3).
+import { GeoConflictService } from './conflict/geo-conflict.service';
+// Wave 33.6 N1 — deterministic feasibility gate. Hard-stops AI generation
+// when the (geoFeature, projectType, conflictLevel) triple is physically
+// impossible (e.g. road in a reservoir). TOOL-BEHAVIOR gate per §17.2 —
+// does NOT gate any workflow transition. Pure; no I/O; no persistence.
+import { FeasibilityGateService } from './feasibility/feasibility-gate.service';
 import { CoordinateContextService } from './coordinate-context.service';
 import { Strategy } from 'src/strategy/entities/strategy.entity';
 import { Tactic } from 'src/tactic/entities/tactic.entity';
@@ -74,6 +93,15 @@ import { IssueCriteriaEvidenceCheckService } from './criteria/issue-criteria-evi
     AiContextService,
     SmartApproveReferenceService,
     GeoBoundaryService,
+    GeoFeatureLookupService,
+    // Wave 31 N2 — NR reverse-geocoder for the [ADMIN_CONTEXT] block.
+    AdminBoundaryLookupService,
+    // Wave 32 N1 — land-use pre-classifier (two-LLM chain).
+    LandUseClassifierService,
+    // Wave 30 N1 — conflict engine.
+    GeoConflictService,
+    // Wave 33.6 N1 — feasibility gate (post-conflict short-circuit).
+    FeasibilityGateService,
     CoordinateContextService,
     SmartApprovePrecheckService,
     // AI cooldown wiring. Memory store by default;
