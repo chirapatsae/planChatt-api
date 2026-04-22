@@ -685,17 +685,26 @@ export class AiService {
       budgetFloor?: number | null;
     } = {},
   ): string {
-    // Wave 34 N1 — LAO-type budget clause. Emitted ONLY when a floor is
-    // resolvable (i.e. the caller is a known LAO type). Agency /
-    // unknown types produce a null floor and the clause is OMITTED so
-    // the prompt remains byte-identical to pre-Wave-34 behavior.
+    // Wave 34 N1 + post-Wave-42 fix — budget clause is now ALWAYS
+    // emitted. Two variants:
+    //   (a) LAO with resolvable floor → "ต้องไม่น้อยกว่า {floor} บาท
+    //       ตามเกณฑ์ประเภท อปท." (enforces Wave 34 floor).
+    //   (b) Agency / unknown LAO type → ask LLM to estimate a
+    //       reasonable amount based on project scope, WITHOUT a minimum
+    //       floor. Previously this case omitted the clause entirely,
+    //       which made agency-generated projects land with `budget: null`
+    //       and no FE autofill — user-reported bug fixed here.
     // §17.9 undelimited system content (server-derived, not user text).
+    // §17.2 advisory — the value is a primary form field, not a
+    // workflow gate. §17.11 no role exemption — LAO floor rules apply
+    // uniformly to every LAO caller, and the no-floor variant is the
+    // same prompt regardless of role.
     const budgetFloorLocal =
       typeof budgetOpts.budgetFloor === 'number' ? budgetOpts.budgetFloor : null;
     const budgetClause =
       budgetFloorLocal !== null
         ? `\n\n**งบประมาณ:**\n[ระบุงบประมาณโดยประมาณของโครงการเป็นตัวเลขจำนวนเต็มในหน่วยบาท ต้องไม่น้อยกว่า ${budgetFloorLocal.toLocaleString('en-US')} บาท ตามเกณฑ์ประเภท อปท. "${budgetOpts.organizationType ?? ''}" โดยให้พิจารณาขอบเขตโครงการ (พื้นที่ดำเนินงาน, ผู้ได้รับประโยชน์, ระยะเวลา, ประเภทกิจกรรม) ประกอบกับเกณฑ์ขั้นต่ำ ตอบเฉพาะตัวเลขล้วน เช่น 1500000 ไม่ต้องใส่เครื่องหมาย , หรือหน่วย]`
-        : '';
+        : `\n\n**งบประมาณ:**\n[ประเมินงบประมาณที่เหมาะสมของโครงการเป็นตัวเลขจำนวนเต็มในหน่วยบาท โดยพิจารณาขอบเขตโครงการ (พื้นที่ดำเนินงาน, ผู้ได้รับประโยชน์, ระยะเวลา, ประเภทกิจกรรม, ความซับซ้อนของงาน) ให้เหมาะสมและสมเหตุสมผลกับประเภทและขนาดของโครงการภาครัฐ ตอบเฉพาะตัวเลขล้วน เช่น 1500000 ไม่ต้องใส่เครื่องหมาย , หรือหน่วย]`;
     const contextLines: string[] = [];
 
     if (ctx?.amphoeName) {
@@ -861,17 +870,16 @@ ${formatRubricForGenerator({ isIssueBased: false })}
       budgetFloor?: number | null;
     } = {},
   ): string {
-    // Wave 34 N1 — LAO-type budget clause. See buildStrategyBasedPrompt
-    // for rationale. Agency / unknown types → null floor → clause
-    // omitted → prompt byte-identical to pre-Wave-34. Gate is org type,
-    // NOT reportFormat — a rare STRATEGY_BASED LAO user also emits this
-    // clause from the other builder.
+    // Wave 34 N1 + post-Wave-42 fix — budget clause is now ALWAYS
+    // emitted (see buildIssueBasedPrompt for the full rationale). LAO
+    // with resolvable floor → enforce minimum; agency / unknown LAO
+    // type → ask LLM to estimate based on scope, no floor.
     const budgetFloorLocal =
       typeof budgetOpts.budgetFloor === 'number' ? budgetOpts.budgetFloor : null;
     const budgetClause =
       budgetFloorLocal !== null
         ? `\n\n**งบประมาณ:**\n[ระบุงบประมาณโดยประมาณของโครงการเป็นตัวเลขจำนวนเต็มในหน่วยบาท ต้องไม่น้อยกว่า ${budgetFloorLocal.toLocaleString('en-US')} บาท ตามเกณฑ์ประเภท อปท. "${budgetOpts.organizationType ?? ''}" โดยให้พิจารณาขอบเขตโครงการ (พื้นที่ดำเนินงาน, ผู้ได้รับประโยชน์, ระยะเวลา, ประเภทกิจกรรม) ประกอบกับเกณฑ์ขั้นต่ำ ตอบเฉพาะตัวเลขล้วน เช่น 1500000 ไม่ต้องใส่เครื่องหมาย , หรือหน่วย]`
-        : '';
+        : `\n\n**งบประมาณ:**\n[ประเมินงบประมาณที่เหมาะสมของโครงการเป็นตัวเลขจำนวนเต็มในหน่วยบาท โดยพิจารณาขอบเขตโครงการ (พื้นที่ดำเนินงาน, ผู้ได้รับประโยชน์, ระยะเวลา, ประเภทกิจกรรม, ความซับซ้อนของงาน) ให้เหมาะสมและสมเหตุสมผลกับประเภทและขนาดของโครงการภาครัฐ ตอบเฉพาะตัวเลขล้วน เช่น 1500000 ไม่ต้องใส่เครื่องหมาย , หรือหน่วย]`;
     const contextLines: string[] = [];
 
     // Wave 30 N2 — when the deterministic conflict verdict is present,

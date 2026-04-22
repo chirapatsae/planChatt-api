@@ -154,6 +154,17 @@ export class RegenerateFieldDto {
   @IsOptional()
   developmentIssueName?: string;
 
+  /**
+   * Plan-scoped DevelopmentIssue id (§16.5 ISSUE_BASED). Additive field
+   * mirroring `GenerateProjectDto.developmentIssueId`. Without this the
+   * FE (AiOption.tsx) sends the field and ValidationPipe's
+   * `forbidNonWhitelisted: true` rejects the request with HTTP 400
+   * ("property developmentIssueId should not exist").
+   */
+  @IsString()
+  @IsOptional()
+  developmentIssueId?: string;
+
   @IsString()
   @IsOptional()
   amphoeId?: string;
@@ -161,4 +172,19 @@ export class RegenerateFieldDto {
   @IsString()
   @IsOptional()
   localAdministrativeOrganizationId?: string;
+
+  /**
+   * Pin coordinates — sent by the FE so the regenerator has the same
+   * geo context as the initial generate call. Mirrors
+   * `GenerateProjectDto.startLat/startLng`. Absent in the original Wave-
+   * introducing this endpoint, which caused 400 rejections on every
+   * regenerate in ISSUE_BASED flows that pass pin coords.
+   */
+  @IsString()
+  @IsOptional()
+  startLat?: string;
+
+  @IsString()
+  @IsOptional()
+  startLng?: string;
 }
