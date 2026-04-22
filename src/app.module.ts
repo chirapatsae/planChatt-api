@@ -108,6 +108,13 @@ import { DevelopmentIssueModule } from './development-issue/development-issue.mo
 import { DevelopmentIssue } from './development-issue/entities/development-issue.entity';
 import { AdminDocumentAnalysisModule } from './admin-document-analysis/admin-document-analysis.module';
 import { AiPreSubmitSnapshot } from './ai/entities/ai-pre-submit-snapshot.entity';
+// Wave 40 N4 — staff reviewer AI run cache. Registered at the root
+// DataSource so TypeORM knows about the entity's metadata. Forgetting
+// this causes `EntityMetadataNotFoundError: No metadata for
+// "AiStaffReviewRun" was found.` even though the feature module
+// registers it via `TypeOrmModule.forFeature` — `forFeature` only
+// provides the repository injection token, not the metadata itself.
+import { AiStaffReviewRun } from './ai/entities/ai-staff-review-run.entity';
 
 
 @Module({
@@ -161,6 +168,7 @@ import { AiPreSubmitSnapshot } from './ai/entities/ai-pre-submit-snapshot.entity
         AiUsageQuota,
         AiUsageLog,
         AiPreSubmitSnapshot,
+        AiStaffReviewRun,
         ProjectType,
         Announcement,
         AnnouncementRole,

@@ -1,7 +1,9 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
+  NotFoundException,
   Param,
   ParseUUIDPipe,
   Post,
@@ -17,11 +19,17 @@ import {
   RegenerateFieldDto,
 } from './dto/generate-project.dto';
 import { PromptSuggestionsDto } from './dto/prompt-suggestions.dto';
-import { SmartApproveRequestDto } from './dto/smart-approve.dto';
 import { PreSubmitReviewDto } from './dto/pre-submit-review.dto';
 import { CreatePreSubmitSnapshotDto } from './dto/pre-submit-snapshot.dto';
 import { GeoPreviewDto } from './dto/geo-preview.dto';
+import { StaffReviewAnalyzeDto } from './dto/staff-review.dto';
 import { PreSubmitSnapshotService } from './pre-submit-snapshot.service';
+import { StaffReviewCacheService } from './staff-review-cache.service';
+import { StaffReviewPromptService } from './staff-review-prompt.service';
+import {
+  buildAiScoreEnvelope,
+  scoreToBand,
+} from './utils/ai-score-envelope';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 import { calculateAiCost } from './utils/cost-calculator';
 // AI cooldown (CLAUDE.md §17.8). Per-endpoint TTLs per task IMPL_STAFF_AI_RF9_COOLDOWN.
@@ -52,6 +60,9 @@ export class AiController {
   constructor(
     private readonly aiService: AiService,
     private readonly preSubmitSnapshotService: PreSubmitSnapshotService,
+    // Wave 41 N4 — staff-review cache + prompt executor.
+    private readonly staffReviewCacheService: StaffReviewCacheService,
+    private readonly staffReviewPromptService: StaffReviewPromptService,
   ) { }
 
   private parseSection(text: string, keyword: string): string | null {
@@ -402,19 +413,6 @@ export class AiController {
     return { newContent: sanitizedContent, usage, cost };
   }
 
-  @Post('smart-approve/analyze')
-  @UseGuards(AiCooldownGuard)
-  @AiCooldown('smart-approve', 10, 'body.projectId')
-  async analyzeSmartApprove(
-    @Body() body: SmartApproveRequestDto,
-    @Req() req: Request & { user: JwtPayloadUser },
-  ) {
-    if (!req.user || !req.user.userId) {
-      throw new UnauthorizedException('User not authenticated');
-    }
-    return this.aiService.analyzeProjectForSmartApprove(body, req.user.userId);
-  }
-
   /**
    * Holistic pre-submit quality review (owner-facing).
    *
@@ -545,6 +543,156 @@ export class AiController {
       result,
       workflow: snapshot.workflow,
       submittedAt: snapshot.computedAt,
+    };
+  }
+
+  // ────────────────────────────────────────────────────────────────────
+  // Wave 41 N4 — Staff AI Review endpoints
+  //
+  // `POST /ai/staff-review/analyze` — run a fresh reviewer-framed LLM
+  // pass OR return a cached run when the content hash hasn't drifted.
+  // Cooldown bucket is `'staff-review'` (SEPARATE from `smart-approve`
+  // per CLAUDE.md §17.8 Q7).
+  //
+  // `GET  /ai/staff-review/:targetKind/:targetId` — staff-lead read of
+  // the active cached run (envelope + result + reviewer stamp).
+  //
+  // Guardrails:
+  //   - §17.2 advisory — workflow buttons unaffected.
+  //   - §17.3 audit separation — writes land in `ai_staff_review_runs`
+  //     only; NEVER in `tracking_status`; NEVER in `ai_pre_submit_snapshots`.
+  //   - §17.4 `strict` staleness on every persisted row.
+  //   - §17.8 cooldown `('staff-review', 10, 'body.projectId')` —
+  //     5xx MUST NOT arm cooldown (existing guard behavior).
+  //   - §17.9 prompt-injection defense via wrap + schema-validated
+  //     output (502 `AI_SCHEMA_DRIFT` on drift, never silent coercion).
+  //   - §17.11 no role exemption — staff-lead gate applies uniformly.
+  // ────────────────────────────────────────────────────────────────────
+
+  @Post('staff-review/analyze')
+  @UseGuards(AiCooldownGuard)
+  @AiCooldown('staff-review', 10, 'body.projectId')
+  async analyzeStaffReview(
+    @Body() body: StaffReviewAnalyzeDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    if (!req.user || !req.user.userId) {
+      throw new UnauthorizedException('User not authenticated');
+    }
+    const userId = req.user.userId;
+
+    // Wave 41 N8 P0 — defense-in-depth staff-lead gate. The authoritative
+    // role check lives in StaffReviewCacheService (`createRun` /
+    // `getActiveRun` both call `assertStaffLead`). We additionally fail
+    // fast here so non staff-lead callers (e.g. `user` role with approved
+    // workStatus) are rejected BEFORE the LLM prompt is built and BEFORE
+    // any cache miss burns reviewer quota. §17.11 — no role exemption.
+    await this.staffReviewCacheService.assertStaffLeadCaller(userId);
+
+    // Compute the content hash server-side. We intentionally use the
+    // prompt service's canonical hasher (shared with owner path) so the
+    // drift banner reflects real semantic drift.
+    const built = await this.staffReviewPromptService.buildStaffReviewPrompt(
+      body as unknown as PreSubmitReviewDto,
+    );
+    const currentContentHash = built.contentHash;
+
+    // Cache-first lookup unless explicit recompute.
+    if (!body.recompute) {
+      const cached = await this.staffReviewCacheService.getActiveRun(
+        userId,
+        body.targetKind,
+        body.targetId,
+        currentContentHash,
+      );
+      if (cached && cached.run.contentHash === currentContentHash) {
+        return {
+          envelope: cached.envelope,
+          result: cached.result,
+          reviewerWorkHistoryId: cached.run.reviewerWorkHistoryId,
+          cached: true,
+        };
+      }
+    }
+
+    // Cache miss OR forced recompute — execute fresh LLM call.
+    const execResult = await this.staffReviewPromptService.executeStaffReview(
+      body as unknown as PreSubmitReviewDto,
+      userId,
+    );
+
+    // Persist the run (strict staleness, drift soft-delete+insert).
+    const saved = await this.staffReviewCacheService.createRun(userId, {
+      targetKind: body.targetKind,
+      targetId: body.targetId,
+      contentHash: execResult.contentHash,
+      endpoint: 'staff-review/analyze',
+      resultJson: execResult as unknown as Record<string, unknown>,
+      score0100: typeof execResult.overallScore === 'number'
+        ? execResult.overallScore
+        : null,
+      band: typeof execResult.overallScore === 'number'
+        ? scoreToBand(execResult.overallScore)
+        : null,
+      model: execResult.model || 'gpt-4o',
+    });
+
+    const envelope = buildAiScoreEnvelope({
+      score: saved.score0100,
+      band: saved.band,
+      computedAt: saved.computedAt,
+      contentHash: saved.contentHash,
+      model: saved.model ?? 'unknown',
+      endpoint: saved.endpoint,
+      policy: 'strict',
+      currentHash: currentContentHash,
+    });
+
+    return {
+      envelope,
+      result: saved.resultJson ?? {},
+      reviewerWorkHistoryId: saved.reviewerWorkHistoryId,
+      cached: false,
+    };
+  }
+
+  @Get('staff-review/:targetKind/:targetId')
+  async getStaffReview(
+    @Param('targetKind') targetKind: string,
+    @Param('targetId', new ParseUUIDPipe()) targetId: string,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    if (!req.user || !req.user.userId) {
+      throw new UnauthorizedException('User not authenticated');
+    }
+    if (
+      targetKind !== 'project-group' &&
+      targetKind !== 'revised-project-group' &&
+      targetKind !== 'supplement-project-group'
+    ) {
+      throw new BadRequestException('INVALID_TARGET_KIND');
+    }
+    const cached = await this.staffReviewCacheService.getActiveRun(
+      req.user.userId,
+      targetKind,
+      targetId,
+    );
+    // Empty-state contract — return 200 with `envelope: null` when no
+    // active cached run exists. Using a null payload (vs 404) keeps the
+    // browser DevTools console clean on every mount-time "do we have a
+    // cached run yet?" probe, which is the dominant read on staff review
+    // surfaces. §17.2 advisory — no workflow implication.
+    if (!cached) {
+      return {
+        envelope: null,
+        result: null,
+        reviewerWorkHistoryId: null,
+      };
+    }
+    return {
+      envelope: cached.envelope,
+      result: cached.result,
+      reviewerWorkHistoryId: cached.run.reviewerWorkHistoryId,
     };
   }
 

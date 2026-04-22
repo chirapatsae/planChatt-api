@@ -1,8 +1,15 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { AiController } from './ai.controller';
 import { AiService } from './ai.service';
 import { PreSubmitSnapshotService } from './pre-submit-snapshot.service';
+import { StaffReviewCacheService } from './staff-review-cache.service';
+import { StaffReviewPromptService } from './staff-review-prompt.service';
 import { PromptSuggestionsDto } from './dto/prompt-suggestions.dto';
 
 const mockAiService = {
@@ -20,6 +27,19 @@ const mockPreSubmitSnapshotService = {
   getOwnerSnapshot: jest.fn(),
 };
 
+const mockStaffReviewCacheService = {
+  getActiveRun: jest.fn(),
+  createRun: jest.fn(),
+  isStale: jest.fn(),
+  // Wave 41 N8 P0 — controller-level fail-fast staff-lead gate.
+  assertStaffLeadCaller: jest.fn(),
+};
+
+const mockStaffReviewPromptService = {
+  buildStaffReviewPrompt: jest.fn(),
+  executeStaffReview: jest.fn(),
+};
+
 const fakeReq = { user: { userId: 'user-1' } } as any;
 
 describe('AiController', () => {
@@ -27,6 +47,11 @@ describe('AiController', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    // Wave 41 N8 P0 — default: controller-level staff-lead gate passes
+    // for the fake req so the existing happy-path tests stay green.
+    mockStaffReviewCacheService.assertStaffLeadCaller.mockResolvedValue({
+      id: 'wh-A',
+    });
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AiController],
       providers: [
@@ -34,6 +59,14 @@ describe('AiController', () => {
         {
           provide: PreSubmitSnapshotService,
           useValue: mockPreSubmitSnapshotService,
+        },
+        {
+          provide: StaffReviewCacheService,
+          useValue: mockStaffReviewCacheService,
+        },
+        {
+          provide: StaffReviewPromptService,
+          useValue: mockStaffReviewPromptService,
         },
       ],
     }).compile();
@@ -342,6 +375,190 @@ describe('AiController', () => {
 
       expect(mockAiService.generateProjectDetail).not.toHaveBeenCalled();
       expect(mockAiService.analyzeProjectForSmartApprove).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Wave 41 N4 — POST /ai/staff-review/analyze · GET /ai/staff-review/:k/:id
+  // ─────────────────────────────────────────────────────────────────────
+  describe('Wave 41 N4 — staff review endpoints', () => {
+    const targetId = '00000000-0000-4000-8000-000000000010';
+    const contentHash = 'c'.repeat(64);
+    const body: any = {
+      reportFormat: 'STRATEGY_BASED',
+      strategyName: 'S',
+      tacticName: 'T',
+      planName: 'P',
+      project: {
+        title: 'T1',
+        objective: 'O1',
+        goal: 'G1',
+        expected: 'E1',
+        indicator: 'I1',
+        startLat: 14.9,
+        startLng: 102.0,
+        amphoeId: 3001,
+        budgets: [{ year: 2025, quantity: 100000 }],
+      },
+      targetKind: 'project-group',
+      targetId,
+      projectId: targetId,
+    };
+
+    it('returns cached envelope when active run has same hash (cached:true)', async () => {
+      mockStaffReviewPromptService.buildStaffReviewPrompt.mockResolvedValue({
+        contentHash,
+      });
+      mockStaffReviewCacheService.getActiveRun.mockResolvedValue({
+        run: {
+          contentHash,
+          reviewerWorkHistoryId: 'wh-A',
+        },
+        envelope: { score: 72, band: 'amber', stalenessPolicy: 'strict' },
+        result: { overallScore: 72 },
+      });
+
+      const out = await controller.analyzeStaffReview(body, fakeReq);
+      expect(out.cached).toBe(true);
+      expect(out.reviewerWorkHistoryId).toBe('wh-A');
+      expect(mockStaffReviewPromptService.executeStaffReview).not.toHaveBeenCalled();
+      expect(mockStaffReviewCacheService.createRun).not.toHaveBeenCalled();
+    });
+
+    it('executes fresh LLM + createRun when no active row', async () => {
+      mockStaffReviewPromptService.buildStaffReviewPrompt.mockResolvedValue({
+        contentHash,
+      });
+      mockStaffReviewCacheService.getActiveRun.mockResolvedValue(null);
+      mockStaffReviewPromptService.executeStaffReview.mockResolvedValue({
+        overallScore: 80,
+        readinessLabel: 'ควรปรับปรุง',
+        rationale: 'rationale',
+        strongPoint: 'sp',
+        suggestions: [],
+        checklistSummary: [],
+        contentHash,
+        model: 'gpt-4o',
+      });
+      mockStaffReviewCacheService.createRun.mockResolvedValue({
+        score0100: 80,
+        band: 'green',
+        computedAt: new Date('2026-04-22T00:00:00Z'),
+        contentHash,
+        model: 'gpt-4o',
+        endpoint: 'staff-review/analyze',
+        reviewerWorkHistoryId: 'wh-A',
+        resultJson: { overallScore: 80 },
+      });
+
+      const out = await controller.analyzeStaffReview(body, fakeReq);
+      expect(out.cached).toBe(false);
+      expect(out.envelope.stalenessPolicy).toBe('strict');
+      expect(out.envelope.isStale).toBe(false);
+      expect(mockStaffReviewPromptService.executeStaffReview).toHaveBeenCalledTimes(1);
+      expect(mockStaffReviewCacheService.createRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('recompute=true bypasses cache and forces a fresh LLM call', async () => {
+      mockStaffReviewPromptService.buildStaffReviewPrompt.mockResolvedValue({
+        contentHash,
+      });
+      mockStaffReviewPromptService.executeStaffReview.mockResolvedValue({
+        overallScore: 50,
+        readinessLabel: 'ต้องแก้ไขก่อนส่ง',
+        rationale: 'r',
+        strongPoint: 's',
+        suggestions: [],
+        checklistSummary: [],
+        contentHash,
+        model: 'gpt-4o',
+      });
+      mockStaffReviewCacheService.createRun.mockResolvedValue({
+        score0100: 50,
+        band: 'amber',
+        computedAt: new Date(),
+        contentHash,
+        model: 'gpt-4o',
+        endpoint: 'staff-review/analyze',
+        reviewerWorkHistoryId: 'wh-A',
+        resultJson: {},
+      });
+
+      const out = await controller.analyzeStaffReview(
+        { ...body, recompute: true },
+        fakeReq,
+      );
+      expect(out.cached).toBe(false);
+      expect(mockStaffReviewCacheService.getActiveRun).not.toHaveBeenCalled();
+      expect(mockStaffReviewPromptService.executeStaffReview).toHaveBeenCalledTimes(1);
+    });
+
+    it('POST: throws UnauthorizedException when req.user missing', async () => {
+      await expect(
+        controller.analyzeStaffReview(body, { user: undefined } as any),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('POST: non staff-lead caller (user role) is rejected BEFORE LLM call (Wave 41 N8 P0)', async () => {
+      // Controller-level fail-fast: assertStaffLeadCaller throws 403 and
+      // the prompt builder / LLM executor MUST NOT be invoked. Protects
+      // reviewer AI quota from being burned by unauthorized callers.
+      mockStaffReviewCacheService.assertStaffLeadCaller.mockRejectedValueOnce(
+        new ForbiddenException(
+          'เฉพาะเจ้าหน้าที่ (staff / admin / super-admin) เท่านั้นที่เรียกดูข้อมูลนี้ได้',
+        ),
+      );
+      await expect(
+        controller.analyzeStaffReview(body, fakeReq),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(mockStaffReviewPromptService.buildStaffReviewPrompt).not.toHaveBeenCalled();
+      expect(mockStaffReviewPromptService.executeStaffReview).not.toHaveBeenCalled();
+      expect(mockStaffReviewCacheService.createRun).not.toHaveBeenCalled();
+      expect(mockStaffReviewCacheService.getActiveRun).not.toHaveBeenCalled();
+    });
+
+    it('GET: returns envelope + result for staff-lead caller', async () => {
+      mockStaffReviewCacheService.getActiveRun.mockResolvedValue({
+        run: { reviewerWorkHistoryId: 'wh-A', contentHash },
+        envelope: { score: 72, band: 'amber', stalenessPolicy: 'strict' },
+        result: { foo: 'bar' },
+      });
+      const out = await controller.getStaffReview(
+        'project-group',
+        targetId,
+        fakeReq,
+      );
+      expect(out.envelope).not.toBeNull();
+      // Narrow the union for the spec: at this point envelope is non-null.
+      if (out.envelope) expect(out.envelope.score).toBe(72);
+      expect(out.reviewerWorkHistoryId).toBe('wh-A');
+    });
+
+    it('GET: returns 200 with null envelope when no active run (empty-state contract)', async () => {
+      mockStaffReviewCacheService.getActiveRun.mockResolvedValue(null);
+      const out = await controller.getStaffReview(
+        'project-group',
+        targetId,
+        fakeReq,
+      );
+      expect(out.envelope).toBeNull();
+      expect(out.result).toBeNull();
+      expect(out.reviewerWorkHistoryId).toBeNull();
+    });
+
+    it('GET: BadRequest for invalid targetKind', async () => {
+      await expect(
+        controller.getStaffReview('bogus-kind' as any, targetId, fakeReq),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('GET: 403 propagates from service (role gate in StaffReviewCacheService)', async () => {
+      mockStaffReviewCacheService.getActiveRun.mockRejectedValue(
+        new ForbiddenException('role'),
+      );
+      await expect(
+        controller.getStaffReview('project-group', targetId, fakeReq),
+      ).rejects.toBeInstanceOf(ForbiddenException);
     });
   });
 });

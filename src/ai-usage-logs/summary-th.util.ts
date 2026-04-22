@@ -21,7 +21,8 @@ export type SummaryEndpoint =
   | 'regenerate-one-field'
   | 'pre-submit-review'
   | 'land-use-classify'
-  | 'document-summary';
+  | 'document-summary'
+  | 'staff-review/analyze';
 
 export interface SummaryContext {
   endpoint: SummaryEndpoint;
@@ -70,6 +71,10 @@ export function composeSummaryTh(ctx: SummaryContext): string {
         ? `สรุปเอกสาร: ${clamp(name)}`
         : 'สรุปเอกสาร: ไฟล์แนบ';
     }
+    case 'staff-review/analyze':
+      return ctx.title
+        ? `ตรวจสอบโครงการโดยเจ้าหน้าที่ด้วย AI: ${clamp(ctx.title)}`
+        : 'ตรวจสอบโครงการโดยเจ้าหน้าที่ด้วย AI';
     default:
       return 'การเรียกใช้ AI';
   }

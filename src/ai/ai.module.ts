@@ -42,6 +42,21 @@ import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.ent
 // RF5 — persisted user-side pre-submit AI score (CLAUDE.md §17.3 / §17.4).
 import { AiPreSubmitSnapshot } from './entities/ai-pre-submit-snapshot.entity';
 import { PreSubmitSnapshotService } from './pre-submit-snapshot.service';
+// Wave 40 N4 — schema-only scaffold for staff smart-approve reviewer
+// runs (§17.3 / §17.4 `strict`). Registered here so TypeORM picks up
+// the entity for metadata. Wave 41 N2 wires the write path via
+// `StaffReviewCacheService`.
+import { AiStaffReviewRun } from './entities/ai-staff-review-run.entity';
+// Wave 41 N2 — staff reviewer cache service (strict staleness, cross-
+// reviewer reuse, drift soft-delete+insert). Advisory-only (§17.2) and
+// audit-separated (§17.3).
+import { StaffReviewCacheService } from './staff-review-cache.service';
+// Wave 41 N3 — staff reviewer-framed prompt builder + executor.
+// Branches on §16.5 (STRATEGY_BASED / ISSUE_BASED), wraps user-sourced
+// text in <<<USER_INPUT>>>...<<<END>>> delimiters per §17.9, and
+// validates LLM output shape server-side (502 AI_SCHEMA_DRIFT on
+// violation).
+import { StaffReviewPromptService } from './staff-review-prompt.service';
 import { WorkHistoryGovernmentAgencyResponsibility } from 'src/work-history-government-agency-responsibility/entities/work-history-government-agency-responsibility.entity';
 import { AiUsageQuotasModule } from 'src/ai-usage-quotas/ai-usage-quotas.module';
 // Wave 36 N2 — rich detail logging for every LLM call site.
@@ -85,6 +100,7 @@ import { IssueCriteriaEvidenceCheckService } from './criteria/issue-criteria-evi
       Budget,
       TrackingStatus,
       AiPreSubmitSnapshot,
+      AiStaffReviewRun,
       WorkHistoryGovernmentAgencyResponsibility,
     ]),
     AiUsageQuotasModule,
@@ -121,6 +137,10 @@ import { IssueCriteriaEvidenceCheckService } from './criteria/issue-criteria-evi
     AiResultEnvelopeService,
     // RF5 — persisted pre-submit AI score (owner write + staff read).
     PreSubmitSnapshotService,
+    // Wave 41 N2 — staff reviewer run cache.
+    StaffReviewCacheService,
+    // Wave 41 N3 — staff reviewer prompt builder + executor.
+    StaffReviewPromptService,
     // Wave 24 N4 — criteria-aware pre-check services.
     IssueCriteriaGeoCheckService,
     IssueCriteriaEvidenceCheckService,
