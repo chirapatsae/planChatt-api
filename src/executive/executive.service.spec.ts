@@ -7,6 +7,8 @@ import { STATUS_NAMES } from '../common/status-names';
 import { WorkHistory } from '../work-history/entities/work-history.entity';
 import { ProjectGroup } from '../project-groups/entities/project-group.entity';
 import { DevelopmentPlan } from '../development-plan/entities/development-plan.entity';
+import { RevisedProjectGroup } from '../revised-project-group/entities/revised-project-group.entity';
+import { SupplementProjectGroup } from '../supplement-project-group/entities/supplement-project-group.entity';
 
 /**
  * Test suite for ExecutiveService.getTeamDashboard — specifically the rename
@@ -25,6 +27,8 @@ describe('ExecutiveService', () => {
   let workHistoryRepo: jest.Mocked<Repository<WorkHistory>>;
   let projectGroupRepo: jest.Mocked<Repository<ProjectGroup>>;
   let developmentPlanRepo: jest.Mocked<Repository<DevelopmentPlan>>;
+  let revisedProjectGroupRepo: jest.Mocked<Repository<RevisedProjectGroup>>;
+  let supplementProjectGroupRepo: jest.Mocked<Repository<SupplementProjectGroup>>;
 
   const STAFF_USER_ID = 'staff-user-1';
   const STAFF_WH_ID = 'wh-staff-1';
@@ -118,6 +122,7 @@ describe('ExecutiveService', () => {
       innerJoin: jest.fn().mockReturnThis(),
       getManyAndCount: jest.fn().mockResolvedValue([[staffRow], 1]),
       getCount: jest.fn().mockResolvedValue(0),
+      getMany: jest.fn().mockResolvedValue([]),
     };
     return qb;
   };
@@ -133,6 +138,12 @@ describe('ExecutiveService', () => {
     developmentPlanRepo = {
       findOne: jest.fn().mockResolvedValue(developmentPlan),
     } as any;
+    revisedProjectGroupRepo = {
+      createQueryBuilder: jest.fn(),
+    } as any;
+    supplementProjectGroupRepo = {
+      createQueryBuilder: jest.fn(),
+    } as any;
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -140,6 +151,8 @@ describe('ExecutiveService', () => {
         { provide: getRepositoryToken(WorkHistory), useValue: workHistoryRepo },
         { provide: getRepositoryToken(ProjectGroup), useValue: projectGroupRepo },
         { provide: getRepositoryToken(DevelopmentPlan), useValue: developmentPlanRepo },
+        { provide: getRepositoryToken(RevisedProjectGroup), useValue: revisedProjectGroupRepo },
+        { provide: getRepositoryToken(SupplementProjectGroup), useValue: supplementProjectGroupRepo },
       ],
     }).compile();
 
@@ -249,7 +262,7 @@ describe('ExecutiveService', () => {
     it('records aging details under the Returned_For_Revision key', async () => {
       wireBuilders(STATUS_NAMES.RETURNED_FOR_REVISION);
 
-      const result = await service.getTeamDashboard(STAFF_USER_ID);
+      const result = await service.getTeamDashboard(STAFF_USER_ID, 'main');
       const amphoe = result.staffWithTotalLao[0].workHistoryResponsibleAmphoe[0]
         .amphoe as any;
 
@@ -258,6 +271,82 @@ describe('ExecutiveService', () => {
         id: 'pg-a-1',
         title: 'Amphoe project',
       });
+    });
+  });
+
+  /**
+   * Wave 43 + post-dispatch refactor — Team Dashboard scope extension.
+   *
+   * Scope enum is now 4 PURE values (no union):
+   *   'main' | 'revision-edit' | 'revision-change' | 'supplement'
+   *
+   * These tests guarantee:
+   *   - `scope=main` / default returns byte-identical keys to the
+   *     pre-Wave-43 shape (no `scope` key).
+   *   - Non-main scopes echo the requested `scope` at top-level.
+   *   - `byScope` breakdown has been REMOVED (each scope is pure, so
+   *     the summary row is redundant).
+   */
+  describe('getTeamDashboard — scope param (Wave 43)', () => {
+    const wireBuildersFor = (statusName: string) => {
+      const mainBuilder = makeQueryBuilder(buildStaffRow(statusName));
+      const scopeBuilder = makeQueryBuilder(null);
+      workHistoryRepo.createQueryBuilder
+        .mockReturnValueOnce(mainBuilder as any)
+        .mockReturnValue(scopeBuilder as any);
+
+      const pgBuilder = makeQueryBuilder(null);
+      projectGroupRepo.createQueryBuilder.mockReturnValue(pgBuilder as any);
+
+      const rpgBuilder = makeQueryBuilder(null);
+      revisedProjectGroupRepo.createQueryBuilder.mockReturnValue(rpgBuilder as any);
+
+      const spgBuilder = makeQueryBuilder(null);
+      supplementProjectGroupRepo.createQueryBuilder.mockReturnValue(spgBuilder as any);
+    };
+
+    it('scope=main → response has NO scope key (byte-identical legacy)', async () => {
+      wireBuildersFor(STATUS_NAMES.PENDING);
+      const result = await service.getTeamDashboard(STAFF_USER_ID, 'main');
+      expect((result as any).scope).toBeUndefined();
+      expect((result as any).byScope).toBeUndefined();
+    });
+
+    it('default (no arg) delegates to scope=main (byte-identical legacy)', async () => {
+      wireBuildersFor(STATUS_NAMES.PENDING);
+      const result = (await service.getTeamDashboard(STAFF_USER_ID)) as any;
+      expect(result.scope).toBeUndefined();
+      expect(result.byScope).toBeUndefined();
+    });
+
+    it('scope=revision-edit → echoes scope and has no byScope key', async () => {
+      wireBuildersFor(STATUS_NAMES.PENDING);
+      const result = (await service.getTeamDashboard(
+        STAFF_USER_ID,
+        'revision-edit',
+      )) as any;
+      expect(result.scope).toBe('revision-edit');
+      expect(result.byScope).toBeUndefined();
+    });
+
+    it('scope=revision-change → echoes scope and has no byScope key', async () => {
+      wireBuildersFor(STATUS_NAMES.PENDING);
+      const result = (await service.getTeamDashboard(
+        STAFF_USER_ID,
+        'revision-change',
+      )) as any;
+      expect(result.scope).toBe('revision-change');
+      expect(result.byScope).toBeUndefined();
+    });
+
+    it('scope=supplement → echoes scope and has no byScope key', async () => {
+      wireBuildersFor(STATUS_NAMES.PENDING);
+      const result = (await service.getTeamDashboard(
+        STAFF_USER_ID,
+        'supplement',
+      )) as any;
+      expect(result.scope).toBe('supplement');
+      expect(result.byScope).toBeUndefined();
     });
   });
 });
