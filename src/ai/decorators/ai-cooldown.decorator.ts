@@ -25,7 +25,11 @@ export type AiCooldownKeyFrom =
   | 'body.targetId'
   | 'body.revisedProjectGroupId'
   | 'body.projectId'
-  | 'body.supplementProjectGroupId';
+  | 'body.supplementProjectGroupId'
+  // Wave 44 — executive-chat cooldown key. Conversations without an id
+  // collapse to `__no_target__` in the guard so users cannot evade the
+  // window by omitting the field.
+  | 'body.conversationId';
 
 export interface AiCooldownMetadata {
   endpointKey: string;

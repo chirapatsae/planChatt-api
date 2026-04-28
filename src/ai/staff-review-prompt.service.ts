@@ -7,7 +7,9 @@ import {
   Logger,
   forwardRef,
 } from '@nestjs/common';
-import { OpenAI } from 'openai';
+// PRIV-W44-01 — central LLM abstraction (CLAUDE.md §17). The direct
+// OpenAI constructor now lives exclusively in `OpenAILlmClient`.
+import { LLM_CLIENT, LlmClient } from './llm/llm-client.interface';
 import { PreSubmitReviewDto } from './dto/pre-submit-review.dto';
 import { SmartApproveRequestDto } from './dto/smart-approve.dto';
 import { SmartApprovePrecheckService } from './smart-approve-precheck.service';
@@ -44,6 +46,9 @@ import { scoreToBand } from './utils/ai-score-envelope';
 // The literal `<<<USER_INPUT>>>` / `<<<END>>>` tokens live exclusively
 // in `wrap-user-text.ts` so owner and staff pipelines cannot drift.
 import { wrapUserText as sharedWrapUserText } from './utils/wrap-user-text';
+// SEC-W44-02 — INPUT-side PII redactor (§17.9 complement to delimiter
+// wrap).  Order: redact → wrap → dispatch.
+import { PiiRedactorService } from 'src/common/pii/pii-redactor.service';
 
 /**
  * Wave 41 N3 — Staff reviewer prompt builder & executor.
@@ -80,7 +85,6 @@ import { wrapUserText as sharedWrapUserText } from './utils/wrap-user-text';
 @Injectable()
 export class StaffReviewPromptService {
   private readonly logger = new Logger(StaffReviewPromptService.name);
-  private readonly openai: OpenAI;
 
   /** §17.9 cap on user-controlled free-text before hashing / prompt-wrap. */
   private static readonly USER_CONTEXT_CAP = 2000;
@@ -93,9 +97,12 @@ export class StaffReviewPromptService {
     private readonly aiUsageQuotasService: AiUsageQuotasService,
     @Inject(forwardRef(() => AiUsageLogsService))
     private readonly aiUsageLogsService: AiUsageLogsService,
-  ) {
-    this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  }
+    // PRIV-W44-01 — central LLM client.
+    @Inject(LLM_CLIENT)
+    private readonly llm: LlmClient,
+    // SEC-W44-02 — INPUT-side PII redactor.
+    private readonly piiRedactor: PiiRedactorService,
+  ) {}
 
   /**
    * Envelope shape returned to the controller. Matches the owner
@@ -471,16 +478,26 @@ ${formatRubricForReviewer({ isIssueBased })}
       contentHash,
     } = built;
 
+    // SEC-W44-02 — §17.9 PII redaction on the staff-review user prompt.
+    // User-sourced text (project fields, attachment OCR summaries,
+    // reviewer's additionalContext) is already delimiter-wrapped; this
+    // pass strips citizen IDs / phones / emails / postal / address
+    // fragments from INSIDE the delimiters before LLM dispatch.
+    const { output: redactedReviewerPrompt } = this.piiRedactor.redactText(
+      userPrompt,
+      { endpoint: 'staff-review/analyze' },
+    );
+
     const startTime = Date.now();
     try {
-      const completion = await this.openai.chat.completions.create({
+      const completion = await this.llm.createChatCompletion({
         model: 'gpt-4o',
         temperature: 0.3,
         max_tokens: 1500,
         response_format: { type: 'json_schema', json_schema: responseSchema },
         messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
+          { role: 'user', content: redactedReviewerPrompt },
         ],
       });
       const durationMs = Date.now() - startTime;

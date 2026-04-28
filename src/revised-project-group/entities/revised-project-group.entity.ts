@@ -213,8 +213,8 @@ export class RevisedProjectGroup {
   @Column('text', { nullable: true })
   oldAdditionDetail: string | null;
 
-  @Column({ name: 'prev_project_id', nullable: true })
-  prevProjectId: string;
+  @Column({ name: 'prev_project_id', type: 'uuid', nullable: true })
+  prevProjectId?: string | null;
 
   @Column({
     name: 'prev_project_type',

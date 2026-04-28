@@ -13,6 +13,12 @@ import { handleException } from 'src/util/handleException';
 import { User } from 'src/users/entities/user.entity';
 import { AiUsageLogsService } from 'src/ai-usage-logs/ai-usage-logs.service';
 import { CreateAiUsageLogDto } from 'src/ai-usage-logs/dto/create-ai-usage-log.dto';
+// Wave 44 / BE-W44-03 — config-driven FX. Replaces the hardcoded
+// `* 34` USD→THB multiplier that previously lived inline in
+// `checkAndLogUsage`. Reads `OPENAI_USD_TO_THB_FX` per call.
+import { getUsdToThbFx } from './fx-config';
+import { resolveModel } from './quota-model-override';
+import { QUOTA_WEIGHT_MAP, QuotaWeightModel } from './quota-weight.map';
 
 @Injectable()
 export class AiUsageQuotasService {
@@ -390,8 +396,10 @@ export class AiUsageQuotasService {
         }
       }
 
-      // 3. Convert Cost to THB (Assuming 1 USD = 34 THB)
-      const exchangeRate = 34;
+      // 3. Convert Cost to THB. Wave 44 / BE-W44-03 — FX is now
+      // config-driven via `OPENAI_USD_TO_THB_FX` (default 34). Read per
+      // call so ops can rotate the rate without a backend restart.
+      const exchangeRate = getUsdToThbFx();
       const costThb = costUsd * exchangeRate;
 
       // 4. Check remaining quota
@@ -434,5 +442,168 @@ export class AiUsageQuotasService {
     } catch (error) {
       handleException(this.logger, error);
     }
+  }
+
+  // ────────────────────────────────────────────────────────────────────
+  // Wave 44 / BE-W44-03 — pre-call guard support + FE-facing snapshot.
+  //
+  // These methods are READ-ONLY. They MUST NOT mutate the quota row —
+  // deduction remains the exclusive responsibility of `checkAndLogUsage`.
+  // Per §17.2 / §17.11, no role exemption is applied here; the guard
+  // handles rejection uniformly for every role.
+  // ────────────────────────────────────────────────────────────────────
+
+  /**
+   * Read-only snapshot of a user's active quota row for the pre-call
+   * `AiQuotaGuard`. Returns `null` when no active quota exists so the
+   * guard can surface a 401 `AI_QUOTA_MISSING`.
+   */
+  async getQuotaSnapshot(
+    userId: string,
+  ): Promise<Pick<
+    AiUsageQuota,
+    | 'id'
+    | 'quotaLimit'
+    | 'quotaUsed'
+    | 'remainingQuota'
+    | 'periodStart'
+    | 'periodEnd'
+    | 'isAutoRenew'
+  > | null> {
+    try {
+      const quota = await this.aiUsageQuotaRepository.findOne({
+        where: { user: { id: userId }, deletedAt: undefined },
+        select: [
+          'id',
+          'quotaLimit',
+          'quotaUsed',
+          'remainingQuota',
+          'periodStart',
+          'periodEnd',
+          'isAutoRenew',
+        ],
+      });
+      return quota ?? null;
+    } catch (err) {
+      this.logger.warn(
+        `[ai-usage-quotas] getQuotaSnapshot failed for userId=${userId}: ${
+          err instanceof Error ? err.message : err
+        }`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Consumed ratio (`quotaUsed / quotaLimit`) for the 80 % auto-downgrade
+   * helper. Returns 0 for missing / invalid rows so callers default to
+   * the declared model. Safe on expired-and-auto-renew rows because
+   * auto-renew happens lazily in `checkAndLogUsage` — the ratio will
+   * correctly report 0 on the next call after renewal.
+   */
+  async getQuotaRatio(userId: string): Promise<number> {
+    const snap = await this.getQuotaSnapshot(userId);
+    if (!snap) return 0;
+    const limit = Number(snap.quotaLimit);
+    const used = Number(snap.quotaUsed);
+    if (!Number.isFinite(limit) || limit <= 0) return 0;
+    if (!Number.isFinite(used) || used < 0) return 0;
+    return used / limit;
+  }
+
+  /**
+   * FE-facing snapshot for the quota pill / header indicator.
+   *
+   * Returns a stable shape so FE code doesn't need to know about the
+   * underlying row. `percentUsed` is rounded to one decimal for display
+   * stability (avoids jittering at 79.997 → 80.003).
+   */
+  async getQuotaSnapshotForUi(userId: string): Promise<{
+    usedThb: number;
+    limitThb: number;
+    percentUsed: number;
+    remainingThb: number;
+    periodEnd: string;
+    isAutoRenew: boolean;
+  } | null> {
+    const snap = await this.getQuotaSnapshot(userId);
+    if (!snap) return null;
+    const limit = Number(snap.quotaLimit);
+    const used = Number(snap.quotaUsed);
+    const remaining = Number(snap.remainingQuota);
+    const percent = limit > 0 ? (used / limit) * 100 : 0;
+    return {
+      usedThb: Number.isFinite(used) ? Number(used.toFixed(4)) : 0,
+      limitThb: Number.isFinite(limit) ? Number(limit.toFixed(4)) : 0,
+      percentUsed: Number(percent.toFixed(1)),
+      remainingThb: Number.isFinite(remaining) ? Number(remaining.toFixed(4)) : 0,
+      periodEnd: snap.periodEnd.toISOString(),
+      isAutoRenew: snap.isAutoRenew,
+    };
+  }
+
+  /**
+   * Per-hop gate for the executive-chat tool loop (BE-W44-02 adapter).
+   *
+   * Unlike the pre-call guard, this helper does NOT throw — it returns
+   * a structured verdict so the adapter can decide to emit
+   * `quota_soft_stop` over SSE and return partial output. See task
+   * §7.8 for the end-to-end soft-stop contract.
+   */
+  async checkMidTurn(
+    userId: string,
+    estimatedNextHopUsd: number,
+  ): Promise<{ canProceed: boolean; reason?: string; remainingThb: number }> {
+    const snap = await this.getQuotaSnapshot(userId);
+    if (!snap) {
+      return { canProceed: false, reason: 'QUOTA_MISSING', remainingThb: 0 };
+    }
+    const now = new Date();
+    const periodLapsed = now > snap.periodEnd;
+    const effectiveRemaining =
+      periodLapsed && snap.isAutoRenew
+        ? Number(snap.quotaLimit)
+        : Number(snap.remainingQuota);
+    const costThb = estimatedNextHopUsd * getUsdToThbFx();
+
+    if (!Number.isFinite(effectiveRemaining) || effectiveRemaining < costThb) {
+      return {
+        canProceed: false,
+        reason: 'USER_QUOTA_EXHAUSTED',
+        remainingThb: Number.isFinite(effectiveRemaining)
+          ? effectiveRemaining
+          : 0,
+      };
+    }
+    return {
+      canProceed: true,
+      remainingThb: effectiveRemaining,
+    };
+  }
+
+  /**
+   * Thin wrapper around `quota-model-override.resolveModel` so services
+   * can ask "should I downgrade?" without importing the helper directly.
+   * Falls back to the requested model on any lookup failure.
+   */
+  async resolveModel(
+    userId: string,
+    requestedModel: QuotaWeightModel,
+  ): Promise<QuotaWeightModel> {
+    const ratio = await this.getQuotaRatio(userId);
+    return resolveModel(ratio, requestedModel);
+  }
+
+  /**
+   * Convenience: estimate the hop cost in USD using the central weight
+   * map (`estMinThb` scaled through FX). Used by BE-W44-02 when the
+   * caller only knows the endpoint key and not an actual USD estimate.
+   */
+  estimateHopCostUsd(weightKey: string): number {
+    const weight = QUOTA_WEIGHT_MAP[weightKey];
+    if (!weight) return 0;
+    const fx = getUsdToThbFx();
+    if (!Number.isFinite(fx) || fx <= 0) return 0;
+    return weight.estMinThb / fx;
   }
 }

@@ -34,7 +34,8 @@
  * we reach here only on the advisory path.
  */
 import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
-import { OpenAI } from 'openai';
+// PRIV-W44-01 — central LLM abstraction (CLAUDE.md §17).
+import { LLM_CLIENT, LlmClient } from './llm/llm-client.interface';
 import { sanitizeBriefingText } from './briefing-sanitizer';
 // Wave 36 N2 — resolve the Wave 32 circular-dep TODO. `AiUsageLogsService`
 // is pulled in via forwardRef so classifier runs under the shared
@@ -45,6 +46,12 @@ import { AiUsageLogsService } from 'src/ai-usage-logs/ai-usage-logs.service';
 import { composeSummaryTh } from 'src/ai-usage-logs/summary-th.util';
 import { sanitizeRequestPayload } from 'src/ai-usage-logs/sanitize-request-payload.util';
 import { calculateAiCost } from './utils/cost-calculator';
+// SEC-W44-02 — INPUT-side PII redactor (§17.9).  The classifier input
+// is structural (admin-boundary names, enum subTypeCode, numeric
+// lat/lng) and contains no user prose by design, so redaction is
+// effectively a no-op; the uniform retrofit keeps the grep gate
+// stable against future prompt shape changes.
+import { PiiRedactorService } from 'src/common/pii/pii-redactor.service';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -184,7 +191,6 @@ interface CacheEntry {
 @Injectable()
 export class LandUseClassifierService {
   private readonly logger = new Logger(LandUseClassifierService.name);
-  private readonly openai: OpenAI;
 
   // FIFO cache via Map insertion order. Adequate per task spec —
   // not a full LRU, but §17.5-compliant: TTL expiry plus bounded
@@ -204,9 +210,14 @@ export class LandUseClassifierService {
     // today because AiUsageLogsModule is a leaf).
     @Inject(forwardRef(() => AiUsageLogsService))
     private readonly aiUsageLogsService: AiUsageLogsService,
-  ) {
-    this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  }
+    // PRIV-W44-01 — central LLM client.
+    @Inject(LLM_CLIENT)
+    private readonly llm: LlmClient,
+    // SEC-W44-02 — INPUT-side PII redactor.  No-op on classifier's
+    // structured input by design; retrofit kept uniform to satisfy
+    // §17.9 grep gate and guard against future prompt drift.
+    private readonly piiRedactor: PiiRedactorService,
+  ) {}
 
   /**
    * Classify the land-use character of a pin inside NR.
@@ -235,18 +246,28 @@ export class LandUseClassifierService {
     // ---- build prompts (structured input only; NO user prose) -----------
     const userPrompt = this.buildUserPrompt(input);
 
+    // SEC-W44-02 — §17.9 PII redactor invocation.  Intentionally a no-op
+    // for the classifier (input is structural; see class comment) but
+    // kept in-function to satisfy the grep-gate "every LLM call site
+    // has upstream redaction" invariant, and to catch any future input
+    // shape change that introduces user prose.
+    const { output: redactedClassifierPrompt } = this.piiRedactor.redactText(
+      userPrompt,
+      { endpoint: 'land-use-classify' },
+    );
+
     // ---- OpenAI call ---------------------------------------------------
     let raw: string | null | undefined;
     const startTime = Date.now();
     try {
-      const completion = await this.openai.chat.completions.create({
+      const completion = await this.llm.createChatCompletion({
         model: 'gpt-4o-mini',
         temperature: 0.15,
         max_tokens: 400,
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: userPrompt },
+          { role: 'user', content: redactedClassifierPrompt },
         ],
       });
       raw = completion.choices?.[0]?.message?.content;

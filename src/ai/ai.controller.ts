@@ -35,6 +35,11 @@ import { calculateAiCost } from './utils/cost-calculator';
 // AI cooldown (CLAUDE.md §17.8). Per-endpoint TTLs per task IMPL_STAFF_AI_RF9_COOLDOWN.
 import { AiCooldownGuard } from './guards/ai-cooldown.guard';
 import { AiCooldown } from './decorators/ai-cooldown.decorator';
+// Wave 44 / BE-W44-03 — pre-call quota enforcement. Guard chain order
+// (JwtAuthGuard → AiQuotaGuard → AiCooldownGuard) MUST be preserved so
+// over-quota requests never arm the cooldown.
+import { AiQuotaGuard } from 'src/ai-usage-quotas/guards/ai-quota.guard';
+import { AiQuotaWeight } from 'src/ai-usage-quotas/decorators/ai-quota-weight.decorator';
 // Wave 29 N2 — briefing citations (opaque bag per Wave 13 DTO discipline).
 import { parseCitationsJsonBlock } from './citation-parser';
 // Wave 31 N1 — output sanitizer: strip bracketed section markers and
@@ -94,6 +99,8 @@ export class AiController {
   }
 
   @Post('generate-project-detail')
+  @UseGuards(AiQuotaGuard)
+  @AiQuotaWeight('generate-project-detail')
   async generate(@Body() body: GenerateProjectDto, @Req() req: Request & { user: JwtPayloadUser }) {
     if (!req.user || !req.user.userId) {
       throw new UnauthorizedException('User not authenticated');
@@ -394,6 +401,8 @@ export class AiController {
   }
 
   @Post('regenerate-one-field')
+  @UseGuards(AiQuotaGuard)
+  @AiQuotaWeight('regenerate-one-field')
   async regenerateField(@Body() body: RegenerateFieldDto, @Req() req: Request & { user: JwtPayloadUser }) {
     if (!req.user || !req.user.userId) {
       throw new UnauthorizedException('User not authenticated');
@@ -423,6 +432,8 @@ export class AiController {
    * CLAUDE.md §16.5: ISSUE_BASED payloads must not send indicator.
    */
   @Post('pre-submit-review')
+  @UseGuards(AiQuotaGuard)
+  @AiQuotaWeight('pre-submit-review')
   async preSubmitReview(
     @Body() body: PreSubmitReviewDto,
     @Req() req: Request & { user: JwtPayloadUser },
@@ -570,7 +581,8 @@ export class AiController {
   // ────────────────────────────────────────────────────────────────────
 
   @Post('staff-review/analyze')
-  @UseGuards(AiCooldownGuard)
+  @UseGuards(AiQuotaGuard, AiCooldownGuard)
+  @AiQuotaWeight('staff-review-analyze')
   @AiCooldown('staff-review', 10, 'body.projectId')
   async analyzeStaffReview(
     @Body() body: StaffReviewAnalyzeDto,
@@ -706,6 +718,8 @@ export class AiController {
    * §16.5: ISSUE_BASED suggestions never mention ตัวชี้วัด / KPI.
    */
   @Post('prompt-suggestions')
+  @UseGuards(AiQuotaGuard)
+  @AiQuotaWeight('prompt-suggestions')
   async promptSuggestions(
     @Body() body: PromptSuggestionsDto,
     @Req() req: Request & { user: JwtPayloadUser },

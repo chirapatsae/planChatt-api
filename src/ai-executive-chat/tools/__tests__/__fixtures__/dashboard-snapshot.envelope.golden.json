@@ -1,0 +1,30 @@
+{
+  "shape": "dashboardSnapshot",
+  "data": {
+    "planId": null,
+    "scope": ["all"],
+    "projectCount": 3,
+    "groupBy": ["status", "originType"],
+    "buckets": {
+      "status": [
+        { "key": "รอตรวจสอบ", "count": 1, "totalBudget": 200000 },
+        { "key": "อนุมัติ", "count": 2, "totalBudget": 900000 }
+      ],
+      "originType": [
+        { "key": "agency-normal", "count": 1, "totalBudget": 500000 },
+        { "key": "lao-coordinated", "count": 2, "totalBudget": 600000 }
+      ]
+    },
+    "totalBudget": 1100000,
+    "executiveStatusBreakdown": {
+      "pendingReviewCount": 1,
+      "awaitingApprovalCount": 0,
+      "approvedCount": 2,
+      "rejectedCount": 0
+    }
+  },
+  "asOf": "2026-04-24T00:00:00.000Z",
+  "missingDimensions": [],
+  "advisories": [],
+  "partial": false
+}

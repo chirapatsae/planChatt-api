@@ -1,0 +1,34 @@
+{
+  "shape": "crossPlanInsights",
+  "data": {
+    "scope": ["all"],
+    "projectCount": 3,
+    "planCount": 2,
+    "plans": [
+      {
+        "planId": "22222222-2222-4222-8222-222222222222",
+        "reportFormat": "STRATEGY_BASED",
+        "projectCount": 2,
+        "totalBudget": 800000
+      },
+      {
+        "planId": "33333333-3333-4333-8333-333333333333",
+        "reportFormat": "ISSUE_BASED",
+        "projectCount": 1,
+        "totalBudget": 250000
+      }
+    ],
+    "groupBy": ["originType"],
+    "buckets": {
+      "originType": [
+        { "key": "agency-normal", "count": 1 },
+        { "key": "lao-coordinated", "count": 2 }
+      ]
+    },
+    "totalBudget": 1050000
+  },
+  "asOf": "2026-04-24T00:00:00.000Z",
+  "missingDimensions": [],
+  "advisories": [],
+  "partial": false
+}

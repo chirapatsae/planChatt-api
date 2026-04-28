@@ -309,7 +309,13 @@ export class PreSubmitSnapshotService {
 
     const snapshot = await this.snapshotRepo.findOne({
       where: {
-        targetKind: targetKind as AiPreSubmitSnapshot['targetKind'],
+        // Wave 46 hotfix: `AbstractAiResult.targetKind` widened to
+        // `AiResultTargetKind | null`. RF5 snapshots always carry a
+        // non-null kind at write time, so the Exclude-null cast here
+        // is truthful and keeps FindOptionsWhere inference happy.
+        targetKind: targetKind as NonNullable<
+          AiPreSubmitSnapshot['targetKind']
+        >,
         targetId,
         deletedAt: IsNull(),
       },
@@ -322,7 +328,13 @@ export class PreSubmitSnapshotService {
       // "soft-deleted" (which would indicate an unexpected overwrite race).
       const withDeletedProbe = await this.snapshotRepo.findOne({
         where: {
-          targetKind: targetKind as AiPreSubmitSnapshot['targetKind'],
+          // Wave 46 hotfix: `AbstractAiResult.targetKind` widened to
+        // `AiResultTargetKind | null`. RF5 snapshots always carry a
+        // non-null kind at write time, so the Exclude-null cast here
+        // is truthful and keeps FindOptionsWhere inference happy.
+        targetKind: targetKind as NonNullable<
+          AiPreSubmitSnapshot['targetKind']
+        >,
           targetId,
         },
         withDeleted: true,
@@ -402,7 +414,13 @@ export class PreSubmitSnapshotService {
 
     const snapshot = await this.snapshotRepo.findOne({
       where: {
-        targetKind: targetKind as AiPreSubmitSnapshot['targetKind'],
+        // Wave 46 hotfix: `AbstractAiResult.targetKind` widened to
+        // `AiResultTargetKind | null`. RF5 snapshots always carry a
+        // non-null kind at write time, so the Exclude-null cast here
+        // is truthful and keeps FindOptionsWhere inference happy.
+        targetKind: targetKind as NonNullable<
+          AiPreSubmitSnapshot['targetKind']
+        >,
         targetId,
         deletedAt: IsNull(),
       },

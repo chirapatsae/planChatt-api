@@ -417,7 +417,10 @@ export class PdfService {
   }> {
     let previous: ProjectGroup | RevisedProjectGroup | null = null;
 
-    if (current.prevProjectType === "original") {
+    // W57-DB-01: prevProjectId is `string | null | undefined` after the
+    // entity-type tightening. Skip the lookup when missing — a row without
+    // a prev pointer has no previous version by definition.
+    if (current.prevProjectType === "original" && current.prevProjectId) {
       previous = await this.projectGroupRepo.findOne({
         where: { id: current.prevProjectId },
         relations: [
@@ -426,7 +429,7 @@ export class PdfService {
           'trackingStatus.createdBy.user', 'originAgencyId', 'responsibleAgency', 'amphoe',
         ],
       });
-    } else if (current.prevProjectType === "revised" || current.prevProjectType === "revision") {
+    } else if (current.prevProjectType === "revised" && current.prevProjectId) {
       previous = await this.revisedProjectGroupRepo.findOne({
         where: { id: current.prevProjectId },
         relations: [

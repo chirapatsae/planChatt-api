@@ -26,6 +26,11 @@ import { AttachmentProjectGroupsService } from './attachment-project-groups.serv
 import { multerConfig } from 'src/attachment-event/multer.config';
 import { UrlSigningUtil } from 'src/util/url-signing.util';
 import { DocumentAnalysisService } from 'src/document-analysis/document-analysis.service';
+// Wave 44 / BE-W44-03 — pre-call quota enforcement for the staff-lead
+// retry endpoint. Analysis triggered here calls OpenAI (summary) so the
+// retry MUST be gated by the user-quota + org-cap pre-call guard.
+import { AiQuotaGuard } from 'src/ai-usage-quotas/guards/ai-quota.guard';
+import { AiQuotaWeight } from 'src/ai-usage-quotas/decorators/ai-quota-weight.decorator';
 
 const STAFF_LEAD_ROLES = new Set(['staff', 'admin', 'super-admin']);
 
@@ -138,7 +143,8 @@ export class AttachmentProjectGroupsController {
   }
 
   // AI analysis — staff-lead retry for failed rows
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, AiQuotaGuard)
+  @AiQuotaWeight('document-summary')
   @Post(':id/analysis/retry')
   @HttpCode(HttpStatus.ACCEPTED)
   async retryAnalysis(

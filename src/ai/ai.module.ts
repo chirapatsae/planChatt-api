@@ -78,6 +78,10 @@ import { AiResultEnvelopeService } from './ai-result-envelope.service';
 // Wave 24 N1 — issue-based criteria registry. Exported so N3/N4 prompt
 // injection can reuse the same lookup as the GET endpoint.
 import { CriteriaModule } from './criteria/criteria.module';
+// SEC-W44-02 — shared PII redactor (§17.9 complementary to delimiter
+// wrap).  Every LLM call site in this module MUST invoke
+// PiiRedactorService on user-controlled inputs BEFORE the LLM call.
+import { PiiRedactorModule } from 'src/common/pii/pii-redactor.module';
 // Wave 24 N4 — deterministic pre-checks feeding the pre-submit review
 // prompt. Both services are advisory-only (§17.2) and stateless.
 import { IssueCriteriaGeoCheckService } from './criteria/issue-criteria-geo-check.service';
@@ -108,6 +112,7 @@ import { IssueCriteriaEvidenceCheckService } from './criteria/issue-criteria-evi
     LineageLockModule,
     BookLockModule,
     CriteriaModule,
+    PiiRedactorModule,
   ],
   controllers: [AiController],
   providers: [

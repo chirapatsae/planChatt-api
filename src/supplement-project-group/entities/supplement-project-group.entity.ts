@@ -18,6 +18,7 @@ import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.ent
 import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
 import { GovernmentAgency } from 'src/government-agencies/entities/government-agency.entity';
 import { DevelopmentIssue } from 'src/development-issue/entities/development-issue.entity';
+import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
 
 @Entity('supplement_project_groups')
 export class SupplementProjectGroup {
@@ -71,6 +72,9 @@ export class SupplementProjectGroup {
 
   @Column({ name: 'is_latest', default: true })
   isLatest: boolean;
+
+  @Column({ type: 'int', nullable: true })
+  pageNumber: number | null;
 
   @ManyToOne(() => Strategy, {
     onDelete: 'CASCADE',
@@ -133,6 +137,26 @@ export class SupplementProjectGroup {
   )
   @JoinColumn({ name: 'origin_agency_id' })
   originAgencyId: LocalAdministrativeOrganization;
+
+  /**
+   * CLAUDE.md §15 book lineage — Wave 55 W55-DB-01.
+   * Nullable FK to `amphoes(id)` (ON DELETE SET NULL) that enables
+   * province-level amphoe aggregation for SPG rows inside the
+   * Executive Chat geo-enrichment pipeline (W55-BE-04). Mirrors the
+   * pattern used by ProjectGroup / RevisedProjectGroup: only the
+   * relation is declared, no separate scalar column. Historical rows
+   * remain NULL by design — no backfill.
+   */
+  @ManyToOne(
+    () => Amphoe,
+    {
+      onUpdate: 'CASCADE',
+      onDelete: 'SET NULL',
+      nullable: true,
+    },
+  )
+  @JoinColumn({ name: 'amphoe_id' })
+  amphoe?: Amphoe | null;
 
   @ManyToOne(
     () => GovernmentAgency,

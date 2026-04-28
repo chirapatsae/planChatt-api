@@ -1,8 +1,9 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { readFile, stat } from 'fs/promises';
-import { OpenAI } from 'openai';
+// PRIV-W44-01 — central LLM abstraction (CLAUDE.md §17).
+import { LLM_CLIENT, LlmClient } from 'src/ai/llm/llm-client.interface';
 import * as mammoth from 'mammoth';
 import { AiUsageQuotasService } from 'src/ai-usage-quotas/ai-usage-quotas.service';
 import { AiUsageLogsService } from 'src/ai-usage-logs/ai-usage-logs.service';
@@ -12,6 +13,12 @@ import { calculateAiCost } from 'src/ai/utils/cost-calculator';
 import { AttachmentProjectGroup } from 'src/attachment-project-groups/entities/attachment-project-group.entity';
 import { AttachmentRevisedProjectGroup } from 'src/attachment-revised-project-groups/entities/attachment-revised-project-group.entity';
 import { redactPii } from './utils/pii-redactor';
+// SEC-W44-02 — shared INPUT-side PII redactor.  This is the complement
+// of `redactPii` above (which guards the response boundary for display).
+// The OCR text → LLM path below is the PRIMARY PII-leak surface
+// identified in the Wave 44 audit and MUST run redaction before the
+// LLM call per §17.9.
+import { PiiRedactorService } from 'src/common/pii/pii-redactor.service';
 import {
   ocrFile,
   ocrBuffer,
@@ -89,7 +96,6 @@ const OPENAI_CONCURRENCY_LIMIT = 3;
 @Injectable()
 export class DocumentAnalysisService implements OnModuleInit {
   private readonly logger = new Logger(DocumentAnalysisService.name);
-  private readonly openai: OpenAI;
   private readonly model = 'gpt-4o-mini';
 
   // Phase 1 semaphore: at most `OPENAI_CONCURRENCY_LIMIT` concurrent
@@ -123,9 +129,12 @@ export class DocumentAnalysisService implements OnModuleInit {
     // because `AiUsageLogsModule` is a leaf (no back-edge into
     // document-analysis), so `forwardRef` is unnecessary.
     private readonly aiUsageLogsService: AiUsageLogsService,
-  ) {
-    this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  }
+    // PRIV-W44-01 — central LLM client.
+    @Inject(LLM_CLIENT)
+    private readonly llm: LlmClient,
+    // SEC-W44-02 — input-side PII redactor (§17.9).
+    private readonly piiRedactor: PiiRedactorService,
+  ) {}
 
   // ----------------------------------------------------------------------
   // Phase 4 §T5 — OCR warm-up on app boot
@@ -277,10 +286,24 @@ export class DocumentAnalysisService implements OnModuleInit {
       // Replaces the naive `slice(0, 8000)` Phase 1 truncation so
       // government documents keep both the subject header and the
       // date/signoff footer within the 2,000-token input cap.
-      const text = smartTruncate(
+      const truncatedText = smartTruncate(
         cleanedText,
         TOKEN_GUARD_CONSTANTS.MAX_INPUT_TOKENS,
       );
+
+      // SEC-W44-02 — OCR text is the highest PII-density input in the
+      // system (scanned government letters carry citizen IDs, phones,
+      // addresses).  Redact BEFORE the LLM call per §17.9.  This is
+      // complementary to the system-prompt PII clause above — the
+      // prompt asks the model not to repeat PII; redaction removes
+      // the PII from the prompt in the first place.
+      const { output: text, counts: piiCounts } =
+        this.piiRedactor.redactText(truncatedText, {
+          endpoint: 'document-summary',
+          fieldPath: 'ocrText',
+        });
+      void piiCounts; // telemetry emitted inside service; counts
+                     // available for future ai_usage_logs annotation.
 
       // OpenAI call
       const responseSchema = {
@@ -318,7 +341,7 @@ export class DocumentAnalysisService implements OnModuleInit {
       const startedAt = Date.now();
       await this.acquireOpenAiSlot();
       try {
-        completion = await this.openai.chat.completions.create({
+        completion = await this.llm.createChatCompletion({
           model: this.model,
           temperature: 0.2,
           max_tokens: 500,

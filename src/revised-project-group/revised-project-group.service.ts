@@ -1607,7 +1607,10 @@ export class RevisedProjectGroupService {
       }
 
       let previous: ProjectGroup | RevisedProjectGroup | null = null;
-      if (current.prevProjectType === "original") {
+      // W57-DB-01: prevProjectId is now `string | null | undefined` after the
+      // entity-type tightening. Skip the lookup if it's missing — a row
+      // without a prev pointer has no previous version by definition.
+      if (current.prevProjectType === "original" && current.prevProjectId) {
         previous = await this.projectGroupRepo.findOne({
           where: {
             id: current.prevProjectId
@@ -1629,7 +1632,7 @@ export class RevisedProjectGroupService {
 
           ]
         })
-      } else if (current.prevProjectType === "revised") {
+      } else if (current.prevProjectType === "revised" && current.prevProjectId) {
         previous = await this.revisedProjectGroupRepo.findOne({
           where: {
             id: current.prevProjectId

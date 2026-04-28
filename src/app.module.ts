@@ -115,6 +115,24 @@ import { AiPreSubmitSnapshot } from './ai/entities/ai-pre-submit-snapshot.entity
 // registers it via `TypeOrmModule.forFeature` — `forFeature` only
 // provides the repository injection token, not the metadata itself.
 import { AiStaffReviewRun } from './ai/entities/ai-staff-review-run.entity';
+// Wave 44 DB-W44-01 — Executive AI Chat feature. Both entities must be
+// registered at the root DataSource (entities[]) AND via forFeature in
+// the feature module; forgetting the former triggers
+// `EntityMetadataNotFoundError` at boot — same footgun as the Wave 40
+// `AiStaffReviewRun` registration above. CLAUDE.md §17.3 — neither
+// entity has a FK into project / plan / tracking tables.
+import { AiExecutiveChatModule } from './ai-executive-chat/ai-executive-chat.module';
+// Wave 44 DB-W44-02 — startup bootstrap hook that applies an
+// allow-listed, idempotent DDL catalog after the DataSource is up.
+// See `docs/tasks/wave44/DB-W44-02.md` and
+// `docs/reports/WAVE44_RUNTIME_FAILURE_RCA.md` §5 (fix F3c).
+import { BootstrapModule } from './bootstrap/bootstrap.module';
+import { AiExecutiveConversation } from './ai-executive-chat/entities/ai-executive-conversation.entity';
+import { AiExecutiveMessage } from './ai-executive-chat/entities/ai-executive-message.entity';
+// PRIV-W44-01 — global LLM client abstraction (CLAUDE.md §17). Every
+// AI-consuming module (ai, document-analysis, ai-executive-chat) picks
+// up the injected `LLM_CLIENT` via this `@Global()` registration.
+import { LlmClientModule } from './ai/llm/llm-client.module';
 
 
 @Module({
@@ -169,6 +187,8 @@ import { AiStaffReviewRun } from './ai/entities/ai-staff-review-run.entity';
         AiUsageLog,
         AiPreSubmitSnapshot,
         AiStaffReviewRun,
+        AiExecutiveConversation,
+        AiExecutiveMessage,
         ProjectType,
         Announcement,
         AnnouncementRole,
@@ -254,6 +274,14 @@ import { AiStaffReviewRun } from './ai/entities/ai-staff-review-run.entity';
     AdminDocumentAnalysisModule,
     BookAssemblyModule,
     DevelopmentIssueModule,
+    AiExecutiveChatModule,
+    // PRIV-W44-01 — global LLM client (must import before any AI
+    // module that injects `LLM_CLIENT`).
+    LlmClientModule,
+    // DB-W44-02 — bootstrap hook for corrective DDL (registered last
+    // so every other module's TypeORM registration completes first,
+    // giving the allow-listed ALTERs a settled DataSource).
+    BootstrapModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -5,6 +5,11 @@ import { AiUsageLogsModule } from 'src/ai-usage-logs/ai-usage-logs.module';
 import { AttachmentProjectGroup } from 'src/attachment-project-groups/entities/attachment-project-group.entity';
 import { AttachmentRevisedProjectGroup } from 'src/attachment-revised-project-groups/entities/attachment-revised-project-group.entity';
 import { DocumentAnalysisService } from './document-analysis.service';
+// SEC-W44-02 — shared PII redactor.  The OCR → LLM path in
+// `document-analysis.service.ts` is the PRIMARY PII-leak surface
+// identified in the Wave 44 audit; the service injects
+// PiiRedactorService and redacts before every LLM call.
+import { PiiRedactorModule } from 'src/common/pii/pii-redactor.module';
 
 /**
  * Known tesseract.js + leptonica native error signatures that can escape
@@ -31,6 +36,7 @@ const KNOWN_OCR_ERROR_PATTERNS =
     // import is safe: `AiUsageLogsModule` is a leaf (no back-edge to
     // document-analysis), so no forwardRef is required.
     AiUsageLogsModule,
+    PiiRedactorModule,
   ],
   providers: [DocumentAnalysisService],
   exports: [DocumentAnalysisService],

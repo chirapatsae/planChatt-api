@@ -47,7 +47,10 @@ export interface IUnifiedProjectDisplay {
   originalProjectId?: string;
   projectGroup?: { id: string | undefined } | null;
   developmentPlanRevision?: DevelopmentPlanRevision;
-  prevProjectId?: string;
+  // W57-DB-01 — entity widened to `string | null`. DTO mirrors that so
+  // callers passing `revisedProject.prevProjectId` (now `string | null
+  // | undefined`) compile.
+  prevProjectId?: string | null;
   prevProjectType?: string;
 
   changes?: {

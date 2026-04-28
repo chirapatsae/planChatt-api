@@ -112,7 +112,15 @@ export class AiResultEnvelopeService {
     return d.toISOString();
   }
 
-  private assertTargetKindAllowed(kind: AiResultTargetKind): void {
+  private assertTargetKindAllowed(kind: AiResultTargetKind | null): void {
+    // Wave 46 hotfix: `AbstractAiResult.targetKind` widened to
+    // `AiResultTargetKind | null` to accommodate chat turns
+    // (§17.3 / BE-W45-01). Per-project AI-result rows (RF2/RF5)
+    // always carry a non-null kind at write time; a null here is
+    // a caller-side bug — reject explicitly.
+    if (kind === null) {
+      throw new BadRequestException('AI_TARGET_KIND_NOT_ALLOWED: null');
+    }
     if (!ALLOWED_TARGET_KINDS.includes(kind)) {
       // Defensive — prevents downstream RFs from accidentally enveloping
       // arbitrary entity kinds (§9 security constraint).

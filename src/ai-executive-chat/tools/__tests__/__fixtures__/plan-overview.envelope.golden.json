@@ -1,0 +1,20 @@
+{
+  "shape": "planOverview",
+  "data": {
+    "planId": "11111111-1111-4111-8111-111111111111",
+    "projectCount": 2,
+    "reportFormat": "STRATEGY_BASED",
+    "scope": ["main"],
+    "totalBudget": 1500000,
+    "statusBreakdown": [
+      { "statusName": "รอตรวจสอบ", "count": 1 },
+      { "statusName": "อนุมัติ", "count": 1 }
+    ],
+    "geoLabelCount": 2,
+    "agencyLabelCount": 1
+  },
+  "asOf": "2026-04-24T00:00:00.000Z",
+  "missingDimensions": [],
+  "advisories": [],
+  "partial": false
+}

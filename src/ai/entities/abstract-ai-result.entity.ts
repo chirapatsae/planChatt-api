@@ -37,12 +37,40 @@ export abstract class AbstractAiResult {
 
   /**
    * Project UUID the result is about. NOT a foreign key (§17.3).
+   *
+   * Nullable at the column level (Wave 46 HOTFIX): chat rows
+   * (`ai_executive_messages`, see BE-W45-01) legitimately carry NULL
+   * when the turn is not "about" any one specific project (user
+   * prompt, aggregate tool result, assistant with no single-project
+   * round). Concrete per-project AI-result tables (e.g.
+   * `ai_pre_submit_snapshots`) continue to enforce NOT NULL at the
+   * SERVICE layer — every write path supplies `targetId`.
+   *
+   * Prior to the Wave 46 hotfix, the base declared NOT NULL and
+   * `AiExecutiveMessage` attempted to override via `declare targetId`
+   * + `@Column({ nullable: true })`. TypeORM 0.3.x entity-inheritance
+   * column metadata did NOT pick up that override; the effective
+   * metadata remained NOT NULL. The BootstrapMigrationsService DDL
+   * hook ran AFTER synchronize and restored nullability — a fight
+   * that was silently successful only while the column held zero
+   * NULLs. Wave 45 (meaningful target_id) began writing real NULLs,
+   * and the next cold boot produced `QueryFailedError` 23502 on
+   * `ALTER COLUMN target_id SET NOT NULL`.
+   *
+   * Making the base nullable eliminates the TypeORM-vs-DDL fight and
+   * makes the metadata honest: the column IS nullable across the
+   * `ai_*` family. Snapshot-style children continue to enforce NOT
+   * NULL at write time.
    */
-  @Column({ name: 'target_id', type: 'uuid' })
-  targetId: string;
+  @Column({ name: 'target_id', type: 'uuid', nullable: true })
+  targetId: string | null;
 
   /**
    * Discriminator for `target_id`. Uses shared `ai_target_kind` enum.
+   *
+   * Nullable at the column level (Wave 46 HOTFIX, same rationale as
+   * `targetId`): chat rows with a NULL `targetId` also carry a NULL
+   * `targetKind`; the pair stays coherent.
    */
   @Column({
     name: 'target_kind',
@@ -53,8 +81,9 @@ export abstract class AbstractAiResult {
       'supplement-project-group',
     ] as AiResultTargetKind[],
     enumName: 'ai_target_kind',
+    nullable: true,
   })
-  targetKind: AiResultTargetKind;
+  targetKind: AiResultTargetKind | null;
 
   /**
    * SHA-256 hex of the canonical input hash that produced this result.

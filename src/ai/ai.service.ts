@@ -7,7 +7,10 @@ import {
   Logger,
   forwardRef,
 } from '@nestjs/common';
-import { OpenAI } from 'openai';
+// PRIV-W44-01 — central LLM abstraction. The direct OpenAI
+// constructor formerly lived in this file; it now lives in
+// `OpenAILlmClient` exclusively (see docs/ops/openai-dpa.md).
+import { LLM_CLIENT, LlmClient } from './llm/llm-client.interface';
 import { AiUsageQuotasService } from 'src/ai-usage-quotas/ai-usage-quotas.service';
 // Wave 36 N2 — rich detail logging. One write per LLM call; isolated
 // in try/catch so logging failure NEVER aborts the user-facing AI
@@ -33,6 +36,21 @@ import { translateInferredAreaType } from './utils/mismatch-advisor';
 // (this file) and staff pipelines MUST emit the delimiter pair only
 // through these helpers; the literal tokens do not appear inline.
 import { wrapUserTextBlock } from './utils/wrap-user-text';
+// SEC-W44-02 — shared INPUT-side PII redactor (§17.9 complement to
+// delimiter wrap).  Every `openai.chat.completions.create` call in
+// this file MUST be preceded by a `piiRedactor` invocation on the
+// user-controlled subset of the DTO / prompt payload.  Order:
+//   1. piiRedactor.redactForPrompt / redactText
+//   2. wrapUserText{,Block}
+//   3. openai.chat.completions.create
+import { PiiRedactorService } from 'src/common/pii/pii-redactor.service';
+import {
+  PROJECT_PROMPT_POLICY,
+  REGEN_PROMPT_POLICY,
+  REVIEW_PROMPT_POLICY,
+  SMART_APPROVE_POLICY,
+  PROMPT_SUGGESTIONS_POLICY,
+} from 'src/common/pii/field-policies';
 import {
   formatRubricForGenerator,
   formatRubricForReviewer,
@@ -139,9 +157,11 @@ const CONFIDENCE_TH: Record<string, string> = {
 @Injectable()
 export class AiService {
   private readonly logger = new Logger(AiService.name);
-  private openai: OpenAI;
 
   constructor(
+    // PRIV-W44-01 — central LLM client (CLAUDE.md §17).
+    @Inject(LLM_CLIENT)
+    private readonly llm: LlmClient,
     private readonly precheckService: SmartApprovePrecheckService,
     private readonly aiUsageQuotasService: AiUsageQuotasService,
     private readonly aiContextService: AiContextService,
@@ -171,10 +191,12 @@ export class AiService {
     // any future cycle without breaking module construction order.
     @Inject(forwardRef(() => AiUsageLogsService))
     private readonly aiUsageLogsService: AiUsageLogsService,
+    // SEC-W44-02 — INPUT-side PII redactor.  Injected here so every
+    // LLM call in this service can redact user-controlled text before
+    // delimiter wrap + LLM dispatch.
+    private readonly piiRedactor: PiiRedactorService,
   ) {
-    this.openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
+    // PRIV-W44-01 — OpenAI constructor moved to `OpenAILlmClient`.
   }
 
   /**
@@ -526,15 +548,26 @@ export class AiService {
       );
     }
 
+    // SEC-W44-02 — §17.9 complementary PII redaction on the final
+    // user-role payload BEFORE LLM dispatch.  The `mainPrompt` already
+    // wraps user-sourced substrings in `<<<USER_INPUT>>>` delimiters;
+    // redaction removes citizen IDs / phones / emails from inside
+    // those delimiters so the LLM never sees them.  System prompt
+    // stays intact (trusted, system-authored, no PII by construction).
+    const { output: redactedMainPrompt } = this.piiRedactor.redactText(
+      mainPrompt,
+      { endpoint: 'generate-project-detail' },
+    );
+
     const startTime = Date.now();
     try {
-      const completion = await this.openai.chat.completions.create({
+      const completion = await this.llm.createChatCompletion({
         model: 'gpt-4o',
         temperature: 0.7,
         max_tokens: 4000,
         messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: mainPrompt },
+          { role: 'user', content: redactedMainPrompt },
         ],
       });
       const durationMs = Date.now() - startTime;
@@ -1403,9 +1436,17 @@ ${formatRubricForGenerator({ isIssueBased: true })}
                 - ภาษาต้องเป็นภาษาไทยที่อ่านเข้าใจง่าย ไม่มี syntax หรือ token ของ prompt ในเนื้อหา
                 `;
 
+    // SEC-W44-02 — §17.9 PII redaction on the final user-role payload.
+    // `prompt` interpolates user-controlled fields (existingContent,
+    // modificationPrompt, classification context) into a single string;
+    // redaction strips citizen IDs / phones / emails before dispatch.
+    const { output: redactedPrompt } = this.piiRedactor.redactText(prompt, {
+      endpoint: 'regenerate-one-field',
+    });
+
     const startTime = Date.now();
     try {
-      const completion = await this.openai.chat.completions.create({
+      const completion = await this.llm.createChatCompletion({
         model: 'gpt-4o',
         temperature: 0.6,
         max_tokens: 700,
@@ -1417,7 +1458,7 @@ ${formatRubricForGenerator({ isIssueBased: true })}
           },
           {
             role: 'user',
-            content: prompt,
+            content: redactedPrompt,
           },
         ],
       });
@@ -1762,16 +1803,28 @@ ${instructions}`.trim();
       },
     };
 
+    // SEC-W44-02 — §17.9 PII redaction on the smart-approve user prompt
+    // before LLM dispatch.  User-sourced fields (title, objective,
+    // goal, expected, additionalContext) are already delimiter-wrapped;
+    // this pass strips citizen IDs / phones / emails from INSIDE the
+    // delimiters.
+    const { output: redactedUserPrompt } = this.piiRedactor.redactText(
+      userPrompt,
+      { endpoint: 'smart-approve' },
+    );
+    void SMART_APPROVE_POLICY; // policy catalogued; used by structured
+                              // retrofits in future call-site refactors.
+
     const startTime = Date.now();
     try {
-      const completion = await this.openai.chat.completions.create({
+      const completion = await this.llm.createChatCompletion({
         model: 'gpt-4o',
         temperature: 0.2,
         max_tokens: 2000,
         response_format: { type: 'json_schema', json_schema: responseSchema },
         messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
+          { role: 'user', content: redactedUserPrompt },
         ],
       });
       const durationMs = Date.now() - startTime;
@@ -2184,15 +2237,26 @@ ${instructions}`.trim();
       'โปรดสร้างคำสั่งสั้นภาษาไทย 5 บรรทัดตามกติกาในข้อความระบบ',
     ].join('\n');
 
+    // SEC-W44-02 — §17.9 PII redaction on the prompt-suggestions user
+    // message.  Context fields are structural metadata (strategy /
+    // amphoe / organization names) with low PII risk, but a uniform
+    // redaction pass keeps the grep gate stable and catches any
+    // future free-text field added to `contextLines`.
+    const { output: redactedUserMessage } = this.piiRedactor.redactText(
+      userMessage,
+      { endpoint: 'prompt-suggestions' },
+    );
+    void PROMPT_SUGGESTIONS_POLICY; // catalogued for future structured retrofits
+
     const startTime = Date.now();
     try {
-      const completion = await this.openai.chat.completions.create({
+      const completion = await this.llm.createChatCompletion({
         model: 'gpt-4o-mini',
         temperature: 0.8,
         max_tokens: 300,
         messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: userMessage },
+          { role: 'user', content: redactedUserMessage },
         ],
       });
       const durationMs = Date.now() - startTime;
@@ -2604,16 +2668,29 @@ ${formatRubricForReviewer({ isIssueBased })}
       },
     };
 
+    // SEC-W44-02 — §17.9 PII redaction on the pre-submit-review user
+    // prompt.  Attachment aiSummary / aiTopic fields are the likely
+    // residual-PII surface (upstream OCR may have leaked); the
+    // delimiter envelope prevents injection, the redactor prevents
+    // egress.  Order: redact → wrap → dispatch.
+    const { output: redactedReviewPrompt } = this.piiRedactor.redactText(
+      userPrompt,
+      { endpoint: 'pre-submit-review' },
+    );
+    void REVIEW_PROMPT_POLICY;
+    void PROJECT_PROMPT_POLICY;
+    void REGEN_PROMPT_POLICY;
+
     const startTime = Date.now();
     try {
-      const completion = await this.openai.chat.completions.create({
+      const completion = await this.llm.createChatCompletion({
         model: 'gpt-4o',
         temperature: 0.3,
         max_tokens: 1500,
         response_format: { type: 'json_schema', json_schema: responseSchema },
         messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
+          { role: 'user', content: redactedReviewPrompt },
         ],
       });
       const durationMs = Date.now() - startTime;
