@@ -235,6 +235,27 @@ export type GroupedExecutiveStatusBreakdownProject = {
    * verbatim from the envelope (W66 anti-prose-translation lock).
    */
   coordinatorLaoName: string | null;
+  /**
+   * W71-BE-PROJECT-BUDGET (2026-04-28) — total committed budget for the
+   * project, summed across all `Budget` rows linked to this PG/RPG/SPG.
+   *
+   * Always a non-null `number`. `0` is the canonical zero-value sentinel
+   * for "project has no Budget rows" — the prompt rule #39 render
+   * template MUST distinguish this from "งบประมาณ: ไม่ระบุ" (used for
+   * missing data) and render `0` as `งบประมาณ: ไม่มีงบประมาณ`.
+   *
+   * Sourced via correlated `COALESCE(SUM(b.quantity), 0)` subquery on the
+   * `Budget` entity. Mirrors the existing pattern in
+   * `executive-tool-handlers.ts` (`listProjectsInPlan`,
+   * `highlightBudgetOutliers`, `getBudgetSummaryByPlan`). §14.2
+   * head-of-lineage anti-join lives on the project spine; the budget
+   * subquery sums rows for a single project id and does NOT need its
+   * own HEAD filter.
+   *
+   * §17.2 advisory only — surfacing budget per project does NOT gate
+   * any workflow transition.
+   */
+  budget: number;
 };
 
 export type GroupedExecutiveStatusBreakdownStatusGroup = {

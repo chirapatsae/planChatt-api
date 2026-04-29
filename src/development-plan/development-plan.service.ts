@@ -947,11 +947,19 @@ export class DevelopmentPlanService {
           throw new NotFoundException(`Development Plan with ID ${id} not found`);
         }
 
-        // CLAUDE.md §15 / OQ-6 — updateLatestStatus is a plan field
-        // mutation and MUST obey the book-lineage lock. A plan with
-        // any non-soft-deleted revision or supplement cannot have its
-        // latest flag flipped.
-        await this.bookLockService.assertEditable(id, 'development_plan', manager);
+        // CLAUDE.md §15.5 carve-out (W72) — `updateLatestStatus` is a
+        // flag-only toggle. It does NOT mutate book content, delete the
+        // row, or affect descendants, so it does NOT violate the book
+        // lineage immutability invariant. Promoting an older plan to
+        // `isLatest=true` so the user can author a new sub-book
+        // (revision / change / supplement) under it is operationally
+        // required and explicitly exempt under §15.5.
+        //
+        // The other §15.4 blocked operations on `DevelopmentPlan`
+        // (`update`, `remove`, `softRemove`, `restore`,
+        // `updateWithPhases`, `rollbackBook`) STILL call
+        // `bookLockService.assertEditable / assertDeletable` — only
+        // this one method is relaxed. See W72-BE-RELAX-LATEST-STATUS.
 
         if (isLatest) {
           await developmentPlanRepository.update(

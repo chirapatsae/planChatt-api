@@ -133,6 +133,30 @@ export class RevisedProjectGroupService {
     dto: CreateRevisedProjectGroupDto,
     userId: string,
   ): Promise<RevisedProjectGroup> {
+    // CLAUDE.md §14.1 / §14.9 — defensive guard rail (W74 BE-GUARDRAIL).
+    // Belt-and-braces beyond the DTO's @IsNotEmpty / @IsEnum validators
+    // for callers that bypass the global ValidationPipe (e.g. internal
+    // service-to-service calls or test paths that construct the DTO
+    // programmatically). These guards MUST run BEFORE any repository
+    // write per §14.9.
+    if (
+      !dto.prevProjectId ||
+      typeof dto.prevProjectId !== 'string' ||
+      dto.prevProjectId.trim() === ''
+    ) {
+      throw new BadRequestException(
+        'LINEAGE_FK_REQUIRED: prevProjectId is required for revised project creation',
+      );
+    }
+    if (
+      !dto.prevProjectType ||
+      (dto.prevProjectType !== 'original' && dto.prevProjectType !== 'revised')
+    ) {
+      throw new BadRequestException(
+        'LINEAGE_FK_REQUIRED: prevProjectType must be "original" or "revised"',
+      );
+    }
+
     try {
       return await this.dataSource.transaction(async (manager) => {
         // CLAUDE.md §16.5 — resolve format FIRST so validateForeignKeys

@@ -44,9 +44,11 @@ import type {
 
 // W67-FIX-C — drill projects now require pageNumber + bookLabel +
 // linkedRelated. W67-COORDINATOR-LAO (2026-04-27) adds
-// `coordinatorLaoName`. The helper builds a baseline projection so the
-// existing test bodies stay readable; spec cases that exercise the new
-// fields override these defaults explicitly.
+// `coordinatorLaoName`. W71-BE-PROJECT-BUDGET (2026-04-28) adds
+// `budget: number` (defaulting to 0 — the canonical "no budget rows"
+// sentinel per the interface contract). The helper builds a baseline
+// projection so the existing test bodies stay readable; spec cases
+// that exercise the new fields override these defaults explicitly.
 function mkProject(
   overrides: Partial<GroupedExecutiveStatusBreakdownProject> &
     Pick<GroupedExecutiveStatusBreakdownProject, 'projectId' | 'projectKind' | 'name'>,
@@ -58,6 +60,10 @@ function mkProject(
     // W67-COORDINATOR-LAO — null by default; per-test overrides exercise
     // the coordinator-LAO annotation surface.
     coordinatorLaoName: null,
+    // W71-BE-PROJECT-BUDGET — 0 by default (canonical "no Budget rows"
+    // sentinel; prompt rule #39 renders this as "งบประมาณ: ไม่มีงบประมาณ").
+    // Per-test overrides exercise the positive-budget render path.
+    budget: 0,
     ...overrides,
   };
 }

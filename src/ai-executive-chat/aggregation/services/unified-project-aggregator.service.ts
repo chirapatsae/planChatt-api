@@ -868,12 +868,23 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
     // distinct alias `proj_lao` (NOT `wh_lao`, which is the creator's
     // LAO via WorkHistory and serves the §1+§5 originType discriminator).
     // SPG has no LAO FK column, so the projection always emits null.
+    //
+    // W71-BE-PROJECT-BUDGET (2026-04-28) — add correlated SUM subquery
+    // over `Budget` rows per project, mirroring the pattern used by
+    // `listProjectsInPlan`, `highlightBudgetOutliers`, and
+    // `getBudgetSummaryByPlan` in `executive-tool-handlers.ts`. The
+    // subquery returns `0` (via COALESCE) when no Budget rows exist for
+    // the project; downstream coercion clamps `Number(...)` to a
+    // non-null number. §14.2 head-of-lineage anti-join already lives on
+    // the spine query — the budget subquery sums rows for a single
+    // project id only and does NOT need its own HEAD filter.
     let rows: Array<{
       id: string;
       title: string | null;
       pagenumber: number | null;
       proj_lao_id: string | null;
       proj_lao_name: string | null;
+      budget: string | number | null;
     }> = [];
     if (book.bookKind === 'main') {
       const planId = args.planId;
@@ -902,6 +913,18 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
         // W67-COORDINATOR-LAO — coordinator-LAO id + name (nullable).
         .addSelect('proj_lao.id', 'proj_lao_id')
         .addSelect('proj_lao.name', 'proj_lao_name')
+        // W71-BE-PROJECT-BUDGET — correlated SUM(b.quantity) per PG.
+        // Same shape as `listProjectsInPlan` (see
+        // `executive-tool-handlers.ts:1977-1984`). Returns 0 when the
+        // project has no Budget rows.
+        .addSelect(
+          (subQb: SelectQueryBuilder<Budget>) =>
+            subQb
+              .select('COALESCE(SUM(b.quantity), 0)')
+              .from(Budget, 'b')
+              .where('b.project_group_id = pg.id'),
+          'budget',
+        )
         .where('pg.deletedAt IS NULL')
         .andWhere('dp.deletedAt IS NULL')
         .andWhere('dp.id = :planIdFilter', { planIdFilter: planId })
@@ -926,6 +949,7 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
         pagenumber: number | null;
         proj_lao_id: string | null;
         proj_lao_name: string | null;
+        budget: string | number | null;
       }>();
     } else if (book.bookKind === 'revised') {
       // bookKey: `${planId}::revised::${dprId}` — pull dprId from key
@@ -957,6 +981,17 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
         // W67-COORDINATOR-LAO — coordinator-LAO id + name (nullable).
         .addSelect('proj_lao.id', 'proj_lao_id')
         .addSelect('proj_lao.name', 'proj_lao_name')
+        // W71-BE-PROJECT-BUDGET — correlated SUM(b.quantity) per RPG.
+        // Same shape as `listProjectsInPlan` (see
+        // `executive-tool-handlers.ts:2130-2137`).
+        .addSelect(
+          (subQb: SelectQueryBuilder<Budget>) =>
+            subQb
+              .select('COALESCE(SUM(b.quantity), 0)')
+              .from(Budget, 'b')
+              .where('b.revised_project_group_id = rpg.id'),
+          'budget',
+        )
         .where('rpg.deletedAt IS NULL')
         .andWhere('dpr.deletedAt IS NULL')
         .andWhere('dp.deletedAt IS NULL')
@@ -982,6 +1017,7 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
         pagenumber: number | null;
         proj_lao_id: string | null;
         proj_lao_name: string | null;
+        budget: string | number | null;
       }>();
     } else {
       // supplement
@@ -1009,6 +1045,17 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
         .addSelect('spg.title', 'title')
         // W67-FIX-C — pageNumber per project entry (Q1=yes).
         .addSelect('spg.pageNumber', 'pagenumber')
+        // W71-BE-PROJECT-BUDGET — correlated SUM(b.quantity) per SPG.
+        // Mirrors the PG / RPG pattern; the FK column on `Budget` for
+        // supplement is `supplement_project_group_id`.
+        .addSelect(
+          (subQb: SelectQueryBuilder<Budget>) =>
+            subQb
+              .select('COALESCE(SUM(b.quantity), 0)')
+              .from(Budget, 'b')
+              .where('b.supplement_project_group_id = spg.id'),
+          'budget',
+        )
         .where('spg.deletedAt IS NULL')
         .andWhere('dps.deletedAt IS NULL')
         .andWhere('dp.deletedAt IS NULL')
@@ -1021,10 +1068,14 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
       this.applyFilters(qb, filters, 'supplement');
       // W67-COORDINATOR-LAO — SPG has no `local_administrative_organization_id`
       // column; emit null shaped rows so the projection stays type-safe.
+      // W71-BE-PROJECT-BUDGET — `budget` IS projected on SPG (the FK
+      // column `supplement_project_group_id` exists on Budget); coerce
+      // through the same pipeline as PG / RPG below.
       const spgRows = await qb.getRawMany<{
         id: string;
         title: string | null;
         pagenumber: number | null;
+        budget: string | number | null;
       }>();
       rows = spgRows.map((r) => ({
         ...r,
@@ -1061,6 +1112,18 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
           r.proj_lao_name.length > 0
             ? r.proj_lao_name
             : null,
+        // W71-BE-PROJECT-BUDGET (2026-04-28) — coerce the COALESCE(SUM,0)
+        // raw cell into a finite non-null number. Postgres returns
+        // numeric-typed SUMs as strings via TypeORM's raw projection;
+        // `Number(string)` collapses to NaN only on garbage input which
+        // the COALESCE prevents. Defensive `|| 0` clamps any residual
+        // edge case to the canonical zero-value sentinel.
+        budget:
+          typeof r.budget === 'number'
+            ? Number.isFinite(r.budget)
+              ? r.budget
+              : 0
+            : Number(r.budget ?? 0) || 0,
       }),
     );
     status.projects = projects;

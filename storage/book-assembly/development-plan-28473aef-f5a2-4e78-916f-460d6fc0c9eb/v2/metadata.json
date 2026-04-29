@@ -1,0 +1,45 @@
+{
+  "version": 2,
+  "sourceType": "main_plan",
+  "sourceId": "28473aef-f5a2-4e78-916f-460d6fc0c9eb",
+  "status": "completed",
+  "correctionMode": "correction_part3",
+  "correctionReason": "แก้ไขรายละเอียดส่วนที่ 3",
+  "parts": {
+    "part1": {
+      "source": "reused",
+      "originalFileName": "à¹à¸­à¸à¸ªà¸²à¸£à¸à¸¸à¸à¸à¸´à¸à¸à¸±à¹à¸à¹à¸à¸´à¹à¸¡à¸à¹à¸­à¸à¹à¸¥à¸ 6 à¸à¸¸à¸ à¸à¸­à¸à¸à¸¥à¸±à¸ .pdf",
+      "uploadedBy": "1a0f8d63-69f3-4e06-a5d2-e7046d926d29",
+      "uploadedAt": "2026-04-15T04:46:39.994Z"
+    },
+    "part2": {
+      "source": "reused",
+      "originalFileName": "à¸à¸±à¸ªà¸à¸¸ L6.pdf",
+      "uploadedBy": "1a0f8d63-69f3-4e06-a5d2-e7046d926d29",
+      "uploadedAt": "2026-04-15T04:46:39.996Z"
+    },
+    "part3": {
+      "source": "generated",
+      "projectCount": 6,
+      "projectIds": [
+        "4eceb35c-b264-425b-b089-063035245f7c",
+        "78a4cc6b-0334-4121-a255-05ed82123ee2",
+        "7aa21192-3367-4743-a8ca-4fa57b57853e",
+        "c9907dbb-b1ae-4296-b922-81bcf66ff2cf",
+        "4c6d797b-c4f7-4d4a-9fd2-a1f1624711f3",
+        "86b8d457-5248-4e9f-8d13-6797483a56cd"
+      ],
+      "generatedAt": "2026-04-28T15:33:47.154Z"
+    }
+  },
+  "merged": {
+    "fileName": "official-book-v2.pdf",
+    "mergedAt": "2026-04-28T15:34:05.645Z",
+    "totalPages": 19
+  },
+  "createdBy": "1a0f8d63-69f3-4e06-a5d2-e7046d926d29",
+  "createdAt": "2026-04-28T15:34:05.577Z",
+  "deprecatedAt": null,
+  "deprecatedBy": null,
+  "deprecationReason": null
+}

@@ -1,9 +1,13 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
-import { Logger } from '@nestjs/common';
+import { BadRequestException, Logger } from '@nestjs/common';
 
 import { RevisedProjectGroupService } from './revised-project-group.service';
+import {
+  CreateRevisedProjectGroupDto,
+  PrevProjectType,
+} from './dto/create-revised-project-group.dto';
 import { RevisedProjectGroup } from './entities/revised-project-group.entity';
 import { DevelopmentPlanRevision } from '../development-plan-revision/entities/development-plan-revision.entity';
 import { ProjectGroup } from '../project-groups/entities/project-group.entity';
@@ -171,6 +175,53 @@ describe('RevisedProjectGroupService', () => {
       );
       expect(dprLatestClauseFound).toBe(true);
       expect(dprBookedClauseFound).toBe(true);
+    });
+  });
+
+  describe('create — §14 lineage FK guard rail (W74 BE-GUARDRAIL)', () => {
+    /**
+     * The guard rail MUST run BEFORE any repository write per CLAUDE.md
+     * §14.9. We assert that providing an invalid lineage FK throws a
+     * BadRequestException with the canonical `LINEAGE_FK_REQUIRED`
+     * message prefix and that the transaction is never opened.
+     */
+    function buildBaseDto(
+      overrides: Partial<CreateRevisedProjectGroupDto> = {},
+    ): CreateRevisedProjectGroupDto {
+      return {
+        developmentPlanRevisionId: 'dpr-uuid',
+        title: 't',
+        objective: 'o',
+        goal: 'g',
+        expected: 'e',
+        projectYear: 2569,
+        prevProjectId: 'pg-uuid',
+        prevProjectType: PrevProjectType.ORIGINAL,
+        responsibleAgency: 'agency-1',
+        ...overrides,
+      } as CreateRevisedProjectGroupDto;
+    }
+
+    it('create throws LINEAGE_FK_REQUIRED when prevProjectId missing', async () => {
+      const dto = buildBaseDto({ prevProjectId: '' as any });
+
+      await expect(service.create(dto, 'user-1')).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(service.create(dto, 'user-1')).rejects.toThrow(
+        /^LINEAGE_FK_REQUIRED:/,
+      );
+    });
+
+    it('create throws LINEAGE_FK_REQUIRED when prevProjectType invalid', async () => {
+      const dto = buildBaseDto({ prevProjectType: 'banana' as any });
+
+      await expect(service.create(dto, 'user-1')).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(service.create(dto, 'user-1')).rejects.toThrow(
+        /^LINEAGE_FK_REQUIRED:/,
+      );
     });
   });
 });

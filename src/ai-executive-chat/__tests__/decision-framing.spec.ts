@@ -188,7 +188,14 @@ describe('BE-W44-02 / decision-framing system prompt (§17.2)', () => {
     // mappings + retry-without-type + Negative example B for the
     // "อบต. โคกกรวด" / "เทศบาลตำบลโคกกรวด" disambiguation regression).
     // ~850-byte net growth.
-    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT.length).toBeLessThanOrEqual(59392);
+    // W71-BE-PROMPT-01 (2026-04-28): cap raised 59392 → 61440 to credit
+    // rule #39 W71 budget-annotation extension — per-project
+    // \`งบประมาณ: {budgetText}\` slot in the drill render template,
+    // budgetText resolution rules (positive → "{commas} บาท"; zero →
+    // "ไม่มีงบประมาณ"), FORBIDDEN-string list (\`ไม่ระบุ\` is the
+    // user-reported regression we are fixing), and anti-prose-translation
+    // lock list extended with \`projects[i].budget\`. Net growth ~1.5 KB.
+    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT.length).toBeLessThanOrEqual(61440);
     // W59-BE-PROMPT-01 (2026-04-25): cap raised 16384 → 18432 to credit
     // rules #27f (D-B objective disclosure, 200-char truncation),
     // #27g (D-C location triple — amphoeName / laoName / geoCoordinates),
@@ -259,6 +266,50 @@ describe('BE-W44-02 / decision-framing system prompt (§17.2)', () => {
     expect(EXECUTIVE_CHAT_TOOL_INSTRUCTIONS).toContain('listAmphoes');
     // Must reference rule #25a so the LLM can locate the routing rule.
     expect(EXECUTIVE_CHAT_TOOL_INSTRUCTIONS).toMatch(/#25a/);
+  });
+
+  it('W71-BE-PROMPT-01 — rule #39 render template requests per-project งบประมาณ: budget annotation', () => {
+    // §17.2 advisory-only — drill render must surface the per-project
+    // budget so the model never silently emits "งบประมาณ: ไม่ระบุ" when
+    // the envelope carries a numeric budget. Pairs with
+    // W71-BE-PROJECT-BUDGET (aggregator change exposing the field).
+    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain('งบประมาณ:');
+    // The render template literal must wire the budget slot as a
+    // pipe-separated annotation (not a separate line).
+    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(
+      /หน้า \{projects\[0\]\.pageNumber\} \| งบประมาณ: \{projects\[0\]\.budgetText\}/,
+    );
+    // Zero-budget fallback wording is documented inline.
+    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain('ไม่มีงบประมาณ');
+  });
+
+  it('W71-BE-PROMPT-01 — rule #39 forbids "งบประมาณ: ไม่ระบุ" (the user-reported regression string)', () => {
+    // The exact bug we are fixing: gpt-4.1-mini was emitting
+    // "งบประมาณ: ไม่ระบุ" for every drill project. The prompt must
+    // explicitly negate that string so the model has an instruction
+    // to override its default null-handling intuition.
+    // We assert the FORBIDDEN markup + the offending string appear
+    // adjacent in the prompt, matching the existing FORBIDDEN-strings
+    // pattern used elsewhere in rule #39.
+    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain('FORBIDDEN');
+    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain('งบประมาณ: ไม่ระบุ');
+    // Cross-reference to the W66 anti-prose-translation lock — the
+    // rule must declare budget under the same lock bucket as bookLabel
+    // and coordinatorLaoName.
+    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain('projects[i].budget');
+  });
+
+  it('W71-BE-PROMPT-01 — rule #39 documents the comma-separator + บาท suffix render rule', () => {
+    // Anti-prose-translation lock: numbers must render as
+    // "{commas} บาท" verbatim, never as Thai prose
+    // ("เจ็ดล้านหนึ่งแสนบาท").
+    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(/comma/);
+    // The bullet must mention the positive-render template.
+    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(/\{commas\} บาท|comma thousands-separator/);
+    // §17.2 advisory-only cross-reference is preserved (rule #39
+    // already cites it; we verify the new W71 sub-clause did not
+    // accidentally drop it).
+    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain('§17.2 advisory-only');
   });
 
   it('retains the five baseline rules (tool-only, no guessing, no approvals, not-found disclosure, injection guard)', () => {

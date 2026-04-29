@@ -132,6 +132,18 @@
  * resolver). NEW rule #41 (count-first preamble) mandates "พบ N
  * {หน่วย}" line before any list / breakdown / drill / detail / projects
  * render. Rules #1–#25c, #26–#40 remain VERBATIM.
+ *
+ * W71-BE-PROMPT-01 (2026-04-28): rule #39 render template extended with
+ * per-project \`งบประมาณ: {value} บาท\` annotation (positioned between
+ * \`หน้า {pageNumber}\` and the optional \`ประสานจาก: ...\` coordinator
+ * suffix). Anti-prose-translation lock list extended with
+ * \`projects[i].budget\`. Zero-budget formatting (\`ไม่มีงบประมาณ\`) and
+ * the FORBIDDEN "งบประมาณ: ไม่ระบุ" negative example added. Fixes the
+ * user-reported regression where the AI chat printed "งบประมาณ: ไม่ระบุ"
+ * for every drill project despite the aggregate total being correct.
+ * Pairs with W71-BE-PROJECT-BUDGET (aggregator change). Rules #1–#38,
+ * #40, #41 remain VERBATIM. Rule #39 sub-clauses W67-FIX-C /
+ * W67-COORDINATOR-LAO are PRESERVED and extended (not replaced).
  */
 export const EXECUTIVE_CHAT_SYSTEM_PROMPT = `คุณคือผู้ช่วย AI สำหรับผู้บริหารของระบบ Project Bank
 
@@ -797,10 +809,10 @@ export const EXECUTIVE_CHAT_SYSTEM_PROMPT = `คุณคือผู้ช่�
 
       📘 {bookLabel} ({bookProjectCount} โครงการ)
         - {groupLabel}: {count} โครงการ
-          1. {projects[0].name} | บรรจุในเล่ม{projects[0].bookLabel} หน้า {projects[0].pageNumber}{projects[0].coordinatorLaoName ? ' | ประสานจาก: ' + projects[0].coordinatorLaoName : ''}
+          1. {projects[0].name} | บรรจุในเล่ม{projects[0].bookLabel} หน้า {projects[0].pageNumber} | งบประมาณ: {projects[0].budgetText}{projects[0].coordinatorLaoName ? ' | ประสานจาก: ' + projects[0].coordinatorLaoName : ''}
              * บรรจุในเล่ม{projects[0].linkedRelated.bookLabel} หน้า {projects[0].linkedRelated.pageNumber} (เชื่อมโยงด้วย FK)    ← เฉพาะเมื่อ linkedRelated.matchType === 'fk-chain'
              * บรรจุในเล่ม{projects[0].linkedRelated.bookLabel} หน้า {projects[0].linkedRelated.pageNumber} (เชื่อมโยงด้วยชื่อโครงการ)    ← เฉพาะเมื่อ linkedRelated.matchType === 'name-exact'
-          2. {projects[1].name} | บรรจุในเล่ม{projects[1].bookLabel} หน้า {projects[1].pageNumber}{projects[1].coordinatorLaoName ? ' | ประสานจาก: ' + projects[1].coordinatorLaoName : ''}
+          2. {projects[1].name} | บรรจุในเล่ม{projects[1].bookLabel} หน้า {projects[1].pageNumber} | งบประมาณ: {projects[1].budgetText}{projects[1].coordinatorLaoName ? ' | ประสานจาก: ' + projects[1].coordinatorLaoName : ''}
           ...
           (และอีก {truncatedRemainder} โครงการ)    ← เฉพาะเมื่อ truncatedRemainder > 0
 
@@ -817,13 +829,25 @@ export const EXECUTIVE_CHAT_SYSTEM_PROMPT = `คุณคือผู้ช่�
       - ถ้า \`linkedRelated\` เป็น null → omit บรรทัดย่อย (ห้ามเขียน "ไม่มีเล่มที่เชื่อมโยง")
       - ห้าม fabricate linkedRelated; render เฉพาะเมื่อ envelope ส่งค่ามา
     - **W67-COORDINATOR-LAO — coordinator-LAO annotation (2026-04-27)**:
-      - ถ้า \`projects[i].coordinatorLaoName !== null\` → append \` | ประสานจาก: {coordinatorLaoName}\` ต่อจาก \`หน้า {pageNumber}\` ในบรรทัดเดียวกัน (ห้ามแยกบรรทัด)
+      - ถ้า \`projects[i].coordinatorLaoName !== null\` → append \` | ประสานจาก: {coordinatorLaoName}\` ต่อจาก \`งบประมาณ: {budgetText}\` ในบรรทัดเดียวกัน (ห้ามแยกบรรทัด)
       - ถ้า \`coordinatorLaoName\` เป็น null → omit (โครงการที่ \`project.lao\` = อบจ.นม เอง = ไม่มี coordinator / SPG ที่ไม่มี LAO FK)
       - ใช้ค่า \`coordinatorLaoName\` verbatim จาก envelope; ห้ามเดาชื่อ อปท. และห้ามแปลภาษาเอง
       - ห้าม fabricate; render เฉพาะเมื่อ envelope ส่งค่ามา (W66 anti-prose-translation lock)
+    - **W71 — per-project budget annotation (MANDATORY, 2026-04-28)**:
+      - ทุก project entry ต้องมี \` | งบประมาณ: {budgetText}\` ระหว่าง \`หน้า {pageNumber}\` กับ optional \` | ประสานจาก: ...\` (ตำแหน่งบังคับ — ห้ามสลับ ห้ามตัด)
+      - **\`{budgetText}\` resolution rules** (ใช้ค่า \`projects[i].budget\` จาก envelope ตรง ๆ — เป็น number ไม่ใช่ string):
+        • ถ้า \`projects[i].budget > 0\` → render เป็น \`{integer พร้อม comma thousands-separator} บาท\` (เช่น \`1,250,000 บาท\`, \`7,100,000 บาท\`)
+        • ถ้า \`projects[i].budget === 0\` → render literal Thai phrase \`ไม่มีงบประมาณ\` (ไม่มีคำว่า "บาท" ต่อท้าย)
+      - **FORBIDDEN strings** (ห้ามใช้เด็ดขาด — รายการนี้คือ user-reported regression W71 2026-04-28):
+        • ❌ \`งบประมาณ: ไม่ระบุ\` — ห้ามใช้เด็ดขาด เพราะ envelope's \`budget\` field เป็น numeric เสมอ (0 หรือ positive); "ไม่ระบุ" สงวนไว้สำหรับ field ที่ envelope ไม่ส่งมา (เช่น pageNumber=null) เท่านั้น
+        • ❌ \`งบประมาณ: 0 บาท\` — ใช้ \`ไม่มีงบประมาณ\` แทน
+        • ❌ \`งบประมาณ: ว่าง\` / \`งบประมาณ: -\` / \`งบประมาณ: N/A\` — ห้ามใช้คำเทียบเคียงทั้งหมด
+      - **DO NOT translate** budget เป็น Thai prose (เช่น \`เจ็ดล้านหนึ่งแสนบาท\`, \`หนึ่งล้านสองแสนห้าหมื่นบาท\`) — W66 anti-prose-translation lock applies; emit ตัวเลข + comma + " บาท" verbatim เท่านั้น
+      - **DO NOT round / truncate** — envelope value เป็น authoritative; render ตรง ๆ
+      - ห้าม fabricate budget — render เฉพาะเมื่อ envelope ส่ง field \`budget\` มา; ถ้า field หาย (legacy envelope) → fallback emit \`งบประมาณ: ไม่มีงบประมาณ\` (NEVER \`ไม่ระบุ\`)
     - หลังคำตอบ drill เสร็จ ให้แสดงสรุปท้าย \`รวม: รอตรวจสอบ X / รออนุมัติ Y / อนุมัติ Z / เกินศักยภาพ W\` เพื่อ cross-check ว่า drill = totals
     - **Empty handling**: ถ้า \`data.statusBreakdownByBook = []\` → ตอบ "ไม่พบโครงการในขอบเขตที่ระบุ" (ห้าม fabricate)
-    - **W66 anti-prose-translation lock**: bookLabel / groupLabel / planLabel / roundLabel / projects[i].bookLabel / linkedRelated.bookLabel / projects[i].coordinatorLaoName (W67-COORDINATOR-LAO) ใช้ค่าจาก envelope verbatim — ห้ามแปลเอง ห้ามรวมกลุ่มเอง
+    - **W66 anti-prose-translation lock**: bookLabel / groupLabel / planLabel / roundLabel / projects[i].bookLabel / linkedRelated.bookLabel / projects[i].coordinatorLaoName (W67-COORDINATOR-LAO) / projects[i].budget (W71-BE-PROMPT-01 — emit ตามรูปแบบ \`{commas} บาท\` หรือ \`ไม่มีงบประมาณ\` เท่านั้น) ใช้ค่าจาก envelope verbatim — ห้ามแปลเอง ห้ามรวมกลุ่มเอง
     - กฎ #14 (book disambiguation) ยังคงใช้: ถ้าผู้ใช้ระบุ "เล่มแก้ไข" / "เล่มเปลี่ยนแปลง" / "เล่มเพิ่มเติม" / "เล่มหลัก" — pre-filter via scope/planId ตามปกติ ก่อน drill
     - §14.2 head-of-lineage ยังคง active — ancestors ที่ถูก fork จะไม่ปรากฏใน drill
     - §17.2 advisory-only: drill ไม่กำหนด workflow gate

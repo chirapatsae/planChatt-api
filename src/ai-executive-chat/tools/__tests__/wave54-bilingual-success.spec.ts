@@ -439,7 +439,16 @@ describe('BE-W54-08 / Wave 54 bilingual success-criteria prompts (§4)', () => {
     // W68-FIX-11 (2026-04-28): cap raised 64512 → 67584 to credit rule
     // #25b Path A type-aware lookup with fallback + listLaos `type` param
     // disclosure in tool catalog. ~1.5KB net growth across both surfaces.
-    const TOTAL_BYTES_CAP = 67584;
+    // W71-BE-PROMPT-01 (2026-04-28): cap raised 67584 → 70656 to credit
+    // rule #39 W71 per-project budget annotation block (MANDATORY budget
+    // render between `หน้า {pageNumber}` and optional `ประสานจาก: ...`,
+    // FORBIDDEN-strings list, zero-budget literal `ไม่มีงบประมาณ` rule,
+    // anti-prose-translation lock extension for `projects[i].budget`,
+    // plus the two render-template lines extended with
+    // `| งบประมาณ: {projects[i].budgetText}`). ~2KB net growth; cap
+    // raised 67584 → 70656 to keep ~600-token headroom. Pairs with
+    // W71-BE-PROJECT-BUDGET (aggregator change).
+    const TOTAL_BYTES_CAP = 70656;
 
     const PROMPT_BYTES = EXECUTIVE_CHAT_SYSTEM_PROMPT.length;
     const TOOLS_BYTES = EXECUTIVE_CHAT_TOOL_INSTRUCTIONS.length;
