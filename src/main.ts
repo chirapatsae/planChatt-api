@@ -14,7 +14,16 @@ import * as dotenv from 'dotenv';
 dotenv.config();
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // `rawBody: true` enables `req.rawBody` (Buffer) on every request.
+  // Required by W86 LINE webhook signature verification — the HMAC is
+  // computed over the EXACT bytes LINE transmitted, not a re-stringified
+  // parsed JSON. See `backend/src/line/line-signature.guard.ts`.
+  // Memory cost is bounded by the body parser limit and is paid only
+  // for routes that read `req.rawBody`; standard JSON handling on every
+  // other route is unaffected.
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    rawBody: true,
+  });
 
   // Security middleware - Helmet
   app.use(helmet({

@@ -133,6 +133,14 @@ import { AiExecutiveMessage } from './ai-executive-chat/entities/ai-executive-me
 // AI-consuming module (ai, document-analysis, ai-executive-chat) picks
 // up the injected `LLM_CLIENT` via this `@Global()` registration.
 import { LlmClientModule } from './ai/llm/llm-client.module';
+// Wave 86 W86-BE-LINE-WEBHOOK — LINE chatbot integration. The
+// `LineUserBinding` entity must be registered at the root DataSource
+// (entities[]) AND via `forFeature` in `LineModule` — the same
+// footgun pattern called out for AiStaffReviewRun / AiExecutiveChat
+// above. Without root registration, TypeORM throws
+// `EntityMetadataNotFoundError` at boot.
+import { LineModule } from './line/line.module';
+import { LineUserBinding } from './line/entities/line-user-binding.entity';
 
 
 @Module({
@@ -218,6 +226,7 @@ import { LlmClientModule } from './ai/llm/llm-client.module';
         DeprecationAuditLog,
         BookProjectLineage,
         DevelopmentIssue,
+        LineUserBinding,
       ],
       synchronize: true,
       extra: {
@@ -278,6 +287,13 @@ import { LlmClientModule } from './ai/llm/llm-client.module';
     // PRIV-W44-01 — global LLM client (must import before any AI
     // module that injects `LLM_CLIENT`).
     LlmClientModule,
+    // W86-BE-LINE-WEBHOOK — LINE chatbot module. Public webhook is
+    // signature-gated via `LineSignatureGuard`; the module's own
+    // `ThrottlerModule.forRoot([...])` applies a 100/60s rate limit
+    // keyed on IP. Imported AFTER `LlmClientModule` so any future
+    // injection of `LLM_CLIENT` into the LINE AI bridge resolves
+    // against a fully-registered global provider.
+    LineModule,
     // DB-W44-02 — bootstrap hook for corrective DDL (registered last
     // so every other module's TypeORM registration completes first,
     // giving the allow-listed ALTERs a settled DataSource).

@@ -101,6 +101,15 @@ import { AggregationModule } from './aggregation/aggregation.module';
     // BE-W44-02 — SSE tool-call loop.
     AiExecutiveChatService,
   ],
-  exports: [TypeOrmModule],
+  exports: [
+    TypeOrmModule,
+    // Wave 86 W86-BE-LINE-AI-BRIDGE — exported so LineModule can bridge
+    // LINE webhook text-message events into the existing chat turn
+    // pipeline. The export is read-only consumption: LINE consumes the
+    // service via `sendMessage` and the SSE-drain shim
+    // (`SseDrainResponse` in `line-ai-bridge.service.ts`); §17.2 / §17.11
+    // — no method override, no role bypass, no workflow gate added.
+    AiExecutiveChatService,
+  ],
 })
 export class AiExecutiveChatModule {}
