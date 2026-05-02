@@ -85,6 +85,23 @@ export class User {
   @Column({ name: 'is_first_login', default: true })
   isFirstLogin: boolean;
 
+  /**
+   * W95: Timestamp at which the user's current email was verified via the
+   * link-based verification flow. NULL means "not yet verified" — the
+   * frontend uses this to render the verification banner / gate features
+   * defined in W95-GATE.
+   *
+   * Reset to NULL automatically by `UsersService.update` whenever the
+   * email column changes (compared via `email_hash`, never decrypted).
+   * Set to NOW() by `UsersService.markEmailVerified` after the verify
+   * endpoint validates the HMAC token.
+   *
+   * §17.3 — this column lives on the User entity, NOT on a project table;
+   * the verification gate is integrity, not workflow authority (§4.1).
+   */
+  @Column({ name: 'email_verified_at', type: 'timestamptz', nullable: true })
+  emailVerifiedAt: Date | null;
+
   @DeleteDateColumn({ nullable: true, name: 'delete_at' })
   @Exclude()
   deletedAt?: Date;

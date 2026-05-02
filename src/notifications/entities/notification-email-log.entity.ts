@@ -144,6 +144,10 @@ export class NotificationEmailLog {
    *   - 'sent'
    *   - 'failed'
    *   - 'skipped-preference'
+   *   - 'skipped-killswitch'      (Wave 22 B2 — global kill-switch OFF)
+   *   - 'skipped-not-verified'    (Wave 95 — recipient email not verified;
+   *                                non-failure skip, classified identically
+   *                                to 'skipped-preference' for aggregation)
    */
   @Column({ name: 'status', type: 'varchar', length: 32 })
   status: string;

@@ -268,6 +268,27 @@ export class UsersService {
       // through the helper so encrypt and hash never drift apart.
       await this.encryptUserPiiFromDto(updatePayload, { email, phone });
 
+      // W95 — Reset-on-change: if the incoming DTO carries a new email AND
+      // the deterministic hash differs from the row's stored emailHash,
+      // force `emailVerifiedAt` back to NULL in the SAME UPDATE so the
+      // reset is atomic with the email change.
+      //
+      // Comparison is hash-only — we MUST NOT decrypt the existing email
+      // to test equality (W89 contract; W83 logger discipline). When the
+      // user has no prior email_hash (first-time email set) we leave
+      // emailVerifiedAt at its current default (NULL) implicitly — no
+      // explicit override needed, but assigning NULL is harmless and
+      // makes the intent obvious.
+      if (email && updatePayload.emailHash) {
+        const existing = await this.userRepository.findOne({
+          where: { id },
+          select: ['id', 'emailHash'],
+        });
+        if (existing && existing.emailHash !== updatePayload.emailHash) {
+          updatePayload.emailVerifiedAt = null;
+        }
+      }
+
       const userToUpdate = await this.userRepository.preload({
         id,
         ...updatePayload,
@@ -281,6 +302,51 @@ export class UsersService {
       return await this.decryptUserPii(savedUser);
     } catch (error) {
       handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * W95 — Idempotently mark a user's current email as verified.
+   *
+   * Single conditional UPDATE — `SET email_verified_at = NOW() WHERE id = $1
+   * AND email_verified_at IS NULL`. Calling twice is a safe no-op (the
+   * second call's WHERE clause matches zero rows and returns affected=0).
+   *
+   * This method is intentionally tolerant of "row no longer exists" — the
+   * verify endpoint (W95-VERIFY-FLOW) may receive a click on a link whose
+   * user has been soft-deleted between issuance and click. We log the
+   * userId only (W83) and return cleanly rather than throwing.
+   *
+   * §4.1 — verification is integrity, NOT workflow authority. This call
+   * does NOT touch tracking_status (§12) and does NOT gate any project
+   * action.
+   */
+  async markEmailVerified(userId: string): Promise<void> {
+    if (typeof userId !== 'string' || userId.length === 0) {
+      return;
+    }
+    try {
+      const result = await this.userRepository
+        .createQueryBuilder()
+        .update(User)
+        .set({ emailVerifiedAt: () => 'NOW()' })
+        .where('id = :id', { id: userId })
+        .andWhere('email_verified_at IS NULL')
+        .execute();
+
+      // W83 — log userId only; never the email or hash.
+      if (result.affected && result.affected > 0) {
+        this.logger.log(`user.email-verified.marked userId=${userId}`);
+      } else {
+        this.logger.log(
+          `user.email-verified.noop userId=${userId} (already verified or row missing)`,
+        );
+      }
+    } catch (error) {
+      // Tolerate "row missing" — log the error class only, don't throw.
+      this.logger.error(
+        `markEmailVerified failed: ${error?.constructor?.name ?? 'UnknownError'} userId=${userId}`,
+      );
     }
   }
 

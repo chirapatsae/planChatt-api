@@ -149,6 +149,9 @@ export class AuthService {
           divisionName,
           role: latestWH.role?.name ?? 'user',
           workStatus: latestWH.workStatus?.name ?? 'pending',
+          // W95 — surface verification timestamp so the frontend Redux
+          // store can render the verification banner. NULL = unverified.
+          emailVerifiedAt: user.emailVerifiedAt ?? null,
         },
       };
     } catch (error) {

@@ -22,7 +22,32 @@ export type ProjectNotificationEventType =
   // proof-of-submission and progress visibility, not just final outcomes.
   | 'PROJECT_SUBMITTED_OWNER'   // Ready→Pending — confirmation to owner
   | 'PROJECT_VERIFIED_OWNER'    // Pending→Verified — progress update to owner
-  | 'PROJECT_REJECTED_OWNER';   // *→Rejected (W67) — final outcome to owner
+  | 'PROJECT_REJECTED_OWNER'    // *→Rejected (W67) — final outcome to owner
+  // Wave 95 — link-based email-verification request (Q1). NOT a workflow
+  // notification — it carries a user-scoped HMAC verify link rather than a
+  // project deep-link. Reuses the existing Bull queue + EmailService
+  // chokepoint so W90 sandbox + audit logging behave identically. See
+  // `BYPASS_VERIFICATION_GATE` below for the W95-GATE bypass set, and
+  // `event.bypassAllowEmailNotification` for the consent-bypass flag used
+  // ONLY by the first-login auto-fire path (NEVER by the user-initiated
+  // resend button).
+  | 'EMAIL_VERIFICATION_REQUEST';
+
+/**
+ * Wave 95 — Event types that MUST bypass the email-verification gate
+ * (`emailVerifiedAt IS NULL` block) added by W95-GATE on the
+ * queueEmail / sendPreparedJob path.
+ *
+ * This set exists because the verification email itself is sent to an
+ * UNVERIFIED address — gating it on `emailVerifiedAt` would create a
+ * deadlock where a user can never receive the message that would make
+ * them verified. The set is intentionally narrow (only the verification
+ * request itself) so no other event type can accidentally opt out.
+ *
+ * Owned by W95-VERIFY-FLOW; CONSUMED by W95-GATE.
+ */
+export const BYPASS_VERIFICATION_GATE: ReadonlySet<ProjectNotificationEventType> =
+  new Set<ProjectNotificationEventType>(['EMAIL_VERIFICATION_REQUEST']);
 
 /**
  * Phase 2 event types — design-only stubs. Handlers/templates exist but are
@@ -85,6 +110,20 @@ export interface ProjectNotificationEvent {
    */
   actorUserId?: string;
   actorWorkHistoryId?: string;
+
+  /**
+   * Wave 95 — Consent-bypass flag for the `allowEmailNotification` preference
+   * gate. ONLY the initial first-login auto-fire path (where the user has
+   * not yet had a chance to set their preference) MAY set this to `true`.
+   * The user-initiated "Resend" button MUST NOT set this — explicit consent
+   * applies even to the verification email if the user has opted out.
+   *
+   * §17.2 advisory — this flag is a consent override, NOT a workflow
+   * authority bypass. It only relaxes the preference gate, never the
+   * verification-status gate (W95-GATE) which is governed separately by
+   * `BYPASS_VERIFICATION_GATE` keyed on event type.
+   */
+  bypassAllowEmailNotification?: boolean;
 }
 
 /**
@@ -110,4 +149,7 @@ export interface ProjectNotificationJobPayload {
   actorUserId?: string;
   /** Wave 22 B1 — see ProjectNotificationEvent.actorWorkHistoryId. */
   actorWorkHistoryId?: string;
+
+  /** Wave 95 — see ProjectNotificationEvent.bypassAllowEmailNotification. */
+  bypassAllowEmailNotification?: boolean;
 }

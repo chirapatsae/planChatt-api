@@ -162,7 +162,10 @@ export class EmailStatsService {
 
   /**
    * Time-series pivoted to WIDE format:
-   *   `[{ bucket, queued, sent, failed, skippedPreference, skippedKillswitch }]`
+   *   `[{ bucket, queued, sent, failed, skippedPreference, skippedKillswitch, skippedNotVerified }]`
+   *
+   * Wave 95 — `skippedNotVerified` mirrors the non-failure-skip treatment of
+   * `skippedPreference`. The audit-row write happens in W95-GATE.
    *
    * `bucket` is `YYYY-MM-DD` when `bucketSize === 'day'` and
    * `YYYY-MM-DDTHH:00:00Z` when `bucketSize === 'hour'`.
@@ -184,6 +187,7 @@ export class EmailStatsService {
       failed: number;
       skippedPreference: number;
       skippedKillswitch: number;
+      skippedNotVerified: number;
     }>
   > {
     const { fromDate, toDate } = this.resolveRange(from, to);
@@ -212,6 +216,7 @@ export class EmailStatsService {
         failed: number;
         skippedPreference: number;
         skippedKillswitch: number;
+        skippedNotVerified: number;
       }
     >();
 
@@ -237,6 +242,7 @@ export class EmailStatsService {
           failed: 0,
           skippedPreference: 0,
           skippedKillswitch: 0,
+          skippedNotVerified: 0,
         };
         byBucket.set(key, entry);
       }
@@ -257,8 +263,13 @@ export class EmailStatsService {
         case 'skipped-killswitch':
           entry.skippedKillswitch += count;
           break;
+        case 'skipped-not-verified':
+          // Wave 95 — non-failure skip; bucketed identically to
+          // `skipped-preference` for dashboard purposes (W95-GATE writes).
+          entry.skippedNotVerified += count;
+          break;
         // Unknown statuses are intentionally ignored — we only render the
-        // five known categories on the dashboard. Total-by-status coverage
+        // six known categories on the dashboard. Total-by-status coverage
         // is provided by `overview`.
         default:
           break;

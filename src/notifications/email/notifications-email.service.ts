@@ -8,6 +8,7 @@ import { User } from 'src/users/entities/user.entity';
 import { EmailService } from 'src/util/email/email.service';
 import { decryption, isLikelyCiphertext } from 'src/util/encryption.util';
 import {
+  BYPASS_VERIFICATION_GATE,
   ProjectNotificationEvent,
   ProjectNotificationEventType,
   ProjectNotificationJobPayload,
@@ -36,6 +37,8 @@ const TEMPLATE_MAP: Record<ProjectNotificationEventType, string> = {
   PROJECT_SUBMITTED_OWNER: 'project-submitted-owner',
   PROJECT_VERIFIED_OWNER: 'project-verified-owner',
   PROJECT_REJECTED_OWNER: 'project-rejected-owner',
+  // Wave 95 — link-based email verification request (Q1).
+  EMAIL_VERIFICATION_REQUEST: 'email-verification-request',
 };
 
 const SUBJECT_MAP: Record<
@@ -55,6 +58,10 @@ const SUBJECT_MAP: Record<
     `[แจ้งความคืบหน้า] โครงการของท่านผ่านการตรวจสอบ: ${p.projectName}`,
   PROJECT_REJECTED_OWNER: (p) =>
     `[แจ้งผล] โครงการของท่านไม่ผ่านการพิจารณา (เกินศักยภาพ): ${p.projectName}`,
+  // Wave 95 — link-based email verification request (Q1). `projectName`
+  // is unused for this event; the subject is static.
+  EMAIL_VERIFICATION_REQUEST: () =>
+    `[ยืนยันอีเมล] กรุณายืนยันอีเมลของท่าน`,
 };
 
 const REQUIRED_TEMPLATE_FIELDS: Record<ProjectNotificationEventType, string[]> = {
@@ -66,6 +73,9 @@ const REQUIRED_TEMPLATE_FIELDS: Record<ProjectNotificationEventType, string[]> =
   PROJECT_SUBMITTED_OWNER: ['projectName', 'actionLink', 'toStatus'],
   PROJECT_VERIFIED_OWNER: ['projectName', 'actionLink', 'toStatus'],
   PROJECT_REJECTED_OWNER: ['projectName', 'actionLink', 'toStatus'],
+  // Wave 95 — verification email needs only the verify link; no project
+  // status fields apply since this is an account-scope event.
+  EMAIL_VERIFICATION_REQUEST: ['actionLink'],
 };
 
 /**
@@ -82,6 +92,21 @@ const JOB_OPTIONS = {
   removeOnFail: false,
   timeout: 30_000,
 };
+
+/**
+ * Wave 95 — emergency rollback flag for the email-verification gate.
+ *
+ * Resolved at module-load time: enabled by default; only the literal string
+ * `'false'` disables the gate (per W95-GATE §7). When disabled, the gate is
+ * inert and behavior reverts to pre-W95 (preference + kill-switch only).
+ *
+ * Gate scope: the verification-status check (`users.email_verified_at`) only.
+ * The consent-bypass flag (`bypassAllowEmailNotification`) and the
+ * `BYPASS_VERIFICATION_GATE` event-type set are orthogonal and remain active
+ * regardless of this flag.
+ */
+const EMAIL_VERIFICATION_GATE_ENABLED =
+  process.env.EMAIL_VERIFICATION_GATE_ENABLED !== 'false';
 
 /**
  * NotificationsEmailService — Wave 21 Option C wrapper.
@@ -177,13 +202,22 @@ export class NotificationsEmailService {
 
       const targetKind = this.extractTargetKind(event.metadata);
 
+      // Wave 95 — consent-bypass flag is event-scope and applies to all
+      // recipients of THIS event. Only the first-login auto-fire path of
+      // EMAIL_VERIFICATION_REQUEST sets this; the user-initiated resend
+      // path leaves it false so the user's `allowEmailNotification=false`
+      // preference is still respected.
+      const bypassPref = event.bypassAllowEmailNotification === true;
+
       for (const recipient of event.recipients) {
         // Preference gate — FIRST LAYER (architecture §2.4). Even though the
         // RecipientResolverService pre-filters, we re-check here against the
         // canonical `users` row because (a) N4 may pass a hand-built recipient
         // list that skipped the resolver, and (b) the gate must be centrally
         // unit-testable in this service (A18).
-        const allowed = await this.assertPreference(recipient.userId);
+        const allowed = await this.assertPreference(recipient.userId, {
+          bypassAllowEmailNotification: bypassPref,
+        });
         if (!allowed) {
           // Fine-grained log already emitted inside assertPreference.
           // Audit point #4 — preference-gate skip (§4.2 audit requirement).
@@ -197,6 +231,39 @@ export class NotificationsEmailService {
             actorWorkHistoryId: event.actorWorkHistoryId ?? null,
           });
           continue;
+        }
+
+        // Wave 95 — verification gate (FIRST LAYER). Ordering: consent first
+        // (above), deliverability second (here), per W95-GATE §11. The
+        // `BYPASS_VERIFICATION_GATE` event-type set short-circuits this check
+        // for `EMAIL_VERIFICATION_REQUEST` itself — gating the verification
+        // email on `email_verified_at` would deadlock the user (chicken-and-
+        // egg). The consent-bypass flag (`bypassAllowEmailNotification`) is
+        // orthogonal: it relaxes the preference gate above but DOES NOT
+        // bypass this verification-status gate (§17.2 advisory: integrity,
+        // not workflow authority).
+        if (
+          EMAIL_VERIFICATION_GATE_ENABLED &&
+          !BYPASS_VERIFICATION_GATE.has(event.eventType)
+        ) {
+          const verified = await this.assertEmailVerified(recipient.userId);
+          if (!verified) {
+            this.logger.log(
+              `[Notify] skipped-at-queue: not-verified userId=${recipient.userId} event=${event.eventType}`,
+            );
+            this.writeAuditLog({
+              eventType: event.eventType,
+              targetId: event.projectId,
+              targetKind,
+              recipient,
+              status: 'skipped-not-verified',
+              providerMessageId: null,
+              errorMessage: null,
+              actorUserId: event.actorUserId ?? null,
+              actorWorkHistoryId: event.actorWorkHistoryId ?? null,
+            });
+            continue;
+          }
         }
 
         const payload: ProjectNotificationJobPayload = {
@@ -213,6 +280,9 @@ export class NotificationsEmailService {
           metadata: event.metadata,
           actorUserId: event.actorUserId,
           actorWorkHistoryId: event.actorWorkHistoryId,
+          // Wave 95 — propagate to processor so the SECOND-layer preference
+          // re-check honors the same bypass.
+          bypassAllowEmailNotification: bypassPref || undefined,
         };
 
         try {
@@ -278,7 +348,7 @@ export class NotificationsEmailService {
    */
   async sendPreparedJob(payload: ProjectNotificationJobPayload): Promise<{
     success: boolean;
-    skipped?: 'preference' | 'no-email' | 'user-missing';
+    skipped?: 'preference' | 'no-email' | 'user-missing' | 'not-verified';
     messageId?: string;
     errorMessage?: string;
   }> {
@@ -312,20 +382,59 @@ export class NotificationsEmailService {
     }
 
     if (user.allowEmailNotification === false) {
-      this.logger.log(
-        `[NotifyProcessor] skipped-at-processor: preference-off userId=${user.id} event=${payload.eventType}`,
-      );
-      // Audit point #4 (processor-side) — preference flipped between enqueue and dispatch.
-      this.writeAuditLog({
-        eventType: payload.eventType,
-        targetId: payload.projectId,
-        targetKind,
-        recipient: payload.recipient,
-        status: 'skipped-preference',
-        actorUserId: payload.actorUserId ?? null,
-        actorWorkHistoryId: payload.actorWorkHistoryId ?? null,
-      });
-      return { success: true, skipped: 'preference' };
+      // Wave 95 — same consent-bypass semantics as assertPreference.
+      if (payload.bypassAllowEmailNotification === true) {
+        this.logger.log(
+          `[NotifyProcessor] preference-off-bypassed userId=${user.id} event=${payload.eventType} (W95 verification-request)`,
+        );
+        // fall through — proceed with send.
+      } else {
+        this.logger.log(
+          `[NotifyProcessor] skipped-at-processor: preference-off userId=${user.id} event=${payload.eventType}`,
+        );
+        // Audit point #4 (processor-side) — preference flipped between enqueue and dispatch.
+        this.writeAuditLog({
+          eventType: payload.eventType,
+          targetId: payload.projectId,
+          targetKind,
+          recipient: payload.recipient,
+          status: 'skipped-preference',
+          actorUserId: payload.actorUserId ?? null,
+          actorWorkHistoryId: payload.actorWorkHistoryId ?? null,
+        });
+        return { success: true, skipped: 'preference' };
+      }
+    }
+
+    // Wave 95 — verification gate (SECOND LAYER). Re-checked here to catch
+    // the case where the user's `email_verified_at` flipped to NULL (email
+    // changed via `UsersService.update`) between enqueue and dispatch —
+    // mirrors the existing two-layer pattern for `allowEmailNotification`.
+    // `BYPASS_VERIFICATION_GATE` keeps `EMAIL_VERIFICATION_REQUEST` flowing
+    // through the unverified path. `bypassAllowEmailNotification` is NOT
+    // honored here — consent-bypass MUST NOT bypass verification (§17.2).
+    if (
+      EMAIL_VERIFICATION_GATE_ENABLED &&
+      !BYPASS_VERIFICATION_GATE.has(payload.eventType)
+    ) {
+      const verified = await this.assertEmailVerified(payload.recipient.userId);
+      if (!verified) {
+        this.logger.log(
+          `[NotifyProcessor] skipped-at-processor: not-verified userId=${payload.recipient.userId} event=${payload.eventType}`,
+        );
+        this.writeAuditLog({
+          eventType: payload.eventType,
+          targetId: payload.projectId,
+          targetKind,
+          recipient: payload.recipient,
+          status: 'skipped-not-verified',
+          providerMessageId: null,
+          errorMessage: 'email-not-verified-at-processor',
+          actorUserId: payload.actorUserId ?? null,
+          actorWorkHistoryId: payload.actorWorkHistoryId ?? null,
+        });
+        return { success: true, skipped: 'not-verified' };
+      }
     }
 
     // W90-FIX-01 — decrypt-at-boundary. Post-W89 the `email` column is
@@ -451,7 +560,10 @@ export class NotificationsEmailService {
    * Called at queueEmail() entry (A18 unit-testable). The processor path
    * re-checks through sendPreparedJob() to catch inter-enqueue flips.
    */
-  async assertPreference(userId: string): Promise<boolean> {
+  async assertPreference(
+    userId: string,
+    opts: { bypassAllowEmailNotification?: boolean } = {},
+  ): Promise<boolean> {
     if (!userId) return false;
     // W90-FIX-01 — gate on `emailHash` instead of decrypting `email`. W89
     // backfill guarantees `emailHash IS NULL` iff the user has no email,
@@ -472,10 +584,59 @@ export class NotificationsEmailService {
       return false;
     }
     if (user.allowEmailNotification === false) {
+      // Wave 95 — consent-bypass for the first-login auto-fire path of
+      // EMAIL_VERIFICATION_REQUEST only. We log the bypass explicitly so the
+      // operational trail makes the override visible. This bypass relaxes
+      // the consent gate ONLY; the W95-GATE verification-status gate is
+      // controlled separately via `BYPASS_VERIFICATION_GATE` keyed on
+      // event type (see project-notification-event.ts).
+      if (opts.bypassAllowEmailNotification === true) {
+        this.logger.log(
+          `[Notify] preference-off-bypassed userId=${userId} (W95 verification-request)`,
+        );
+        return true;
+      }
       this.logger.log(`[Notify] skipped-at-queue: preference-off userId=${userId}`);
       return false;
     }
     return true;
+  }
+
+  /**
+   * Wave 95 — verification gate (W95-GATE). Single source of truth for the
+   * `email_verified_at IS NOT NULL` predicate, called from BOTH layers:
+   *   1. queueEmail() — prevents queue bloat for unverified addresses.
+   *   2. sendPreparedJob() — covers the case where the user changed their
+   *      email between enqueue and dispatch (UsersService.update resets
+   *      `email_verified_at = null` on email change — see W95-USERS-API).
+   *
+   * Returns:
+   *   - `true`  — `email_verified_at` is non-null (user verified).
+   *   - `false` — verified-at is NULL, user-missing, or DB error.
+   *
+   * Fail-closed: any DB error returns `false` (never silently sends to an
+   * unverified address). Mirrors the `assertPreference` failure shape. The
+   * BYPASS_VERIFICATION_GATE event-type set is checked at the call site —
+   * this helper does NOT inspect event type.
+   *
+   * §17.3 — never logs raw email; userId only (W83 PII discipline).
+   */
+  private async assertEmailVerified(userId: string): Promise<boolean> {
+    if (!userId) return false;
+    try {
+      const user = await this.userRepo.findOne({
+        where: { id: userId },
+        select: ['id', 'emailVerifiedAt'],
+      });
+      if (!user) return false;
+      return user.emailVerifiedAt != null;
+    } catch (err) {
+      // Fail-closed — DB outage MUST NOT cause unverified sends.
+      this.logger.warn(
+        `[Notify] assertEmailVerified db-error userId=${userId}: ${(err as Error).message}`,
+      );
+      return false;
+    }
   }
 
   /**
@@ -682,7 +843,11 @@ export class NotificationsEmailService {
       | 'failed'
       | 'skipped-preference'
       // Wave 22 B2 — global kill-switch OFF (ปิดไว้ก่อน).
-      | 'skipped-killswitch';
+      | 'skipped-killswitch'
+      // Wave 95 — recipient email not verified at queue time. Non-failure
+      // skip; aggregations bucket this identically to 'skipped-preference'.
+      // The actual write site lives in W95-GATE.
+      | 'skipped-not-verified';
     providerMessageId?: string | null;
     errorMessage?: string | null;
     sentAt?: Date | null;
