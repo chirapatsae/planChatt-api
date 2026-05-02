@@ -494,4 +494,112 @@ export class EmailStatsService {
       };
     });
   }
+
+  // ---------------------------------------------------------------------------
+  // Wave 97 — Combined quota window aggregation
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Wave 97 — quota-window aggregation for the super-admin dashboard.
+   *
+   * Returns counts grouped by `status` + a top-50 `byEvent` breakdown for
+   * the inclusive `[from, to]` range. Caller resolves the window (default
+   * = today UTC) and passes Date objects directly so the controller can
+   * stamp the same `windowStart` / `windowEnd` into the response envelope.
+   *
+   * NOT a refactor of the existing `getOverview` — this is an additive
+   * method that returns the exact shape required by `GET /admin/notifications/quota`.
+   *
+   * §4.1 / §17.2 — purely advisory; not used to gate any workflow.
+   */
+  async getQuotaWindow(
+    fromDate: Date,
+    toDate: Date,
+  ): Promise<{
+    byStatus: Record<string, number>;
+    byEvent: Array<{
+      eventType: string;
+      sent: number;
+      failed: number;
+      skipped: number;
+    }>;
+  }> {
+    const statusRows = await this.auditLogRepo
+      .createQueryBuilder('log')
+      .select('log.status', 'status')
+      .addSelect('COUNT(*)', 'count')
+      .where('log.queued_at >= :from', { from: fromDate })
+      .andWhere('log.queued_at <= :to', { to: toDate })
+      .groupBy('log.status')
+      .getRawMany<{ status: string; count: string }>();
+
+    const byStatus: Record<string, number> = {};
+    for (const r of statusRows) {
+      byStatus[r.status] = Number(r.count) || 0;
+    }
+
+    const eventRows = await this.auditLogRepo
+      .createQueryBuilder('log')
+      .select('log.event_type', 'eventType')
+      .addSelect('log.status', 'status')
+      .addSelect('COUNT(*)', 'count')
+      .where('log.queued_at >= :from', { from: fromDate })
+      .andWhere('log.queued_at <= :to', { to: toDate })
+      .groupBy('log.event_type')
+      .addGroupBy('log.status')
+      .getRawMany<{ eventType: string; status: string; count: string }>();
+
+    const eventMap = new Map<
+      string,
+      { eventType: string; sent: number; failed: number; skipped: number; total: number }
+    >();
+    for (const r of eventRows) {
+      const n = Number(r.count) || 0;
+      let entry = eventMap.get(r.eventType);
+      if (!entry) {
+        entry = {
+          eventType: r.eventType,
+          sent: 0,
+          failed: 0,
+          skipped: 0,
+          total: 0,
+        };
+        eventMap.set(r.eventType, entry);
+      }
+      if (r.status === 'sent') entry.sent += n;
+      else if (r.status === 'failed') entry.failed += n;
+      else if (r.status?.startsWith('skipped-')) entry.skipped += n;
+      entry.total += n;
+    }
+
+    // Top-50 by total volume, drop the helper `total` column from the
+    // outgoing shape. See §11 (cardinality limit).
+    const byEvent = Array.from(eventMap.values())
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 50)
+      .map(({ eventType, sent, failed, skipped }) => ({
+        eventType,
+        sent,
+        failed,
+        skipped,
+      }));
+
+    return { byStatus, byEvent };
+  }
+
+  /**
+   * Wave 97 — sum of `sent` rows in the given window. Used by the alert
+   * worker to compute `percentUsed` against `EMAIL_DAILY_QUOTA` without
+   * paying the full `getQuotaWindow` aggregation cost.
+   */
+  async getSentCount(fromDate: Date, toDate: Date): Promise<number> {
+    const row = await this.auditLogRepo
+      .createQueryBuilder('log')
+      .select('COUNT(*)', 'count')
+      .where('log.status = :status', { status: 'sent' })
+      .andWhere('log.queued_at >= :from', { from: fromDate })
+      .andWhere('log.queued_at <= :to', { to: toDate })
+      .getRawOne<{ count: string }>();
+    return Number(row?.count ?? 0) || 0;
+  }
 }

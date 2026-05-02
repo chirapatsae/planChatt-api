@@ -83,6 +83,10 @@ import { NotificationSettingsAudit } from './notifications/entities/notification
 // write fails with `EntityMetadataNotFoundError: No metadata for
 // "NotificationLineLog" was found` and the LINE pipeline silently no-ops.
 import { NotificationLineLog } from './notifications/entities/notification-line-log.entity';
+// Wave 97 — quota-alert config table. Same registration footgun as W91/W96
+// (forRoot uses an explicit `entities[]` list, no autoLoadEntities).
+import { NotificationQuotaAlert } from './notifications/entities/notification-quota-alert.entity';
+import { NotificationsAdminModule } from './notifications/admin/notifications-admin.module';
 import { UserNotificationsModule } from './user-notifications/user-notifications.module';
 import { UserNotification } from './user-notifications/entities/user-notification.entity';
 import { WebsocketModule } from './websocket/websocket.module';
@@ -160,6 +164,12 @@ import { LlmClientModule } from './ai/llm/llm-client.module';
 // `EntityMetadataNotFoundError` at boot.
 import { LineModule } from './line/line.module';
 import { LineUserBinding } from './line/entities/line-user-binding.entity';
+// W97-API-BINDINGS — super-admin LINE binding registry audit table.
+// Same root-DataSource registration footgun as the AI / LINE entities
+// above: `forFeature` in `NotificationsLineModule` provides the repo
+// injection token, but the metadata MUST also be listed here or
+// TypeORM throws `EntityMetadataNotFoundError` at boot.
+import { LineBindingAdminAction } from './notifications/line/entities/line-binding-admin-action.entity';
 
 
 @Module({
@@ -252,6 +262,13 @@ import { LineUserBinding } from './line/entities/line-user-binding.entity';
         NotificationSettingsAudit,
         // Wave 96 — LINE notification audit row (same footgun rationale).
         NotificationLineLog,
+        // Wave 97 — quota-alert config rows (W97-MIGRATION shipped table).
+        NotificationQuotaAlert,
+        // W97-API-BINDINGS — admin-action audit table (W97-MIGRATION
+        // shipped table). Owned by `NotificationsLineModule` via
+        // `TypeOrmModule.forFeature([...])`; root registration here
+        // unblocks the repo injection in `LineBindingsController`.
+        LineBindingAdminAction,
       ],
       synchronize: true,
       extra: {
@@ -294,6 +311,10 @@ import { LineUserBinding } from './line/entities/line-user-binding.entity';
     // be imported AFTER NotificationsEmailModule because it consumes the
     // re-exported NotificationSettingsService + RecipientResolverService.
     NotificationsLineModule,
+    // Wave 97 — admin quota + alert CRUD + cron worker. Imported AFTER
+    // both NotificationsEmailModule and NotificationsLineModule so the
+    // exported stats services resolve cleanly.
+    NotificationsAdminModule,
     UserNotificationsModule,
     WebsocketModule,
     EventsModule,

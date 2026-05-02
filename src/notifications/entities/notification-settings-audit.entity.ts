@@ -69,4 +69,14 @@ export class NotificationSettingsAudit {
    */
   @Column({ name: 'reason', type: 'text', nullable: true })
   reason?: string | null;
+
+  /**
+   * Wave 97 — channel discriminator. `'email' | 'line'`. Added by
+   * W97-MIGRATION (`1777680000000-W97NotificationOpsSchema`); CHECK
+   * constraint enforces the two-value enum at the DB layer. Pre-W97
+   * rows backfilled to 'email' via DEFAULT before DROP DEFAULT, so
+   * the column is NOT NULL and every insert MUST specify it.
+   */
+  @Column({ name: 'channel', type: 'varchar', length: 8 })
+  channel: 'email' | 'line';
 }

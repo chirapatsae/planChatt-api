@@ -38,7 +38,11 @@ import { UpdateEmailSettingsDto } from './dto/update-email-settings.dto';
  *              bypass workflow authority
  */
 
+// W97 user-amendment: GET allows admin to view kill-switch state for the
+// unified `/admin/notifications` dashboard. PATCH (flipping the switch)
+// stays super-admin-only — admins VIEW but only super-admin disables.
 const SUPER_ADMIN_ROLES = new Set(['super-admin']);
+const ADMIN_OR_ABOVE_ROLES = new Set(['admin', 'super-admin']);
 const COOLDOWN_MS = 1_000;
 
 @Controller({
@@ -56,7 +60,7 @@ export class NotificationSettingsController {
   @Get()
   @HttpCode(HttpStatus.OK)
   async get(@Req() req: Request & { user: JwtPayloadUser }) {
-    this.assertSuperAdmin(req.user);
+    this.assertAdminOrAbove(req.user);
     this.assertCooldown(req.user.userId, 'get');
     return this.settingsService.getSettings();
   }
@@ -79,7 +83,12 @@ export class NotificationSettingsController {
     this.assertCooldown(req.user.userId, 'patch');
     return this.settingsService.updateSettings(
       { userId: req.user.userId },
-      { emailEnabled: body.emailEnabled, reason: body.reason },
+      {
+        emailEnabled: body.emailEnabled,
+        lineEnabled: body.lineEnabled,
+        reason: body.reason,
+        expectedUpdatedAt: body.expectedUpdatedAt,
+      },
     );
   }
 
@@ -91,6 +100,15 @@ export class NotificationSettingsController {
     if (!user || !SUPER_ADMIN_ROLES.has(user.role)) {
       throw new ForbiddenException(
         'เฉพาะ super-admin เท่านั้นที่สามารถจัดการการเปิด/ปิดการส่งอีเมลได้',
+      );
+    }
+  }
+
+  // W97 user-amendment: read-only access for admin + super-admin.
+  private assertAdminOrAbove(user: JwtPayloadUser): void {
+    if (!user || !ADMIN_OR_ABOVE_ROLES.has(user.role)) {
+      throw new ForbiddenException(
+        'การเข้าถึงนี้สงวนสำหรับ admin หรือ super-admin',
       );
     }
   }

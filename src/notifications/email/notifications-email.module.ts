@@ -87,6 +87,9 @@ import { ActionLinkVerifyController } from './action-link-verify.controller';
     NotificationsEmailService,
     RecipientResolverService,
     NotificationSettingsService,
+    // Wave 97 — admin module re-uses the email stats aggregator for the
+    // combined quota endpoint and the alert worker.
+    EmailStatsService,
   ],
 })
 export class NotificationsEmailModule {}
