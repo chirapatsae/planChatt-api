@@ -72,31 +72,81 @@ export class TrackingStatusService {
   ) { }
 
   /**
-   * Wave 21 N4 — Map a canonical (fromStatus → toStatus) transition into an
-   * optional Phase-1 notification event type. Returns null when the transition
-   * is NOT a Phase-1 notification trigger (e.g. Pending → Verified, any
-   * Pull_Back, Ready → Draft). Phase-1 events (architecture §2.3):
+   * Wave 21 N4 (refactored W94) — Map a canonical (fromStatus → toStatus)
+   * transition into ZERO, ONE, or MORE notification event types. Returns an
+   * empty array when the transition is NOT a notification trigger (e.g.
+   * Verified → Pending_Approval, Ready → Draft).
    *
-   *   * → Pending                          → PROJECT_SUBMITTED
-   *   Pending → Returned_For_Revision      → PROJECT_RETURNED_FOR_REVISION
-   *   Verified → Returned_For_Revision     → PROJECT_RETURNED_FOR_REVISION
-   *   Pending_Approval → Approved          → PROJECT_APPROVED
+   * Multi-event per transition:
+   *   - W94 introduces owner-side counterparts to staff-side events. A
+   *     single transition may now fan out to BOTH (e.g. Ready → Pending
+   *     fires PROJECT_SUBMITTED [staff] AND PROJECT_SUBMITTED_OWNER
+   *     [confirmation]). Each call site loops the array.
+   *
+   * Wave 21 (Phase-1) events — staff/owner per existing semantics:
+   *   * → Pending                          → PROJECT_SUBMITTED               (staff)
+   *   Pending → Returned_For_Revision      → PROJECT_RETURNED_FOR_REVISION   (owner)
+   *   Verified → Returned_For_Revision     → PROJECT_RETURNED_FOR_REVISION   (owner)
+   *   Pending_Approval → Approved          → PROJECT_APPROVED                (owner)
+   *
+   * Wave 91 — owner pull-back:
+   *   Pending  → Pull_Back                 → PROJECT_PULLED_BACK             (staff)
+   *   Verified → Pull_Back                 → PROJECT_PULLED_BACK             (staff)
+   *
+   * Wave 94 — owner notification matrix:
+   *   * → Pending                          → PROJECT_SUBMITTED_OWNER         (owner; ALONGSIDE staff PROJECT_SUBMITTED)
+   *   Pending → Verified                   → PROJECT_VERIFIED_OWNER          (owner; progress update)
+   *   * → Rejected                         → PROJECT_REJECTED_OWNER          (owner; final outcome — W67 status)
    */
-  private resolveNotificationEventType(
+  private resolveNotificationEventTypes(
     fromStatus: string | undefined,
     toStatus: string,
-  ): ProjectNotificationEventType | null {
-    if (toStatus === 'Pending') return 'PROJECT_SUBMITTED';
+  ): ProjectNotificationEventType[] {
+    const events: ProjectNotificationEventType[] = [];
+
+    if (toStatus === 'Pending') {
+      events.push('PROJECT_SUBMITTED');         // W21: staff fanout
+      events.push('PROJECT_SUBMITTED_OWNER');   // W94: owner confirmation
+      return events;
+    }
+
+    if (toStatus === 'Verified' && fromStatus === 'Pending') {
+      events.push('PROJECT_VERIFIED_OWNER');    // W94: owner progress
+      return events;
+    }
+
     if (toStatus === 'Returned_For_Revision') {
       if (fromStatus === 'Pending' || fromStatus === 'Verified') {
-        return 'PROJECT_RETURNED_FOR_REVISION';
+        events.push('PROJECT_RETURNED_FOR_REVISION');
       }
-      return null;
+      return events;
     }
+
     if (toStatus === 'Approved' && fromStatus === 'Pending_Approval') {
-      return 'PROJECT_APPROVED';
+      events.push('PROJECT_APPROVED');
+      return events;
     }
-    return null;
+
+    if (toStatus === 'Rejected') {
+      // W67 introduced 'Rejected' as a workflow exit state. W68 follow-up
+      // defines exact valid prior states / who can trigger; until then, fire
+      // the email on ANY transition to Rejected (the underlying state machine
+      // is the gate — if the transition is invalid it would not happen).
+      events.push('PROJECT_REJECTED_OWNER');    // W94: owner final outcome
+      return events;
+    }
+
+    if (toStatus === 'Pull_Back') {
+      // Per CLAUDE.md GLOBAL PULL BACK RULE, pull back is only allowed from
+      // Pending or Verified. Defensive gate on fromStatus so we never emit
+      // a notification for a malformed transition.
+      if (fromStatus === 'Pending' || fromStatus === 'Verified') {
+        events.push('PROJECT_PULLED_BACK');
+      }
+      return events;
+    }
+
+    return events;
   }
 
   /**
@@ -107,10 +157,12 @@ export class TrackingStatusService {
    * workflow caller (§4.1 + task §7 guardrail).
    *
    * Recipient resolution rules (architecture §2.3):
-   *   - PROJECT_SUBMITTED (main plan)  → staff-lead by project.amphoe
-   *   - PROJECT_SUBMITTED (revision)   → staff-lead by project.responsibleAgency
-   *   - PROJECT_RETURNED_FOR_REVISION  → project owner (createdBy WorkHistory)
-   *   - PROJECT_APPROVED               → project owner (createdBy WorkHistory)
+   *   - PROJECT_SUBMITTED (main plan)   → staff-lead by project.amphoe
+   *   - PROJECT_SUBMITTED (revision)    → staff-lead by project.responsibleAgency
+   *   - PROJECT_PULLED_BACK (main plan) → staff-lead by project.amphoe (Wave 91)
+   *   - PROJECT_PULLED_BACK (revision)  → staff-lead by project.responsibleAgency (Wave 91)
+   *   - PROJECT_RETURNED_FOR_REVISION   → project owner (createdBy WorkHistory)
+   *   - PROJECT_APPROVED                → project owner (createdBy WorkHistory)
    */
   private async dispatchPhaseOneNotification(args: {
     eventType: ProjectNotificationEventType;
@@ -136,7 +188,13 @@ export class TrackingStatusService {
   }): Promise<void> {
     try {
       let recipients: ProjectNotificationRecipient[] = [];
-      if (args.eventType === 'PROJECT_SUBMITTED') {
+      // Wave 91 — PROJECT_PULLED_BACK uses the same staff-lead resolution
+      // as PROJECT_SUBMITTED. Owner is intentionally excluded (they
+      // performed the action and do not need to be notified about it).
+      if (
+        args.eventType === 'PROJECT_SUBMITTED' ||
+        args.eventType === 'PROJECT_PULLED_BACK'
+      ) {
         if (args.projectKind === 'project-group' && args.projectAmphoeId) {
           recipients = await this.recipientResolver.resolveStaffLeadByAmphoe(
             args.projectAmphoeId,
@@ -165,6 +223,21 @@ export class TrackingStatusService {
         return;
       }
 
+      // Wave 92 — resolve Thai status labels from `status.th_name` per CLAUDE.md
+      // W67. Lookup is best-effort: a missing row falls back to the canonical
+      // English name in `notifications-email.service.ts → templateCtx`. Two
+      // queries instead of one IN-clause to keep the result map order-stable.
+      const [fromStatusRow, toStatusRow] = await Promise.all([
+        this.statusRepo.findOne({
+          where: { name: args.fromStatus },
+          select: ['name', 'th_name'],
+        }),
+        this.statusRepo.findOne({
+          where: { name: args.toStatus },
+          select: ['name', 'th_name'],
+        }),
+      ]);
+
       const event: ProjectNotificationEvent =
         this.notificationsEmailService.buildEvent({
           eventType: args.eventType,
@@ -172,6 +245,9 @@ export class TrackingStatusService {
           projectName: args.projectTitle,
           fromStatus: args.fromStatus,
           toStatus: args.toStatus,
+          fromStatusTh: fromStatusRow?.th_name ?? undefined,
+          toStatusTh: toStatusRow?.th_name ?? undefined,
+          projectKind: args.projectKind,
           reason: args.reason ?? undefined,
           recipients,
           metadata: {
@@ -504,11 +580,13 @@ export class TrackingStatusService {
       // resolves. Any thrown error here is caught INSIDE
       // dispatchPhaseOneNotification so a notification failure can never fail
       // the workflow transition (§4.1, task §7 guardrail).
-      const eventType = this.resolveNotificationEventType(
+      // W94 — multi-event per transition. Loop sequentially so one failure
+      // does not affect the next (each dispatch is wrapped in try/catch).
+      const eventTypes = this.resolveNotificationEventTypes(
         txResult.fromStatus,
         txResult.toStatus,
       );
-      if (eventType) {
+      for (const eventType of eventTypes) {
         await this.dispatchPhaseOneNotification({
           eventType,
           fromStatus: txResult.fromStatus,
@@ -668,25 +746,26 @@ export class TrackingStatusService {
         return inner;
       });
 
-      // POST-COMMIT emits — one call per bulk item that maps to a Phase-1 event.
-      // Strictly after the transaction resolves.
+      // POST-COMMIT emits — one call per (bulk item × resolved event).
+      // W94: an item may produce multiple events (e.g. SUBMITTED + SUBMITTED_OWNER).
       for (const ctx of bulkEmits) {
-        const eventType = this.resolveNotificationEventType(ctx.fromStatus, ctx.toStatus);
-        if (!eventType) continue;
-        await this.dispatchPhaseOneNotification({
-          eventType,
-          fromStatus: ctx.fromStatus,
-          toStatus: ctx.toStatus,
-          projectId: ctx.projectId,
-          projectKind: 'project-group',
-          projectTitle: ctx.projectTitle,
-          projectAmphoeId: ctx.projectAmphoeId,
-          createdByWorkHistoryId: ctx.createdByWorkHistoryId,
-          reason: ctx.reason,
-          planName: ctx.planName,
-          actorUserId: ctx.actorUserId,
-          actorWorkHistoryId: ctx.actorWorkHistoryId,
-        });
+        const eventTypes = this.resolveNotificationEventTypes(ctx.fromStatus, ctx.toStatus);
+        for (const eventType of eventTypes) {
+          await this.dispatchPhaseOneNotification({
+            eventType,
+            fromStatus: ctx.fromStatus,
+            toStatus: ctx.toStatus,
+            projectId: ctx.projectId,
+            projectKind: 'project-group',
+            projectTitle: ctx.projectTitle,
+            projectAmphoeId: ctx.projectAmphoeId,
+            createdByWorkHistoryId: ctx.createdByWorkHistoryId,
+            reason: ctx.reason,
+            planName: ctx.planName,
+            actorUserId: ctx.actorUserId,
+            actorWorkHistoryId: ctx.actorWorkHistoryId,
+          });
+        }
       }
 
       return results;
@@ -834,24 +913,25 @@ export class TrackingStatusService {
         return inner;
       });
 
-      // POST-COMMIT emits — RPG bulk. Each item dispatched independently.
+      // POST-COMMIT emits — RPG bulk. W94: multi-event per transition.
       for (const ctx of bulkRpgEmits) {
-        const eventType = this.resolveNotificationEventType(ctx.fromStatus, ctx.toStatus);
-        if (!eventType) continue;
-        await this.dispatchPhaseOneNotification({
-          eventType,
-          fromStatus: ctx.fromStatus,
-          toStatus: ctx.toStatus,
-          projectId: ctx.projectId,
-          projectKind: 'revised-project-group',
-          projectTitle: ctx.projectTitle,
-          projectResponsibleAgencyId: ctx.responsibleAgencyId,
-          createdByWorkHistoryId: ctx.createdByWorkHistoryId,
-          reason: ctx.reason,
-          planName: ctx.planName,
-          actorUserId: ctx.actorUserId,
-          actorWorkHistoryId: ctx.actorWorkHistoryId,
-        });
+        const eventTypes = this.resolveNotificationEventTypes(ctx.fromStatus, ctx.toStatus);
+        for (const eventType of eventTypes) {
+          await this.dispatchPhaseOneNotification({
+            eventType,
+            fromStatus: ctx.fromStatus,
+            toStatus: ctx.toStatus,
+            projectId: ctx.projectId,
+            projectKind: 'revised-project-group',
+            projectTitle: ctx.projectTitle,
+            projectResponsibleAgencyId: ctx.responsibleAgencyId,
+            createdByWorkHistoryId: ctx.createdByWorkHistoryId,
+            reason: ctx.reason,
+            planName: ctx.planName,
+            actorUserId: ctx.actorUserId,
+            actorWorkHistoryId: ctx.actorWorkHistoryId,
+          });
+        }
       }
 
       return results;
@@ -1260,12 +1340,12 @@ export class TrackingStatusService {
       });
 
       // POST-COMMIT Phase-1 notification emit (§4.1 guardrail). See create()
-      // for the same pattern and rationale.
-      const eventType = this.resolveNotificationEventType(
+      // for the same pattern and rationale. W94: multi-event per transition.
+      const eventTypes = this.resolveNotificationEventTypes(
         txResult.fromStatus,
         txResult.toStatus,
       );
-      if (eventType) {
+      for (const eventType of eventTypes) {
         await this.dispatchPhaseOneNotification({
           eventType,
           fromStatus: txResult.fromStatus,

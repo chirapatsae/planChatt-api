@@ -64,6 +64,15 @@ import { NotificationLogsModule } from './notification-logs/notification-logs.mo
 import { NotificationLog } from './notification-logs/entities/notification-log.entity';
 import { NotificationsModule } from './notifications/notifications.module';
 import { NotificationsEmailModule } from './notifications/email/notifications-email.module';
+// Wave 91 — register Wave 21/22 notification-pipeline entities at the data
+// source level. Previously only declared via TypeOrmModule.forFeature() in
+// NotificationsEmailModule, which is insufficient when forRoot uses an
+// explicit `entities: [...]` list instead of `autoLoadEntities: true`. Without
+// this registration, every queueEmail / kill-switch read fails with
+// "No metadata for X was found" and the entire pipeline silently no-ops.
+import { NotificationEmailLog } from './notifications/entities/notification-email-log.entity';
+import { NotificationSetting } from './notifications/entities/notification-settings.entity';
+import { NotificationSettingsAudit } from './notifications/entities/notification-settings-audit.entity';
 import { UserNotificationsModule } from './user-notifications/user-notifications.module';
 import { UserNotification } from './user-notifications/entities/user-notification.entity';
 import { WebsocketModule } from './websocket/websocket.module';
@@ -227,6 +236,10 @@ import { LineUserBinding } from './line/entities/line-user-binding.entity';
         BookProjectLineage,
         DevelopmentIssue,
         LineUserBinding,
+        // Wave 91 — Wave 21/22 notification entities (see import note).
+        NotificationEmailLog,
+        NotificationSetting,
+        NotificationSettingsAudit,
       ],
       synchronize: true,
       extra: {

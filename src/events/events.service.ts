@@ -10,6 +10,7 @@ import { AttachmentEventService } from 'src/attachment-event/attachment-event.se
 import { AnnouncementsService } from 'src/announcements/announcements.service';
 import { RolesService } from 'src/roles/roles.service';
 import { AnnouncementStatus, NotificationType } from 'src/announcements/entities/announcement.entity';
+import { UsersService } from 'src/users/users.service';
 
 @Injectable()
 export class EventsService {
@@ -23,6 +24,10 @@ export class EventsService {
     private readonly attachmentEventService: AttachmentEventService,
     private readonly announcementsService: AnnouncementsService,
     private readonly rolesService: RolesService,
+    // W89B — used to decrypt `event.createdBy.user` PII at the response
+    // boundary. Pre-W89B this entity flowed straight from TypeORM into
+    // the response DTO with `iv:ciphertext` email/phone columns.
+    private readonly usersService: UsersService,
   ) {}
 
   async create(createEventDto: CreateEventDto, userId: string): Promise<EventResponseDto> {
@@ -276,7 +281,16 @@ export class EventsService {
   private async mapToResponseDto(event: Event): Promise<EventResponseDto> {
     // ดึงข้อมูล attachments จาก attachment-event service
     const attachments = await this.attachmentEventService.findByEventId(event.id);
-    
+
+    // W89B — `event.createdBy.user` arrives from TypeORM with email/phone
+    // still in `iv:ciphertext` form (W89 encrypted these columns at rest).
+    // Decrypt at the response boundary so the FE never sees ciphertext.
+    // `decryptUserPii` is idempotent (W89B ciphertext heuristic guards
+    // each column) so a re-decrypt on cached/repeated entities is safe.
+    if (event.createdBy?.user) {
+      await this.usersService.decryptUserPii(event.createdBy.user);
+    }
+
     return {
       id: event.id,
       title: event.title,

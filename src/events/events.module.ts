@@ -7,6 +7,7 @@ import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { AttachmentEventModule } from 'src/attachment-event/attachment-event.module';
 import { AnnouncementsModule } from 'src/announcements/announcements.module';
 import { RolesModule } from 'src/roles/roles.module';
+import { UsersModule } from 'src/users/users.module';
 
 @Module({
   imports: [
@@ -14,6 +15,8 @@ import { RolesModule } from 'src/roles/roles.module';
     AttachmentEventModule,
     AnnouncementsModule,
     RolesModule,
+    // W89B — UsersService.decryptUserPii used in mapToResponseDto.
+    UsersModule,
   ],
   controllers: [EventsController],
   providers: [EventsService],

@@ -1,3 +1,4 @@
+import { Transform } from 'class-transformer';
 import {
   IsBoolean,
   IsEmail,
@@ -18,10 +19,15 @@ export class CreateUserDto {
   @Matches(/^[a-f0-9]{64}$/, { message: 'citizenIdHash must be a 64-character hexadecimal string' })
   citizenIdHash: string;
 
+  // NOTE (W89): Any future email/phone-shaped field added to this DTO MUST also
+  // be decorated with the matching @Transform so DTO-layer normalization stays
+  // in lockstep with `hashEmail` / `hashPhone` in `backend/src/util/encryption.util.ts`.
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toLowerCase() : value))
   @IsEmail({}, { message: 'Invalid email format' })
   @IsOptional()
   email?: string;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.replace(/\D/g, '') : value))
   @IsPhoneNumber('TH', { message: 'Invalid Thai phone number' })
   @IsOptional()
   phone?: string;

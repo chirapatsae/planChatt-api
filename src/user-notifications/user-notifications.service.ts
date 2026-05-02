@@ -6,6 +6,7 @@ import { UpdateUserNotificationDto } from './dto/update-user-notification.dto';
 import { UserNotification, UserNotificationStatus } from './entities/user-notification.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { handleException } from 'src/util/handleException';
+import { UsersService } from 'src/users/users.service';
 
 @Injectable()
 export class UserNotificationsService {
@@ -16,6 +17,11 @@ export class UserNotificationsService {
     private userNotificationRepository: Repository<UserNotification>,
     @InjectRepository(WorkHistory)
     private workHistoryRepository: Repository<WorkHistory>,
+    // W89B — used to decrypt the embedded `announcement.createdBy.user`
+    // before returning UserNotification rows. The `findByUserId` path is
+    // hit by GET /v1/user-notifications/my-notifications and would
+    // otherwise leak `iv:ciphertext` to the FE.
+    private readonly usersService: UsersService,
   ) { }
 
   async create(createUserNotificationDto: CreateUserNotificationDto): Promise<UserNotification> {
@@ -41,11 +47,23 @@ export class UserNotificationsService {
       }
 
       // Use user.id to find user notifications
-      return await this.userNotificationRepository.find({
+      const notifications = await this.userNotificationRepository.find({
         where: { user: { id: workHistory.user.id } },
         relations: ['announcement', 'announcement.createdBy', 'announcement.createdBy.user'],
         order: { createdAt: 'DESC' },
       });
+
+      // W89B — decrypt the embedded creator User on every row before the
+      // payload leaves the service. Without this, `announcement.createdBy
+      // .user.email/.phone` would be `iv:ciphertext` strings on the wire.
+      // `decryptUserPii` is idempotent so a repeat call on a cached entity
+      // is safe.
+      for (const n of notifications) {
+        if (n.announcement?.createdBy?.user) {
+          await this.usersService.decryptUserPii(n.announcement.createdBy.user);
+        }
+      }
+      return notifications;
     } catch (error) {
       handleException(this.logger, error);
     }

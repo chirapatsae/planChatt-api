@@ -25,6 +25,8 @@ import { EmailStatsController } from './email-stats.controller';
 // Wave 22 B2 — super-admin email kill-switch surface.
 import { NotificationSettingsService } from './notification-settings.service';
 import { NotificationSettingsController } from './notification-settings.controller';
+// W93-VERIFY-API — public stateless action-link verifier endpoint.
+import { ActionLinkVerifyController } from './action-link-verify.controller';
 
 /**
  * Wave 21 — Email notification module (Option C wrapper).
@@ -60,7 +62,11 @@ import { NotificationSettingsController } from './notification-settings.controll
     ]),
     EmailModule,
   ],
-  controllers: [EmailStatsController, NotificationSettingsController],
+  controllers: [
+    EmailStatsController,
+    NotificationSettingsController,
+    ActionLinkVerifyController,
+  ],
   providers: [
     NotificationsEmailService,
     EmailNotificationProcessor,

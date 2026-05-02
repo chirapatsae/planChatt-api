@@ -16,7 +16,7 @@
       },
       {
         "include": "src/notifications/templates/**/*.hbs",
-        "outDir": "notifications/templates",
+        "outDir": "src/notifications/templates",
         "watchAssets": true
       }
     ]

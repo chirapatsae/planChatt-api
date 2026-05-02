@@ -44,8 +44,63 @@ export class TemplateRendererService {
   private readonly partials = new Map<string, string>();
 
   constructor() {
-    this.templateDir = path.join(__dirname, '..', 'templates');
+    this.templateDir = TemplateRendererService.resolveTemplateDir();
+    this.logger.log(`[Notify] template directory resolved: ${this.templateDir}`);
     this.loadPartials();
+  }
+
+  /**
+   * Wave 93 hardening — `nest-cli.json` `assets` glob is supposed to copy
+   * `.hbs` files into `dist/src/notifications/templates/`, but in practice
+   * (`nest start` vs `nest build`, watch vs full build, deleteOutDir
+   * timing) we have repeatedly observed the copy NOT happening, leading
+   * to template-context-invalid file-not-found in DLQ.
+   *
+   * Resolution order — pick the FIRST directory that contains `_base.hbs`:
+   *   1. Sibling of compiled __dirname (canonical: `dist/src/notifications/templates/`)
+   *   2. Source tree fallback by walking up from `dist/src/...` to project root
+   *      and joining `src/notifications/templates`. This works even when
+   *      asset copy silently fails.
+   *
+   * Last-resort fallback returns the canonical sibling so the original
+   * file-not-found error still surfaces in logs (better than silently
+   * rendering a blank email).
+   */
+  private static resolveTemplateDir(): string {
+    const candidates: string[] = [];
+
+    // Candidate 1 — compiled sibling, e.g. `dist/src/notifications/templates`.
+    candidates.push(path.join(__dirname, '..', 'templates'));
+
+    // Candidate 2 — walk up to find a `src/notifications/templates` that
+    // exists in the source tree. Handles both `dist/src/...` and
+    // `dist/...` compile layouts.
+    let current = __dirname;
+    for (let i = 0; i < 8; i++) {
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      const sourceCandidate = path.join(
+        parent,
+        'src',
+        'notifications',
+        'templates',
+      );
+      if (fs.existsSync(path.join(sourceCandidate, '_base.hbs'))) {
+        candidates.push(sourceCandidate);
+        break;
+      }
+      current = parent;
+    }
+
+    for (const dir of candidates) {
+      if (fs.existsSync(path.join(dir, '_base.hbs'))) {
+        return dir;
+      }
+    }
+
+    // Last resort — return the canonical sibling so the file-not-found error
+    // still surfaces with a familiar path.
+    return candidates[0];
   }
 
   private loadPartials(): void {

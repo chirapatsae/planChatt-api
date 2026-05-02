@@ -3,10 +3,10 @@ import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import * as crypto from 'crypto';
 
 import { User } from 'src/users/entities/user.entity';
 import { EmailService } from 'src/util/email/email.service';
+import { decryption, isLikelyCiphertext } from 'src/util/encryption.util';
 import {
   ProjectNotificationEvent,
   ProjectNotificationEventType,
@@ -17,6 +17,7 @@ import { TemplateRendererService } from './template-renderer.service';
 import { NotificationEmailLog } from '../entities/notification-email-log.entity';
 import { maskEmail } from './utils/mask-email.util';
 import { NotificationSettingsService } from './notification-settings.service';
+import { signActionLinkToken } from './action-link-token.util';
 
 export const NOTIFICATIONS_EMAIL_QUEUE = 'notifications-email';
 export const NOTIFICATIONS_EMAIL_JOB = 'email';
@@ -30,6 +31,11 @@ const TEMPLATE_MAP: Record<ProjectNotificationEventType, string> = {
   PROJECT_SUBMITTED: 'project-submitted',
   PROJECT_RETURNED_FOR_REVISION: 'project-returned-for-revision',
   PROJECT_APPROVED: 'project-approved',
+  PROJECT_PULLED_BACK: 'project-pulled-back',
+  // Wave 94 — owner-side templates.
+  PROJECT_SUBMITTED_OWNER: 'project-submitted-owner',
+  PROJECT_VERIFIED_OWNER: 'project-verified-owner',
+  PROJECT_REJECTED_OWNER: 'project-rejected-owner',
 };
 
 const SUBJECT_MAP: Record<
@@ -40,12 +46,26 @@ const SUBJECT_MAP: Record<
   PROJECT_RETURNED_FOR_REVISION: (p) =>
     `[แจ้งเตือน] โครงการของท่านถูกส่งกลับเพื่อแก้ไข: ${p.projectName}`,
   PROJECT_APPROVED: (p) => `[แจ้งเตือน] โครงการของท่านได้รับการอนุมัติ: ${p.projectName}`,
+  PROJECT_PULLED_BACK: (p) =>
+    `[แจ้งเตือน] โครงการถูกถอนออกจากการตรวจสอบ: ${p.projectName}`,
+  // Wave 94 — owner-side subject lines.
+  PROJECT_SUBMITTED_OWNER: (p) =>
+    `[ยืนยันการนำส่ง] โครงการของท่านถูกส่งเรียบร้อย: ${p.projectName}`,
+  PROJECT_VERIFIED_OWNER: (p) =>
+    `[แจ้งความคืบหน้า] โครงการของท่านผ่านการตรวจสอบ: ${p.projectName}`,
+  PROJECT_REJECTED_OWNER: (p) =>
+    `[แจ้งผล] โครงการของท่านไม่ผ่านการพิจารณา (เกินศักยภาพ): ${p.projectName}`,
 };
 
 const REQUIRED_TEMPLATE_FIELDS: Record<ProjectNotificationEventType, string[]> = {
   PROJECT_SUBMITTED: ['projectName', 'actionLink', 'toStatus'],
   PROJECT_RETURNED_FOR_REVISION: ['projectName', 'actionLink', 'toStatus'],
   PROJECT_APPROVED: ['projectName', 'actionLink', 'toStatus'],
+  PROJECT_PULLED_BACK: ['projectName', 'actionLink', 'fromStatus', 'toStatus'],
+  // Wave 94 — owner-side required fields.
+  PROJECT_SUBMITTED_OWNER: ['projectName', 'actionLink', 'toStatus'],
+  PROJECT_VERIFIED_OWNER: ['projectName', 'actionLink', 'toStatus'],
+  PROJECT_REJECTED_OWNER: ['projectName', 'actionLink', 'toStatus'],
 };
 
 /**
@@ -185,6 +205,8 @@ export class NotificationsEmailService {
           projectName: event.projectName,
           fromStatus: event.fromStatus,
           toStatus: event.toStatus,
+          fromStatusTh: event.fromStatusTh,
+          toStatusTh: event.toStatusTh,
           reason: event.reason,
           actionLink: event.actionLink,
           recipient,
@@ -261,9 +283,13 @@ export class NotificationsEmailService {
     errorMessage?: string;
   }> {
     // SECOND LAYER — re-load user and re-check allowEmailNotification.
+    // W90-FIX-01: also pull `emailHash` so the empty-email gate works on the
+    // W89 invariant (no email → emailHash IS NULL). The `email` column itself
+    // is AES-ciphertext post-W89 and only becomes a usable address after
+    // decryption at the transport boundary below.
     const user = await this.userRepo.findOne({
       where: { id: payload.recipient.userId },
-      select: ['id', 'email', 'allowEmailNotification'],
+      select: ['id', 'email', 'emailHash', 'allowEmailNotification'],
     });
 
     const targetKind = this.extractTargetKind(payload.metadata);
@@ -285,23 +311,6 @@ export class NotificationsEmailService {
       return { success: true, skipped: 'user-missing' };
     }
 
-    if (!user.email || user.email.trim() === '') {
-      this.logger.log(
-        `[NotifyProcessor] skipped: no-email-address userId=${user.id} event=${payload.eventType}`,
-      );
-      this.writeAuditLog({
-        eventType: payload.eventType,
-        targetId: payload.projectId,
-        targetKind,
-        recipient: payload.recipient,
-        status: 'skipped-preference',
-        errorMessage: 'no-email-at-processor',
-        actorUserId: payload.actorUserId ?? null,
-        actorWorkHistoryId: payload.actorWorkHistoryId ?? null,
-      });
-      return { success: true, skipped: 'no-email' };
-    }
-
     if (user.allowEmailNotification === false) {
       this.logger.log(
         `[NotifyProcessor] skipped-at-processor: preference-off userId=${user.id} event=${payload.eventType}`,
@@ -319,13 +328,64 @@ export class NotificationsEmailService {
       return { success: true, skipped: 'preference' };
     }
 
+    // W90-FIX-01 — decrypt-at-boundary. Post-W89 the `email` column is
+    // AES-ciphertext (`iv:hex`); pre-W89 legacy rows may still hold plaintext.
+    // We branch on the shape, decrypt only when needed, and treat any
+    // decryption failure as a non-retryable per-job audit failure (the
+    // ciphertext could be corrupted or encrypted under a rotated key — Bull
+    // retry would not help). Plaintext NEVER leaves this stack frame: it
+    // lives only in `plaintextEmail` between this block and the
+    // `emailService.sendEmail` call below, and is fed to `maskEmail(...)`
+    // for log lines so masks are meaningful instead of opaque hex.
+    const plaintextEmail = await this.decryptUserEmail(user);
+    if (plaintextEmail === '__decrypt_failed__') {
+      // W83 logger discipline — never log the raw ciphertext payload.
+      this.logger.error(
+        `[NotifyProcessor] decrypt-failed userId=${user.id} event=${payload.eventType}`,
+      );
+      this.writeAuditLog({
+        eventType: payload.eventType,
+        targetId: payload.projectId,
+        targetKind,
+        recipient: payload.recipient,
+        status: 'failed',
+        errorMessage: 'decrypt-failed',
+        actorUserId: payload.actorUserId ?? null,
+        actorWorkHistoryId: payload.actorWorkHistoryId ?? null,
+      });
+      return { success: false, errorMessage: 'decrypt-failed' };
+    }
+
+    if (!plaintextEmail) {
+      this.logger.log(
+        `[NotifyProcessor] skipped: no-email-address userId=${user.id} event=${payload.eventType}`,
+      );
+      this.writeAuditLog({
+        eventType: payload.eventType,
+        targetId: payload.projectId,
+        targetKind,
+        recipient: payload.recipient,
+        status: 'skipped-preference',
+        errorMessage: 'no-email-at-processor',
+        actorUserId: payload.actorUserId ?? null,
+        actorWorkHistoryId: payload.actorWorkHistoryId ?? null,
+      });
+      return { success: true, skipped: 'no-email' };
+    }
+
     // Render template. TemplateContextError is non-retryable.
     const templateName = TEMPLATE_MAP[payload.eventType];
     const required = REQUIRED_TEMPLATE_FIELDS[payload.eventType];
+    // Wave 92 — Thai labels are the preferred display source per CLAUDE.md
+    // W67. Templates render `{{fromStatusTh}}` / `{{toStatusTh}}`; we fall
+    // back to the canonical English name when the upstream caller has not
+    // supplied a Thai label (legacy callers / boot-time defensive case).
     const templateCtx = {
       projectName: payload.projectName,
       fromStatus: payload.fromStatus,
       toStatus: payload.toStatus,
+      fromStatusTh: payload.fromStatusTh ?? payload.fromStatus,
+      toStatusTh: payload.toStatusTh ?? payload.toStatus,
       reason: payload.reason,
       actionLink: payload.actionLink,
       sentAt: this.formatThaiTimestamp(new Date()),
@@ -340,9 +400,11 @@ export class NotificationsEmailService {
     const text = this.templateRenderer.toPlainText(bodyHtml);
 
     // Transport — Option C: delegate to existing EmailService. No provider
-    // instantiation here.
+    // instantiation here. W90-FIX-01: `plaintextEmail` is the decrypted
+    // address; the ciphertext form on `user.email` MUST NOT be passed to
+    // nodemailer or Gmail will reject the malformed address.
     const result = await this.emailService.sendEmail({
-      to: user.email,
+      to: plaintextEmail,
       subject: templateCtx.subject,
       html,
       text,
@@ -350,7 +412,7 @@ export class NotificationsEmailService {
 
     if (result.success) {
       this.logger.log(
-        `[NotifyProvider] sent event=${payload.eventType} project=${payload.projectId} recipient=${maskEmail(user.email)} messageId=${result.messageId ?? 'n/a'}`,
+        `[NotifyProvider] sent event=${payload.eventType} project=${payload.projectId} recipient=${maskEmail(plaintextEmail)} messageId=${result.messageId ?? 'n/a'}`,
       );
       // Audit point #2 — send success.
       this.writeAuditLog({
@@ -368,7 +430,7 @@ export class NotificationsEmailService {
     }
 
     this.logger.error(
-      `[NotifyProvider] send-failed event=${payload.eventType} project=${payload.projectId} recipient=${maskEmail(user.email)} error=${result.error ?? 'unknown'}`,
+      `[NotifyProvider] send-failed event=${payload.eventType} project=${payload.projectId} recipient=${maskEmail(plaintextEmail)} error=${result.error ?? 'unknown'}`,
     );
     // Audit point #3 — provider send failure (non-retryable tail).
     this.writeAuditLog({
@@ -391,15 +453,21 @@ export class NotificationsEmailService {
    */
   async assertPreference(userId: string): Promise<boolean> {
     if (!userId) return false;
+    // W90-FIX-01 — gate on `emailHash` instead of decrypting `email`. W89
+    // backfill guarantees `emailHash IS NULL` iff the user has no email,
+    // so this is functionally equivalent to the prior plaintext check
+    // without paying the per-job decryption cost on the queue-ingress hot
+    // path. The prior `user.email.trim() === ''` check operated on
+    // ciphertext post-W89 and was therefore non-functional (always truthy).
     const user = await this.userRepo.findOne({
       where: { id: userId },
-      select: ['id', 'email', 'allowEmailNotification'],
+      select: ['id', 'emailHash', 'allowEmailNotification'],
     });
     if (!user) {
       this.logger.debug(`[Notify] skipped-at-queue: user-missing userId=${userId}`);
       return false;
     }
-    if (!user.email || user.email.trim() === '') {
+    if (!user.emailHash) {
       this.logger.log(`[Notify] skipped-at-queue: no-email-address userId=${userId}`);
       return false;
     }
@@ -416,16 +484,94 @@ export class NotificationsEmailService {
    *
    * Signed-URL is anti-leak only — recipients still re-auth on click (§9.4).
    */
-  signActionLink(projectId: string, expiresInDays = 30): string {
+  signActionLink(args: {
+    projectId: string;
+    eventType: ProjectNotificationEventType;
+    projectKind: 'project-group' | 'revised-project-group';
+    expiresInDays?: number;
+  }): string {
+    const expiresInDays = args.expiresInDays ?? 30;
+    // Base URL precedence (Wave 93 fix — APP_URL removed from chain):
+    //   1. NOTIFY_ACTION_LINK_BASE — explicit override (REQUIRED in production)
+    //   2. http://localhost:5173   — Vite dev default (frontend dev server)
+    //
+    // APP_URL is intentionally NOT in this chain. Convention in this repo
+    // (and across most NestJS projects) is APP_URL = BACKEND API origin,
+    // which would produce email links pointing at the API host instead of
+    // the SPA — clicking would 404 or download JSON. The W92 version
+    // mistakenly fell back to APP_URL; removed here.
+    //
+    // Production deployers MUST set NOTIFY_ACTION_LINK_BASE to the public
+    // frontend origin (e.g. https://projectbank.kpao.go.th).
     const base =
       process.env.NOTIFY_ACTION_LINK_BASE ||
-      process.env.APP_URL ||
-      'http://localhost:3000';
-    const secret = process.env.NOTIFY_ACTION_LINK_SECRET || 'dev-insecure-secret';
+      'http://localhost:5173';
     const expiry = Math.floor(Date.now() / 1000) + expiresInDays * 24 * 60 * 60;
-    const payload = `${projectId}|${expiry}`;
-    const token = crypto.createHmac('sha256', secret).update(payload).digest('hex');
-    return `${base.replace(/\/+$/, '')}/projects/${encodeURIComponent(projectId)}?t=${token}&e=${expiry}`;
+    // W93-VERIFY-CORE — HMAC computation now lives in the shared util so the
+    // verifier endpoint (W93-VERIFY-API) can import the same code path. URL
+    // output here is byte-for-byte unchanged for fixed inputs.
+    const token = signActionLinkToken({ projectId: args.projectId, expiry });
+    const path = this.resolveActionPath(args.eventType, args.projectKind, args.projectId);
+    return `${base.replace(/\/+$/, '')}${path}?t=${token}&e=${expiry}`;
+  }
+
+  /**
+   * Wave 92 — pick the deep-link path based on event + project kind so the
+   * email button lands on a route that EXISTS in the frontend AND matches
+   * the recipient's role. Auth is handled by RequireAuth/ProtectedRoute on
+   * the frontend — anonymous clicks bounce through `/login` automatically.
+   *
+   * Routing table (see App.tsx + menuConfig.tsx):
+   *   PROJECT_SUBMITTED     / PROJECT_PULLED_BACK
+   *     - main plan  → `/agency/admin/pending`        (staff list)
+   *     - revision   → `/revise/edit/admin/detail/:id` (staff detail)
+   *   PROJECT_RETURNED_FOR_REVISION
+   *     - main plan  → `/project/edit/:id`            (owner editable)
+   *     - revision   → `/revision/edit`               (owner revision-edit list)
+   *   PROJECT_APPROVED
+   *     - main plan  → `/project`                     (owner project list)
+   *     - revision   → `/revision/tracking`           (owner revision tracker)
+   *
+   * Trade-off: revision projects route through `/revise/edit/...` regardless
+   * of whether the underlying revision is type=edit or type=change. The
+   * `/revise/change/admin/detail/:id` route exists but the projectKind alone
+   * does not tell us which. Acceptable for Wave 92 — staff land on a page
+   * that shows the project either way.
+   */
+  private resolveActionPath(
+    eventType: ProjectNotificationEventType,
+    projectKind: 'project-group' | 'revised-project-group',
+    projectId: string,
+  ): string {
+    const id = encodeURIComponent(projectId);
+    const isMainPlan = projectKind === 'project-group';
+
+    if (eventType === 'PROJECT_SUBMITTED' || eventType === 'PROJECT_PULLED_BACK') {
+      return isMainPlan ? '/agency/admin/pending' : `/revise/edit/admin/detail/${id}`;
+    }
+    if (eventType === 'PROJECT_RETURNED_FOR_REVISION') {
+      return isMainPlan ? `/project/edit/${id}` : '/revision/edit';
+    }
+    if (eventType === 'PROJECT_APPROVED') {
+      return isMainPlan ? '/project' : '/revision/tracking';
+    }
+    // Wave 94 — owner-side events route to the owner's project list. We do
+    // not deep-link to a detail page because:
+    //   - SUBMITTED_OWNER: they just submitted; list view shows the new row
+    //     with "Pending" badge — most natural landing.
+    //   - VERIFIED_OWNER: progress update, no action needed; list view OK.
+    //   - REJECTED_OWNER: post-rejection editability is W68 follow-up;
+    //     until that's defined, do NOT push them to an edit page.
+    if (
+      eventType === 'PROJECT_SUBMITTED_OWNER' ||
+      eventType === 'PROJECT_VERIFIED_OWNER' ||
+      eventType === 'PROJECT_REJECTED_OWNER'
+    ) {
+      return isMainPlan ? '/project' : '/revision/tracking';
+    }
+    // Defensive fallback — owner project list. Should never hit since the
+    // event-type union is exhaustive above, but keeps the function total.
+    return '/project';
   }
 
   /**
@@ -438,7 +584,17 @@ export class NotificationsEmailService {
     projectName: string;
     fromStatus: string;
     toStatus: string;
+    /** Wave 92 — Thai display labels resolved from `status.th_name`. */
+    fromStatusTh?: string;
+    toStatusTh?: string;
     reason?: string;
+    /**
+     * Wave 92 — required for action-link routing. The legacy `metadata.kind`
+     * channel is still populated for compatibility, but we accept the kind
+     * as a first-class arg so the action link can be built without
+     * inspecting `metadata`.
+     */
+    projectKind: 'project-group' | 'revised-project-group';
     recipients: ProjectNotificationRecipient[];
     metadata?: Record<string, string | number | null | undefined>;
     /** Wave 22 B1 — optional workflow-actor threading (see event type). */
@@ -452,8 +608,14 @@ export class NotificationsEmailService {
       projectName: args.projectName,
       fromStatus: args.fromStatus,
       toStatus: args.toStatus,
+      fromStatusTh: args.fromStatusTh,
+      toStatusTh: args.toStatusTh,
       reason: args.reason,
-      actionLink: this.signActionLink(args.projectId),
+      actionLink: this.signActionLink({
+        projectId: args.projectId,
+        eventType: args.eventType,
+        projectKind: args.projectKind,
+      }),
       recipients: args.recipients,
       metadata: args.metadata,
       actorUserId: args.actorUserId,
@@ -464,6 +626,44 @@ export class NotificationsEmailService {
   // ---------------------------------------------------------------------------
   // Utilities
   // ---------------------------------------------------------------------------
+
+  /**
+   * W90-FIX-01 — decrypt the user's email at the transport boundary.
+   *
+   * Return contract:
+   *   - `null`                — no email present (empty / missing column).
+   *   - `'__decrypt_failed__'` — column held ciphertext-shaped data but
+   *     `decryption()` threw. Caller MUST audit-log `errorMessage='decrypt-failed'`
+   *     and abort the send. We use a sentinel string instead of throwing so
+   *     the failure path stays inside the existing fire-and-forget audit
+   *     contract and never bubbles up to crash the Bull processor.
+   *   - any other string     — plaintext email, ready to hand to nodemailer.
+   *
+   * Plaintext NEVER appears in logs and NEVER leaves the function-local
+   * scope of the caller. No closure / cache / map keyed on the value.
+   * Centralized in this file (NOT exported globally) to keep blast radius
+   * small per the task spec.
+   */
+  private async decryptUserEmail(user: {
+    email?: string;
+  }): Promise<string | null | '__decrypt_failed__'> {
+    const raw = user?.email;
+    if (typeof raw !== 'string' || raw.length === 0) return null;
+    if (isLikelyCiphertext(raw)) {
+      try {
+        const plain = await decryption(raw);
+        const trimmed = (plain ?? '').trim();
+        return trimmed.length > 0 ? trimmed : null;
+      } catch {
+        // W83 — never log the raw ciphertext here. Caller emits a structured
+        // log with userId only.
+        return '__decrypt_failed__';
+      }
+    }
+    // Legacy pre-W89 plaintext row — accept as-is.
+    const trimmed = raw.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
 
   /**
    * Fire-and-forget audit write. NEVER throws. NEVER awaits completion from

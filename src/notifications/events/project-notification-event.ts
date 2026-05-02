@@ -9,7 +9,20 @@
 export type ProjectNotificationEventType =
   | 'PROJECT_SUBMITTED'
   | 'PROJECT_RETURNED_FOR_REVISION'
-  | 'PROJECT_APPROVED';
+  | 'PROJECT_APPROVED'
+  // Wave 91 — owner-triggered pull back (Pending/Verified → Pull_Back).
+  // Recipients: staff-lead in the project's amphoe (main plan) /
+  // responsibleAgency (revision/change) — same resolver as PROJECT_SUBMITTED.
+  // Owner does NOT receive (they performed the action).
+  | 'PROJECT_PULLED_BACK'
+  // Wave 94 — owner-side notification matrix completion. These events fire
+  // ALONGSIDE existing staff-side events (e.g. PROJECT_SUBMITTED for staff
+  // fans out staff fanout AND PROJECT_SUBMITTED_OWNER fans out owner
+  // confirmation in the same transition). Government context: owners need
+  // proof-of-submission and progress visibility, not just final outcomes.
+  | 'PROJECT_SUBMITTED_OWNER'   // Ready→Pending — confirmation to owner
+  | 'PROJECT_VERIFIED_OWNER'    // Pending→Verified — progress update to owner
+  | 'PROJECT_REJECTED_OWNER';   // *→Rejected (W67) — final outcome to owner
 
 /**
  * Phase 2 event types — design-only stubs. Handlers/templates exist but are
@@ -38,6 +51,14 @@ export interface ProjectNotificationEvent {
   projectName: string;
   fromStatus: string;
   toStatus: string;
+  /**
+   * Wave 92 — Thai display labels resolved from `status.th_name` per CLAUDE.md
+   * W67 single source of truth. Hard-coded canonical→Thai maps are forbidden.
+   * Optional only because legacy callers may not have set them yet; templates
+   * fall back to canonical English when these are missing.
+   */
+  fromStatusTh?: string;
+  toStatusTh?: string;
   /** Only populated for PROJECT_RETURNED_FOR_REVISION. Staff-authored free text. */
   reason?: string;
   /** Signed URL with TTL (see NotificationsEmailService.signActionLink). */
@@ -77,6 +98,9 @@ export interface ProjectNotificationJobPayload {
   projectName: string;
   fromStatus: string;
   toStatus: string;
+  /** Wave 92 — Thai labels (see ProjectNotificationEvent). */
+  fromStatusTh?: string;
+  toStatusTh?: string;
   reason?: string;
   actionLink: string;
   recipient: ProjectNotificationRecipient;

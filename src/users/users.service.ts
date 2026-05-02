@@ -13,6 +13,8 @@ import {
   decryption,
   encryption,
   hashCitizenId,
+  hashEmail,
+  hashPhone,
 } from 'src/util/encryption.util';
 import { handleException } from 'src/util/handleException';
 import { AiUsageQuotasService } from 'src/ai-usage-quotas/ai-usage-quotas.service';
@@ -30,6 +32,104 @@ export class UsersService {
   ) { }
 
   /**
+   * W89 — Decrypts PII columns (citizenId, email, phone) on a User entity in
+   * place. Use at every read-path response boundary so callers always see
+   * plaintext.
+   *
+   * If decryption throws (corrupted ciphertext, wrong key, etc.) the field
+   * is set to `null` rather than crashing the request — only the error
+   * class name is logged, never the ciphertext or the partial plaintext.
+   * W83 logger discipline applies.
+   *
+   * W89B — Made `public` so downstream services that read the User entity
+   * via TypeORM relations (EventsService, AnnouncementsService, ...) can
+   * decrypt at THEIR response boundary without bypassing UsersService and
+   * without duplicating the decryption util.
+   *
+   * This method is SAFE to call multiple times on the same entity — the
+   * `decryption()` util internally tolerates strings that no longer match
+   * the `iv:ciphertext` shape (the value will be re-set to itself or
+   * `null` on a parse error). Callers MAY guard with the W89 ciphertext
+   * heuristic if they want to skip the work entirely on already-decrypted
+   * entities, but a redundant call is not a correctness hazard.
+   */
+  async decryptUserPii(user: User): Promise<User> {
+    if (!user) return user;
+
+    if (user.citizenId && UsersService.looksLikeCiphertext(user.citizenId)) {
+      try {
+        user.citizenId = await decryption(user.citizenId);
+      } catch (error) {
+        this.logger.error(
+          `decryptUserPii citizenId failed: ${error?.constructor?.name ?? 'UnknownError'}`,
+        );
+        user.citizenId = null as unknown as string;
+      }
+    }
+
+    if (user.email && UsersService.looksLikeCiphertext(user.email)) {
+      try {
+        user.email = await decryption(user.email);
+      } catch (error) {
+        this.logger.error(
+          `decryptUserPii email failed: ${error?.constructor?.name ?? 'UnknownError'}`,
+        );
+        user.email = undefined;
+      }
+    }
+
+    if (user.phone && UsersService.looksLikeCiphertext(user.phone)) {
+      try {
+        user.phone = await decryption(user.phone);
+      } catch (error) {
+        this.logger.error(
+          `decryptUserPii phone failed: ${error?.constructor?.name ?? 'UnknownError'}`,
+        );
+        user.phone = undefined;
+      }
+    }
+
+    return user;
+  }
+
+  /**
+   * W89B — Ciphertext heuristic. Mirrors `AuthService.looksLikeCiphertext`.
+   * Used to guard decryption so `decryptUserPii` is safe to call multiple
+   * times on the same User entity (downstream services may decrypt at
+   * their response boundary without knowing whether someone already did).
+   *
+   * Plaintext emails contain `@` and plaintext phones are digit-only —
+   * neither matches the `iv:ciphertext` shape (two hex blocks separated
+   * by a colon). Already-decrypted values are short-circuited.
+   */
+  private static looksLikeCiphertext(value: string): boolean {
+    if (typeof value !== 'string' || value.length === 0) return false;
+    return /^[0-9a-f]{16,}:[0-9a-f]{16,}$/i.test(value);
+  }
+
+  /**
+   * W89 — Encrypts + hashes email/phone from an inbound DTO onto a User
+   * partial. Caller is responsible for citizenId (handled separately due
+   * to its preCalculatedHash flow). Mutates `target` in place.
+   *
+   * Empty strings are treated as "not provided" — only truthy DTO values
+   * trigger encryption.
+   */
+  private async encryptUserPiiFromDto(
+    target: Partial<User>,
+    dto: { email?: string; phone?: string },
+  ): Promise<void> {
+    if (dto.email) {
+      target.email = await encryption(dto.email);
+      target.emailHash = hashEmail(dto.email);
+    }
+    if (dto.phone) {
+      target.phone = await encryption(dto.phone);
+      target.phoneHash = hashPhone(dto.phone);
+    }
+  }
+
+  /**
    * Creates a new user. Unique constraints are handled by the database.
    */
   async create(createUserDto: CreateUserDto, preCalculatedHash?: string): Promise<User> {
@@ -44,38 +144,50 @@ export class UsersService {
 
       if (existingUser) {
         this.logger.warn(`User with hash ${hashedCid} already exists. Returning existing user.`);
-        existingUser.citizenId = await decryption(existingUser.citizenId);
-        return existingUser;
+        return await this.decryptUserPii(existingUser);
       }
 
       const encryptedCid = await encryption(createUserDto.citizenId);
 
-      const user = this.userRepository.create({
-        ...createUserDto,
+      // Build the row with citizenId already encrypted; email/phone are
+      // applied via the PII helper so encryption + hash stay in lockstep.
+      const { email: _dtoEmail, phone: _dtoPhone, ...rest } = createUserDto;
+      const userPayload: Partial<User> = {
+        ...rest,
         citizenId: encryptedCid,
         citizenIdHash: hashedCid,
-      });
+      };
+      await this.encryptUserPiiFromDto(userPayload, createUserDto);
 
+      const user = this.userRepository.create(userPayload);
       const savedUser = await this.userRepository.save(user);
 
       // Assign default AI quota
       await this.aiUsageQuotasService.createDefaultQuota(savedUser.id);
 
-      savedUser.citizenId = await decryption(savedUser.citizenId); // Decrypt for the response
-      return savedUser;
+      return await this.decryptUserPii(savedUser);
     } catch (error) {
-      // Log the error details for debugging
-      this.logger.error(`Failed to create user: ${JSON.stringify(createUserDto)}`, error);
+      // W83 — DO NOT JSON.stringify the DTO; it carries plaintext PII.
+      // Log only the error class so we keep observability without leaking.
+      this.logger.error(
+        `Failed to create user: ${error?.constructor?.name ?? 'UnknownError'}`,
+        error?.stack,
+      );
       handleException(this.logger, error);
     }
   }
 
   /**
-   * Retrieves all users. Does not decrypt sensitive data for performance.
+   * Retrieves all users. Decrypts citizenId / email / phone for every row
+   * so callers always see plaintext (§17 advisory; W89 contract).
+   *
+   * Performance note: decryption runs sequentially per row. For large user
+   * tables this should switch to paginated reads + lazy decrypt at the
+   * response shaping layer. For current scale this is acceptable.
    */
   async findAll(): Promise<User[]> {
     try {
-      return await this.userRepository.find({
+      const users = await this.userRepository.find({
         relations: {
           workHistory: {
             amphoe: true,
@@ -88,6 +200,11 @@ export class UsersService {
           aiUsageQuota: true,
         },
       });
+
+      for (const user of users) {
+        await this.decryptUserPii(user);
+      }
+      return users;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -120,8 +237,7 @@ export class UsersService {
         throw new NotFoundException(`User with ID ${id} not found`);
       }
 
-      user.citizenId = await decryption(user.citizenId);
-      return user;
+      return await this.decryptUserPii(user);
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -129,16 +245,28 @@ export class UsersService {
 
   /**
    * Updates a user's details using the 'preload' pattern.
+   *
+   * W89 — when `dto.email` / `dto.phone` are provided we re-encrypt and
+   * recompute the deterministic hash. When they are `undefined` we leave
+   * the column untouched (TypeORM preload semantics).
+   *
+   * citizenId remains intentionally non-mutable here (kept commented-out
+   * since pre-W89). If a future flow wants to mutate it, route through a
+   * dedicated method that re-validates the hash uniqueness.
    */
   async update(id: string, updateUserDto: UpdateUserDto): Promise<User> {
     try {
-      const { citizenId, ...otherDetails } = updateUserDto;
-      const updatePayload: Partial<UpdateUserDto> = { ...otherDetails };
+      const { citizenId, email, phone, ...otherDetails } = updateUserDto;
+      const updatePayload: Partial<User> = { ...otherDetails };
 
       // if (citizenId) {
       //   updatePayload['citizenId'] = await encryption(citizenId);
       //   updatePayload['citizenIdHash'] = hashCitizenId(citizenId);
       // }
+
+      // Encrypt + hash email/phone only when the DTO carries them. Pass
+      // through the helper so encrypt and hash never drift apart.
+      await this.encryptUserPiiFromDto(updatePayload, { email, phone });
 
       const userToUpdate = await this.userRepository.preload({
         id,
@@ -150,10 +278,94 @@ export class UsersService {
       }
 
       const savedUser = await this.userRepository.save(userToUpdate);
-      savedUser.citizenId = await decryption(savedUser.citizenId); // Decrypt for the response
-      return savedUser;
+      return await this.decryptUserPii(savedUser);
     } catch (error) {
       handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * W89 — Lookup a user by their citizenId hash and return the entity with
+   * PII decrypted. Used by the ThaID OAuth login flow which derives
+   * `citizenIdHash` from the verified id_token claim and MUST NOT see
+   * ciphertext on the User entity (otherwise the response payload would
+   * leak `iv:ciphertext` to the frontend).
+   *
+   * The returned entity carries the relations the auth flow depends on
+   * (workHistory + amphoe + LAO + workStatus + role + governmentAgencies)
+   * so callers don't need to refetch.
+   *
+   * `hash` is expected to already be a hex digest produced by
+   * `hashCitizenId` — this method does NOT re-hash. Empty / non-string
+   * input returns `null` to avoid `where: { citizenIdHash: '' }` matching
+   * any legacy row.
+   */
+  async findByCitizenIdHash(hash: string): Promise<User | null> {
+    if (typeof hash !== 'string' || hash.length === 0) {
+      return null;
+    }
+    try {
+      const user = await this.userRepository.findOne({
+        where: { citizenIdHash: hash },
+        relations: [
+          'workHistory',
+          'workHistory.amphoe',
+          'workHistory.localAdministrativeOrganization',
+          'workHistory.workStatus',
+          'workHistory.role',
+          'workHistory.governmentAgencies',
+        ],
+      });
+      if (!user) return null;
+      return await this.decryptUserPii(user);
+    } catch (error) {
+      handleException(this.logger, error);
+      return null;
+    }
+  }
+
+  /**
+   * W89 — Lookup a user by deterministic email hash. Returns the entity
+   * with PII decrypted, or `null` if not found.
+   *
+   * Empty / non-string input returns `null` immediately to prevent the
+   * "match anyone whose email_hash equals hash('')" failure mode.
+   */
+  async findByEmailHash(email: string): Promise<User | null> {
+    if (typeof email !== 'string' || email.trim().length === 0) {
+      return null;
+    }
+    try {
+      const hash = hashEmail(email);
+      const user = await this.userRepository.findOne({
+        where: { emailHash: hash },
+      });
+      if (!user) return null;
+      return await this.decryptUserPii(user);
+    } catch (error) {
+      handleException(this.logger, error);
+      return null;
+    }
+  }
+
+  /**
+   * W89 — Lookup a user by deterministic phone hash. Same contract as
+   * `findByEmailHash`.
+   */
+  async findByPhoneHash(phone: string): Promise<User | null> {
+    if (typeof phone !== 'string' || phone.replace(/\D/g, '').length === 0) {
+      return null;
+    }
+    try {
+      const hash = hashPhone(phone);
+      const user = await this.userRepository.findOne({
+        where: { phoneHash: hash },
+      });
+      if (!user) return null;
+      return await this.decryptUserPii(user);
+    } catch (error) {
+      handleException(this.logger, error);
+      return null;
     }
   }
 
@@ -300,10 +512,8 @@ export class UsersService {
       user.profileImageUrl = imageUrl;
       const updatedUser = await this.userRepository.save(user);
 
-      // Decrypt for response
-      updatedUser.citizenId = await decryption(updatedUser.citizenId);
-
-      return updatedUser;
+      // W89 — return all PII columns decrypted, not just citizenId.
+      return await this.decryptUserPii(updatedUser);
     } catch (error) {
       handleException(this.logger, error);
     }

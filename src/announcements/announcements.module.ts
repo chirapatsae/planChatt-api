@@ -10,6 +10,7 @@ import { UserNotificationsModule } from '../user-notifications/user-notification
 import { NotificationLogsModule } from '../notification-logs/notification-logs.module';
 import { AnnouncementSchedulerModule } from './announcement-scheduler.module';
 import { WebsocketModule } from '../websocket/websocket.module';
+import { UsersModule } from 'src/users/users.module';
 
 @Module({
   imports: [
@@ -18,6 +19,9 @@ import { WebsocketModule } from '../websocket/websocket.module';
     NotificationLogsModule,
     AnnouncementSchedulerModule,
     WebsocketModule,
+    // W89B — UsersService.decryptUserPii used in findAll/findOne to keep
+    // ciphertext from leaking into the response payload.
+    UsersModule,
   ],
   controllers: [AnnouncementsController],
   providers: [AnnouncementsService],

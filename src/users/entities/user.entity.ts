@@ -9,6 +9,7 @@ import {
   Column,
   DeleteDateColumn,
   Entity,
+  Index,
   JoinColumn,
   OneToMany,
   OneToOne,
@@ -36,11 +37,39 @@ export class User {
   @Column()
   lastname: string;
 
-  @Column({ nullable: true, unique: true })
+  /**
+   * W89: AES-encrypted at rest (`iv:ciphertext`). UNIQUE constraint moved
+   * to `emailHash` (deterministic HMAC over normalized form). Widened to
+   * 512 chars to fit the ciphertext blob comfortably.
+   */
+  @Column({ nullable: true, length: 512 })
   email?: string;
 
-  @Column({ nullable: true, unique: true })
+  /**
+   * W89: AES-encrypted at rest. UNIQUE moved to `phoneHash`.
+   */
+  @Column({ nullable: true, length: 512 })
   phone?: string;
+
+  /**
+   * W89: HMAC-SHA256(LOWER(TRIM(email))) — deterministic lookup + uniqueness
+   * surrogate. Owned by `hashEmail` in `src/util/encryption.util.ts`.
+   * Partial-unique index (`uq_users_email_hash WHERE email_hash IS NOT NULL`)
+   * is created by the W89 migration; the entity-side index is a plain
+   * b-tree alias for query planning.
+   */
+  @Index('idx_users_email_hash')
+  @Column({ name: 'email_hash', nullable: true, length: 64 })
+  @Exclude()
+  emailHash?: string;
+
+  /**
+   * W89: HMAC-SHA256(digit-only phone). See `emailHash` notes.
+   */
+  @Index('idx_users_phone_hash')
+  @Column({ name: 'phone_hash', nullable: true, length: 64 })
+  @Exclude()
+  phoneHash?: string;
 
   @Column({ name: 'profile_image_url', nullable: true })
   @Transform(({ value }) => {

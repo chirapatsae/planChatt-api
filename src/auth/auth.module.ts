@@ -1,14 +1,15 @@
 import { Module } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
-import { TypeOrmModule } from '@nestjs/typeorm';
-import { WorkHistory } from 'src/work-history/entities/work-history.entity';
-import { User } from 'src/users/entities/user.entity';
 import { PassportModule } from '@nestjs/passport';
 import { JwtStrategy } from './jwt.strategy';
 import { JwtModule } from '@nestjs/jwt';
 import { UsersModule } from 'src/users/users.module';
 
+// W89B — `TypeOrmModule.forFeature([WorkHistory, User])` was removed: the
+// AuthService no longer injects either repository (W89-BE-AUTH-INTEGRATION
+// routed all User reads/writes through UsersService, and WorkHistory was
+// already unused). UsersModule is the only remaining dependency.
 @Module({
   imports: [
     PassportModule,
@@ -16,7 +17,6 @@ import { UsersModule } from 'src/users/users.module';
       secret: process.env.JWT_SECRET || '',
       signOptions: { expiresIn: '1d' },
     }),
-    TypeOrmModule.forFeature([WorkHistory, User]),
     UsersModule,
   ],
   controllers: [AuthController],

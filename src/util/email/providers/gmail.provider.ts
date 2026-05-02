@@ -43,24 +43,27 @@ export class GmailProvider implements EmailProvider {
   }
 
   private buildMailOptions(message: EmailMessage): nodemailer.SendMailOptions {
+    // W90 deliverability fix (2026-05-01):
+    // - Removed `X-Priority: 1`, `X-MSMail-Priority: High`, `Importance: high` —
+    //   three high-priority headers in combination is a documented Gmail spam
+    //   trigger; transactional notifications are not "high priority" mail.
+    // - Removed custom `messageId` at `@projectbank.com` — that domain has no
+    //   matching DKIM/SPF, and a Message-ID whose domain disagrees with `From:`
+    //   triggers heuristic spam scoring on Gmail-to-Gmail delivery.
+    // - Removed `List-Unsubscribe: <mailto:unsubscribe@projectbank.com>` — the
+    //   target mailbox does not exist; Gmail validates the list-unsubscribe
+    //   target as part of its bulk-sender policy. Re-add only when a real
+    //   unsubscribe handler ships.
+    // - Removed `X-Auto-Response-Suppress` (deprecated Microsoft header) and
+    //   the bespoke X-Mailer / X-Entity-Ref-ID headers (no operational value).
+    // Result: nodemailer / Gmail SMTP auto-generate a Message-ID at the From
+    // domain (`@gmail.com`), which DKIM-aligns and lands in the inbox.
     const mailOptions: nodemailer.SendMailOptions = {
       from: message.from || `"ระบบธนาคารโครงการ อบจ.นม" <${process.env.EMAIL_USER}>`,
       to: message.to,
       subject: message.subject,
       text: message.text,
       html: message.html,
-      headers: {
-        'X-Priority': '1', // High priority
-        'X-MSMail-Priority': 'High',
-        'Importance': 'high',
-        'X-Mailer': 'Project Bank System v1.0',
-        'X-Entity-Ref-ID': 'project-bank-notification',
-        'List-Unsubscribe': '<mailto:unsubscribe@projectbank.com>',
-        'X-Auto-Response-Suppress': 'All',
-      },
-      // เพิ่ม message ID และ references
-      messageId: `<${Date.now()}-${Math.random().toString(36).substr(2, 9)}@projectbank.com>`,
-      // ตั้งค่า reply-to
       replyTo: process.env.EMAIL_USER,
     };
 

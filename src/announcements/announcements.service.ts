@@ -12,6 +12,7 @@ import { UserNotificationsService } from '../user-notifications/user-notificatio
 import { NotificationLogsService } from '../notification-logs/notification-logs.service';
 import { WebsocketService } from '../websocket/websocket/websocket.service';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
+import { UsersService } from 'src/users/users.service';
 
 @Injectable()
 export class AnnouncementsService {
@@ -30,6 +31,11 @@ export class AnnouncementsService {
     private readonly notificationLogsService: NotificationLogsService,
     private readonly websocketService: WebsocketService,
     private readonly eventEmitter: EventEmitter2,
+    // W89B — used to decrypt `announcement.createdBy.user` at the
+    // response boundary. The Announcement entity is returned directly
+    // (no DTO transform) by findAll/findOne, so without this the FE
+    // would receive `iv:ciphertext` email/phone strings.
+    private readonly usersService: UsersService,
   ) { }
 
   async create(createAnnouncementDto: CreateAnnouncementDto, userId: string): Promise<Announcement> {
@@ -104,11 +110,22 @@ export class AnnouncementsService {
   }
 
   async findAll(): Promise<Announcement[]> {
-    return this.announcementRepository.find({
+    const announcements = await this.announcementRepository.find({
       relations: ['createdBy', 'createdBy.user', 'announcementRoles', 'announcementRoles.role', 'createdBy.amphoe', 'createdBy.localAdministrativeOrganization'],
       order: { createdAt: 'DESC' },
       where: { type: NotificationType.ANNOUNCEMENT }
     });
+
+    // W89B — decrypt the embedded creator User entity on every row before
+    // returning. `decryptUserPii` is idempotent (ciphertext-shape guarded)
+    // so this is safe even if a future caller pre-decrypts. Sequential
+    // decrypt is acceptable at current scale per W89B brief.
+    for (const a of announcements) {
+      if (a.createdBy?.user) {
+        await this.usersService.decryptUserPii(a.createdBy.user);
+      }
+    }
+    return announcements;
   }
 
   async findOne(id: string): Promise<Announcement> {
@@ -119,6 +136,12 @@ export class AnnouncementsService {
 
     if (!announcement) {
       throw new NotFoundException(`Announcement with ID ${id} not found`);
+    }
+
+    // W89B — decrypt creator's email/phone before returning. Same rationale
+    // as findAll above.
+    if (announcement.createdBy?.user) {
+      await this.usersService.decryptUserPii(announcement.createdBy.user);
     }
 
     return announcement;

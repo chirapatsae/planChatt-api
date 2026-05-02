@@ -22,6 +22,8 @@ export interface EmailResult {
   success: boolean;
   messageId?: string;
   error?: string;
+  /** W90-SAFEGUARD-01 — true when MAIL_ENABLED was false (suppressed) or MAIL_SANDBOX_TO rerouted the send. */
+  sandboxed?: boolean;
 }
 
 
