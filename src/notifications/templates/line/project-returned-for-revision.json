@@ -1,0 +1,133 @@
+{
+  "type": "bubble",
+  "size": "mega",
+  "header": {
+    "type": "box",
+    "layout": "vertical",
+    "backgroundColor": "#F59E0B",
+    "paddingAll": "16px",
+    "contents": [
+      {
+        "type": "text",
+        "text": "ส่งกลับเพื่อแก้ไข",
+        "color": "#FFFFFF",
+        "weight": "bold",
+        "size": "md"
+      }
+    ]
+  },
+  "body": {
+    "type": "box",
+    "layout": "vertical",
+    "spacing": "md",
+    "paddingAll": "16px",
+    "contents": [
+      {
+        "type": "text",
+        "text": "เจ้าหน้าที่ส่งโครงการกลับเพื่อให้แก้ไขเพิ่มเติม กรุณาตรวจสอบเหตุผลและดำเนินการปรับแก้",
+        "wrap": true,
+        "size": "sm",
+        "color": "#374151"
+      },
+      {
+        "type": "separator",
+        "color": "#E5E7EB"
+      },
+      {
+        "type": "box",
+        "layout": "vertical",
+        "spacing": "sm",
+        "contents": [
+          {
+            "type": "box",
+            "layout": "baseline",
+            "spacing": "sm",
+            "contents": [
+              {
+                "type": "text",
+                "text": "ชื่อโครงการ",
+                "size": "xs",
+                "color": "#6B7280",
+                "flex": 3
+              },
+              {
+                "type": "text",
+                "text": "{{projectName}}",
+                "size": "sm",
+                "color": "#111827",
+                "weight": "bold",
+                "wrap": true,
+                "flex": 7
+              }
+            ]
+          },
+          {
+            "type": "box",
+            "layout": "baseline",
+            "spacing": "sm",
+            "contents": [
+              {
+                "type": "text",
+                "text": "สถานะ",
+                "size": "xs",
+                "color": "#6B7280",
+                "flex": 3
+              },
+              {
+                "type": "text",
+                "text": "{{fromStatusTh}} → {{toStatusTh}}",
+                "size": "sm",
+                "color": "#111827",
+                "wrap": true,
+                "flex": 7
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "box",
+        "layout": "vertical",
+        "spacing": "xs",
+        "backgroundColor": "#FEF3C7",
+        "paddingAll": "12px",
+        "cornerRadius": "4px",
+        "contents": [
+          {
+            "type": "text",
+            "text": "เหตุผลจากผู้ตรวจสอบ",
+            "size": "xs",
+            "color": "#92400E",
+            "weight": "bold"
+          },
+          {
+            "type": "text",
+            "text": "{{reason}}",
+            "size": "sm",
+            "color": "#111827",
+            "wrap": true
+          }
+        ]
+      }
+    ]
+  },
+  "footer": {
+    "type": "box",
+    "layout": "vertical",
+    "spacing": "sm",
+    "paddingAll": "16px",
+    "contents": [
+      {
+        "type": "button",
+        "style": "primary",
+        "color": "#4F46E5",
+        "height": "sm",
+        "action": {
+          "type": "uri",
+          "label": "เปิดดูโครงการ",
+          "uri": "{{actionLink}}"
+        }
+      }
+    ]
+  }
+}

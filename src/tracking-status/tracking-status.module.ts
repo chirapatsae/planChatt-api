@@ -15,6 +15,7 @@ import { WorkHistoryAmphoeResponsibility } from 'src/work-history-amphoe-respons
 import { WorkHistoryGovernmentAgencyResponsibility } from 'src/work-history-government-agency-responsibility/entities/work-history-government-agency-responsibility.entity';
 import { LineageLockModule } from 'src/common/lineage-lock/lineage-lock.module';
 import { NotificationsEmailModule } from 'src/notifications/email/notifications-email.module';
+import { NotificationsLineModule } from 'src/notifications/line/notifications-line.module';
 
 @Module({
   imports: [
@@ -32,6 +33,10 @@ import { NotificationsEmailModule } from 'src/notifications/email/notifications-
     AnnouncementsModule,
     LineageLockModule,
     NotificationsEmailModule,
+    // W96-TRIGGER-WIRING — independent LINE fanout (Q9). Imported here so
+    // TrackingStatusService can inject NotificationsLineService alongside
+    // NotificationsEmailService.
+    NotificationsLineModule,
   ],
   controllers: [TrackingStatusController],
   providers: [TrackingStatusService],

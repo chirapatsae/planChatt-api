@@ -42,6 +42,22 @@ export class NotificationSetting {
   @Column({ name: 'email_enabled', type: 'boolean', default: false })
   emailEnabled: boolean;
 
+  /**
+   * Wave 96 — per-channel kill-switch for LINE push notifications.
+   *
+   * Defaults to FALSE on the seeded `global` row (parity with email —
+   * "ปิดไว้ก่อน"). Toggled by super-admins via the same kill-switch
+   * surface as `emailEnabled`; consulted at the top of
+   * `NotificationsLineService.queueLine()` to short-circuit fanout when
+   * LINE is disabled system-wide.
+   *
+   * Fail-closed: any DB-read error in the settings service treats this
+   * as `false` (never silently push). §17.11 — integrity, not
+   * permission; no role bypass.
+   */
+  @Column({ name: 'line_enabled', type: 'boolean', default: false })
+  lineEnabled: boolean;
+
   @Column({
     name: 'last_changed_at',
     type: 'timestamptz',

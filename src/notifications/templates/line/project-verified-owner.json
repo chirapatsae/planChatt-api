@@ -1,0 +1,109 @@
+{
+  "type": "bubble",
+  "size": "mega",
+  "header": {
+    "type": "box",
+    "layout": "vertical",
+    "backgroundColor": "#4F46E5",
+    "paddingAll": "16px",
+    "contents": [
+      {
+        "type": "text",
+        "text": "โครงการผ่านการตรวจสอบ",
+        "color": "#FFFFFF",
+        "weight": "bold",
+        "size": "md"
+      }
+    ]
+  },
+  "body": {
+    "type": "box",
+    "layout": "vertical",
+    "spacing": "md",
+    "paddingAll": "16px",
+    "contents": [
+      {
+        "type": "text",
+        "text": "โครงการของท่านผ่านการตรวจสอบและเข้าสู่ขั้นตอนการอนุมัติ",
+        "wrap": true,
+        "size": "sm",
+        "color": "#374151"
+      },
+      {
+        "type": "separator",
+        "color": "#E5E7EB"
+      },
+      {
+        "type": "box",
+        "layout": "vertical",
+        "spacing": "sm",
+        "contents": [
+          {
+            "type": "box",
+            "layout": "baseline",
+            "spacing": "sm",
+            "contents": [
+              {
+                "type": "text",
+                "text": "ชื่อโครงการ",
+                "size": "xs",
+                "color": "#6B7280",
+                "flex": 3
+              },
+              {
+                "type": "text",
+                "text": "{{projectName}}",
+                "size": "sm",
+                "color": "#111827",
+                "weight": "bold",
+                "wrap": true,
+                "flex": 7
+              }
+            ]
+          },
+          {
+            "type": "box",
+            "layout": "baseline",
+            "spacing": "sm",
+            "contents": [
+              {
+                "type": "text",
+                "text": "สถานะ",
+                "size": "xs",
+                "color": "#6B7280",
+                "flex": 3
+              },
+              {
+                "type": "text",
+                "text": "{{fromStatusTh}} → {{toStatusTh}}",
+                "size": "sm",
+                "color": "#111827",
+                "wrap": true,
+                "flex": 7
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "footer": {
+    "type": "box",
+    "layout": "vertical",
+    "spacing": "sm",
+    "paddingAll": "16px",
+    "contents": [
+      {
+        "type": "button",
+        "style": "primary",
+        "color": "#4F46E5",
+        "height": "sm",
+        "action": {
+          "type": "uri",
+          "label": "เปิดดูโครงการ",
+          "uri": "{{actionLink}}"
+        }
+      }
+    ]
+  }
+}

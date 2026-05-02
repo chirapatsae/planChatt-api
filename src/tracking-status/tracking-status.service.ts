@@ -27,6 +27,7 @@ import { WorkHistoryAmphoeResponsibility } from 'src/work-history-amphoe-respons
 import { WorkHistoryGovernmentAgencyResponsibility } from 'src/work-history-government-agency-responsibility/entities/work-history-government-agency-responsibility.entity';
 import { LineageLockService } from 'src/common/lineage-lock/lineage-lock.service';
 import { NotificationsEmailService } from 'src/notifications/email/notifications-email.service';
+import { NotificationsLineService } from 'src/notifications/line/notifications-line.service';
 import { RecipientResolverService } from 'src/notifications/email/recipient-resolver.service';
 import {
   ProjectNotificationEvent,
@@ -69,6 +70,13 @@ export class TrackingStatusService {
     // `this.dataSource.transaction(...)` callback has returned successfully.
     private readonly notificationsEmailService: NotificationsEmailService,
     private readonly recipientResolver: RecipientResolverService,
+    // W96-TRIGGER-WIRING — independent LINE fanout (Q9). queueLine internally
+    // filters by LINE_EVENT_ALLOWLIST (W96-DISPATCH §gate 1) so non-LINE
+    // events (e.g. PROJECT_SUBMITTED staff fanout) early-return without
+    // queueing. Wrapped in its own try/catch at the call site so a LINE
+    // failure does NOT prevent email firing AND does NOT cascade into the
+    // workflow caller (§4.1).
+    private readonly notificationsLineService: NotificationsLineService,
   ) { }
 
   /**
@@ -260,7 +268,29 @@ export class TrackingStatusService {
 
       // queueEmail internally swallows all errors but we still wrap in
       // try/catch as belt-and-braces in case the API contract regresses.
-      await this.notificationsEmailService.queueEmail(event);
+      try {
+        await this.notificationsEmailService.queueEmail(event);
+      } catch (emailErr) {
+        // Email-side isolation — failure MUST NOT prevent LINE fanout
+        // (Q9 independent channels) and MUST NOT cascade to workflow caller.
+        this.logger.warn(
+          `[Notify-email] emit-failed event=${args.eventType} project=${args.projectId} err=${(emailErr as Error).message}`,
+        );
+      }
+
+      // W96-TRIGGER-WIRING — independent LINE fanout (Q9). queueLine
+      // internally honors LINE_EVENT_ALLOWLIST (W96-DISPATCH §gate 1), so
+      // calling for ALL events (including staff fanouts) is safe — non-LINE
+      // events early-return without queueing. Channel-specific recipient
+      // enrichment (LINE bindings) happens inside queueLine. Wrapped in its
+      // own try/catch so a LINE failure does NOT cascade.
+      try {
+        await this.notificationsLineService.queueLine(event);
+      } catch (lineErr) {
+        this.logger.warn(
+          `[Notify-line] emit-failed event=${args.eventType} project=${args.projectId} err=${(lineErr as Error).message}`,
+        );
+      }
     } catch (err) {
       this.logger.warn(
         `[Notify] emit-failed event=${args.eventType} project=${args.projectId} err=${(err as Error).message}`,

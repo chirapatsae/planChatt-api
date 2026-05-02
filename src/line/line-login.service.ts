@@ -66,6 +66,23 @@ export interface LineLoginCallbackResult {
   reason?: string;
 }
 
+/**
+ * W96B — thrown by `upsertBinding` when the incoming `lineUserId` already has
+ * an active binding owned by a DIFFERENT Project Bank user. The previous
+ * implementation silently soft-unlinked the other user's binding; that was a
+ * privacy / UX defect (the displaced user lost notifications without notice).
+ *
+ * The new contract: cross-binding is REJECTED. Frontend surfaces a Thai
+ * toast asking the user to unlink the previous account first. Same-user
+ * re-link (rebinding your OWN LINE) continues to succeed.
+ */
+export class LineCrossBindingError extends Error {
+  constructor() {
+    super('LINE_CROSS_BINDING_REJECTED');
+    this.name = 'LineCrossBindingError';
+  }
+}
+
 @Injectable()
 export class LineLoginService implements OnModuleDestroy {
   private readonly logger = new Logger(LineLoginService.name);
@@ -264,6 +281,15 @@ export class LineLoginService implements OnModuleDestroy {
         pictureUrl,
       });
     } catch (e: any) {
+      // W96B — distinguish cross-binding rejection from other failures so
+      // the FE can show a precise "ask the other user to unlink first"
+      // toast instead of a generic "binding failed".
+      if (e instanceof LineCrossBindingError) {
+        this.logger.warn(
+          `line-login.callback.failure reason=already_linked userId=${userId} at=${new Date().toISOString()}`,
+        );
+        return { ok: false, reason: 'already_linked' };
+      }
       this.logger.warn(
         `line-login.callback.failure reason=binding_failed at=${new Date().toISOString()}`,
       );
@@ -449,22 +475,37 @@ export class LineLoginService implements OnModuleDestroy {
       const repo = em.getRepository(LineUserBinding);
       const now = new Date();
 
-      // Soft-unlink any active binding owned by this user (re-link).
+      // W96B — REJECT cross-binding before mutating anything. If this
+      // lineUserId already has an active binding owned by a different
+      // Project Bank user, we MUST NOT silently soft-unlink it (the
+      // displaced user would lose notifications without notice). Force
+      // the new user to ask the previous owner to unlink first.
+      //
+      // Same-user re-link (your OWN LINE) is fine — handled by the
+      // soft-unlink-self step below.
+      const conflictRow = await repo.findOne({
+        where: {
+          lineUserId: args.lineUserId,
+          unlinkedAt: IsNull(),
+        },
+      });
+      if (conflictRow && conflictRow.userId !== args.userId) {
+        // W83 — never log raw lineUserId; SHA-256 prefix only.
+        this.logger.warn(
+          `line-login.binding.cross-binding-rejected ` +
+            `incomingUserId=${args.userId} ` +
+            `incumbentUserId=${conflictRow.userId} ` +
+            `lineUserIdHash=${this.shaPrefix(args.lineUserId)} ` +
+            `at=${now.toISOString()}`,
+        );
+        throw new LineCrossBindingError();
+      }
+
+      // Soft-unlink any active binding owned by this user (re-link self).
       await repo.update(
         { userId: args.userId, unlinkedAt: IsNull() },
         { unlinkedAt: now },
       );
-
-      // Soft-unlink any active binding for this lineUserId under a
-      // different Project Bank user (cross-link / re-bind).
-      await repo
-        .createQueryBuilder()
-        .update(LineUserBinding)
-        .set({ unlinkedAt: now })
-        .where('line_user_id = :lid', { lid: args.lineUserId })
-        .andWhere('unlinked_at IS NULL')
-        .andWhere('user_id <> :uid', { uid: args.userId })
-        .execute();
 
       // Insert the new active binding.
       const fresh = repo.create({

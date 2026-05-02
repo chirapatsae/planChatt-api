@@ -18,6 +18,11 @@
         "include": "src/notifications/templates/**/*.hbs",
         "outDir": "src/notifications/templates",
         "watchAssets": true
+      },
+      {
+        "include": "src/notifications/templates/line/**/*.json",
+        "outDir": "src/notifications/templates/line",
+        "watchAssets": true
       }
     ]
   }

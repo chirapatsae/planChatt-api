@@ -54,6 +54,13 @@ export class NotificationSettingsService {
   /** Cached `emailEnabled` value with fetch timestamp. */
   private cache: { value: boolean; fetchedAt: number } | null = null;
 
+  /**
+   * Wave 96 — separate cache slot for `lineEnabled`. Distinct from the
+   * email cache so a flip on one channel does not invalidate the other.
+   * Same 5-second TTL + fail-closed semantics as `cache` above.
+   */
+  private lineCache: { value: boolean; fetchedAt: number } | null = null;
+
   constructor(
     @InjectRepository(NotificationSetting)
     private readonly settingsRepo: Repository<NotificationSetting>,
@@ -90,6 +97,41 @@ export class NotificationSettingsService {
     } catch (err) {
       this.logger.warn(
         `[Notify kill-switch] cache-fallback: assuming OFF due to DB error: ${(err as Error).message}`,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Wave 96 — fast gate for the LINE channel. Mirror of `isEmailEnabled`
+   * with an independent cache slot so the two channels can be toggled
+   * without cross-invalidation.
+   *
+   * Called by `NotificationsLineService.queueLine` as the very first
+   * check (after the allowlist gate) to short-circuit the entire fanout
+   * when LINE is disabled system-wide.
+   *
+   * Fail-closed: DB read errors return `false`. Missing seed row also
+   * resolves to `false` — we would rather drop messages than silently
+   * push during an outage.
+   */
+  async isLineEnabled(): Promise<boolean> {
+    const now = Date.now();
+    if (this.lineCache && now - this.lineCache.fetchedAt < CACHE_TTL_MS) {
+      return this.lineCache.value;
+    }
+
+    try {
+      const row = await this.settingsRepo.findOne({
+        where: { id: GLOBAL_SETTING_ID },
+        select: ['id', 'lineEnabled'],
+      });
+      const value = row?.lineEnabled === true;
+      this.lineCache = { value, fetchedAt: now };
+      return value;
+    } catch (err) {
+      this.logger.warn(
+        `[Notify line kill-switch] cache-fallback: assuming OFF due to DB error: ${(err as Error).message}`,
       );
       return false;
     }

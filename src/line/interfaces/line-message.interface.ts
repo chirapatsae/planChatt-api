@@ -29,12 +29,13 @@
 import type { LineQuickReply } from './line-quick-reply.interface';
 
 /**
- * Discriminator union — every Message object carries `type`. W86 only
- * emits `text`; additional members in this union are pre-allocated for
- * future waves so consumers can `switch (msg.type)` without breaking
- * exhaustiveness when more types are added.
+ * Discriminator union — every Message object carries `type`. W86 ships
+ * `text`; W96 adds `flex` for the owner-side LINE notification fanout.
+ * Additional members (sticker, image, audio, video, file, location,
+ * imagemap, template) MAY be added later without breaking the contract —
+ * consumers should `switch (msg.type)` to keep exhaustiveness checks honest.
  */
-export type LineMessage = LineTextMessage;
+export type LineMessage = LineTextMessage | LineFlexMessage;
 
 /**
  * Plain text message. The `text` field is the user-visible body and is
@@ -52,6 +53,31 @@ export interface LineTextMessage {
   type: 'text';
   text: string;
   quickReply?: LineQuickReply;
+}
+
+/**
+ * Flex Message — Wave 96. Renders a structured bubble (header band,
+ * body, optional footer) on LINE clients that support Flex (LINE app
+ * v7.0+). On unsupported clients LINE falls back to `altText` as a
+ * plain push, so `altText` MUST be a meaningful Thai sentence (NOT a
+ * placeholder like "Flex message").
+ *
+ * `contents` carries the Flex bubble JSON object (see LINE Messaging
+ * API "Flex Message" reference). It is typed as `object` here because
+ * the full Flex schema (bubble vs carousel, nested boxes, components)
+ * is voluminous and is owned by the template authors. Templates are
+ * loaded from `backend/src/notifications/templates/line/*.json` and
+ * validated by the LINE platform on push (a malformed bubble returns
+ * 400 from the messaging API and is caught by the transport layer).
+ *
+ * §17.2 advisory — Flex bubbles MUST NOT include inline workflow
+ * affordances (no "Approve" / "Reject" buttons in the message body).
+ * The single CTA is read-only navigation to the project page.
+ */
+export interface LineFlexMessage {
+  type: 'flex';
+  altText: string;
+  contents: object;
 }
 
 /**

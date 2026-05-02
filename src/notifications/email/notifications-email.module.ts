@@ -6,6 +6,9 @@ import { User } from 'src/users/entities/user.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { WorkHistoryAmphoeResponsibility } from 'src/work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity';
 import { WorkHistoryGovernmentAgencyResponsibility } from 'src/work-history-government-agency-responsibility/entities/work-history-government-agency-responsibility.entity';
+// W96-RECIPIENT-RESOLVER — read-only access to active LINE bindings for
+// the `enrichWithLineBindings` method on RecipientResolverService.
+import { LineUserBinding } from 'src/line/entities/line-user-binding.entity';
 import { NotificationEmailLog } from '../entities/notification-email-log.entity';
 // Wave 22 B2 — global email kill-switch config + audit trail.
 import { NotificationSetting } from '../entities/notification-settings.entity';
@@ -59,6 +62,11 @@ import { ActionLinkVerifyController } from './action-link-verify.controller';
       // Wave 22 B2 — kill-switch storage.
       NotificationSetting,
       NotificationSettingsAudit,
+      // W96-RECIPIENT-RESOLVER — RecipientResolverService.enrichWithLineBindings
+      // reads `line_user_bindings` directly (single batched query). Re-registering
+      // the entity here is safe and additive; LineModule still owns the write
+      // surface (binding link/unlink), this is read-only.
+      LineUserBinding,
     ]),
     EmailModule,
   ],

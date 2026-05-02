@@ -74,8 +74,11 @@ function isAxiosErr(err: unknown): err is AxiosErrorLike {
 }
 import * as crypto from 'crypto';
 import {
+  LINE_MESSAGING_ENABLED_ENV,
   LINE_MESSAGING_PUSH_URL,
   LINE_MESSAGING_REPLY_URL,
+  LINE_SANDBOX_USER_ID_ENV,
+  LINE_USER_ID_RE,
   assertLineChannelAccessToken,
 } from './line.config';
 import type {
@@ -85,6 +88,35 @@ import type {
   LineTextMessage,
 } from './interfaces/line-message.interface';
 import type { LineQuickReplyItem } from './interfaces/line-quick-reply.interface';
+
+/**
+ * Result envelope for `pushMessage` / `pushText`. Discriminated by the
+ * `sandboxed` flag so callers can branch on whether the LINE API was
+ * actually contacted:
+ *
+ *   - `sandboxed: true` — the W96 sandbox guard short-circuited the
+ *     send (kill-switch off, or sandbox userId rerouted). `success` is
+ *     always `true` for sandboxed outcomes — there is no provider call
+ *     to fail. `sandboxedTo` is populated when the recipient was rerouted
+ *     to a configured `LINE_SANDBOX_USER_ID` (already mask-hashed via
+ *     `shortHash`), and absent when the kill-switch was off.
+ *
+ *   - `sandboxed: false` — the LINE Messaging API was contacted. `success`
+ *     reflects the API outcome. `providerMessageId` is reserved for
+ *     future use; LINE's Reply/Push endpoints currently return an empty
+ *     body on 2xx so this field is normally omitted.
+ *
+ * Failures continue to surface as thrown Errors (existing behavior); they
+ * are NOT folded into this result type. That keeps the W83-style retry
+ * log lines and the caller-side "best-effort" semantics described in
+ * §17.2 intact.
+ */
+export interface LinePushResult {
+  success: true;
+  sandboxed: boolean;
+  sandboxedTo?: string;
+  providerMessageId?: string;
+}
 
 /**
  * Maximum number of retry attempts for transient failures (429 / 5xx).
@@ -207,7 +239,7 @@ export class LineMessagingService {
   async pushMessage(
     toLineUserId: string,
     messages: LineMessage[],
-  ): Promise<void> {
+  ): Promise<LinePushResult> {
     if (!toLineUserId || toLineUserId.trim().length === 0) {
       throw new Error('[LineMessaging] toLineUserId is required');
     }
@@ -215,22 +247,86 @@ export class LineMessagingService {
       throw new Error('[LineMessaging] at least one message is required');
     }
 
-    const body: LinePushRequest = { to: toLineUserId, messages };
+    // ---- W96 sandbox guard (LAST line of defense) ----------------------
+    //
+    // Mirrors the W90 `MAIL_ENABLED` + `MAIL_SANDBOX_TO` pattern. This
+    // guard runs BEFORE `assertLineChannelAccessToken` and BEFORE any
+    // HTTP call, so a misconfigured non-prod env can never reach a real
+    // citizen's LINE inbox even if upstream gates (kill-switch in
+    // `NotificationsLineService`, preference checks, 2nd-pass unlink
+    // checks added by W96-DISPATCH) are skipped or buggy.
+    //
+    // Scope note: this guard is `pushMessage`-specific. `replyMessage`
+    // (used by the W86 chatbot) is intentionally NOT gated — reply-token
+    // flows are inbound-driven webhook responses and gating them would
+    // break the dev-time chatbot loop. See task spec §3.
+    //
+    // §17.11 — integrity gate, NOT a permission check; no role bypass.
+    const enabled =
+      (process.env[LINE_MESSAGING_ENABLED_ENV] ?? '').trim() === 'true';
     const recipientHash = this.shortHash(toLineUserId);
+
+    if (!enabled) {
+      this.logger.log(
+        `[Line.sandbox] short-circuit (LINE_MESSAGING_ENABLED!=true) to=${recipientHash} messageCount=${messages.length} at=${new Date().toISOString()}`,
+      );
+      return { success: true, sandboxed: true };
+    }
+
+    const sandboxUid = (
+      process.env[LINE_SANDBOX_USER_ID_ENV] ?? ''
+    ).trim();
+    let effectiveTo = toLineUserId;
+    let sandboxedTo: string | undefined;
+
+    if (sandboxUid) {
+      if (!LINE_USER_ID_RE.test(sandboxUid)) {
+        // W90 §9 header-injection-defense parity: a malformed sandbox env
+        // value MUST NOT silently fall back to the original recipient —
+        // that would defeat the purpose of the sandbox. Fail closed: log
+        // a warning and return without sending.
+        this.logger.warn(
+          `[Line.sandbox] LINE_SANDBOX_USER_ID is set but malformed; refusing to send (fail-closed) originalTo=${recipientHash} messageCount=${messages.length} at=${new Date().toISOString()}`,
+        );
+        return { success: true, sandboxed: true };
+      }
+      const sandboxHash = this.shortHash(sandboxUid);
+      this.logger.log(
+        `[Line.sandbox] rerouted to=${sandboxHash} originalTo=${recipientHash} messageCount=${messages.length} at=${new Date().toISOString()}`,
+      );
+      effectiveTo = sandboxUid;
+      sandboxedTo = sandboxHash;
+    }
+    // ---- end sandbox guard --------------------------------------------
+
+    const effectiveHash =
+      effectiveTo === toLineUserId ? recipientHash : this.shortHash(effectiveTo);
+    const body: LinePushRequest = { to: effectiveTo, messages };
 
     await this.postWithRetry(
       LINE_MESSAGING_PUSH_URL,
       body,
       `messaging.push`,
       {
-        to: recipientHash,
+        to: effectiveHash,
         messageCount: messages.length,
       },
     );
 
     this.logger.log(
-      `messaging.push.sent to=${recipientHash} messageCount=${messages.length} at=${new Date().toISOString()}`,
+      `messaging.push.sent to=${effectiveHash} messageCount=${messages.length} at=${new Date().toISOString()}`,
     );
+
+    if (sandboxedTo) {
+      // Rerouted-and-sent: the LINE API WAS contacted, but the recipient
+      // was a configured sandbox userId rather than the caller-supplied
+      // one. We classify this as `sandboxed: true` — the original
+      // recipient never received the message — so callers can treat
+      // reroute and short-circuit identically when deciding whether to
+      // record a "delivered to citizen" notification log entry.
+      return { success: true, sandboxed: true, sandboxedTo };
+    }
+    return { success: true, sandboxed: false };
   }
 
   /**
@@ -241,9 +337,9 @@ export class LineMessagingService {
     toLineUserId: string,
     text: string,
     quickReplyItems?: LineQuickReplyItem[],
-  ): Promise<void> {
+  ): Promise<LinePushResult> {
     const message = this.buildTextMessage(text, quickReplyItems);
-    await this.pushMessage(toLineUserId, [message]);
+    return this.pushMessage(toLineUserId, [message]);
   }
 
   // TODO(W87): multicast / broadcast / narrowcast. Deferred — these

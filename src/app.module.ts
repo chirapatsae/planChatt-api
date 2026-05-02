@@ -64,6 +64,10 @@ import { NotificationLogsModule } from './notification-logs/notification-logs.mo
 import { NotificationLog } from './notification-logs/entities/notification-log.entity';
 import { NotificationsModule } from './notifications/notifications.module';
 import { NotificationsEmailModule } from './notifications/email/notifications-email.module';
+// Wave 96 — LINE notification pipeline. Mirrors NotificationsEmailModule
+// shape (separate Bull queue `notifications-line`, separate audit table
+// `notification_line_logs`, separate per-channel kill-switch flag).
+import { NotificationsLineModule } from './notifications/line/notifications-line.module';
 // Wave 91 — register Wave 21/22 notification-pipeline entities at the data
 // source level. Previously only declared via TypeOrmModule.forFeature() in
 // NotificationsEmailModule, which is insufficient when forRoot uses an
@@ -73,6 +77,12 @@ import { NotificationsEmailModule } from './notifications/email/notifications-em
 import { NotificationEmailLog } from './notifications/entities/notification-email-log.entity';
 import { NotificationSetting } from './notifications/entities/notification-settings.entity';
 import { NotificationSettingsAudit } from './notifications/entities/notification-settings-audit.entity';
+// Wave 96 — same registration footgun as Wave 91. NotificationLineLog must
+// be in the root `entities[]` list because forRoot uses an explicit array
+// (no `autoLoadEntities: true`). Without this, every `queueLine` audit
+// write fails with `EntityMetadataNotFoundError: No metadata for
+// "NotificationLineLog" was found` and the LINE pipeline silently no-ops.
+import { NotificationLineLog } from './notifications/entities/notification-line-log.entity';
 import { UserNotificationsModule } from './user-notifications/user-notifications.module';
 import { UserNotification } from './user-notifications/entities/user-notification.entity';
 import { WebsocketModule } from './websocket/websocket.module';
@@ -240,6 +250,8 @@ import { LineUserBinding } from './line/entities/line-user-binding.entity';
         NotificationEmailLog,
         NotificationSetting,
         NotificationSettingsAudit,
+        // Wave 96 — LINE notification audit row (same footgun rationale).
+        NotificationLineLog,
       ],
       synchronize: true,
       extra: {
@@ -278,6 +290,10 @@ import { LineUserBinding } from './line/entities/line-user-binding.entity';
     NotificationLogsModule,
     NotificationsModule,
     NotificationsEmailModule,
+    // Wave 96 — LINE notification pipeline (mirror of email module). Must
+    // be imported AFTER NotificationsEmailModule because it consumes the
+    // re-exported NotificationSettingsService + RecipientResolverService.
+    NotificationsLineModule,
     UserNotificationsModule,
     WebsocketModule,
     EventsModule,

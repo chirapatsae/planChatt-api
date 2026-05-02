@@ -50,6 +50,37 @@ export const BYPASS_VERIFICATION_GATE: ReadonlySet<ProjectNotificationEventType>
   new Set<ProjectNotificationEventType>(['EMAIL_VERIFICATION_REQUEST']);
 
 /**
+ * Wave 96 — events that the LINE channel sends. The trigger-wiring node
+ * fans out to BOTH email and LINE for every transition; LINE-side fanout
+ * is filtered by this allowlist so only owner-facing events fire over LINE.
+ *
+ * Owner-side only per Q2: government context favors LINE for personal
+ * progress awareness, not staff workflow notifications. Staff continue
+ * to use email + dashboard for fanouts.
+ *
+ * Closed list — adding a new event here requires a corresponding Flex
+ * template in `backend/src/notifications/templates/line/`.
+ */
+export const LINE_EVENT_ALLOWLIST: ReadonlySet<ProjectNotificationEventType> =
+  new Set<ProjectNotificationEventType>([
+    'PROJECT_SUBMITTED_OWNER',
+    'PROJECT_VERIFIED_OWNER',
+    'PROJECT_RETURNED_FOR_REVISION',
+    'PROJECT_APPROVED',
+    'PROJECT_REJECTED_OWNER',
+    // W96F — staff-side LINE awareness. The W96 Q2 government-context bet
+    // (staff use email + dashboard, don't need LINE alerts) was inverted by
+    // first-test feedback: Thai government staff use LINE more than email,
+    // and a queue-arrival LINE alert materially improves response time.
+    //   PROJECT_SUBMITTED   — staff-lead in amphoe gets "new project to review"
+    //   PROJECT_PULLED_BACK — staff-lead gets "project withdrawn from queue"
+    // The fanout cap at RecipientResolverService.filterAndCap (W21 R5) still
+    // bounds blast radius for busy amphoes.
+    'PROJECT_SUBMITTED',
+    'PROJECT_PULLED_BACK',
+  ]);
+
+/**
  * Phase 2 event types — design-only stubs. Handlers/templates exist but are
  * not wired to any cron / trigger in Wave 21.
  */
@@ -61,6 +92,28 @@ export interface ProjectNotificationRecipient {
   userId: string;
   email: string;
   workHistoryId: string;
+}
+
+/**
+ * Wave 96 — LINE-channel recipient shape. Produced by
+ * `RecipientResolverService.enrichWithLineBindings()` from a list of
+ * email-shaped recipients by joining `line_user_bindings` (active rows
+ * only) and filtering out users who have opted out via
+ * `users.allowLineNotification = false`.
+ *
+ * §17.3 — `lineUserId` is sourced from `line_user_bindings` (canonical
+ * per W86); the legacy `users.lineId` column is NOT consulted.
+ *
+ * Extends `ProjectNotificationRecipient` per the W96-RECIPIENT-RESOLVER
+ * spec — preserves `email` so the same recipient instance can be carried
+ * through dispatch surfaces that surface a per-user channel-summary
+ * (e.g. operator audit). The dispatch-time queue payload
+ * (`LineNotificationJobPayload`) drops the `email` field — it carries
+ * `{ userId, lineUserId, workHistoryId }` only.
+ */
+export interface ProjectNotificationLineRecipient
+  extends ProjectNotificationRecipient {
+  lineUserId: string;
 }
 
 /**
@@ -152,4 +205,37 @@ export interface ProjectNotificationJobPayload {
 
   /** Wave 95 — see ProjectNotificationEvent.bypassAllowEmailNotification. */
   bypassAllowEmailNotification?: boolean;
+}
+
+/**
+ * Wave 96 — Serializable payload for the `notifications-line` Bull queue.
+ * Mirror of ProjectNotificationJobPayload but with LINE-specific recipient
+ * shape (lineUserId instead of email).
+ *
+ * Channel-specific resolution (email vs LINE recipient shape) happens at
+ * dispatch time — the workflow event layer (`ProjectNotificationEvent`)
+ * remains channel-agnostic per §17.2 advisory boundary.
+ */
+export interface LineNotificationJobPayload {
+  eventType: ProjectNotificationEventType;
+  projectId: string;
+  projectName: string;
+  fromStatus: string;
+  toStatus: string;
+  /** Wave 92 — Thai labels (see ProjectNotificationEvent). */
+  fromStatusTh?: string;
+  toStatusTh?: string;
+  reason?: string;
+  actionLink: string;
+  recipient: {
+    userId: string;
+    lineUserId: string;
+    workHistoryId: string;
+  };
+  metadata?: Record<string, string | number | null | undefined>;
+
+  /** Wave 22 B1 — see ProjectNotificationEvent.actorUserId. */
+  actorUserId?: string;
+  /** Wave 22 B1 — see ProjectNotificationEvent.actorWorkHistoryId. */
+  actorWorkHistoryId?: string;
 }

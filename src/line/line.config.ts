@@ -60,6 +60,40 @@ export const LINE_LOGIN_PROFILE_URL = 'https://api.line.me/v2/profile';
 export const LINE_CHANNEL_ACCESS_TOKEN_ENV = 'LINE_CHANNEL_ACCESS_TOKEN';
 
 /**
+ * W96 sandbox guard env var names — mirror the W90 email sandbox pattern
+ * (`MAIL_ENABLED` + `MAIL_SANDBOX_TO`).
+ *
+ *   - `LINE_MESSAGING_ENABLED` — kill-switch. When NOT exactly the string
+ *     'true', `LineMessagingService.pushMessage` short-circuits and never
+ *     contacts the LINE API. Default-deny posture: an unset env var means
+ *     "messaging is disabled", which is the correct behavior for any
+ *     environment that has not explicitly opted in to outbound LINE.
+ *
+ *   - `LINE_SANDBOX_USER_ID` — optional reroute target. When set AND
+ *     `LINE_MESSAGING_ENABLED=true`, every push is rerouted to this single
+ *     LINE userId regardless of the original recipient. Used in
+ *     dev/staging to ensure operator inboxes receive what would otherwise
+ *     reach a citizen. MUST match `LINE_USER_ID_RE`; a malformed value
+ *     fails closed (refuses to send to the original recipient).
+ *
+ * Both vars are read lazily inside `pushMessage`; no boot-time assertion
+ * — that would force every test/CI environment to declare them.
+ *
+ * §17.11 — these are integrity gates, not permission checks. No role can
+ * bypass.
+ */
+export const LINE_MESSAGING_ENABLED_ENV = 'LINE_MESSAGING_ENABLED';
+export const LINE_SANDBOX_USER_ID_ENV = 'LINE_SANDBOX_USER_ID';
+
+/**
+ * LINE userId format — `U` prefix followed by 32 lowercase hex chars
+ * (33 total). Used to defensively validate `LINE_SANDBOX_USER_ID` before
+ * any reroute, so a malformed env value cannot silently leak messages to
+ * an unintended recipient.
+ */
+export const LINE_USER_ID_RE = /^U[0-9a-f]{32}$/;
+
+/**
  * Canonical LINE Messaging API endpoints. Hard-coded constants — these
  * are not env-overridable. Region failover is the LINE platform's
  * concern (HTTPS hostname stays constant); local tests intercept via
