@@ -20,6 +20,17 @@ import {
  * MUST be masked via `maskEmail` in any log line.
  */
 
+/**
+ * W98 follow-up — `recipientEmail` is now OPTIONAL.
+ *
+ * The product direction shifted from "operator-supplied destination"
+ * to "auto-fan-out to all admin + super-admin mailboxes". When the
+ * field is absent (the new default from the FE create form), the
+ * worker queries `users` for every active admin / super-admin and
+ * sends to that list. Existing rows that still carry an explicit
+ * `recipientEmail` keep working — the worker prefers the explicit
+ * value when present.
+ */
 export class CreateQuotaAlertDto {
   @IsIn(['email', 'line'], {
     message: "channel ต้องเป็น 'email' หรือ 'line'",
@@ -31,8 +42,9 @@ export class CreateQuotaAlertDto {
   @Max(200, { message: 'thresholdPercent ต้องอยู่ในช่วง 1..200' })
   thresholdPercent: number;
 
+  @IsOptional()
   @IsEmail({}, { message: 'recipientEmail ต้องเป็นอีเมลที่ถูกต้อง' })
-  recipientEmail: string;
+  recipientEmail?: string;
 
   @IsOptional()
   @IsBoolean({ message: 'enabled ต้องเป็น boolean' })

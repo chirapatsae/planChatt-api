@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { EmailModule } from 'src/util/email/email.module';
 import { LineModule } from 'src/line/line.module';
 import { User } from 'src/users/entities/user.entity';
+import { UsersModule } from 'src/users/users.module';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 
 import { NotificationQuotaAlert } from '../entities/notification-quota-alert.entity';
@@ -59,6 +60,10 @@ import { LineBindingsAdminController } from './line-bindings.controller';
     NotificationsEmailModule, // exports EmailStatsService
     NotificationsLineModule,  // exports LineStatsService (added W97)
     EmailModule,              // exports EmailService (W90 chokepoint)
+    // W98 follow-up — `QuotaAlertWorkerService` resolves admin /
+    // super-admin emails dynamically when an alert row has no
+    // `recipientEmail`; needs `UsersService.decryptUserPii(...)`.
+    UsersModule,
     // W97-API-FORCE-UNLINK — exports `LineUserBindingService` (extended
     // here with `forceUnlinkByAdmin(...)`). The service injects
     // `LineBindingAdminAction` repo internally via `LineModule`'s

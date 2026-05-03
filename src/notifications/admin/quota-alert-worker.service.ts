@@ -1,7 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 import { Cron } from '@nestjs/schedule';
+import { Repository } from 'typeorm';
 
 import { EmailService } from 'src/util/email/email.service';
+import { User } from 'src/users/entities/user.entity';
+import { UsersService } from 'src/users/users.service';
 import { maskEmail } from '../email/utils/mask-email.util';
 import { EmailStatsService } from '../email/email-stats.service';
 import { LineStatsService } from '../line/line-stats.service';
@@ -51,7 +55,44 @@ export class QuotaAlertWorkerService {
     private readonly emailStats: EmailStatsService,
     private readonly lineStats: LineStatsService,
     private readonly emailService: EmailService,
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
+    private readonly usersService: UsersService,
   ) {}
+
+  /**
+   * W98 follow-up — fetch every active admin / super-admin email
+   * address. Used as the recipient list when an alert row carries a
+   * NULL `recipientEmail` (the new W98 default).
+   *
+   * Decrypts `users.email` via `UsersService.decryptUserPii` because
+   * the column is encrypted at rest under W89. Skips users whose
+   * decrypt fails or returns falsy. Deduplicates the final list.
+   *
+   * Read-only path — no audit row, no tracking_status write.
+   */
+  private async resolveAdminLeadEmails(): Promise<string[]> {
+    const users = await this.userRepo
+      .createQueryBuilder('u')
+      .innerJoin('u.workHistories', 'wh', 'wh.is_current = true')
+      .innerJoin('wh.role', 'r', "r.name IN ('admin', 'super-admin')")
+      .innerJoin('wh.workStatus', 'ws', "ws.name = 'approved'")
+      .where('u.email IS NOT NULL')
+      .getMany();
+
+    const emails = new Set<string>();
+    for (const u of users) {
+      try {
+        await this.usersService.decryptUserPii(u);
+      } catch {
+        // decryption failed — skip this user; never block other admins
+        continue;
+      }
+      const e = (u.email ?? '').trim().toLowerCase();
+      if (e) emails.add(e);
+    }
+    return Array.from(emails);
+  }
 
   @Cron('*/5 * * * *')
   async tick(): Promise<void> {
@@ -149,16 +190,45 @@ export class QuotaAlertWorkerService {
       </div>
     `;
 
-    const result = await this.emailService.sendEmail({
-      to: row.recipientEmail,
-      subject,
-      text,
-      html,
-    });
+    // W98 follow-up — resolve recipients. If the row carries an explicit
+    // `recipientEmail` (W97 contract / legacy rows), use that single
+    // address. Otherwise fan out to every active admin + super-admin
+    // mailbox. If neither path yields an address, skip firing for this
+    // tick and try again later — DO NOT mark fired so the alert reaches
+    // someone once accounts exist.
+    const explicit = (row.recipientEmail ?? '').trim();
+    const recipients = explicit
+      ? [explicit]
+      : await this.resolveAdminLeadEmails();
 
-    if (!result.success) {
+    if (recipients.length === 0) {
       this.logger.warn(
-        `[QuotaAlertWorker] sendEmail failed channel=${row.channel} to=${maskEmail(row.recipientEmail)} err=${result.error}`,
+        `[QuotaAlertWorker] no recipients channel=${row.channel} threshold=${row.thresholdPercent}% — skipping; will retry next tick`,
+      );
+      return;
+    }
+
+    // Send to every recipient; one transient failure does not stall
+    // the rest. Mark fired only if AT LEAST ONE send succeeds.
+    let anySuccess = false;
+    let lastError: string | undefined;
+    let anySandboxed = false;
+    for (const to of recipients) {
+      const r = await this.emailService.sendEmail({ to, subject, text, html });
+      if (r.success) {
+        anySuccess = true;
+        if (r.sandboxed) anySandboxed = true;
+      } else {
+        lastError = r.error;
+        this.logger.warn(
+          `[QuotaAlertWorker] sendEmail failed channel=${row.channel} to=${maskEmail(to)} err=${r.error}`,
+        );
+      }
+    }
+
+    if (!anySuccess) {
+      this.logger.warn(
+        `[QuotaAlertWorker] all sends failed channel=${row.channel} threshold=${row.thresholdPercent}% lastError=${lastError ?? 'unknown'}`,
       );
       // Do NOT mark fired — a transient send failure should retry next tick.
       return;
@@ -168,7 +238,7 @@ export class QuotaAlertWorkerService {
     // env does not loop alerts every 5 minutes.)
     await this.alerts.markFired(row.id, currentKey);
     this.logger.log(
-      `[QuotaAlertWorker] fired channel=${row.channel} threshold=${row.thresholdPercent}% used=${pctRounded}% to=${maskEmail(row.recipientEmail)} sandboxed=${!!result.sandboxed}`,
+      `[QuotaAlertWorker] fired channel=${row.channel} threshold=${row.thresholdPercent}% used=${pctRounded}% recipients=${recipients.length} explicit=${!!explicit} sandboxed=${anySandboxed}`,
     );
   }
 

@@ -37,10 +37,15 @@ export class NotificationQuotaAlertsService {
     actorUserId: string,
     body: CreateQuotaAlertDto,
   ): Promise<NotificationQuotaAlert> {
+    // W98 follow-up — `recipientEmail` is optional. When omitted, the
+    // worker fans the alert out to every active admin + super-admin
+    // mailbox at fire time. When provided (W97 contract), the worker
+    // prefers the explicit value. We persist `null` (not an empty
+    // string) so the worker can rely on `IS NULL` to drive behaviour.
     const row = this.repo.create({
       channel: body.channel,
       thresholdPercent: body.thresholdPercent,
-      recipientEmail: body.recipientEmail,
+      recipientEmail: body.recipientEmail?.trim() || null,
       enabled: body.enabled ?? true,
       createdByUserId: actorUserId,
       lastFiredAt: null,
@@ -64,7 +69,9 @@ export class NotificationQuotaAlertsService {
       row.thresholdPercent = body.thresholdPercent;
     }
     if (body.recipientEmail !== undefined) {
-      row.recipientEmail = body.recipientEmail;
+      // W98 follow-up — explicit empty string from the FE is normalised
+      // to `null` so the worker falls back to dynamic admin lookup.
+      row.recipientEmail = body.recipientEmail.trim() || null;
     }
     if (body.enabled !== undefined) row.enabled = body.enabled;
 

@@ -49,8 +49,23 @@ export class NotificationQuotaAlert {
   thresholdPercent: number;
 
   /** Destination address (super-admin's mailbox). NOT a FK. */
-  @Column({ name: 'recipient_email', type: 'varchar', length: 255 })
-  recipientEmail: string;
+  /**
+   * Destination address. NOT a FK.
+   *
+   * W98 follow-up — column is now NULLABLE. The product direction is
+   * "fan out to all admin + super-admin mailboxes when an alert fires."
+   * `QuotaAlertWorkerService` resolves the recipient list at fire time
+   * when this value is null. Existing rows created under the W97
+   * contract still carry an explicit address and the worker prefers
+   * it over the dynamic lookup.
+   */
+  @Column({
+    name: 'recipient_email',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
+  recipientEmail: string | null;
 
   @Column({ name: 'enabled', type: 'boolean', default: true })
   enabled: boolean;
