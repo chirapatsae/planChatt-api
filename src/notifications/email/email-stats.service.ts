@@ -602,4 +602,38 @@ export class EmailStatsService {
       .getRawOne<{ count: string }>();
     return Number(row?.count ?? 0) || 0;
   }
+
+  /**
+   * W97 visual amendment — daily `sent` series bucketed by **Asia/Bangkok**
+   * day so the channel-comparison chart's "today" matches the operator's
+   * local calendar. Mirrors `LineStatsService.getSentByDay`. Returns
+   * sparse rows (zero-day buckets omitted); FE pads when rendering.
+   *
+   * Distinct from `getByDay` (which is UTC-bucketed and pivots all
+   * statuses). Adding a parallel method here instead of modifying
+   * `getByDay` so the W22 `/admin/email-stats` page remains stable.
+   */
+  async getSentByDay(
+    fromDate: Date,
+    toDate: Date,
+  ): Promise<Array<{ bucket: string; sent: number }>> {
+    const rows = await this.auditLogRepo
+      .createQueryBuilder('log')
+      .select(
+        `to_char(log.queued_at AT TIME ZONE 'Asia/Bangkok', 'YYYY-MM-DD')`,
+        'bucket',
+      )
+      .addSelect('COUNT(*)', 'count')
+      .where('log.queued_at >= :from', { from: fromDate })
+      .andWhere('log.queued_at <= :to', { to: toDate })
+      .andWhere('log.status = :status', { status: 'sent' })
+      .groupBy('bucket')
+      .orderBy('bucket', 'ASC')
+      .getRawMany<{ bucket: string; count: string }>();
+
+    return rows.map((r) => ({
+      bucket: r.bucket,
+      sent: Number(r.count) || 0,
+    }));
+  }
 }

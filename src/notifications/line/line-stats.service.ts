@@ -161,4 +161,46 @@ export class LineStatsService {
       .getRawOne<{ count: string }>();
     return Number(row?.count ?? 0) || 0;
   }
+
+  /**
+   * Wave 97 visual amendment — daily-bucket time series for the LINE
+   * channel comparison chart. Mirrors `EmailStatsService.getByDay` but
+   * reads `notification_line_logs` and emits the `sent` count per UTC day.
+   * Other statuses are omitted because the comparison chart only plots
+   * "successful sends" (i.e. quota actually consumed).
+   *
+   * Returns rows sorted by bucket ASC. Buckets with zero `sent` are
+   * intentionally NOT padded — the consumer (FE) is responsible for
+   * filling missing days when rendering a continuous timeline.
+   */
+  async getSentByDay(
+    fromDate: Date,
+    toDate: Date,
+  ): Promise<Array<{ bucket: string; sent: number }>> {
+    // W97 amendment — bucket by **Asia/Bangkok** day so the chart's
+    // "today" matches the operator's local calendar. Using UTC days here
+    // misaligned: a 08:00 Bangkok send (01:00 UTC) was previously bucketed
+    // under the previous UTC day, and the operator perceived "yesterday's
+    // total bleeding into today". `to_char` returns a stable YYYY-MM-DD
+    // string keyed by the Bangkok-local day even when `queued_at` straddles
+    // UTC midnight.
+    const rows = await this.lineLogRepo
+      .createQueryBuilder('log')
+      .select(
+        `to_char(log.queued_at AT TIME ZONE 'Asia/Bangkok', 'YYYY-MM-DD')`,
+        'bucket',
+      )
+      .addSelect('COUNT(*)', 'count')
+      .where('log.queued_at >= :from', { from: fromDate })
+      .andWhere('log.queued_at <= :to', { to: toDate })
+      .andWhere('log.status = :status', { status: 'sent' })
+      .groupBy('bucket')
+      .orderBy('bucket', 'ASC')
+      .getRawMany<{ bucket: string; count: string }>();
+
+    return rows.map((r) => ({
+      bucket: r.bucket,
+      sent: Number(r.count) || 0,
+    }));
+  }
 }

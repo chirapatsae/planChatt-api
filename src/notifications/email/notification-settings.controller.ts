@@ -19,6 +19,11 @@ import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 
 import { NotificationSettingsService } from './notification-settings.service';
 import { UpdateEmailSettingsDto } from './dto/update-email-settings.dto';
+// Wave 98 PR2 — widen GET role gate to exec-read so the executive
+// notifications-overview page can render the kill-switch state chip. PATCH
+// remains super-admin only (declared inline below as the local
+// SUPER_ADMIN_ROLES constant).
+import { EXEC_READ_ROLES } from '../admin/roles';
 
 /**
  * Wave 22 B2 — Global email kill-switch admin surface.
@@ -41,8 +46,10 @@ import { UpdateEmailSettingsDto } from './dto/update-email-settings.dto';
 // W97 user-amendment: GET allows admin to view kill-switch state for the
 // unified `/admin/notifications` dashboard. PATCH (flipping the switch)
 // stays super-admin-only — admins VIEW but only super-admin disables.
+//
+// Wave 98 PR2: GET widens further to `EXEC_READ_ROLES` (adds c-level) for
+// the executive notifications-overview page. PATCH gate is unchanged.
 const SUPER_ADMIN_ROLES = new Set(['super-admin']);
-const ADMIN_OR_ABOVE_ROLES = new Set(['admin', 'super-admin']);
 const COOLDOWN_MS = 1_000;
 
 @Controller({
@@ -60,7 +67,7 @@ export class NotificationSettingsController {
   @Get()
   @HttpCode(HttpStatus.OK)
   async get(@Req() req: Request & { user: JwtPayloadUser }) {
-    this.assertAdminOrAbove(req.user);
+    this.assertExecRead(req.user);
     this.assertCooldown(req.user.userId, 'get');
     return this.settingsService.getSettings();
   }
@@ -104,11 +111,14 @@ export class NotificationSettingsController {
     }
   }
 
-  // W97 user-amendment: read-only access for admin + super-admin.
-  private assertAdminOrAbove(user: JwtPayloadUser): void {
-    if (!user || !ADMIN_OR_ABOVE_ROLES.has(user.role)) {
+  // Wave 98 PR2: read-only access for the exec-read role set
+  // (staff / admin / super-admin / c-level). The executive
+  // notifications-overview page renders the kill-switch state chip from
+  // this response. PATCH still routes through `assertSuperAdmin`.
+  private assertExecRead(user: JwtPayloadUser): void {
+    if (!user || !EXEC_READ_ROLES.has(user.role)) {
       throw new ForbiddenException(
-        'การเข้าถึงนี้สงวนสำหรับ admin หรือ super-admin',
+        'การเข้าถึงนี้สงวนสำหรับ staff / admin / super-admin / c-level',
       );
     }
   }

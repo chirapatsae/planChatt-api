@@ -18,18 +18,24 @@ import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 import { EmailStatsService } from '../email/email-stats.service';
 import { LineStatsService } from '../line/line-stats.service';
 import { QuotaQueryDto } from './dto/quota-query.dto';
+import { EXEC_READ_ROLES } from './roles';
 
 /**
  * Wave 97 — Combined email + LINE quota endpoint.
+ * Wave 98 PR2 — read role widened from staff-lead to exec-read (adds
+ * `c-level`) so the new executive notifications-overview page can consume
+ * the aggregate. The data shape is unchanged.
  *
  * Source-of-truth guardrails (CLAUDE.md):
  *   - §4.1   — read-only advisory; no workflow gating
  *   - §12    — no `tracking_status` writes
  *   - §17.2  — staff retains final decision authority; this is display data
  *   - §17.3  — aggregation only; no FK touch
+ *   - §17.11 — widening to c-level is additive read access; no integrity
+ *              rule is being overridden
  *
- * Auth model: staff-lead (staff / admin / super-admin) read access. The
- * data exposed is aggregate counts only — no `lineUserId`, no email
+ * Auth model: exec-read (staff / admin / super-admin / c-level) read access.
+ * The data exposed is aggregate counts only — no `lineUserId`, no email
  * address, no PII. Per-channel `byEvent` cardinality is capped at 50 by
  * the underlying service.
  *
@@ -38,7 +44,6 @@ import { QuotaQueryDto } from './dto/quota-query.dto';
  * Redis dependency — see W97-API-QUOTA §7).
  */
 
-const STAFF_LEAD_ROLES = new Set(['staff', 'admin', 'super-admin']);
 const COOLDOWN_MS = 1_000;
 const CACHE_TTL_MS = 30_000;
 const MAX_RANGE_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
@@ -63,6 +68,13 @@ interface ChannelEnvelope {
     failed: number;
     skipped: number;
   }>;
+  /**
+   * W97 visual amendment — daily sent-count time series for the
+   * channel-comparison sparkline. Each row is `{ bucket: 'YYYY-MM-DD',
+   * sent: number }` sorted by bucket ASC. Sparse — buckets with zero
+   * sent are omitted; the FE pads missing days when rendering.
+   */
+  byDay?: Array<{ bucket: string; sent: number }>;
 }
 
 interface QuotaResponse {
@@ -94,7 +106,7 @@ export class NotificationQuotaController {
     @Req() req: Request & { user: JwtPayloadUser },
     @Query() query: QuotaQueryDto,
   ): Promise<QuotaResponse> {
-    this.assertStaffLead(req.user);
+    this.assertExecRead(req.user);
     this.assertCooldown(req.user.userId, 'quota');
 
     const channel = query.channel ?? 'both';
@@ -138,10 +150,14 @@ export class NotificationQuotaController {
     const response: QuotaResponse = { fetchedAt: now.toISOString() };
 
     if (channel === 'email' || channel === 'both') {
-      const agg = await this.emailStats.getQuotaWindow(
-        emailWindow.from,
-        emailWindow.to,
-      );
+      const [agg, byDay] = await Promise.all([
+        this.emailStats.getQuotaWindow(emailWindow.from, emailWindow.to),
+        // W97 amendment — Bangkok-bucketed time series so the comparison
+        // chart's day labels match the operator's local "today". The W22
+        // `getByDay` (UTC-bucketed, multi-status) is left untouched for the
+        // legacy `/admin/email-stats` page.
+        this.emailStats.getSentByDay(emailWindow.from, emailWindow.to),
+      ]);
       response.email = this.buildEnvelope({
         windowStart: emailWindow.from,
         windowEnd: emailWindow.to,
@@ -150,14 +166,15 @@ export class NotificationQuotaController {
         sentCount: agg.byStatus['sent'] ?? 0,
         byStatus: agg.byStatus,
         byEvent: agg.byEvent,
+        byDay,
       });
     }
 
     if (channel === 'line' || channel === 'both') {
-      const agg = await this.lineStats.getQuotaWindow(
-        lineWindow.from,
-        lineWindow.to,
-      );
+      const [agg, byDay] = await Promise.all([
+        this.lineStats.getQuotaWindow(lineWindow.from, lineWindow.to),
+        this.lineStats.getSentByDay(lineWindow.from, lineWindow.to),
+      ]);
       response.line = this.buildEnvelope({
         windowStart: lineWindow.from,
         windowEnd: lineWindow.to,
@@ -166,6 +183,7 @@ export class NotificationQuotaController {
         sentCount: agg.byStatus['sent'] ?? 0,
         byStatus: agg.byStatus,
         byEvent: agg.byEvent,
+        byDay,
       });
     }
 
@@ -195,6 +213,7 @@ export class NotificationQuotaController {
       failed: number;
       skipped: number;
     }>;
+    byDay?: Array<{ bucket: string; sent: number }>;
   }): ChannelEnvelope {
     const { quotaTotal, sentCount } = args;
     const remaining = Math.max(0, quotaTotal - sentCount);
@@ -218,6 +237,7 @@ export class NotificationQuotaController {
       bandStatus,
       byStatus: args.byStatus,
       byEvent: args.byEvent,
+      byDay: args.byDay,
     };
   }
 
@@ -275,10 +295,10 @@ export class NotificationQuotaController {
   // Guards
   // ---------------------------------------------------------------------------
 
-  private assertStaffLead(user: JwtPayloadUser): void {
-    if (!user || !STAFF_LEAD_ROLES.has(user.role)) {
+  private assertExecRead(user: JwtPayloadUser): void {
+    if (!user || !EXEC_READ_ROLES.has(user.role)) {
       throw new ForbiddenException(
-        'เฉพาะ staff / admin / super-admin เท่านั้นที่สามารถดูข้อมูลโควต้าได้',
+        'เฉพาะ staff / admin / super-admin / c-level เท่านั้นที่สามารถดูข้อมูลโควต้าได้',
       );
     }
   }

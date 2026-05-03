@@ -26,6 +26,10 @@ import {
   CreateQuotaAlertDto,
   UpdateQuotaAlertDto,
 } from './dto/quota-alert.dto';
+// Wave 98 PR2 — exec-read role set for the new `summary` endpoint. The
+// LIST + CRUD paths keep their pre-W98 gates (admin-or-above for read,
+// super-admin for write).
+import { EXEC_READ_ROLES } from './roles';
 
 /**
  * Wave 97 — Quota Alert CRUD admin surface.
@@ -44,8 +48,12 @@ import {
 
 // W97 user-amendment: `admin` role gets READ access to the dashboard. Writes
 // (alert CRUD) stay super-admin only — alerts management is a "central
-// authority" surface per the original Q5 decision; admin can VIEW the list
-// to see which thresholds are configured but cannot mutate them.
+// authority" surface per the original Q5 decision.
+// W98 amendment: LIST role gate widened from `admin-or-above` to
+// `EXEC_READ_ROLES` (see controller `list` JSDoc). The pre-W98
+// `ADMIN_OR_ABOVE_ROLES` constant + `assertAdminOrAbove` helper are kept
+// as **dead code** for one wave to make the diff easy to revert if the
+// widening causes operator pushback. Schedule removal in W99.
 const SUPER_ADMIN_ROLES = new Set(['super-admin']);
 const ADMIN_OR_ABOVE_ROLES = new Set(['admin', 'super-admin']);
 const COOLDOWN_MS = 1_000;
@@ -59,13 +67,59 @@ export class NotificationAlertsController {
 
   constructor(private readonly alerts: NotificationQuotaAlertsService) {}
 
+  /**
+   * W98 amendment — LIST role gate widened from `admin-or-above` to
+   * `EXEC_READ_ROLES` (staff / admin / super-admin / c-level) so the
+   * executive notifications-overview surface can render the same
+   * alert rows the operations page sees, in read-only mode.
+   *
+   * The exposed fields (`thresholdPercent`, `recipientEmail`,
+   * `lastFiredAt`, …) are **operator policy** — not user PII. The
+   * recipient is an operator mailbox (e.g. `notifications@gov.th`),
+   * not the project owner's email; thresholds are system tuning data.
+   * Defense-in-depth: WRITE paths (POST / PATCH / DELETE) keep
+   * `assertSuperAdmin`, so an exec viewer cannot mutate even if they
+   * craft a request by hand. Frontend additionally passes
+   * `readOnly: true` to `<QuotaAlertsPanel>` on the exec surface so
+   * edit + trash icon buttons are absent from the DOM.
+   */
   @UseGuards(JwtAuthGuard)
   @Get()
   @HttpCode(HttpStatus.OK)
   async list(@Req() req: Request & { user: JwtPayloadUser }) {
-    this.assertAdminOrAbove(req.user);
+    this.assertExecRead(req.user);
     this.assertCooldown(req.user.userId, 'list');
     return this.alerts.list();
+  }
+
+  /**
+   * Wave 98 PR2 — per-channel armed + lastFiredAt summary for the new
+   * executive notifications-overview page.
+   *
+   * Role gate: `EXEC_READ_ROLES` (staff / admin / super-admin / c-level)
+   * — strictly weaker than the alert LIST endpoint, which exposes
+   * threshold values that c-level should not see. The summary returns
+   * only counts + a fire-time timestamp; no PII, no operational tuning
+   * data leaked.
+   *
+   * Cooldown: 1 s per `(userId, 'summary')` bucket. Mirrors the quota
+   * controller's pattern; each role gets its own bucket since the key
+   * includes `userId`.
+   *
+   * §4.1 — no workflow authority granted.
+   * §12  — no `tracking_status` write.
+   * §17.2 — advisory display data; not a workflow gate.
+   * §17.3 — no FK to any project table; reads from
+   *         `notification_quota_alerts` aggregate.
+   * §17.11 — additive read access, not a write override.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Get('summary')
+  @HttpCode(HttpStatus.OK)
+  async summary(@Req() req: Request & { user: JwtPayloadUser }) {
+    this.assertExecRead(req.user);
+    this.assertCooldown(req.user.userId, 'summary');
+    return this.alerts.getSummaryByChannel();
   }
 
   @UseGuards(JwtAuthGuard)
@@ -136,6 +190,20 @@ export class NotificationAlertsController {
     if (!user || !ADMIN_OR_ABOVE_ROLES.has(user.role)) {
       throw new ForbiddenException(
         'การเข้าถึงนี้สงวนสำหรับ admin หรือ super-admin',
+      );
+    }
+  }
+
+  // Wave 98 PR2: exec-read access for the `/summary` endpoint.
+  // W98 amendment: also reused by the LIST endpoint so the executive
+  // overview can render alert rows in read-only mode (per user direction
+  // post-PR2). Threshold + recipient values are operator policy data,
+  // not user PII; widening is safe. CRUD writes still gate on
+  // `assertSuperAdmin` — defense-in-depth.
+  private assertExecRead(user: JwtPayloadUser): void {
+    if (!user || !EXEC_READ_ROLES.has(user.role)) {
+      throw new ForbiddenException(
+        'การเข้าถึงนี้สงวนสำหรับ staff / admin / super-admin / c-level',
       );
     }
   }

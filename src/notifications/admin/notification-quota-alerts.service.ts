@@ -86,6 +86,58 @@ export class NotificationQuotaAlertsService {
   }
 
   /**
+   * Wave 98 PR2 — per-channel summary for the executive notifications
+   * overview page. Returns the count of armed (enabled, non-deleted)
+   * alerts and the most-recent `lastFiredAt` timestamp per channel.
+   *
+   * Single-roundtrip aggregation via `QueryBuilder` GROUP BY channel —
+   * no N+1, no row-by-row scan. Channels with no rows return
+   * `{ armed: 0, lastFiredAt: null }`.
+   *
+   * `armed` counts ENABLED alerts only — a disabled alert is configured
+   * but inert; the executive surface should reflect the operationally
+   * armed posture, not the configured-but-off posture. This matches the
+   * UX copy "X alerts armed" in the §13 mock.
+   *
+   * §17.3 — read-only aggregation; no `tracking_status` write, no FK to
+   * any project table.
+   */
+  async getSummaryByChannel(): Promise<{
+    email: { armed: number; lastFiredAt: string | null };
+    line: { armed: number; lastFiredAt: string | null };
+  }> {
+    const rows: Array<{
+      channel: 'email' | 'line';
+      armed: string;
+      lastFiredAt: Date | null;
+    }> = await this.repo
+      .createQueryBuilder('a')
+      .select('a.channel', 'channel')
+      .addSelect('COUNT(*)', 'armed')
+      .addSelect('MAX(a.last_fired_at)', 'lastFiredAt')
+      .where('a.enabled = :enabled', { enabled: true })
+      .groupBy('a.channel')
+      .getRawMany();
+
+    const summary = {
+      email: { armed: 0, lastFiredAt: null as string | null },
+      line: { armed: 0, lastFiredAt: null as string | null },
+    };
+
+    for (const row of rows) {
+      if (row.channel !== 'email' && row.channel !== 'line') continue;
+      summary[row.channel] = {
+        armed: Number(row.armed) || 0,
+        lastFiredAt: row.lastFiredAt
+          ? new Date(row.lastFiredAt).toISOString()
+          : null,
+      };
+    }
+
+    return summary;
+  }
+
+  /**
    * Worker-owned mutation — record that an alert fired for the given
    * window key. Kept off the public CRUD surface intentionally.
    */
