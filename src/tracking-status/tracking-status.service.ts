@@ -29,6 +29,7 @@ import { LineageLockService } from 'src/common/lineage-lock/lineage-lock.service
 import { NotificationsEmailService } from 'src/notifications/email/notifications-email.service';
 import { NotificationsLineService } from 'src/notifications/line/notifications-line.service';
 import { RecipientResolverService } from 'src/notifications/email/recipient-resolver.service';
+import { DigestDispatcherService } from 'src/notifications/digest/digest-dispatcher.service';
 import {
   ProjectNotificationEvent,
   ProjectNotificationEventType,
@@ -37,6 +38,34 @@ import {
 import { UsersService } from 'src/users/users.service';
 import { maskEmail } from 'src/notifications/email/utils/mask-email.util';
 import { User } from 'src/users/entities/user.entity';
+
+/**
+ * W105-BE-PR1 — sentinel thrown inside a per-project sub-transaction in
+ * `bulkSubmit` to roll back ONLY that sub-transaction while preserving the
+ * stable error code that the controller surfaces to the client. Caught by
+ * the outer loop and converted into a `{ ok: false, errorCode }` row.
+ *
+ * Not exported — internal to the bulk-submit flow.
+ */
+class BulkSubmitRowError extends Error {
+  constructor(
+    public readonly code:
+      | 'PROJECT_NOT_FOUND'
+      | 'OWNERSHIP_OR_SCOPE_MISMATCH'
+      | 'PLAN_NOT_LATEST'
+      | 'PLAN_BOOKED'
+      | 'PLAN_PHASE_NOT_OPEN'
+      | 'WRONG_WORKFLOW'
+      | 'STATUS_NOT_READY'
+      | 'PROJECT_HAS_DESCENDANT'
+      | 'STATUS_LOOKUP_FAILED'
+      | 'INTERNAL_ERROR',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'BulkSubmitRowError';
+  }
+}
 
 @Injectable()
 export class TrackingStatusService {
@@ -87,6 +116,14 @@ export class TrackingStatusService {
     // CLAUDE.md §17.11 (no role exemption), masking is applied uniformly
     // regardless of caller role. Read-only — no §12 audit write impact.
     private readonly usersService: UsersService,
+    // W105 BE-PR2 — bulk-submit digest dispatcher. Consumed by `bulkSubmit`
+    // post-commit to collapse N per-project notifications into ONE digest
+    // job per `(recipientUserId, eventType)` group when group.projects ≥ 2.
+    // Single-project (`POST /tracking-status/`) endpoints are NOT routed
+    // through this service — they continue to use
+    // `dispatchPhaseOneNotification` directly so the existing single-event
+    // UX is unchanged. §17.2 advisory only.
+    private readonly digestDispatcher: DigestDispatcherService,
   ) { }
 
   /**
@@ -860,6 +897,370 @@ export class TrackingStatusService {
       handleException(this.logger, error);
     }
   }
+
+  /**
+   * W105-BE-PR1 — Owner-scoped bulk Ready → Pending transition for
+   * MAIN-PLAN ProjectGroup rows.
+   *
+   * Replaces the N-parallel `POST /tracking-status/` storm produced by
+   * `ReadyToSendPage.handleChangeStatusSelect` with a single round-trip
+   * that performs per-project validation, partial-success semantics, and
+   * collects post-commit notification descriptors (`bulkEmits[]`) for the
+   * BE-PR2 digest dispatcher.
+   *
+   * Validation order per CLAUDE.md VALIDATION ORDER:
+   *
+   *   GLOBAL (run once before the per-project loop; failure rejects the
+   *   ENTIRE request — not a per-row error):
+   *     1. Authenticated user resolves
+   *     2. Current/latest WorkHistory exists
+   *     3. workStatus = approved
+   *     4. Resolve submitter classification (agency vs lao) per CLAUDE.md §1
+   *
+   *   PER-PROJECT (each project runs in its own sub-transaction so a
+   *   failure in one DOES NOT roll back successful peers — partial-success):
+   *     5.  Load ProjectGroup
+   *     6.  Same-org scope (§4.2) — Ready → Pending allows same-org
+   *         submission. LAO requester must match project LAO; agency
+   *         requester must match agency scope. Owner is always allowed.
+   *     7.  Plan scope binding (§10): isLatest, !isBooked, matching open
+   *         PlanPhase
+   *     8.  Workflow scope: must be a main-plan project (RPG → WRONG_WORKFLOW)
+   *         — implicit because we look up via `projectGroupRepo`.
+   *     9.  Current latest status === 'Ready'
+   *     10. Lineage lock (§14)
+   *     11. Insert new TrackingStatus row, flip prior latest
+   *     12. Push BulkSubmitEmit
+   *
+   * Transaction strategy: PER-PROJECT SUB-TRANSACTION (Option B per task
+   * §6.3). Each project runs inside its own `dataSource.transaction()`
+   * callback so a thrown exception inside one rolls back ONLY that
+   * project's work. Rationale: simpler error isolation than savepoint
+   * juggling, matches the partial-success contract verbatim, and the
+   * per-project tx overhead is acceptable at the array cap of 100 rows.
+   *
+   * §17.3 — `bulkEmits[]` is in-memory only. The notification dispatch
+   * happens AFTER all per-project transactions resolve and is wrapped in
+   * try/catch per emit so a notification failure cannot fail the request.
+   *
+   * §12 — every successful project produces ONE TrackingStatus row with
+   * isLatest flip; the digest does NOT touch tracking_status.
+   */
+  async bulkSubmit(
+    actorUserId: string,
+    dto: { projectIds: string[] },
+  ): Promise<{
+    results: Array<
+      | { projectId: string; ok: true }
+      | { projectId: string; ok: false; error: string; errorCode: string }
+    >;
+  }> {
+    // --- GLOBAL submitter validation (steps 1-4) -----------------------------
+    // Failures here reject the ENTIRE request with the appropriate HTTP error,
+    // matching CLAUDE.md VALIDATION ORDER + task §6.2.
+    const submitterWh = await this.workHistoryRepo.findOne({
+      where: { user: { id: actorUserId }, isCurrent: true },
+      relations: [
+        'user',
+        'role',
+        'workStatus',
+        'amphoe',
+        'localAdministrativeOrganization',
+      ],
+    });
+    if (!submitterWh) {
+      throw new NotFoundException(
+        `WorkHistory for user ${actorUserId} not found`,
+      );
+    }
+    if (submitterWh.workStatus?.name !== 'approved') {
+      throw new UnauthorizedException(
+        'คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)',
+      );
+    }
+
+    // Resolve submitter classification (CLAUDE.md §1)
+    const isSubmitterAgency =
+      submitterWh.amphoe?.id === '3001' &&
+      submitterWh.localAdministrativeOrganization?.id === '3001027';
+
+    // --- Duplicate-id dedup at the request edge ------------------------------
+    // Per task §6.5 cheap dedup. We reject duplicates with HTTP 400 so the
+    // client can correct the payload before retry.
+    const seen = new Set<string>();
+    for (const id of dto.projectIds) {
+      if (seen.has(id)) {
+        throw new BadRequestException(
+          `DUPLICATE_PROJECT_ID: projectIds must be unique (duplicate: ${id})`,
+        );
+      }
+      seen.add(id);
+    }
+
+    // Resolve the canonical 'Pending' status row ONCE for the whole batch.
+    // Any failure here is a server misconfiguration, not a per-project error.
+    const pendingStatus = await this.statusRepo.findOne({
+      where: { name: 'Pending' },
+    });
+    if (!pendingStatus) {
+      throw new InternalServerErrorException(
+        'ไม่พบสถานะ "Pending" ในระบบ ข้อมูลสถานะอาจไม่สมบูรณ์',
+      );
+    }
+
+    // --- Per-project sub-transactions (steps 5-12) ---------------------------
+    type Result =
+      | { projectId: string; ok: true }
+      | { projectId: string; ok: false; error: string; errorCode: string };
+    const results: Result[] = [];
+    const bulkEmits: Array<{
+      projectId: string;
+      projectName: string;
+      trackingStatusId: string;
+      fromStatus: 'Ready';
+      toStatus: 'Pending';
+      ownerWorkHistoryId: string | null;
+      amphoeId: string | null;
+      agencyId: string | null;
+      projectKind: 'main';
+      planName: string | null;
+      occurredAt: Date;
+      actorUserId: string | null;
+      actorWorkHistoryId: string | null;
+    }> = [];
+
+    for (const projectId of dto.projectIds) {
+      try {
+        const emit = await this.dataSource.transaction(async (manager) => {
+          // 5. Load target project — main plan (ProjectGroup) only.
+          const projectGroup = await manager.findOne(ProjectGroup, {
+            where: { id: projectId },
+            relations: [
+              'createdBy',
+              'createdBy.amphoe',
+              'createdBy.localAdministrativeOrganization',
+              'developmentPlan',
+              'amphoe',
+            ],
+          });
+          if (!projectGroup) {
+            throw new BulkSubmitRowError(
+              'PROJECT_NOT_FOUND',
+              `ProjectGroup with ID ${projectId} not found`,
+            );
+          }
+
+          // 6. Ownership OR §4.2 same-org scope. The original `create()` path
+          //    ALSO allows Pull_Back / Returned_For_Revision sources, but the
+          //    bulk endpoint is RESTRICTED to Ready → Pending so the same-org
+          //    branch is the only relevant one here. Owner is always allowed
+          //    (an owner is by definition same-org). Per task §6.2 step 6.
+          const projectCreatorWh = projectGroup.createdBy;
+          if (!projectCreatorWh) {
+            throw new BulkSubmitRowError(
+              'OWNERSHIP_OR_SCOPE_MISMATCH',
+              'ไม่พบข้อมูล WorkHistory ของผู้สร้างโครงการ',
+            );
+          }
+          const isProjectAgency =
+            projectCreatorWh.amphoe?.id === '3001' &&
+            projectCreatorWh.localAdministrativeOrganization?.id === '3001027';
+
+          if (isProjectAgency) {
+            if (!isSubmitterAgency) {
+              throw new BulkSubmitRowError(
+                'OWNERSHIP_OR_SCOPE_MISMATCH',
+                'คุณไม่มีสิทธิ์ส่งโครงการนี้ (ต้องเป็นผู้ใช้ประเภท Agency เดียวกัน)',
+              );
+            }
+          } else {
+            // LAO-origin project — submitter must be LAO + same LAO id.
+            if (isSubmitterAgency) {
+              throw new BulkSubmitRowError(
+                'OWNERSHIP_OR_SCOPE_MISMATCH',
+                'คุณไม่มีสิทธิ์ส่งโครงการนี้ (ต้องเป็นผู้ใช้ประเภท LAO เดียวกัน)',
+              );
+            }
+            const requesterLaoId =
+              submitterWh.localAdministrativeOrganization?.id;
+            const projectCreatorLaoId =
+              projectCreatorWh.localAdministrativeOrganization?.id;
+            if (
+              !requesterLaoId ||
+              !projectCreatorLaoId ||
+              requesterLaoId !== projectCreatorLaoId
+            ) {
+              throw new BulkSubmitRowError(
+                'OWNERSHIP_OR_SCOPE_MISMATCH',
+                'คุณไม่มีสิทธิ์ส่งโครงการนี้ (ต้องอยู่ในองค์กรปกครองส่วนท้องถิ่นเดียวกัน)',
+              );
+            }
+          }
+
+          // 7. Plan scope binding (§10).
+          const dp = projectGroup.developmentPlan;
+          if (!dp?.isLatest) {
+            throw new BulkSubmitRowError(
+              'PLAN_NOT_LATEST',
+              'แผนพัฒนาฯ ไม่ใช่แผนปัจจุบัน',
+            );
+          }
+          if (dp?.isBooked) {
+            throw new BulkSubmitRowError(
+              'PLAN_BOOKED',
+              'แผนพัฒนาฯ ถูกรวมเล่มแล้ว',
+            );
+          }
+          // PlanPhase open + matches submitter group. We use the SUBMITTER's
+          // classification per the existing `create()` behavior (see
+          // tracking-status.service.ts:505-509). Same-org scope ensures
+          // submitter group matches project group.
+          const openPhase = await manager.findOne(PlanPhase, {
+            where: {
+              developmentPlan: { id: dp.id },
+              phaseType: isSubmitterAgency ? PhaseType.AGENCY : PhaseType.LAO,
+              isOpen: true,
+            },
+          });
+          if (!openPhase) {
+            throw new BulkSubmitRowError(
+              'PLAN_PHASE_NOT_OPEN',
+              'ระยะเวลายื่นโครงการปิดแล้ว ไม่สามารถส่งโครงการได้',
+            );
+          }
+
+          // 9. Current latest status MUST be 'Ready'. Re-read inside the
+          //    transaction (concurrency rule per task §6.5) — if a peer
+          //    actor flipped this row to Pull_Back/Pending between request
+          //    arrival and now, this read will surface it.
+          const currentTracking = await manager.findOne(TrackingStatus, {
+            where: { projectGroupId: { id: projectGroup.id }, isLatest: true },
+            relations: ['statusId'],
+          });
+          const currentStatusName = currentTracking?.statusId?.name ?? '';
+          if (currentStatusName !== 'Ready') {
+            throw new BulkSubmitRowError(
+              'STATUS_NOT_READY',
+              `ไม่สามารถส่งโครงการได้จากสถานะ "${currentStatusName}" (ต้องอยู่ในสถานะ Ready)`,
+            );
+          }
+
+          // 10. Lineage lock (§14). Ready-state projects rarely have
+          //     descendants but we enforce uniformly per CLAUDE.md §14.5
+          //     (no role exemption) and §14.9 (guard before write).
+          await this.lineageLockService.assertEditable(
+            projectGroup.id,
+            'original',
+            manager,
+          );
+
+          // 11. Transition + Audit (§12). Flip prior latest, insert new
+          //     Pending row marked isLatest=true.
+          await manager.update(
+            TrackingStatus,
+            { projectGroupId: { id: projectGroup.id } },
+            { isLatest: false },
+          );
+
+          const tracking = manager.create(TrackingStatus, {
+            createdBy: submitterWh,
+            projectGroupId: projectGroup,
+            statusId: pendingStatus,
+            // Owner-scoped path — staffRemark is always null per CLAUDE.md §3.
+            staffRemark: null,
+            isLatest: true,
+          });
+          const savedTracking = await manager.save(TrackingStatus, tracking);
+
+          // 12. Build BulkSubmitEmit. Pushed by the OUTER `try` after the
+          //     sub-tx commits successfully (we return the descriptor so
+          //     it is only collected on commit).
+          return {
+            projectId: projectGroup.id,
+            projectName: projectGroup.title ?? '',
+            trackingStatusId: savedTracking.id,
+            fromStatus: 'Ready' as const,
+            toStatus: 'Pending' as const,
+            ownerWorkHistoryId: projectGroup.createdBy?.id ?? null,
+            amphoeId: projectGroup.amphoe?.id ?? null,
+            agencyId: null,
+            projectKind: 'main' as const,
+            planName: projectGroup.developmentPlan?.name ?? null,
+            occurredAt: new Date(),
+            actorUserId: submitterWh.user?.id ?? null,
+            actorWorkHistoryId: submitterWh.id ?? null,
+          };
+        });
+
+        bulkEmits.push(emit);
+        results.push({ projectId, ok: true });
+      } catch (err) {
+        if (err instanceof BulkSubmitRowError) {
+          results.push({
+            projectId,
+            ok: false,
+            error: err.message,
+            errorCode: err.code,
+          });
+          continue;
+        }
+        // Lineage lock surfaces ConflictException with PROJECT_HAS_DESCENDANT
+        // prefix per CLAUDE.md §14.9. Map to the canonical row error code.
+        if (
+          err instanceof ConflictException &&
+          typeof err.message === 'string' &&
+          err.message.includes('PROJECT_HAS_DESCENDANT')
+        ) {
+          results.push({
+            projectId,
+            ok: false,
+            error: err.message,
+            errorCode: 'PROJECT_HAS_DESCENDANT',
+          });
+          continue;
+        }
+        // Unknown failure — log and surface a generic INTERNAL_ERROR for the
+        // row. We DO NOT rethrow so peers can still complete (partial-success
+        // contract). The detailed error is in the server log.
+        this.logger.warn(
+          `[bulkSubmit] project=${projectId} unexpected-error err=${(err as Error).message}`,
+        );
+        results.push({
+          projectId,
+          ok: false,
+          error: 'เกิดข้อผิดพลาดภายในระบบ',
+          errorCode: 'INTERNAL_ERROR',
+        });
+      }
+    }
+
+    // --- POST-COMMIT notification dispatch -----------------------------------
+    // W105 BE-PR2 — delegate to the digest dispatcher. The dispatcher groups
+    // emits by `(recipientUserId, eventType)` and:
+    //   - emits ONE digest job per group when group.projects.length >= 2
+    //   - falls back to per-project events when group.projects.length === 1
+    // This collapses the previous N×K×2 fanout into 2K + 2 jobs for the
+    // typical bulk submit (K staff-leads + 1 owner). The dispatcher itself
+    // is fully try/catch'd so a notification-side failure cannot propagate
+    // to this caller (§4.1, §17.2 advisory boundary).
+    //
+    // Pulling actorUserId / actorWorkHistoryId from the FIRST emit is
+    // safe — `bulkSubmit` runs all per-project sub-transactions under the
+    // same submitter WorkHistory, so the actor is uniform across emits.
+    if (bulkEmits.length > 0) {
+      const actorUserId = bulkEmits[0].actorUserId;
+      const actorWorkHistoryId = bulkEmits[0].actorWorkHistoryId;
+      await this.digestDispatcher.dispatchBulkSubmitNotifications({
+        emits: bulkEmits,
+        projectKind: 'project-group',
+        actorUserId,
+        actorWorkHistoryId,
+      });
+    }
+
+    return { results };
+  }
+
   async createManyRevisedProjectGroup(dtos: CreateTrackingStatusDto[], userId: string) {
     try {
       const workHistory = await this.workHistoryRepo.findOne({

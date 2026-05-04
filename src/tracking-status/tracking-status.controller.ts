@@ -15,6 +15,7 @@ import {
 import { TrackingStatusService } from './tracking-status.service';
 import { CreateTrackingStatusDto } from './dto/create-tracking-status.dto';
 import { UpdateTrackingStatusDto } from './dto/update-tracking-status.dto';
+import { BulkSubmitDto } from './dto/bulk-submit.dto';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 
@@ -52,6 +53,30 @@ export class TrackingStatusController {
     @Req() req: Request & { user: JwtPayloadUser },
   ) {
     return this.trackingStatusService.createMany(dtos, req.user.userId);
+  }
+
+  /**
+   * W105-BE-PR1 — Owner-scoped bulk Ready → Pending submit for main-plan
+   * projects. Replaces the N-parallel `POST /tracking-status/` storm
+   * produced by `ReadyToSendPage.tsx`.
+   *
+   * NOTE: this is INTENTIONALLY a separate route from `POST /bulk` (which
+   * is staff-only and accepts arbitrary transitions). DO NOT merge them —
+   * permission models, allowed transitions, and partial-success semantics
+   * differ. Single-project `POST /tracking-status/` is UNCHANGED.
+   *
+   * Returns HTTP 200 with `{ results: [...] }` even on partial failure.
+   * Per-row error codes are stable strings consumed by the frontend toast.
+   */
+  @Post('bulk-submit')
+  bulkSubmit(
+    @Body() dto: BulkSubmitDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    this.logger.log(
+      `Request to bulk-submit Ready→Pending for ${dto.projectIds?.length ?? 0} projects`,
+    );
+    return this.trackingStatusService.bulkSubmit(req.user.userId, dto);
   }
 
   @Post('bulk/revised-project-group')

@@ -23,6 +23,7 @@ import {
   FlexTemplateNotFoundError,
   FlexTemplateRendererService,
 } from './flex-template-renderer.service';
+import { DigestFlexBuilderService } from './digest-flex-builder.service';
 
 export const NOTIFICATIONS_LINE_QUEUE = 'notifications-line';
 export const NOTIFICATIONS_LINE_JOB = 'line';
@@ -91,6 +92,11 @@ export class NotificationsLineService {
     private readonly recipientResolver: RecipientResolverService,
     private readonly flexRenderer: FlexTemplateRendererService,
     private readonly lineMessagingService: LineMessagingService,
+    // W105 BE-PR2 — digest carousel builder. Used in `sendPreparedJob`
+    // when the payload's eventType is one of the digest variants, where
+    // we bypass the static template walker (which does not understand
+    // arrays / repetition).
+    private readonly digestFlexBuilder: DigestFlexBuilderService,
   ) {}
 
   /**
@@ -354,17 +360,28 @@ export class NotificationsLineService {
     // Render Flex template. FlexTemplateNotFoundError is non-retryable.
     let flexMessage;
     try {
-      const ctx: FlexRenderContext = {
-        projectName: payload.projectName,
-        fromStatusTh: payload.fromStatusTh ?? payload.fromStatus,
-        toStatusTh: payload.toStatusTh ?? payload.toStatus,
-        actionLink: payload.actionLink,
-        reason: payload.reason,
-      };
-      flexMessage = this.flexRenderer.renderFlexTemplate(
-        payload.eventType,
-        ctx,
-      );
+      if (
+        payload.eventType === 'PROJECT_SUBMITTED_DIGEST' ||
+        payload.eventType === 'PROJECT_SUBMITTED_OWNER_DIGEST'
+      ) {
+        // W105 BE-PR2 — digest carousel path. Bypass the dumb static
+        // walker because it does not know how to repeat per-project
+        // bubbles. The builder accepts pre-resolved descriptors and
+        // assembles a `type: "carousel"` Flex contents object.
+        flexMessage = this.buildDigestFlex(payload);
+      } else {
+        const ctx: FlexRenderContext = {
+          projectName: payload.projectName,
+          fromStatusTh: payload.fromStatusTh ?? payload.fromStatus,
+          toStatusTh: payload.toStatusTh ?? payload.toStatus,
+          actionLink: payload.actionLink,
+          reason: payload.reason,
+        };
+        flexMessage = this.flexRenderer.renderFlexTemplate(
+          payload.eventType,
+          ctx,
+        );
+      }
     } catch (err) {
       if (err instanceof FlexTemplateNotFoundError) {
         this.logger.error(
@@ -455,6 +472,69 @@ export class NotificationsLineService {
   // ---------------------------------------------------------------------------
   // Internals
   // ---------------------------------------------------------------------------
+
+  /**
+   * W105 BE-PR2 — assemble the digest carousel from the payload metadata.
+   * The dispatcher serialized the project descriptors as a JSON string in
+   * `metadata.digestProjects` (the metadata bag accepts string values
+   * only); we deserialize here, resolve the icon base, and hand the input
+   * to `DigestFlexBuilderService.buildSubmittedDigestFlex`.
+   *
+   * Throws `FlexTemplateNotFoundError` if the digest descriptor metadata
+   * is missing — surfaced as a non-retryable DLQ error consistent with
+   * the existing template-not-found handling.
+   */
+  private buildDigestFlex(payload: LineNotificationJobPayload) {
+    const rawProjects = payload.metadata?.['digestProjects'];
+    const rawTotalCount = payload.metadata?.['digestTotalCount'];
+    let projects: Array<{
+      projectName: string;
+      fromStatusTh?: string;
+      fromStatus: string;
+      toStatusTh?: string;
+      toStatus: string;
+    }> = [];
+    try {
+      if (typeof rawProjects === 'string' && rawProjects.length > 0) {
+        projects = JSON.parse(rawProjects);
+      }
+    } catch (err) {
+      throw new FlexTemplateNotFoundError(
+        payload.eventType,
+        `digest-payload-parse-error: ${(err as Error).message}`,
+      );
+    }
+    if (projects.length === 0) {
+      throw new FlexTemplateNotFoundError(
+        payload.eventType,
+        '<digest-projects-empty>',
+      );
+    }
+    const totalCount =
+      typeof rawTotalCount === 'number' ? rawTotalCount : projects.length;
+    // Mirror `FlexTemplateRendererService` icon-base resolution so the
+    // carousel bubbles share the same CDN origin as single-project bubbles.
+    const iconBase = (
+      process.env.LINE_ICON_BASE_URL ||
+      process.env.APP_URL ||
+      ''
+    ).replace(/\/$/, '');
+    const flavor =
+      payload.eventType === 'PROJECT_SUBMITTED_OWNER_DIGEST'
+        ? 'owner'
+        : 'staff';
+    return this.digestFlexBuilder.buildSubmittedDigestFlex({
+      flavor,
+      totalCount,
+      projects: projects.map((p) => ({
+        projectName: p.projectName,
+        fromStatusTh: p.fromStatusTh ?? p.fromStatus,
+        toStatusTh: p.toStatusTh ?? p.toStatus,
+      })),
+      iconBase,
+      actionLink: payload.actionLink,
+    });
+  }
 
   /**
    * Disambiguate why a recipient was dropped at the 1st-pass gate.

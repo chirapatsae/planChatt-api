@@ -31,7 +31,17 @@ export type ProjectNotificationEventType =
   // `event.bypassAllowEmailNotification` for the consent-bypass flag used
   // ONLY by the first-login auto-fire path (NEVER by the user-initiated
   // resend button).
-  | 'EMAIL_VERIFICATION_REQUEST';
+  | 'EMAIL_VERIFICATION_REQUEST'
+  // W105 BE-PR2 — bulk-submit digest event types. Emitted by the digest
+  // dispatcher AFTER `bulkSubmit` commits; one job per
+  // (recipientUserId, eventType) group when group.projects.length >= 2.
+  // N=1 groups fall back to the single-project events
+  // (`PROJECT_SUBMITTED` / `PROJECT_SUBMITTED_OWNER`) so single-project
+  // submit UX is unchanged. §17.3 — these events carry an array of
+  // project descriptors but their queue payload references projects by
+  // UUID only and never FKs into project tables.
+  | 'PROJECT_SUBMITTED_DIGEST'        // staff-lead recipients (carousel digest)
+  | 'PROJECT_SUBMITTED_OWNER_DIGEST'; // owner self-receipt (carousel digest)
 
 /**
  * Wave 95 — Event types that MUST bypass the email-verification gate
@@ -78,6 +88,11 @@ export const LINE_EVENT_ALLOWLIST: ReadonlySet<ProjectNotificationEventType> =
     // bounds blast radius for busy amphoes.
     'PROJECT_SUBMITTED',
     'PROJECT_PULLED_BACK',
+    // W105 BE-PR2 — digest variants ride the same allowlist; otherwise
+    // `NotificationsLineService.queueLine` would gate them out at Gate 1
+    // and the staff/owner digest carousels would never be enqueued.
+    'PROJECT_SUBMITTED_DIGEST',
+    'PROJECT_SUBMITTED_OWNER_DIGEST',
   ]);
 
 /**
@@ -205,6 +220,89 @@ export interface ProjectNotificationJobPayload {
 
   /** Wave 95 — see ProjectNotificationEvent.bypassAllowEmailNotification. */
   bypassAllowEmailNotification?: boolean;
+}
+
+/**
+ * W105 BE-PR2 — Per-project descriptor used inside the digest event /
+ * payload. Mirrors the §17.3 audit-separation discipline: project rows
+ * are referenced by UUID only and the descriptor carries the display
+ * fields the renderer needs so the dispatcher does not have to re-query.
+ */
+export interface DigestProjectDescriptor {
+  projectId: string;
+  projectName: string;
+  fromStatus: string;
+  toStatus: string;
+  fromStatusTh?: string;
+  toStatusTh?: string;
+}
+
+/**
+ * W105 BE-PR2 — In-process event consumed by the email + LINE digest
+ * branches of `NotificationsEmailService.queueEmail` /
+ * `NotificationsLineService.queueLine`. Distinct from
+ * `ProjectNotificationEvent` because:
+ *   - it carries a `projects[]` array, not a single project
+ *   - it carries a single `recipient` (digest jobs are 1 recipient × N
+ *     projects; the dispatcher pre-resolves and groups by recipient)
+ *
+ * §17.2 advisory — digest events MUST NOT gate any workflow transition.
+ * §17.3 audit separation — descriptors carry no FK; project deletion
+ * after digest enqueue is intentionally tolerated (the rendered job
+ * still emits with the captured project name).
+ */
+export interface ProjectNotificationDigestEvent {
+  eventType: 'PROJECT_SUBMITTED_DIGEST' | 'PROJECT_SUBMITTED_OWNER_DIGEST';
+  recipient: ProjectNotificationRecipient;
+  projects: DigestProjectDescriptor[];
+  /** Deep link to the queue / submitted page. */
+  actionLink: string;
+  /** `'project-group'` for main plan; future-proofed for revision/change. */
+  projectKind: 'project-group' | 'revised-project-group';
+  /** §4.1 advisory — workflow actor (display only on stats surfaces). */
+  actorUserId?: string;
+  actorWorkHistoryId?: string;
+}
+
+/**
+ * W105 BE-PR2 — Serializable digest payload persisted into the email
+ * Bull queue. Distinct shape from `ProjectNotificationJobPayload` so the
+ * processor can branch on `'projects' in payload` without ambiguity.
+ *
+ * `projects[]` is the rendered list passed to the handlebars
+ * `{{#each projects}}` loop. `recipient` is a single recipient (1 job =
+ * 1 recipient × N projects).
+ */
+export interface ProjectNotificationDigestEmailPayload {
+  eventType: 'PROJECT_SUBMITTED_DIGEST' | 'PROJECT_SUBMITTED_OWNER_DIGEST';
+  totalCount: number;
+  projects: DigestProjectDescriptor[];
+  actionLink: string;
+  recipient: ProjectNotificationRecipient;
+  /** Display-only metadata; mirrors `ProjectNotificationJobPayload.metadata`. */
+  metadata?: Record<string, string | number | null | undefined>;
+  actorUserId?: string;
+  actorWorkHistoryId?: string;
+}
+
+/**
+ * W105 BE-PR2 — Serializable digest payload persisted into the LINE
+ * Bull queue. Mirror of `ProjectNotificationDigestEmailPayload` but
+ * with the LINE-specific recipient shape (lineUserId).
+ */
+export interface ProjectNotificationDigestLinePayload {
+  eventType: 'PROJECT_SUBMITTED_DIGEST' | 'PROJECT_SUBMITTED_OWNER_DIGEST';
+  totalCount: number;
+  projects: DigestProjectDescriptor[];
+  actionLink: string;
+  recipient: {
+    userId: string;
+    lineUserId: string;
+    workHistoryId: string;
+  };
+  metadata?: Record<string, string | number | null | undefined>;
+  actorUserId?: string;
+  actorWorkHistoryId?: string;
 }
 
 /**

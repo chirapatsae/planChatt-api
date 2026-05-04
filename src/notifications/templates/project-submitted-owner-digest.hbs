@@ -1,0 +1,44 @@
+<p style="font-size: 14px; line-height: 1.7; margin: 0 0 4px 0; color: #111827;">
+  เรียน เจ้าของโครงการ
+</p>
+<p style="font-size: 14px; line-height: 1.7; margin: 0; color: #374151;">
+  ระบบได้รับ {{totalCount}} โครงการที่ท่านนำส่งเข้าสู่กระบวนการตรวจสอบเรียบร้อยแล้ว
+  เจ้าหน้าที่ผู้รับผิดชอบจะดำเนินการพิจารณาตามขั้นตอน
+  ท่านจะได้รับอีเมลแจ้งเตือนอีกครั้งเมื่อสถานะของแต่ละโครงการมีการเปลี่ยนแปลง
+</p>
+
+<div style="border-top: 1px solid #e5e7eb; margin: 24px 0 0 0; padding-top: 20px;">
+  <p style="font-size: 12px; color: #6b7280; font-weight: 600; margin: 0 0 12px 0;">
+    รายการโครงการที่นำส่ง ({{totalCount}} รายการ)
+  </p>
+  <table style="width: 100%; font-size: 14px; border-collapse: collapse; margin: 0;">
+    <thead>
+      <tr>
+        <th style="padding: 8px 6px; text-align: left; color: #6b7280; font-weight: 600; border-bottom: 1px solid #e5e7eb; width: 48px;">#</th>
+        <th style="padding: 8px 6px; text-align: left; color: #6b7280; font-weight: 600; border-bottom: 1px solid #e5e7eb;">ชื่อโครงการ</th>
+        <th style="padding: 8px 6px; text-align: left; color: #6b7280; font-weight: 600; border-bottom: 1px solid #e5e7eb; width: 180px;">สถานะ</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{#each projects}}
+      <tr>
+        <td style="padding: 8px 6px; color: #6b7280; vertical-align: top; border-bottom: 1px solid #f3f4f6;">{{index1}}</td>
+        <td style="padding: 8px 6px; color: #111827; font-weight: 600; vertical-align: top; border-bottom: 1px solid #f3f4f6;">{{projectName}}</td>
+        <td style="padding: 8px 6px; color: #111827; vertical-align: top; border-bottom: 1px solid #f3f4f6;">{{fromStatusTh}} &rarr; {{toStatusTh}}</td>
+      </tr>
+      {{/each}}
+    </tbody>
+  </table>
+</div>
+
+<div style="border-top: 1px solid #e5e7eb; margin: 24px 0 0 0; padding-top: 20px;">
+  <p style="margin: 0;">
+    <a href="{{actionLink}}"
+       style="display: inline-block; background-color: #4f46e5; color: #ffffff; text-decoration: none; padding: 10px 20px; border-radius: 6px; font-size: 14px;">
+      เปิดคิวที่ส่ง
+    </a>
+  </p>
+  <p style="font-size: 12px; color: #6b7280; line-height: 1.6; margin: 16px 0 0 0;">
+    อีเมลฉบับนี้เป็นการยืนยันการนำส่งเพื่อทราบเท่านั้น ไม่ต้องดำเนินการใด ๆ
+  </p>
+</div>

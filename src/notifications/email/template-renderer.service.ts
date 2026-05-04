@@ -178,8 +178,40 @@ export class TemplateRendererService {
   }
 
   private evaluate(template: string, ctx: Record<string, unknown>): string {
-    // {{#if var}}...{{/if}} (non-nested, single-line or multi-line)
+    // {{#each array}}...{{/each}} — W105 BE-PR3 digest list support.
+    // Iterates a context array, recursively evaluating the inner body with
+    // a per-item child context. The child context shadows the parent for
+    // any field names that collide. Two synthetic fields are injected:
+    //   - `index0` — zero-based iteration index
+    //   - `index1` — one-based iteration index (handy for numbered lists)
+    //
+    // Non-nested only — matches the existing `{{#if}}` constraint.
+    // If the resolved value is not an array (or is null/undefined), the
+    // block is silently elided. This mirrors the truthy-falsey behavior
+    // of `{{#if}}` and avoids surfacing template typos as broken HTML.
     let out = template.replace(
+      /\{\{#each\s+([a-zA-Z0-9_.]+)\s*\}\}([\s\S]*?)\{\{\/each\}\}/g,
+      (_m, key: string, body: string) => {
+        const value = this.lookup(ctx, key);
+        if (!Array.isArray(value)) return '';
+        return value
+          .map((item, idx) => {
+            const itemCtx: Record<string, unknown> = {
+              ...ctx,
+              ...(item !== null && typeof item === 'object'
+                ? (item as Record<string, unknown>)
+                : { this: item }),
+              index0: idx,
+              index1: idx + 1,
+            };
+            return this.evaluate(body, itemCtx);
+          })
+          .join('');
+      },
+    );
+
+    // {{#if var}}...{{/if}} (non-nested, single-line or multi-line)
+    out = out.replace(
       /\{\{#if\s+([a-zA-Z0-9_.]+)\s*\}\}([\s\S]*?)\{\{\/if\}\}/g,
       (_m, key: string, body: string) => (this.truthy(this.lookup(ctx, key)) ? body : ''),
     );

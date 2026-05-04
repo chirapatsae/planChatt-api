@@ -1,42 +1,50 @@
 {
   "type": "bubble",
   "size": "mega",
-  "header": {
-    "type": "box",
-    "layout": "vertical",
-    "backgroundColor": "#4F46E5",
-    "paddingAll": "16px",
-    "contents": [
-      {
-        "type": "text",
-        "text": "โครงการผ่านการตรวจสอบ",
-        "color": "#FFFFFF",
-        "weight": "bold",
-        "size": "md"
-      }
-    ]
-  },
   "body": {
     "type": "box",
     "layout": "vertical",
-    "spacing": "md",
+    "spacing": "none",
     "paddingAll": "16px",
     "contents": [
       {
         "type": "text",
-        "text": "โครงการของท่านผ่านการตรวจสอบและเข้าสู่ขั้นตอนการอนุมัติ",
+        "text": "ธนาคารโครงการ · อบจ.นครราชสีมา",
+        "size": "xxs",
+        "color": "#6B7280",
+        "weight": "regular",
+        "wrap": false,
+        "align": "center"
+      },
+      {
+        "type": "text",
+        "text": "โครงการผ่านการตรวจสอบ",
+        "size": "lg",
+        "weight": "bold",
+        "color": "#111827",
         "wrap": true,
-        "size": "sm",
-        "color": "#374151"
+        "margin": "sm",
+        "align": "center"
+      },
+      {
+        "type": "image",
+        "url": "{{iconBase}}/line-icons/project-verified-owner.png",
+        "size": "72px",
+        "aspectMode": "fit",
+        "aspectRatio": "1:1",
+        "align": "center",
+        "margin": "md"
       },
       {
         "type": "separator",
-        "color": "#E5E7EB"
+        "color": "#E5E7EB",
+        "margin": "md"
       },
       {
         "type": "box",
         "layout": "vertical",
         "spacing": "sm",
+        "margin": "md",
         "contents": [
           {
             "type": "box",
@@ -55,7 +63,6 @@
                 "text": "{{projectName}}",
                 "size": "sm",
                 "color": "#111827",
-                "weight": "bold",
                 "wrap": true,
                 "flex": 7
               }
@@ -91,16 +98,18 @@
     "type": "box",
     "layout": "vertical",
     "spacing": "sm",
-    "paddingAll": "16px",
+    "paddingAll": "12px",
+    "paddingTop": "0px",
     "contents": [
       {
         "type": "button",
-        "style": "primary",
+        "style": "link",
         "color": "#4F46E5",
         "height": "sm",
+        "gravity": "center",
         "action": {
           "type": "uri",
-          "label": "เปิดดูโครงการ",
+          "label": "เปิดดูโครงการ ›",
           "uri": "{{actionLink}}"
         }
       }

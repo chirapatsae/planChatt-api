@@ -39,6 +39,9 @@ const TEMPLATE_MAP: Record<ProjectNotificationEventType, string> = {
   PROJECT_REJECTED_OWNER: 'project-rejected-owner',
   // Wave 95 — link-based email verification request (Q1).
   EMAIL_VERIFICATION_REQUEST: 'email-verification-request',
+  // W105 BE-PR2 — digest templates. Templates support `{{#each projects}}`.
+  PROJECT_SUBMITTED_DIGEST: 'project-submitted-digest',
+  PROJECT_SUBMITTED_OWNER_DIGEST: 'project-submitted-owner-digest',
 };
 
 const SUBJECT_MAP: Record<
@@ -62,7 +65,27 @@ const SUBJECT_MAP: Record<
   // is unused for this event; the subject is static.
   EMAIL_VERIFICATION_REQUEST: () =>
     `[ยืนยันอีเมล] กรุณายืนยันอีเมลของท่าน`,
+  // W105 BE-PR2 — digest subjects. The `projectName` arg is repurposed to
+  // carry the totalCount-as-string from `dispatchDigest`. The dispatcher
+  // sets `event.projectName = '${N} โครงการ'` so we extract the leading
+  // numeric run and fall back to the raw value if parsing fails.
+  PROJECT_SUBMITTED_DIGEST: (p) =>
+    `[แจ้งเตือน] มีโครงการใหม่รอการตรวจสอบ ${extractDigestCount(p.projectName)} รายการ`,
+  PROJECT_SUBMITTED_OWNER_DIGEST: (p) =>
+    `[ยืนยันการนำส่ง] ส่งโครงการ ${extractDigestCount(p.projectName)} รายการเรียบร้อย`,
 };
+
+/**
+ * W105 BE-PR2 — extract the leading numeric digit run from the digest
+ * `projectName` placeholder (`'<N> โครงการ'`). Defensive: if the value is
+ * not in that shape we return the raw input so the subject still renders
+ * something readable.
+ */
+function extractDigestCount(raw: string): string {
+  if (!raw) return '0';
+  const m = raw.match(/^\s*(\d+)/);
+  return m ? m[1] : raw;
+}
 
 const REQUIRED_TEMPLATE_FIELDS: Record<ProjectNotificationEventType, string[]> = {
   PROJECT_SUBMITTED: ['projectName', 'actionLink', 'toStatus'],
@@ -76,6 +99,11 @@ const REQUIRED_TEMPLATE_FIELDS: Record<ProjectNotificationEventType, string[]> =
   // Wave 95 — verification email needs only the verify link; no project
   // status fields apply since this is an account-scope event.
   EMAIL_VERIFICATION_REQUEST: ['actionLink'],
+  // W105 BE-PR2 — digest templates iterate over `projects[]` and render
+  // a totalCount + actionLink. `projects` is an array; the renderer's
+  // truthy check (length > 0) covers the "required-and-non-empty" rule.
+  PROJECT_SUBMITTED_DIGEST: ['totalCount', 'projects', 'actionLink'],
+  PROJECT_SUBMITTED_OWNER_DIGEST: ['totalCount', 'projects', 'actionLink'],
 };
 
 /**
@@ -485,25 +513,86 @@ export class NotificationsEmailService {
     // Render template. TemplateContextError is non-retryable.
     const templateName = TEMPLATE_MAP[payload.eventType];
     const required = REQUIRED_TEMPLATE_FIELDS[payload.eventType];
-    // Wave 92 — Thai labels are the preferred display source per CLAUDE.md
-    // W67. Templates render `{{fromStatusTh}}` / `{{toStatusTh}}`; we fall
-    // back to the canonical English name when the upstream caller has not
-    // supplied a Thai label (legacy callers / boot-time defensive case).
-    const templateCtx = {
-      projectName: payload.projectName,
-      fromStatus: payload.fromStatus,
-      toStatus: payload.toStatus,
-      fromStatusTh: payload.fromStatusTh ?? payload.fromStatus,
-      toStatusTh: payload.toStatusTh ?? payload.toStatus,
-      reason: payload.reason,
-      actionLink: payload.actionLink,
-      sentAt: this.formatThaiTimestamp(new Date()),
-      subject: SUBJECT_MAP[payload.eventType]({ projectName: payload.projectName }),
-    };
+    // W105 BE-PR2 — branch on event type to build the templateCtx. Digest
+    // events carry `projects[]` in `metadata.digestProjects` (JSON-encoded
+    // by `DigestDispatcherService.dispatchDigest`) and a `digestTotalCount`
+    // count. Single-project events use the legacy single-row context.
+    let templateCtx: Record<string, unknown>;
+    if (
+      payload.eventType === 'PROJECT_SUBMITTED_DIGEST' ||
+      payload.eventType === 'PROJECT_SUBMITTED_OWNER_DIGEST'
+    ) {
+      const rawProjects = payload.metadata?.['digestProjects'];
+      const rawTotalCount = payload.metadata?.['digestTotalCount'];
+      let projects: Array<{
+        projectId: string;
+        projectName: string;
+        fromStatus: string;
+        toStatus: string;
+        fromStatusTh?: string;
+        toStatusTh?: string;
+      }> = [];
+      try {
+        if (typeof rawProjects === 'string' && rawProjects.length > 0) {
+          projects = JSON.parse(rawProjects);
+        }
+      } catch (parseErr) {
+        this.logger.warn(
+          `[NotifyProcessor] digest payload parse-error event=${payload.eventType}: ${(parseErr as Error).message}`,
+        );
+      }
+      const totalCount =
+        typeof rawTotalCount === 'number'
+          ? rawTotalCount
+          : projects.length;
+      // Resolve Thai labels per-project so the email's `{{fromStatusTh}}` /
+      // `{{toStatusTh}}` columns render canonical Thai labels (W67). The
+      // dispatcher already populates these on each descriptor; this fallback
+      // mirrors the single-project path's behavior for legacy callers.
+      const projectsForRender = projects.map((p) => ({
+        projectName: p.projectName,
+        fromStatus: p.fromStatus,
+        toStatus: p.toStatus,
+        fromStatusTh: p.fromStatusTh ?? p.fromStatus,
+        toStatusTh: p.toStatusTh ?? p.toStatus,
+      }));
+      templateCtx = {
+        totalCount,
+        projects: projectsForRender,
+        actionLink: payload.actionLink,
+        sentAt: this.formatThaiTimestamp(new Date()),
+        // For the subject builder we re-use the digest-count extraction
+        // pattern; payload.projectName is `'${N} โครงการ'` set by the
+        // dispatcher.
+        subject: SUBJECT_MAP[payload.eventType]({
+          projectName: payload.projectName,
+        }),
+      };
+    } else {
+      // Wave 92 — Thai labels are the preferred display source per CLAUDE.md
+      // W67. Templates render `{{fromStatusTh}}` / `{{toStatusTh}}`; we fall
+      // back to the canonical English name when the upstream caller has not
+      // supplied a Thai label (legacy callers / boot-time defensive case).
+      templateCtx = {
+        projectName: payload.projectName,
+        fromStatus: payload.fromStatus,
+        toStatus: payload.toStatus,
+        fromStatusTh: payload.fromStatusTh ?? payload.fromStatus,
+        toStatusTh: payload.toStatusTh ?? payload.toStatus,
+        reason: payload.reason,
+        actionLink: payload.actionLink,
+        sentAt: this.formatThaiTimestamp(new Date()),
+        subject: SUBJECT_MAP[payload.eventType]({
+          projectName: payload.projectName,
+        }),
+      };
+    }
     const bodyHtml = this.templateRenderer.render(templateName, templateCtx, required);
+    const subjectStr = String(templateCtx.subject ?? '');
+    const sentAtStr = String(templateCtx.sentAt ?? '');
     const html = this.templateRenderer.render('_base', {
-      subject: templateCtx.subject,
-      sentAt: templateCtx.sentAt,
+      subject: subjectStr,
+      sentAt: sentAtStr,
       bodyHtml,
     });
     const text = this.templateRenderer.toPlainText(bodyHtml);
@@ -514,7 +603,7 @@ export class NotificationsEmailService {
     // nodemailer or Gmail will reject the malformed address.
     const result = await this.emailService.sendEmail({
       to: plaintextEmail,
-      subject: templateCtx.subject,
+      subject: subjectStr,
       html,
       text,
     });
@@ -728,6 +817,14 @@ export class NotificationsEmailService {
       eventType === 'PROJECT_VERIFIED_OWNER' ||
       eventType === 'PROJECT_REJECTED_OWNER'
     ) {
+      return isMainPlan ? '/project' : '/revision/tracking';
+    }
+    // W105 BE-PR2 — digest events route to the same list pages as their
+    // single-project counterparts so the CTA lands on the queue/owner list.
+    if (eventType === 'PROJECT_SUBMITTED_DIGEST') {
+      return isMainPlan ? '/agency/admin/pending' : `/revise/edit/admin/detail/${id}`;
+    }
+    if (eventType === 'PROJECT_SUBMITTED_OWNER_DIGEST') {
       return isMainPlan ? '/project' : '/revision/tracking';
     }
     // Defensive fallback — owner project list. Should never hit since the

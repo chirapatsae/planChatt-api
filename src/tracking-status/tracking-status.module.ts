@@ -16,6 +16,13 @@ import { WorkHistoryGovernmentAgencyResponsibility } from 'src/work-history-gove
 import { LineageLockModule } from 'src/common/lineage-lock/lineage-lock.module';
 import { NotificationsEmailModule } from 'src/notifications/email/notifications-email.module';
 import { NotificationsLineModule } from 'src/notifications/line/notifications-line.module';
+// W105 BE-PR2 — digest dispatcher consumed by TrackingStatusService.bulkSubmit
+// to collapse N per-project notifications into ONE digest job per
+// (recipientUserId, eventType) group. Registered as a provider here so it
+// can be constructor-injected; depends on NotificationsEmail/LineModule
+// (already imported above) and the local Status repository (already in
+// TypeOrmModule.forFeature below).
+import { DigestDispatcherService } from 'src/notifications/digest/digest-dispatcher.service';
 import { UsersModule } from 'src/users/users.module';
 
 @Module({
@@ -44,6 +51,6 @@ import { UsersModule } from 'src/users/users.module';
     UsersModule,
   ],
   controllers: [TrackingStatusController],
-  providers: [TrackingStatusService],
+  providers: [TrackingStatusService, DigestDispatcherService],
 })
 export class TrackingStatusModule {}

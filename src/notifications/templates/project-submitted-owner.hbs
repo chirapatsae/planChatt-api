@@ -1,27 +1,36 @@
-<p style="font-size: 14px; line-height: 1.6;">
+<p style="font-size: 14px; line-height: 1.7; margin: 0 0 4px 0; color: #111827;">
   เรียน เจ้าของโครงการ
 </p>
-<p style="font-size: 14px; line-height: 1.6;">
+<p style="font-size: 14px; line-height: 1.7; margin: 0; color: #374151;">
   ระบบได้รับโครงการของท่านเข้าสู่กระบวนการตรวจสอบเรียบร้อยแล้ว
   เจ้าหน้าที่ผู้รับผิดชอบจะดำเนินการพิจารณาตามขั้นตอน
   ท่านจะได้รับอีเมลแจ้งเตือนอีกครั้งเมื่อสถานะมีการเปลี่ยนแปลง
 </p>
-<table style="width: 100%; font-size: 14px; border-collapse: collapse; margin: 16px 0;">
-  <tr>
-    <td style="padding: 6px 0; color: #6b7280; width: 160px;">ชื่อโครงการ</td>
-    <td style="padding: 6px 0; color: #111827; font-weight: 600;">{{projectName}}</td>
-  </tr>
-  <tr>
-    <td style="padding: 6px 0; color: #6b7280;">สถานะ</td>
-    <td style="padding: 6px 0; color: #111827;">{{fromStatusTh}} &rarr; {{toStatusTh}}</td>
-  </tr>
-</table>
-<p style="margin: 24px 0;">
-  <a href="{{actionLink}}"
-     style="display: inline-block; background-color: #4f46e5; color: #ffffff; text-decoration: none; padding: 10px 20px; border-radius: 6px; font-size: 14px;">
-    ดูโครงการของท่าน
-  </a>
-</p>
-<p style="font-size: 12px; color: #6b7280; line-height: 1.6;">
-  อีเมลฉบับนี้เป็นการยืนยันการนำส่งเพื่อทราบเท่านั้น ไม่ต้องดำเนินการใด ๆ
-</p>
+
+<div style="border-top: 1px solid #e5e7eb; margin: 24px 0 0 0; padding-top: 20px;">
+  <p style="font-size: 12px; color: #6b7280; font-weight: 600; margin: 0 0 12px 0;">
+    รายละเอียดโครงการ
+  </p>
+  <table style="width: 100%; font-size: 14px; border-collapse: collapse; margin: 0;">
+    <tr>
+      <td style="padding: 6px 0; color: #6b7280; width: 160px; vertical-align: top;">ชื่อโครงการ</td>
+      <td style="padding: 6px 0; color: #111827; font-weight: 600; vertical-align: top;">{{projectName}}</td>
+    </tr>
+    <tr>
+      <td style="padding: 6px 0; color: #6b7280; vertical-align: top;">สถานะ</td>
+      <td style="padding: 6px 0; color: #111827; vertical-align: top;">{{fromStatusTh}} &rarr; {{toStatusTh}}</td>
+    </tr>
+  </table>
+</div>
+
+<div style="border-top: 1px solid #e5e7eb; margin: 24px 0 0 0; padding-top: 20px;">
+  <p style="margin: 0;">
+    <a href="{{actionLink}}"
+       style="display: inline-block; background-color: #4f46e5; color: #ffffff; text-decoration: none; padding: 10px 20px; border-radius: 6px; font-size: 14px;">
+      ดูโครงการของท่าน
+    </a>
+  </p>
+  <p style="font-size: 12px; color: #6b7280; line-height: 1.6; margin: 16px 0 0 0;">
+    อีเมลฉบับนี้เป็นการยืนยันการนำส่งเพื่อทราบเท่านั้น ไม่ต้องดำเนินการใด ๆ
+  </p>
+</div>

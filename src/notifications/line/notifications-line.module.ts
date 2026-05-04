@@ -16,6 +16,7 @@ import {
 } from './notifications-line.service';
 import { LineNotificationProcessor } from './line-notification.processor';
 import { FlexTemplateRendererService } from './flex-template-renderer.service';
+import { DigestFlexBuilderService } from './digest-flex-builder.service';
 import { NotificationsLineController } from './notifications-line.controller';
 // Wave 97 — LINE-side aggregation parity with EmailStatsService for the
 // admin quota dashboard and the alert worker.
@@ -76,11 +77,17 @@ import { LineBindingAdminAction } from './entities/line-binding-admin-action.ent
     NotificationsLineService,
     LineNotificationProcessor,
     FlexTemplateRendererService,
+    // W105 BE-PR2 — digest carousel builder. BE-PR3 created the class but
+    // did not register it; wired here now that the dispatcher needs it.
+    DigestFlexBuilderService,
     // Wave 97 — read-only aggregation service for admin quota endpoints.
     LineStatsService,
   ],
   exports: [
     NotificationsLineService,
+    // W105 BE-PR2 — exported so DigestDispatcherService can be assembled
+    // alongside the email + line dispatch services in TrackingStatusModule.
+    DigestFlexBuilderService,
     // Wave 97 — exported so NotificationsAdminModule can resolve it.
     LineStatsService,
   ],

@@ -1,28 +1,40 @@
-<p style="font-size: 14px; line-height: 1.6;">
+<p style="font-size: 14px; line-height: 1.7; margin: 0 0 4px 0; color: #111827;">
   เรียน เจ้าของโครงการ
 </p>
-<p style="font-size: 14px; line-height: 1.6;">
+<p style="font-size: 14px; line-height: 1.7; margin: 0; color: #374151;">
   โครงการของท่านถูกส่งกลับเพื่อแก้ไข โปรดตรวจสอบเหตุผลด้านล่างและดำเนินการปรับแก้ก่อนนำส่งอีกครั้ง
 </p>
-<table style="width: 100%; font-size: 14px; border-collapse: collapse; margin: 16px 0;">
-  <tr>
-    <td style="padding: 6px 0; color: #6b7280; width: 160px;">ชื่อโครงการ</td>
-    <td style="padding: 6px 0; color: #111827; font-weight: 600;">{{projectName}}</td>
-  </tr>
-  <tr>
-    <td style="padding: 6px 0; color: #6b7280;">การเปลี่ยนสถานะ</td>
-    <td style="padding: 6px 0; color: #111827;">{{fromStatusTh}} &rarr; {{toStatusTh}}</td>
-  </tr>
-</table>
+
+<div style="border-top: 1px solid #e5e7eb; margin: 24px 0 0 0; padding-top: 20px;">
+  <p style="font-size: 12px; color: #6b7280; font-weight: 600; margin: 0 0 12px 0;">
+    รายละเอียดโครงการ
+  </p>
+  <table style="width: 100%; font-size: 14px; border-collapse: collapse; margin: 0;">
+    <tr>
+      <td style="padding: 6px 0; color: #6b7280; width: 160px; vertical-align: top;">ชื่อโครงการ</td>
+      <td style="padding: 6px 0; color: #111827; font-weight: 600; vertical-align: top;">{{projectName}}</td>
+    </tr>
+    <tr>
+      <td style="padding: 6px 0; color: #6b7280; vertical-align: top;">การเปลี่ยนสถานะ</td>
+      <td style="padding: 6px 0; color: #111827; vertical-align: top;">{{fromStatusTh}} &rarr; {{toStatusTh}}</td>
+    </tr>
+  </table>
+</div>
+
 {{#if reason}}
-<div style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px 16px; border-radius: 4px; margin: 16px 0;">
-  <p style="font-size: 12px; color: #92400e; margin: 0 0 4px 0; font-weight: 600;">เหตุผลจากผู้ตรวจสอบ</p>
-  <p style="font-size: 14px; color: #111827; margin: 0; line-height: 1.6; white-space: pre-wrap;">{{reason}}</p>
+<div style="border-top: 1px solid #e5e7eb; margin: 24px 0 0 0; padding-top: 20px;">
+  <p style="font-size: 12px; color: #6b7280; font-weight: 600; margin: 0 0 12px 0;">
+    เหตุผลจากผู้ตรวจสอบ
+  </p>
+  <p style="font-size: 14px; line-height: 1.7; color: #111827; margin: 0; white-space: pre-wrap;">{{reason}}</p>
 </div>
 {{/if}}
-<p style="margin: 24px 0;">
-  <a href="{{actionLink}}"
-     style="display: inline-block; background-color: #4f46e5; color: #ffffff; text-decoration: none; padding: 10px 20px; border-radius: 6px; font-size: 14px;">
-    เปิดโครงการเพื่อแก้ไข
-  </a>
-</p>
+
+<div style="border-top: 1px solid #e5e7eb; margin: 24px 0 0 0; padding-top: 20px;">
+  <p style="margin: 0;">
+    <a href="{{actionLink}}"
+       style="display: inline-block; background-color: #4f46e5; color: #ffffff; text-decoration: none; padding: 10px 20px; border-radius: 6px; font-size: 14px;">
+      เปิดโครงการเพื่อแก้ไข
+    </a>
+  </p>
+</div>

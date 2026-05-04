@@ -95,6 +95,14 @@ export class FlexTemplateRendererService {
     // surfaces as a clean FlexTemplateNotFoundError rather than silently
     // emitting an empty bubble.
     EMAIL_VERIFICATION_REQUEST: null,
+    // W105 BE-PR2 — digest events bypass this renderer entirely (the static
+    // walker does not understand carousel repetition). They are routed
+    // through `DigestFlexBuilderService` inside `NotificationsLineService.
+    // sendPreparedJob`. Mapped to null so a defensive call here surfaces
+    // a clean FlexTemplateNotFoundError instead of silently rendering an
+    // empty bubble.
+    PROJECT_SUBMITTED_DIGEST: null,
+    PROJECT_SUBMITTED_OWNER_DIGEST: null,
   };
 
   /**
@@ -124,6 +132,11 @@ export class FlexTemplateRendererService {
     PROJECT_PULLED_BACK: (p) =>
       `[แจ้งเตือน] โครงการถูกถอนออกจากการตรวจสอบ: ${p}`,
     EMAIL_VERIFICATION_REQUEST: null,
+    // W105 BE-PR2 — digest events use the carousel builder's own altText
+    // (computed from `totalCount`); the renderer-side altText is not used
+    // for digest jobs. Mapped to null for typing exhaustiveness only.
+    PROJECT_SUBMITTED_DIGEST: null,
+    PROJECT_SUBMITTED_OWNER_DIGEST: null,
   };
 
   constructor() {
@@ -163,12 +176,24 @@ export class FlexTemplateRendererService {
     // approach makes user-controlled text safe by construction — the
     // `\"` in a project name becomes a normal character inside an
     // already-parsed string, never a JSON quote.
+    //
+    // `iconBase` is the public origin where the backend serves
+    // `/line-icons/*.png` (mounted via `app.useStaticAssets` in main.ts).
+    // Resolution order: LINE_ICON_BASE_URL (explicit override, useful for
+    // dev tunnels like ngrok) → APP_URL (production canonical origin) →
+    // empty string (renders broken image, surfaces misconfig loudly).
+    const iconBase = (
+      process.env.LINE_ICON_BASE_URL ||
+      process.env.APP_URL ||
+      ''
+    ).replace(/\/$/, '');
     const substitutions: Record<string, string> = {
       projectName,
       fromStatusTh: ctx.fromStatusTh,
       toStatusTh: ctx.toStatusTh,
       actionLink: ctx.actionLink,
       reason: ctx.reason ?? '',
+      iconBase,
     };
     const contents = this.substitute(template, substitutions) as object;
 

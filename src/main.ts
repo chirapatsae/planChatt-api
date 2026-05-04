@@ -48,6 +48,14 @@ async function bootstrap() {
   app.useStaticAssets(join(__dirname, '..', 'uploads'), {
     prefix: '/uploads/',
   });
+  // Serve public assets (LINE flex icons, brand logos) at root so URLs like
+  // `${APP_URL}/line-icons/project-submitted-owner.png` resolve. Used by the
+  // LINE Flex template renderer (FlexRenderContext.iconBase).
+  //
+  // Uses `process.cwd()` (= `backend/`) instead of `__dirname` because the
+  // app boots from `dist/src/main.js` — `__dirname + '..'` would resolve to
+  // `dist/public` which does not exist after `nest build`.
+  app.useStaticAssets(join(process.cwd(), 'public'));
   app.enableVersioning({
     type: VersioningType.URI,
   });
