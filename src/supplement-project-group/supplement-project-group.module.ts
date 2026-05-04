@@ -12,6 +12,7 @@ import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { Budget } from 'src/budget/entities/budget.entity';
 import { ProjectClassificationModule } from 'src/common/project-classification/project-classification.module';
 import { DevelopmentIssue } from 'src/development-issue/entities/development-issue.entity';
+import { UsersModule } from 'src/users/users.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { DevelopmentIssue } from 'src/development-issue/entities/development-iss
       DevelopmentIssue,
     ]),
     ProjectClassificationModule,
+    UsersModule,
   ],
   controllers: [SupplementProjectGroupController],
   providers: [SupplementProjectGroupService],

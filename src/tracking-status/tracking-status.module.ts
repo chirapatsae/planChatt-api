@@ -16,6 +16,7 @@ import { WorkHistoryGovernmentAgencyResponsibility } from 'src/work-history-gove
 import { LineageLockModule } from 'src/common/lineage-lock/lineage-lock.module';
 import { NotificationsEmailModule } from 'src/notifications/email/notifications-email.module';
 import { NotificationsLineModule } from 'src/notifications/line/notifications-line.module';
+import { UsersModule } from 'src/users/users.module';
 
 @Module({
   imports: [
@@ -37,6 +38,10 @@ import { NotificationsLineModule } from 'src/notifications/line/notifications-li
     // TrackingStatusService can inject NotificationsLineService alongside
     // NotificationsEmailService.
     NotificationsLineModule,
+    // W100 PR3 — needed by TrackingStatusService.maskActorUsersOnTracking
+    // to call `usersService.decryptUserPii(user)` before masking actor email.
+    // §17.11: masking is applied uniformly regardless of role; no reveal here.
+    UsersModule,
   ],
   controllers: [TrackingStatusController],
   providers: [TrackingStatusService],

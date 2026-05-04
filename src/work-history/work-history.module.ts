@@ -12,6 +12,7 @@ import { Position } from 'src/positions/entities/position.entity';
 import { WorkStatus } from 'src/work-status/entities/work-status.entity';
 import { WebsocketModule } from 'src/websocket/websocket.module';
 import { AnnouncementsModule } from 'src/announcements/announcements.module';
+import { UsersModule } from 'src/users/users.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { AnnouncementsModule } from 'src/announcements/announcements.module';
     ]),
     WebsocketModule,
     AnnouncementsModule,
+    UsersModule,
   ],
   controllers: [WorkHistoryController],
   providers: [WorkHistoryService],

@@ -26,6 +26,8 @@ import {
   ERROR_CODES,
   ERROR_MESSAGES,
 } from 'src/common/project-classification/constants';
+import { UsersService } from 'src/users/users.service';
+import { maskCreatedByUserOnProjects } from 'src/utils/mask-project-creator.util';
 
 @Injectable()
 export class SupplementProjectGroupService {
@@ -59,7 +61,17 @@ export class SupplementProjectGroupService {
     private readonly dataSource: DataSource,
     private readonly classificationValidator: ProjectClassificationValidator,
     private readonly bookFormatResolver: BookFormatResolver,
+    private readonly usersService: UsersService,
   ) {}
+
+  /**
+   * W100 PR2 — thin wrapper around the shared
+   * `maskCreatedByUserOnProjects` utility (Pattern 3 — decrypt-then-mask).
+   * See `src/utils/mask-project-creator.util.ts`.
+   */
+  private async maskCreatedByUser(items: any): Promise<void> {
+    await maskCreatedByUserOnProjects(this.usersService, items);
+  }
 
   async create(
     dto: CreateSupplementProjectGroupDto,
@@ -208,17 +220,21 @@ export class SupplementProjectGroupService {
 
   async findAll(): Promise<SupplementProjectGroup[]> {
     try {
-      return await this.supplementProjectGroupRepo.find({
+      const rows = await this.supplementProjectGroupRepo.find({
         relations: [
           'developmentPlanSupplement',
           'strategy',
           'tactic',
           'plan',
           'createdBy',
+          'createdBy.user',
           'budgets',
         ],
         order: { createdAt: 'DESC' },
       });
+      // W100 PR2 — Pattern 3 (mask). See §17.2 / §17.3.
+      await this.maskCreatedByUser(rows);
+      return rows;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -226,7 +242,7 @@ export class SupplementProjectGroupService {
 
   async findBySupplement(supplementId: string): Promise<SupplementProjectGroup[]> {
     try {
-      return await this.supplementProjectGroupRepo.find({
+      const rows = await this.supplementProjectGroupRepo.find({
         where: { developmentPlanSupplement: { id: supplementId } },
         relations: [
           'developmentPlanSupplement',
@@ -234,10 +250,14 @@ export class SupplementProjectGroupService {
           'tactic',
           'plan',
           'createdBy',
+          'createdBy.user',
           'budgets',
         ],
         order: { createdAt: 'DESC' },
       });
+      // W100 PR2 — Pattern 3 (mask). See §17.2 / §17.3.
+      await this.maskCreatedByUser(rows);
+      return rows;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -253,8 +273,11 @@ export class SupplementProjectGroupService {
           'tactic',
           'plan',
           'createdBy',
+          'createdBy.user',
           'budgets',
           'trackingStatus',
+          'trackingStatus.createdBy',
+          'trackingStatus.createdBy.user',
         ],
       });
 
@@ -264,6 +287,8 @@ export class SupplementProjectGroupService {
         );
       }
 
+      // W100 PR2 — Pattern 3 (mask). See §17.2 / §17.3.
+      await this.maskCreatedByUser(supplementProject);
       return supplementProject;
     } catch (error) {
       handleException(this.logger, error);

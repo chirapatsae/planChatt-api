@@ -35,6 +35,8 @@ import {
   ERROR_CODES,
   ERROR_MESSAGES,
 } from 'src/common/project-classification/constants';
+import { UsersService } from 'src/users/users.service';
+import { maskCreatedByUserOnProjects } from 'src/utils/mask-project-creator.util';
 
 @Injectable()
 export class RevisedProjectGroupService {
@@ -72,7 +74,19 @@ export class RevisedProjectGroupService {
     private readonly lineageLockService: LineageLockService,
     private readonly classificationValidator: ProjectClassificationValidator,
     private readonly bookFormatResolver: BookFormatResolver,
+    private readonly usersService: UsersService,
   ) { }
+
+  /**
+   * W100 PR2 — thin wrapper around the shared
+   * `maskCreatedByUserOnProjects` utility so existing call sites read
+   * naturally. See `src/utils/mask-project-creator.util.ts` for the
+   * pattern decision (Pattern 3 — decrypt-then-mask) and the
+   * idempotency / WeakSet-dedupe semantics inherited from PR1.
+   */
+  private async maskCreatedByUser(items: any): Promise<void> {
+    await maskCreatedByUserOnProjects(this.usersService, items);
+  }
 
   // ========================================
   // Lineage-lock batched helpers (CLAUDE.md §14)
@@ -380,7 +394,7 @@ export class RevisedProjectGroupService {
    */
   async findAll(): Promise<RevisedProjectGroup[]> {
     try {
-      return await this.revisedProjectGroupRepo.find({
+      const rows = await this.revisedProjectGroupRepo.find({
         relations: [
           'developmentPlanRevision',
           'projectGroup',
@@ -389,10 +403,14 @@ export class RevisedProjectGroupService {
           'tactic',
           'plan',
           'createdBy',
+          'createdBy.user',
           'budgets',
         ],
         order: { createdAt: 'DESC' },
       });
+      // W100 PR2 — Pattern 3 (mask). See §17.2 / §17.3.
+      await this.maskCreatedByUser(rows);
+      return rows;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -403,7 +421,7 @@ export class RevisedProjectGroupService {
    */
   async findByRevision(revisionId: string): Promise<RevisedProjectGroup[]> {
     try {
-      return await this.revisedProjectGroupRepo.find({
+      const rows = await this.revisedProjectGroupRepo.find({
         where: { developmentPlanRevision: { id: revisionId } },
         relations: [
           'developmentPlanRevision',
@@ -413,10 +431,14 @@ export class RevisedProjectGroupService {
           'tactic',
           'plan',
           'createdBy',
+          'createdBy.user',
           'budgets',
         ],
         order: { createdAt: 'DESC' },
       });
+      // W100 PR2 — Pattern 3 (mask). See §17.2 / §17.3.
+      await this.maskCreatedByUser(rows);
+      return rows;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -453,6 +475,9 @@ export class RevisedProjectGroupService {
       );
     }
 
+    // W100 PR2 — Pattern 3 (mask). Internal helper used by update flows;
+    // mask defensively in case the entity is returned upstream.
+    await this.maskCreatedByUser(revisedProject);
     return revisedProject;
   }
 
@@ -501,6 +526,8 @@ export class RevisedProjectGroupService {
         where: { prevProjectId: id },
       });
 
+      // W100 PR2 — Pattern 3 (mask). See §17.2 / §17.3.
+      await this.maskCreatedByUser(revisedProject);
       return UnifiedProjectMapper.fromRevisedProjectGroup(revisedProject, hasDescendant);
     } catch (error) {
       handleException(this.logger, error);
@@ -777,7 +804,7 @@ export class RevisedProjectGroupService {
    */
   async findLatestRevisionProjects(): Promise<RevisedProjectGroup[]> {
     try {
-      return await this.revisedProjectGroupRepo
+      const rows = await this.revisedProjectGroupRepo
         .createQueryBuilder('rpg')
         .leftJoinAndSelect('rpg.developmentPlanRevision', 'dpr')
         .leftJoinAndSelect('dpr.revisionType', 'rt')
@@ -798,6 +825,9 @@ export class RevisedProjectGroupService {
         .where('dpr.is_latest = :isLatest', { isLatest: true })
         .orderBy('dpr.created_at', 'DESC')
         .getMany();
+      // W100 PR2 — Pattern 3 (mask). See §17.2 / §17.3.
+      await this.maskCreatedByUser(rows);
+      return rows;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -917,6 +947,9 @@ export class RevisedProjectGroupService {
 
       const results = await query.orderBy('rpg.created_at', 'DESC').getMany();
 
+      // W100 PR2 — Pattern 3 (mask). See §17.2 / §17.3.
+      await this.maskCreatedByUser(results);
+
       // Batch descendant check (avoid N+1)
       if (results.length > 0) {
         const ids = results.map((r) => r.id);
@@ -995,6 +1028,9 @@ export class RevisedProjectGroupService {
       }
 
       const results = await query.orderBy('rpg.created_at', 'DESC').getMany();
+
+      // W100 PR2 — Pattern 3 (mask). See §17.2 / §17.3.
+      await this.maskCreatedByUser(results);
 
       // Batch descendant check (avoid N+1)
       if (results.length > 0) {
@@ -1099,6 +1135,9 @@ export class RevisedProjectGroupService {
 
       const results = await query.orderBy('rpg.created_at', 'DESC').getMany();
 
+      // W100 PR2 — Pattern 3 (mask). See §17.2 / §17.3.
+      await this.maskCreatedByUser(results);
+
       // Batch descendant check (avoid N+1)
       if (results.length > 0) {
         const ids = results.map((r) => r.id);
@@ -1175,6 +1214,9 @@ export class RevisedProjectGroupService {
       }
 
       const results = await query.orderBy('rpg.created_at', 'DESC').getMany();
+
+      // W100 PR2 — Pattern 3 (mask). See §17.2 / §17.3.
+      await this.maskCreatedByUser(results);
 
       // Batch descendant check (avoid N+1)
       if (results.length > 0) {
@@ -1253,6 +1295,9 @@ export class RevisedProjectGroupService {
       }
 
       const results = await query.orderBy('rpg.created_at', 'DESC').getMany();
+
+      // W100 PR2 — Pattern 3 (mask). See §17.2 / §17.3.
+      await this.maskCreatedByUser(results);
 
       // Batch descendant check (avoid N+1)
       if (results.length > 0) {
@@ -1336,6 +1381,9 @@ export class RevisedProjectGroupService {
 
       const results = await query.orderBy('rpg.created_at', 'DESC').getMany();
 
+      // W100 PR2 — Pattern 3 (mask). See §17.2 / §17.3.
+      await this.maskCreatedByUser(results);
+
       // Batch descendant check (avoid N+1)
       if (results.length > 0) {
         const ids = results.map((r) => r.id);
@@ -1413,6 +1461,9 @@ export class RevisedProjectGroupService {
       }
 
       const results = await query.orderBy('rpg.created_at', 'DESC').getMany();
+
+      // W100 PR2 — Pattern 3 (mask). See §17.2 / §17.3.
+      await this.maskCreatedByUser(results);
 
       // Batch descendant check (avoid N+1)
       if (results.length > 0) {
@@ -1492,6 +1543,9 @@ export class RevisedProjectGroupService {
 
       const results = await query.orderBy('rpg.created_at', 'DESC').getMany();
 
+      // W100 PR2 — Pattern 3 (mask). See §17.2 / §17.3.
+      await this.maskCreatedByUser(results);
+
       // Batch descendant check (avoid N+1)
       if (results.length > 0) {
         const ids = results.map((r) => r.id);
@@ -1569,6 +1623,9 @@ export class RevisedProjectGroupService {
       }
 
       const results = await query.orderBy('rpg.created_at', 'DESC').getMany();
+
+      // W100 PR2 — Pattern 3 (mask). See §17.2 / §17.3.
+      await this.maskCreatedByUser(results);
 
       // Batch descendant check (avoid N+1)
       if (results.length > 0) {
@@ -1686,6 +1743,12 @@ export class RevisedProjectGroupService {
           `Previous project type not found: ${current.prevProjectType}`,
         );
       }
+
+      // W100 PR2 — Pattern 3 (mask). The comparison surface ships
+      // createdBy.user + tracking-status actors for both the current row
+      // and its ancestor (PG or RPG); both must be masked. The shared
+      // helper accepts both shapes uniformly via duck-typing.
+      await this.maskCreatedByUser([current as any, previous as any]);
 
       return {
         current,
@@ -1806,6 +1869,9 @@ export class RevisedProjectGroupService {
       const projects = await query
         .orderBy('revisedProject.createdAt', 'DESC')
         .getMany();
+
+      // W100 PR2 — Pattern 3 (mask). See §17.2 / §17.3.
+      await this.maskCreatedByUser(projects);
 
       // Batch descendant check (avoid N+1)
       if (projects.length > 0) {
@@ -2010,6 +2076,8 @@ export class RevisedProjectGroupService {
 
     if (originalProject) {
       rootProjectGroupId = originalProject.id;
+      // W100 PR2 — Pattern 3 (mask) BEFORE the unified mapper runs.
+      await this.maskCreatedByUser(originalProject);
       currentProject = UnifiedProjectMapper.fromProjectGroup(originalProject);
     } else {
       // 2) ถ้าไม่เจอ ลองหาเป็น revised project
@@ -2038,6 +2106,8 @@ export class RevisedProjectGroupService {
         throw new NotFoundException('ไม่พบโครงการ');
       }
 
+      // W100 PR2 — Pattern 3 (mask) BEFORE the unified mapper runs.
+      await this.maskCreatedByUser(requestedRevisedProject);
       currentProject = UnifiedProjectMapper.fromRevisedProjectGroup(requestedRevisedProject);
       rootProjectGroupId = requestedRevisedProject.projectGroup?.id || null;
 
@@ -2107,6 +2177,12 @@ export class RevisedProjectGroupService {
         },
       },
     });
+
+    // W100 PR2 — Pattern 3 (mask). Mask the original PG + every revision
+    // BEFORE the unified mapper runs so the mapper output also carries
+    // masked email / null phone / null citizenId. Tracking-status actors
+    // on every row are walked transitively by the helper.
+    await this.maskCreatedByUser([originalProject as any, ...allRevisions]);
 
     // CLAUDE.md §14 — batched lineage-lock lookups for the version chain.
     // The original PG is locked iff it has any active descendant (when this

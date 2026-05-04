@@ -34,6 +34,9 @@ import {
   ProjectNotificationEventType,
   ProjectNotificationRecipient,
 } from 'src/notifications/events/project-notification-event';
+import { UsersService } from 'src/users/users.service';
+import { maskEmail } from 'src/notifications/email/utils/mask-email.util';
+import { User } from 'src/users/entities/user.entity';
 
 @Injectable()
 export class TrackingStatusService {
@@ -77,7 +80,61 @@ export class TrackingStatusService {
     // failure does NOT prevent email firing AND does NOT cascade into the
     // workflow caller (§4.1).
     private readonly notificationsLineService: NotificationsLineService,
+    // W100 PR3 — Cluster B3 fix. Used by `maskActorUsersOnTracking` to
+    // decrypt-then-mask the actor User attached to every TrackingStatus
+    // returned by the dedicated `/v1/tracking-status` read endpoints. Per
+    // user-confirmed default #1 (audit timeline → mask everywhere) and
+    // CLAUDE.md §17.11 (no role exemption), masking is applied uniformly
+    // regardless of caller role. Read-only — no §12 audit write impact.
+    private readonly usersService: UsersService,
   ) { }
+
+  /**
+   * W100 PR3 — Decrypt-then-mask the actor User attached to every
+   * TrackingStatus row before it leaves the dedicated tracking endpoints.
+   *
+   * Pattern 3 (mask everywhere) per user-confirmed default #1 — even
+   * super-admin sees masked email on the audit timeline. PDPA-aligned.
+   *
+   * - email: decrypted, then replaced with `c***@domain.tld` shape
+   * - phone: nulled (never surfaced on the timeline)
+   * - citizenId: nulled (never surfaced on the timeline)
+   *
+   * Walks both `createdBy.user` (the actor) and `deletedBy.user` (the
+   * staff/admin who soft-deleted the row, surfaced on the restore
+   * response). Idempotent — `decryptUserPii` is safe to call on already
+   * decrypted users (W89B), and `maskEmail` on a masked address is a
+   * no-op-shaped output. WeakSet dedupes repeated User identities so we
+   * never decrypt-then-mask the same user twice in one response.
+   *
+   * §12: this is a READ-side mutation of the in-memory response only;
+   * the `tracking_status` table is NEVER written by this helper.
+   * §17.3: AI tables untouched — no FK, no audit cross-write.
+   * §17.11: no role override — every caller gets the masked shape.
+   */
+  private async maskActorUsersOnTracking(
+    items: TrackingStatus[] | TrackingStatus | null | undefined,
+  ): Promise<void> {
+    if (!items) return;
+    const list = Array.isArray(items) ? items : [items];
+    const seen = new WeakSet<object>();
+    const visit = async (user: User | null | undefined) => {
+      if (!user || seen.has(user)) return;
+      seen.add(user);
+      await this.usersService.decryptUserPii(user);
+      user.email = user.email ? maskEmail(user.email) : (null as unknown as string);
+      // Phone and citizenId are NEVER surfaced on the audit timeline —
+      // null at the response boundary defends against accidental
+      // serialization of either ciphertext or plaintext.
+      user.phone = null as unknown as string;
+      user.citizenId = null as unknown as string;
+    };
+    for (const t of list) {
+      if (!t) continue;
+      await visit(t.createdBy?.user);
+      await visit(t.deletedBy?.user);
+    }
+  }
 
   /**
    * Wave 21 N4 (refactored W94) — Map a canonical (fromStatus → toStatus)
@@ -973,15 +1030,23 @@ export class TrackingStatusService {
 
   async findAll(): Promise<TrackingStatus[]> {
     try {
-      return await this.trackingStatusRepo.find({
+      const rows = await this.trackingStatusRepo.find({
         relations: [
           'createdBy',
+          // W100 PR3 — load actor User so it can be decrypt-then-masked at
+          // the response boundary. Without `createdBy.user` the FE has no
+          // actor identity to render; with it, ciphertext would otherwise
+          // leak (§17.11 forbids reveal here — Pattern 3 mask everywhere).
+          'createdBy.user',
           'deletedBy',
+          'deletedBy.user',
           'projectGroupId',
           'statusId',
           'comments',
         ],
       });
+      await this.maskActorUsersOnTracking(rows);
+      return rows;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -993,7 +1058,10 @@ export class TrackingStatusService {
         where: { id },
         relations: [
           'createdBy',
+          // W100 PR3 — see findAll() comment on actor User loading.
+          'createdBy.user',
           'deletedBy',
+          'deletedBy.user',
           'projectGroupId',
           'statusId',
           'comments',
@@ -1002,6 +1070,7 @@ export class TrackingStatusService {
       if (!tracking) {
         throw new NotFoundException(`Tracking status with ID ${id} not found`);
       }
+      await this.maskActorUsersOnTracking(tracking);
       return tracking;
     } catch (error) {
       handleException(this.logger, error);
@@ -1104,7 +1173,11 @@ export class TrackingStatusService {
         where: { id },
         relations: [
           'createdBy',
+          // W100 PR3 — Cluster B3 also covers the restore response.
+          // Load actor User chain so masking can run before return.
+          'createdBy.user',
           'deletedBy',
+          'deletedBy.user',
           'projectGroupId',
           'statusId',
           'comments',
@@ -1115,6 +1188,7 @@ export class TrackingStatusService {
           `Tracking status with ID ${id} not found after restore`,
         );
       }
+      await this.maskActorUsersOnTracking(restoredTracking);
       return {
         message: `Tracking status ${id} restored successfully`,
         data: restoredTracking,

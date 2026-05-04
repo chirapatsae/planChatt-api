@@ -45,6 +45,8 @@ import {
   ERROR_CODES,
   ERROR_MESSAGES,
 } from 'src/common/project-classification/constants';
+import { UsersService } from 'src/users/users.service';
+import { maskEmail } from 'src/notifications/email/utils/mask-email.util';
 
 @Injectable()
 export class ProjectGroupsService {
@@ -98,7 +100,55 @@ export class ProjectGroupsService {
     private readonly lineageLockService: LineageLockService,
     private readonly classificationValidator: ProjectClassificationValidator,
     private readonly bookFormatResolver: BookFormatResolver,
+    private readonly usersService: UsersService,
   ) { }
+
+  /**
+   * W100 PR1 — Decrypt-then-mask the User PII attached to every
+   * `createdBy.user` and (transitively) every `trackingStatus[].createdBy.user`
+   * node found in the supplied project tree(s). Project-list surfaces are
+   * admin/staff-facing per default #3 (mask). Idempotent + safe to call on
+   * already-decrypted users (W89B).
+   *
+   * Walks `ProjectGroup` and `RevisedProjectGroup` instances uniformly so the
+   * unified-list endpoints in this service can call one helper.
+   *
+   * Note: PR1 scope is `WorkHistory` + `ProjectGroup.createdBy.user`. The
+   * `trackingStatus[].createdBy.user` chain that ships in every project
+   * response is partially in scope here (since it leaks via the same list
+   * payload) and partially in PR3. To stop the user-visible bug now, this
+   * helper masks the User regardless of how it was reached.
+   */
+  private async maskCreatedByUserOnProjects(
+    items: Array<ProjectGroup | RevisedProjectGroup | null | undefined> | ProjectGroup | RevisedProjectGroup | null | undefined,
+  ): Promise<void> {
+    if (!items) return;
+    const list = Array.isArray(items) ? items : [items];
+    // Dedupe by User identity so we never decrypt-then-mask the same User
+    // twice (the same WorkHistory.user instance may appear as createdBy on
+    // many projects, and as tracking-status actor on the same project).
+    const seen = new WeakSet<object>();
+    const visit = async (user: User | null | undefined) => {
+      if (!user || seen.has(user)) return;
+      seen.add(user);
+      await this.usersService.decryptUserPii(user);
+      user.email = user.email ? maskEmail(user.email) : null as unknown as string;
+      user.phone = null as unknown as string;
+      user.citizenId = null as unknown as string;
+    };
+    for (const item of list) {
+      if (!item) continue;
+      // createdBy is a WorkHistory; its `.user` is the User row we mask.
+      await visit(item.createdBy?.user);
+      // tracking-status actor (covered fully by PR3, but also leaks here).
+      const ts = (item as any).trackingStatus as Array<{ createdBy?: { user?: User } }> | undefined;
+      if (Array.isArray(ts)) {
+        for (const t of ts) {
+          await visit(t?.createdBy?.user);
+        }
+      }
+    }
+  }
 
   /**
    * ADD_PROJECT_PREVENT_STEP_BYPASS — authoritative server-side gate
@@ -889,6 +939,8 @@ export class ProjectGroupsService {
       });
     }
 
+    // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
+    await this.maskCreatedByUserOnProjects(projects);
     return projects;
   }
   async bulkAssignAgency(dto: BulkAssignAgencyDto[], userId: string) {
@@ -1102,6 +1154,8 @@ export class ProjectGroupsService {
       .orderBy('projectGroup.createdAt', 'DESC')
       .getMany();
 
+    // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
+    await this.maskCreatedByUserOnProjects(projects);
     return projects;
   }
 
@@ -1199,6 +1253,8 @@ export class ProjectGroupsService {
       .orderBy('projectGroup.createdAt', 'DESC')
       .getMany();
 
+    // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
+    await this.maskCreatedByUserOnProjects(projects);
     return projects;
   }
   async findByStatusProvincialCommittee(options: {
@@ -1270,6 +1326,8 @@ export class ProjectGroupsService {
       .orderBy('projectGroup.createdAt', 'DESC')
       .getMany();
 
+    // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
+    await this.maskCreatedByUserOnProjects(projects);
     return projects;
   }
   async findByStatusPlanCommittee(options: {
@@ -1341,6 +1399,8 @@ export class ProjectGroupsService {
       .orderBy('projectGroup.createdAt', 'DESC')
       .getMany();
 
+    // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
+    await this.maskCreatedByUserOnProjects(projects);
     return projects;
   }
   async findByStatusVerifiedAgency(options: {
@@ -1411,6 +1471,8 @@ export class ProjectGroupsService {
       .orderBy('projectGroup.createdAt', 'DESC')
       .getMany();
 
+    // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
+    await this.maskCreatedByUserOnProjects(projects);
     return projects;
   }
   async findProjectsByStatusInAuthority(options: {
@@ -1480,6 +1542,8 @@ export class ProjectGroupsService {
       .orderBy('projectGroup.createdAt', 'DESC')
       .getMany();
 
+    // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
+    await this.maskCreatedByUserOnProjects(projects);
     return projects;
   }
   async findProjectsByStatusInAuthorityOut(options: {
@@ -1551,6 +1615,8 @@ export class ProjectGroupsService {
     const projects = await query
       .orderBy('projectGroup.createdAt', 'DESC')
       .getMany();
+    // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
+    await this.maskCreatedByUserOnProjects(projects);
     return projects;
 
   }
@@ -1616,6 +1682,8 @@ export class ProjectGroupsService {
       .orderBy('projectGroup.createdAt', 'DESC')
       .getMany();
 
+    // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
+    await this.maskCreatedByUserOnProjects(projects);
     return projects;
 
   }
@@ -1680,6 +1748,8 @@ export class ProjectGroupsService {
       .orderBy('projectGroup.createdAt', 'DESC')
       .getMany();
 
+    // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
+    await this.maskCreatedByUserOnProjects(projects);
     return projects;
 
   }
@@ -1794,7 +1864,10 @@ export class ProjectGroupsService {
       query.andWhere('projectGroup.responsibleAgency.id = :responsibleAgencyId', { responsibleAgencyId });
     }
 
-    return await query.getMany();
+    const projects = await query.getMany();
+    // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
+    await this.maskCreatedByUserOnProjects(projects);
+    return projects;
   }
 
   /**
@@ -1846,7 +1919,10 @@ export class ProjectGroupsService {
       query.andWhere('revisedProject.responsibleAgency.id = :responsibleAgencyId', { responsibleAgencyId });
     }
 
-    return await query.getMany();
+    const projects = await query.getMany();
+    // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
+    await this.maskCreatedByUserOnProjects(projects);
+    return projects;
   }
 
 
@@ -1908,7 +1984,10 @@ export class ProjectGroupsService {
       // ไม่มี active revision
       .andWhere('activeRevision.id IS NULL');
 
-    return await query.getMany();
+    const projects = await query.getMany();
+    // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
+    await this.maskCreatedByUserOnProjects(projects);
+    return projects;
   }
 
   /**
@@ -1955,7 +2034,10 @@ export class ProjectGroupsService {
       query.andWhere('status.name = :statusName', { statusName: status });
     }
 
-    return await query.getMany();
+    const projects = await query.getMany();
+    // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
+    await this.maskCreatedByUserOnProjects(projects);
+    return projects;
   }
 
   /**
@@ -2473,6 +2555,8 @@ export class ProjectGroupsService {
       .orderBy('projectGroup.createdAt', 'DESC')
       .getMany();
 
+    // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
+    await this.maskCreatedByUserOnProjects(projects);
     return projects;
   }
   private async findLatestRevisedProjectsAllStatus(
@@ -2537,7 +2621,10 @@ export class ProjectGroupsService {
       query.andWhere('status.name = :statusName', { statusName: status });
     }
 
-    return await query.getMany();
+    const projects = await query.getMany();
+    // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
+    await this.maskCreatedByUserOnProjects(projects);
+    return projects;
   }
 
   private async findLatestRevisedProjects(
@@ -2603,7 +2690,10 @@ export class ProjectGroupsService {
       query.andWhere('status.name = :statusName', { statusName: status });
     }
 
-    return await query.getMany();
+    const projects = await query.getMany();
+    // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
+    await this.maskCreatedByUserOnProjects(projects);
+    return projects;
   }
 
   private async findOriginalWithoutRevisionAllStatus(
@@ -2749,7 +2839,10 @@ export class ProjectGroupsService {
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true });
     // ไม่มีเงื่อนไข isBooked และ status
 
-    return await queryBuilder.getMany();
+    const projects = await queryBuilder.getMany();
+    // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
+    await this.maskCreatedByUserOnProjects(projects);
+    return projects;
   }
 
 
@@ -4956,6 +5049,13 @@ export class ProjectGroupsService {
       },
     });
 
+    // W100 PR1 — mask createdBy + tracking-status actor PII (default #3)
+    // BEFORE mapping to unified DTO so the masked email/phone propagate.
+    if (originalProject) {
+      await this.maskCreatedByUserOnProjects(originalProject);
+    }
+    await this.maskCreatedByUserOnProjects(allRevisions);
+
     // CLAUDE.md §14 — In the version chain view, the original PG is locked
     // iff any revision exists for it (allRevisions.length > 0). The chain is
     // already loaded, so we can derive `hasDescendant` without another query.
@@ -5132,6 +5232,8 @@ export class ProjectGroupsService {
       const lockedSet = await this.findProjectGroupIdsWithDescendants([projectGroup.id]);
       (projectGroup as any).hasDescendant = lockedSet.has(projectGroup.id);
 
+      // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
+      await this.maskCreatedByUserOnProjects(projectGroup);
       return projectGroup;
     } catch (error) {
       handleException(this.logger, error);

@@ -20,6 +20,8 @@ import { WebsocketService } from 'src/websocket/websocket/websocket.service';
 import { AnnouncementsService } from 'src/announcements/announcements.service';
 import { AnnouncementStatus, NotificationType } from 'src/announcements/entities/announcement.entity';
 import { In } from 'typeorm';
+import { UsersService } from 'src/users/users.service';
+import { maskEmail } from 'src/notifications/email/utils/mask-email.util';
 
 @Injectable()
 export class WorkHistoryService {
@@ -52,7 +54,25 @@ export class WorkHistoryService {
 
     private readonly webSocketService: WebsocketService,
     private readonly announcementsService: AnnouncementsService,
+    private readonly usersService: UsersService,
   ) { }
+
+  /**
+   * W100 PR1 — Mask `WorkHistory.user` PII for admin list / lookup
+   * surfaces. Decrypts via `UsersService.decryptUserPii` (idempotent +
+   * ciphertext-shape-guarded post-W89B) and then applies `maskEmail`.
+   * `phone` and `citizenId` are nulled per user-confirmed default #5
+   * for admin lists. See docs/tasks/wave100/W100-PLAN-PII-DECRYPT-AUDIT.md.
+   */
+  private async maskUsersOnWorkHistories(rows: WorkHistory[]): Promise<void> {
+    for (const wh of rows) {
+      if (!wh?.user) continue;
+      await this.usersService.decryptUserPii(wh.user);
+      wh.user.email = wh.user.email ? maskEmail(wh.user.email) : null as unknown as string;
+      wh.user.phone = null as unknown as string;
+      wh.user.citizenId = null as unknown as string;
+    }
+  }
 
   async create(
     dto: CreateWorkHistoryDto,
@@ -199,7 +219,10 @@ export class WorkHistoryService {
         query.andWhere('workStatus.name = :workStatusName', { workStatusName });
       if (roleName) query.andWhere('role.name = :roleName', { roleName });
 
-      return query.getMany();
+      const rows = await query.getMany();
+      // W100 PR1 — admin user-management list. Default #3 (mask).
+      await this.maskUsersOnWorkHistories(rows);
+      return rows;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -264,7 +287,7 @@ export class WorkHistoryService {
 
   async findAllByGovernmentAgencyId(id: string, role: string): Promise<WorkHistory[]> {
     try {
-      const query = this.workHistoryRepository.find({
+      const rows = await this.workHistoryRepository.find({
         where: { governmentAgencies: { id }, role: { name: role }, workStatus: { name: 'approved' } },
         relations: [
           'user',
@@ -274,14 +297,16 @@ export class WorkHistoryService {
           // 'role',
         ]
       });
-      return query;
+      // W100 PR1 — agency staff lookup (admin/assignment UI). Default #3 (mask).
+      await this.maskUsersOnWorkHistories(rows);
+      return rows;
     } catch (error) {
       handleException(this.logger, error);
     }
   }
   async findAllByLocalAdministrativeOrganizationId(id: string, role: string): Promise<WorkHistory[]> {
     try {
-      const query = this.workHistoryRepository.find({
+      const rows = await this.workHistoryRepository.find({
         where: { localAdministrativeOrganization: { id: id }, role: { name: role }, workStatus: { name: 'approved' } },
         relations: [
           'user',
@@ -291,7 +316,9 @@ export class WorkHistoryService {
           //   'role',
         ]
       });
-      return query;
+      // W100 PR1 — LAO staff lookup (admin/assignment UI). Default #3 (mask).
+      await this.maskUsersOnWorkHistories(rows);
+      return rows;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -319,6 +346,11 @@ export class WorkHistoryService {
       });
       if (!workHistory) {
         throw new NotFoundException(`Work history with ID ${id} not found`);
+      }
+      // W100 PR1 — Detail / profile slide. Pattern 1 (decrypt): caller is
+      // viewing a single record they are already authorized to see.
+      if (workHistory.user) {
+        await this.usersService.decryptUserPii(workHistory.user);
       }
       return workHistory;
     } catch (error) {

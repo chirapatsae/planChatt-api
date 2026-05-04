@@ -15,6 +15,8 @@ import { WorkHistory } from '../work-history/entities/work-history.entity';
 import { GovernmentAgency } from '../government-agencies/entities/government-agency.entity';
 import { User } from '../users/entities/user.entity';
 import { handleException } from '../util/handleException';
+import { UsersService } from '../users/users.service';
+import { maskEmail } from '../notifications/email/utils/mask-email.util';
 
 //หลัง test ต้องแก้คน assign เป็น admin เท่านั้น
 @Injectable()
@@ -32,7 +34,43 @@ export class WorkHistoryGovernmentAgencyResponsibilityService {
     private readonly governmentAgencyRepository: Repository<GovernmentAgency>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    private readonly usersService: UsersService,
   ) { }
+
+  /**
+   * W100 PR6 — Mask `WorkHistory.user` PII on government-agency
+   * responsibility-table reads (cluster B6). Pattern 3 (mask) per master
+   * plan §1 decision rule. Decrypts via `UsersService.decryptUserPii`
+   * (idempotent post-W89B) then applies `maskEmail`. `phone` and
+   * `citizenId` are nulled per default #5.
+   */
+  private async maskUsersOnResponsibilities(
+    rows: Array<WorkHistoryGovernmentAgencyResponsibility | undefined | null>,
+  ): Promise<void> {
+    for (const row of rows) {
+      if (!row) continue;
+      const wh = row.workHistory;
+      if (wh?.user) {
+        await this.usersService.decryptUserPii(wh.user);
+        wh.user.email = wh.user.email
+          ? maskEmail(wh.user.email)
+          : (null as unknown as string);
+        wh.user.phone = null as unknown as string;
+        wh.user.citizenId = null as unknown as string;
+      }
+      const assignedWh = (row as any).assignedByWorkHistory as
+        | WorkHistory
+        | undefined;
+      if (assignedWh?.user) {
+        await this.usersService.decryptUserPii(assignedWh.user);
+        assignedWh.user.email = assignedWh.user.email
+          ? maskEmail(assignedWh.user.email)
+          : (null as unknown as string);
+        assignedWh.user.phone = null as unknown as string;
+        assignedWh.user.citizenId = null as unknown as string;
+      }
+    }
+  }
 
   async create(
     dto: CreateWorkHistoryGovernmentAgencyResponsibilityDto,
@@ -110,7 +148,7 @@ export class WorkHistoryGovernmentAgencyResponsibilityService {
         where.workHistory = { id: workHistoryId };
       }
 
-      return this.responsibilityRepository.find({
+      const rows = await this.responsibilityRepository.find({
         where,
         relations: [
           'workHistory',
@@ -119,6 +157,9 @@ export class WorkHistoryGovernmentAgencyResponsibilityService {
           'assignedByWorkHistory',
         ],
       });
+      // W100 PR6 — admin assignment list. Default #3 (mask).
+      await this.maskUsersOnResponsibilities(rows);
+      return rows;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -156,6 +197,8 @@ export class WorkHistoryGovernmentAgencyResponsibilityService {
       if (!responsibility) {
         throw new NotFoundException(`ไม่พบความรับผิดชอบที่ ID ${id}`);
       }
+      // W100 PR6 — agency assignment lookup. Default #3 (mask).
+      await this.maskUsersOnResponsibilities([responsibility]);
       return responsibility;
     } catch (error) {
       handleException(this.logger, error);
@@ -177,6 +220,8 @@ export class WorkHistoryGovernmentAgencyResponsibilityService {
       if (!responsibility) {
         throw new NotFoundException(`ไม่พบความรับผิดชอบที่ ID ${id}`);
       }
+      // W100 PR6 — admin assignment detail. Default #3 (mask).
+      await this.maskUsersOnResponsibilities([responsibility]);
       return responsibility;
     } catch (error) {
       handleException(this.logger, error);
@@ -247,6 +292,10 @@ export class WorkHistoryGovernmentAgencyResponsibilityService {
           `ไม่พบความรับผิดชอบที่ ID ${id} หลังจากการอัปเดต`,
         );
       }
+
+      // W100 PR6 — mask user PII on the post-update response so the
+      // admin assignment screen never receives W89 ciphertext.
+      await this.maskUsersOnResponsibilities([updated]);
 
       return updated;
     } catch (error) {

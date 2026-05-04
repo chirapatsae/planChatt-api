@@ -16,6 +16,8 @@ import { WorkHistory } from '../work-history/entities/work-history.entity';
 import { Amphoe } from '../amphoes/entities/amphoe.entity';
 import { User } from '../users/entities/user.entity';
 import { handleException } from '../util/handleException';
+import { UsersService } from '../users/users.service';
+import { maskEmail } from '../notifications/email/utils/mask-email.util';
 
 @Injectable()
 export class WorkHistoryAmphoeResponsibilityService {
@@ -32,7 +34,45 @@ export class WorkHistoryAmphoeResponsibilityService {
     private readonly amphoeRepository: Repository<Amphoe>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    private readonly usersService: UsersService,
   ) { }
+
+  /**
+   * W100 PR6 — Mask `WorkHistory.user` PII on responsibility-table reads.
+   * Cluster B6: amphoe-responsibility list/detail joins
+   * `workHistory.user` and previously shipped W89 ciphertext to admin
+   * assignment screens. Pattern 3 (mask) per master plan §1 decision rule
+   * and the audit's recommendation column. Decrypts via
+   * `UsersService.decryptUserPii` (idempotent post-W89B), then applies
+   * `maskEmail`. `phone` and `citizenId` are nulled per default #5.
+   */
+  private async maskUsersOnResponsibilities(
+    rows: Array<WorkHistoryAmphoeResponsibility | undefined | null>,
+  ): Promise<void> {
+    for (const row of rows) {
+      if (!row) continue;
+      const wh = row.workHistory;
+      if (wh?.user) {
+        await this.usersService.decryptUserPii(wh.user);
+        wh.user.email = wh.user.email
+          ? maskEmail(wh.user.email)
+          : (null as unknown as string);
+        wh.user.phone = null as unknown as string;
+        wh.user.citizenId = null as unknown as string;
+      }
+      const assignedWh = (row as any).assignedByWorkHistory as
+        | WorkHistory
+        | undefined;
+      if (assignedWh?.user) {
+        await this.usersService.decryptUserPii(assignedWh.user);
+        assignedWh.user.email = assignedWh.user.email
+          ? maskEmail(assignedWh.user.email)
+          : (null as unknown as string);
+        assignedWh.user.phone = null as unknown as string;
+        assignedWh.user.citizenId = null as unknown as string;
+      }
+    }
+  }
 
   async create(
     dto: CreateWorkHistoryAmphoeResponsibilityDto,
@@ -110,7 +150,7 @@ export class WorkHistoryAmphoeResponsibilityService {
         where.workHistory = { id: workHistoryId };
       }
 
-      return this.responsibilityRepository.find({
+      const rows = await this.responsibilityRepository.find({
         where,
         relations: [
           'workHistory',
@@ -119,6 +159,9 @@ export class WorkHistoryAmphoeResponsibilityService {
           'assignedByWorkHistory',
         ],
       });
+      // W100 PR6 — admin assignment list. Default #3 (mask).
+      await this.maskUsersOnResponsibilities(rows);
+      return rows;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -139,6 +182,9 @@ export class WorkHistoryAmphoeResponsibilityService {
       if (!responsibility) {
         throw new NotFoundException(`Responsibility with ID ${id} not found`);
       }
+      // W100 PR6 — admin assignment detail. Default #3 (mask) for
+      // consistency with the list endpoint above.
+      await this.maskUsersOnResponsibilities([responsibility]);
       return responsibility;
     } catch (error) {
       handleException(this.logger, error);
@@ -204,6 +250,10 @@ export class WorkHistoryAmphoeResponsibilityService {
           `Responsibility with ID ${id} not found after update`,
         );
       }
+
+      // W100 PR6 — mask user PII on the post-update response so the
+      // admin assignment screen never receives W89 ciphertext.
+      await this.maskUsersOnResponsibilities([updated]);
 
       return updated;
     } catch (error) {

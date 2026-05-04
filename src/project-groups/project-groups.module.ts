@@ -20,6 +20,7 @@ import { GeoBoundaryService } from 'src/ai/geo-boundary.service';
 import { LineageLockModule } from 'src/common/lineage-lock/lineage-lock.module';
 import { ProjectClassificationModule } from 'src/common/project-classification/project-classification.module';
 import { DevelopmentIssue } from 'src/development-issue/entities/development-issue.entity';
+import { UsersModule } from 'src/users/users.module';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { DevelopmentIssue } from 'src/development-issue/entities/development-iss
     ]),
     LineageLockModule,
     ProjectClassificationModule,
+    UsersModule,
   ],
   controllers: [ProjectGroupsController],
   providers: [ProjectGroupsService, GeoBoundaryService],
