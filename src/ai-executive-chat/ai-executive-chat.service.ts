@@ -84,6 +84,12 @@ import {
   UNIFIED_PROJECT_AGGREGATOR,
 } from './aggregation/tokens';
 import { ProjectLineageService } from './aggregation/services/project-lineage.service';
+// Wave 103 PR2 — canonical agency-projects aggregator wiring. Reroutes
+// `getExecutiveDashboardSnapshot` + `getCrossPlanInsights` to the canonical
+// aggregator under feature flag `EXECUTIVE_AI_CANONICAL_AGENCY_AGGREGATOR`
+// (default OFF). When OFF the legacy code paths run unchanged. §17.2
+// advisory only — never gates a workflow transition. §17.3 read-only.
+import { AgencyProjectsCanonicalAggregatorService } from './aggregation/services/agency-projects-canonical-aggregator.service';
 import type {
   IAgencyEnrichment,
   IBudgetAggregator,
@@ -324,6 +330,13 @@ export class AiExecutiveChatService {
     private readonly resilience: IResilienceEnvelope,
     // Wave 61 — Mode 3 lineage service. Read-only (§17.2 / §17.3).
     private readonly projectLineage: ProjectLineageService,
+    // Wave 103 PR2 — canonical agency-projects aggregator (PR1). Wired
+    // into the per-call deps bag in `invokeTool`. Two tool handlers
+    // (`getExecutiveDashboardSnapshot`, `getCrossPlanInsights`) branch on
+    // `isCanonicalAgencyAggregatorEnabled()` AND the presence of
+    // `filters.agencyIds` to call the canonical aggregator's
+    // `computeWithLegacyComparison` for side-by-side telemetry.
+    private readonly agencyProjectsCanonical: AgencyProjectsCanonicalAggregatorService,
   ) {}
 
   // ────────────────────────────────────────────────────────────────
@@ -1281,6 +1294,12 @@ export class AiExecutiveChatService {
       agency: this.agency,
       resilience: this.resilience,
       projectLineage: this.projectLineage,
+      // Wave 103 PR2 — canonical agency-projects aggregator behind
+      // `EXECUTIVE_AI_CANONICAL_AGENCY_AGGREGATOR` (default OFF). The
+      // `getExecutiveDashboardSnapshot` + `getCrossPlanInsights` handlers
+      // gate on the flag at call time so toggling the env var per test
+      // works without re-importing this module.
+      agencyProjectsCanonical: this.agencyProjectsCanonical,
     };
     return handler(params, caller, deps);
   }

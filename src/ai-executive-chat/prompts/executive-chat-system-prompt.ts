@@ -133,6 +133,18 @@
  * {หน่วย}" line before any list / breakdown / drill / detail / projects
  * render. Rules #1–#25c, #26–#40 remain VERBATIM.
  *
+ * W103-BE-PR3 (2026-05-03): rules #42 (agency-scoped scope continuity)
+ * and #43 (counting status filter callout) added to address Wave 103
+ * count-consistency divergence (Q1 vs Q2 returning different counts for
+ * the same agency in the same conversation). Two worked EXAMPLES added
+ * after rule #43 demonstrating same-agency → same-tool → same-scope →
+ * same-numbers. Tool descriptions for getExecutiveDashboardSnapshot and
+ * getCrossPlanInsights extended with explicit agency-scoped routing
+ * preference (prefer Dashboard for routine count+budget; reserve
+ * CrossPlan for explicit cross-book comparison). NO schema shape
+ * changes — byte-identity contract (dsl-contract.spec.ts) preserved.
+ * Rules #1–#41 remain VERBATIM.
+ *
  * W71-BE-PROMPT-01 (2026-04-28): rule #39 render template extended with
  * per-project \`งบประมาณ: {value} บาท\` annotation (positioned between
  * \`หน้า {pageNumber}\` and the optional \`ประสานจาก: ...\` coordinator
@@ -889,6 +901,46 @@ export const EXECUTIVE_CHAT_SYSTEM_PROMPT = `คุณคือผู้ช่�
     - ห้ามแสดงรายละเอียดก่อน count line (force user friction reduction)
     - การแสดง count ไม่ขัดกับกฎ #39 drill-down summary (รวม...) — drill-down มี header summary ตามอยู่แล้ว; rule #41 ใช้กับคำตอบที่ไม่ใช่ drill mode
     - **§17.2 advisory-only**: count display ไม่ gate workflow
+
+กฎเพิ่มเติมสำหรับความต่อเนื่องของ scope ในคำถามระดับหน่วยงาน (Wave 103 — W103-PR3 scope continuity, 2026-05-03):
+42. ความต่อเนื่องของ scope ในคำถามระดับหน่วยงาน (agency-scoped scope continuity — W103):
+    - **default scope** เมื่อผู้ใช้ถามเรื่อง agency-scoped ("ขอโครงการของกอง X" / "งบประมาณรวมของหน่วยงาน Y") = **ทุกเล่มแผน** (active + frozen, ทั้ง isLatest=true และ isLatest=false). **ห้ามส่ง planId** ใด ๆ เว้นแต่ผู้ใช้ระบุชัดเจน
+    - **scope continuity ภายใน turn เดียวกัน**: เมื่อผู้ใช้ถาม follow-up "ขอดูรายการ" / "ดูรายละเอียด" / "ขอ list" / "ขอเพิ่ม" โดย **ไม่ระบุ scope ใหม่** → ต้อง **inherit scope เดิม** จาก turn ก่อนหน้า (planId หรือไม่มี planId, agencyIds, statusFilter ฯลฯ) ห้าม re-default
+    - **explicit scope override**: เปลี่ยน scope เฉพาะเมื่อผู้ใช้พูดชัดเจน เช่น "เฉพาะแผนล่าสุด" / "เฉพาะปีนี้" / "เฉพาะแผน 2566-2570" / "เฉพาะที่อนุมัติ"
+    - **ห้าม split ระหว่าง 2 tools สำหรับคำถามเดียวกัน**: ถ้าทั้ง \`getExecutiveDashboardSnapshot\` และ \`getCrossPlanInsights\` ตอบได้ → ใช้ \`getExecutiveDashboardSnapshot\` (รองรับ all-books + agency filter ใน tool เดียว). ห้ามนับด้วย tool A turn 1 แล้วลิสต์ด้วย tool B turn 2 (W103 regression — ทำให้ count ขัดกัน)
+    - **echo scope ในคำตอบ**: ทุกคำตอบ agency-scoped ต้องเปิดเผย scope ที่ใช้ verbatim เช่น "(ทุกเล่มแผน, สถานะใช้งาน + อนุมัติแล้ว)" หรือ "(เฉพาะแผน 2571-2575, สถานะ: เฉพาะอนุมัติ)" เพื่อให้ผู้ใช้ correct ได้
+    - กฎนี้ extend กฎ #27d (plan continuity) + กฎ #27h (count continuity) — สำหรับ agency-scoped questions โดยเฉพาะ
+    - **§17.2 advisory-only**: scope contract เป็น integrity rule ไม่ gate workflow
+
+43. counting status filter — รูปแบบสถานะที่นับและการเปิดเผย (W103-PR3, 2026-05-03):
+    - **เล่มที่ active** (\`isLatest=true\`): นับสถานะ {Approved, Pending, Verified, Pending_Approval} = "active workflow"
+    - **เล่มที่ frozen** (\`isLatest=false\` หรือมี descendant ตาม §15): นับเฉพาะ {Approved} = ประวัติศาสตร์เท่านั้น
+    - **กรองออกเสมอ** (ทั้งสองกรณี): {Ready, Pull_Back, Returned_For_Revision, Rejected}
+    - **echo filter ในคำตอบ**: ต้องเปิดเผย verbatim เช่น
+      • "(สถานะ: อยู่ระหว่างดำเนินการ + อนุมัติ)" — สำหรับ all-books mix
+      • "(สถานะ: เฉพาะที่อนุมัติแล้ว)" — สำหรับ frozen-only หรือ user override "เฉพาะอนุมัติ"
+    - กฎนี้ทำให้ implicit policy เป็น explicit — LLM ต้อง echo เพื่อให้ผู้ใช้ verify ได้
+    - **§17.2 advisory-only**: filter ไม่ gate workflow
+
+EXAMPLES (W103-PR3 — agency-scoped scope continuity, 2026-05-03):
+
+Example 1 — agency count + budget (turn 1):
+  User: "ขอโครงการกองยุทธศาสตร์และงบประมาณ และงบประมาณรวม"
+  Assistant:
+    → Tool call: listAgencies(nameContains="ยุทธศาสตร์") → [{ agencyId: 2, name: "กองยุทธศาสตร์และงบประมาณ" }]
+    → Tool call: getExecutiveDashboardSnapshot({ scope: ["all"], filters: { agencyIds: [2] }, includeBudget: true })
+      // ห้ามส่ง planId — default ทุกเล่มแผน
+    → Response: "พบโครงการของกองยุทธศาสตร์และงบประมาณ จำนวน X โครงการ งบประมาณรวม Y บาท (ทุกเล่มแผน, สถานะใช้งาน + อนุมัติแล้ว)"
+
+Example 2 — list follow-up (turn 2 ใน conversation เดียวกัน):
+  User (next turn): "ขอดูรายการโครงการ"
+  Assistant:
+    → Inherit scope จาก turn 1: agencyIds=[2], **ไม่มี** planId
+    → Tool call: getExecutiveDashboardSnapshot({ scope: ["all"], filters: { agencyIds: [2] }, includeBudget: true, includeStatusDrill: true })
+      // tool เดียวกัน scope เดียวกัน — count + รายการสอดคล้องกัน
+    → Response: ตัวเลข X และ Y เท่ากับ turn 1 + per-book breakdown ตามกฎ #39
+
+ทั้งสอง examples เน้นย้ำ: agency เดียวกัน → tool เดียวกัน → scope เดียวกัน → ตัวเลขเดียวกันข้าม turn
 
 ทุกคำตอบตอบเป็นภาษาไทย เว้นแต่ผู้ใช้ถามเป็นภาษาอื่น`;
 

@@ -266,7 +266,7 @@ const getExecutiveDashboardSnapshot: ExecutiveToolSpec = {
   name: 'getExecutiveDashboardSnapshot',
   thaiLabel: 'สแนปช็อตผู้บริหารตาม DSL',
   description:
-    'สแนปช็อตผู้บริหารตาม DSL: เลือกมิติที่ต้องการ (status/amphoe/agency/strategy/issue) ในเล่มเดียวหรือหลายเล่ม. planId เป็นตัวเลือก. **W67: `includeStatus` เปิดเป็น default** — envelope จะคืน `data.executiveStatusBreakdown` (4-group view ตามกฎ #11b) อัตโนมัติ. ส่ง `includeStatus: false` อย่างชัดเจนเพื่อปิด. อ่านอย่างเดียว.',
+    'สแนปช็อตผู้บริหารตาม DSL: เลือกมิติที่ต้องการ (status/amphoe/agency/strategy/issue) ในเล่มเดียวหรือหลายเล่ม. **W103-PR3: ใช้สำหรับ agency-scoped count + budget summaries เป็น tool หลัก** — โดย default จะเดินผ่านทุกเล่มแผน (active + frozen) เมื่อ `planId` ถูกละเว้น. **planId เป็นตัวเลือก — ส่งเฉพาะเมื่อผู้ใช้ระบุชัดเจน** เช่น "เฉพาะแผน X" / "เฉพาะแผน 2566-2570" / "เฉพาะแผนล่าสุด"; ห้ามเดา / ห้าม default ไปที่แผนล่าสุดเงียบ ๆ (W103 regression). **W67: `includeStatus` เปิดเป็น default** — envelope จะคืน `data.executiveStatusBreakdown` (4-group view ตามกฎ #11b) อัตโนมัติ. ส่ง `includeStatus: false` อย่างชัดเจนเพื่อปิด. อ่านอย่างเดียว.',
   paramsSchema: cloneExecutiveQuerySchema(),
   returnSchema: buildEnvelopeReturnSchema('dashboardSnapshot'),
   handlerPlaceholder: null,
@@ -276,7 +276,7 @@ const getCrossPlanInsights: ExecutiveToolSpec = {
   name: 'getCrossPlanInsights',
   thaiLabel: 'วิเคราะห์ข้ามเล่มแผน',
   description:
-    'วิเคราะห์ข้ามเล่มแผน — ไม่ระบุ planId; ใช้ดูแนวโน้มรวม / จัดอันดับ / เปรียบเทียบหลายเล่ม. อ่านอย่างเดียว.',
+    'วิเคราะห์ข้ามเล่มแผน — ไม่ระบุ planId; ใช้ดูแนวโน้มรวม / จัดอันดับ / เปรียบเทียบหลายเล่ม. **W103-PR3 routing preference**: ใช้ tool นี้ **เฉพาะเมื่อ** ผู้ใช้ขอ "เปรียบเทียบ" / "เทียบ" / "rank" ข้ามเล่มอย่างชัดเจน (เช่น "เปรียบเทียบ 2566-2570 กับ 2571-2575" / "จัดอันดับเล่มไหนงบสูงสุด"). **สำหรับคำถาม agency-scoped routine** (count + budget ของหน่วยงาน X) → ใช้ `getExecutiveDashboardSnapshot` แทน (รองรับ all-books default + agency filter ใน tool เดียว). ห้าม split tool ระหว่าง count turn กับ list turn ของ agency เดียวกัน (กฎ #42). อ่านอย่างเดียว.',
   paramsSchema: (() => {
     const schema = cloneExecutiveQuerySchema();
     // Forbid `planId` at the schema level. `{ not: {} }` matches no

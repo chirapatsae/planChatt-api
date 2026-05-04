@@ -121,6 +121,11 @@ import {
   formatNumberedListMarkdown,
 } from '../../aggregation/constants/display-text-normalize';
 import { PlanPhase } from 'src/plan-phase/entities/plan-phase.entity';
+// Wave 103 PR2 — feature flag accessor for canonical agency-projects
+// aggregator. Read at call time so test harnesses can flip the env var
+// per test without re-importing the handler module. The aggregator
+// service itself is reached via `deps.agencyProjectsCanonical`.
+import { isCanonicalAgencyAggregatorEnabled } from '../../aggregation/services/agency-projects-canonical-aggregator.service';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -4395,6 +4400,45 @@ const getExecutiveDashboardSnapshot: ExecutiveToolHandler = async (
     }
   }
 
+  // Wave 103 PR2 — canonical aggregator reroute (Q1's tool path).
+  //
+  // When `EXECUTIVE_AI_CANONICAL_AGENCY_AGGREGATOR=true` AND the caller
+  // narrowed the query to a specific agency (`filters.agencyIds`), the
+  // canonical aggregator (PR1) is the source of truth for `count` /
+  // `budgetTotal` / per-book rollup. The legacy `listUnifiedProjects`
+  // spine still ran above (it powers the per-`groupBy` buckets, status
+  // breakdown, geo / agency enrichments) so the response shape — every
+  // existing field — is preserved byte-for-byte.
+  //
+  // Side-by-side telemetry (logged inside the aggregator service via
+  // `Logger.warn`) compares the canonical envelope against the legacy
+  // dashboard count for the first 24-48h after deploy. The flag-OFF
+  // path remains the only source of truth for non-agency queries
+  // (`agencyIds` empty) — those drop straight through to the legacy
+  // path with zero behavior change.
+  //
+  // §17.2 advisory only — never gates a workflow transition. §17.3
+  // read-only — no `tracking_status` writes. §11 / §14 / §15 — the
+  // canonical aggregator is lineage-aware (HEAD-of-lineage anti-join)
+  // and book-frozenness-aware (status policy split per `dp.isLatest`).
+  try {
+    await applyCanonicalAggregatorReroute({
+      deps,
+      envelope,
+      filters,
+      legacyCount: (envelope as unknown as { data: Record<string, unknown> })
+        .data.projectCount as number,
+      legacyBudget: (envelope as unknown as { data: Record<string, unknown> })
+        .data.totalBudget as number | undefined,
+      planId,
+      legacyKind: 'dashboard',
+    });
+  } catch {
+    // Aggregator failure MUST NOT throw out of the snapshot handler —
+    // the legacy envelope is already intact and is the safe fallback.
+    // §17.2 advisory only.
+  }
+
   mergeEnrichmentDocumentedPartials(envelope, capturedResults);
 
   // Envelope is structurally a string-keyed object — cast widens it to
@@ -4402,6 +4446,84 @@ const getExecutiveDashboardSnapshot: ExecutiveToolHandler = async (
   // changing any field (§17.2 advisory-only shape preserved).
   return envelope as unknown as Record<string, unknown>;
 };
+
+/**
+ * Wave 103 PR2 — shared canonical-aggregator reroute helper used by
+ * `getExecutiveDashboardSnapshot` and `getCrossPlanInsights`.
+ *
+ * When the feature flag is OFF, or the caller has not narrowed the
+ * query to a specific agency, the helper is a no-op. Otherwise it
+ * calls `AgencyProjectsCanonicalAggregatorService.computeWithLegacyComparison`
+ * — which runs the canonical query AND emits a side-by-side log line
+ * comparing the canonical result against the legacy `count` / `budget`
+ * — and overrides `data.projectCount` / `data.totalBudget` /
+ * `data.byBook` on the envelope.
+ *
+ * The override is in-place (mutating `envelope.data`) because the
+ * envelope was assembled by the resilience layer and the response
+ * shape must remain byte-for-byte identical for the LLM contract. We
+ * are swapping VALUES, not field names.
+ *
+ * MUST be awaited by the caller; the inline `.catch(() => {})` at the
+ * call site keeps a flag-on aggregator failure from rejecting the
+ * outer handler promise (advisory-only per §17.2).
+ */
+async function applyCanonicalAggregatorReroute(args: {
+  deps: ExecutiveToolHandlerDeps;
+  envelope: unknown;
+  filters: UnifiedFilters | undefined;
+  legacyCount: number;
+  legacyBudget: number | undefined;
+  planId: string | undefined;
+  legacyKind: 'dashboard' | 'crossPlan';
+}): Promise<void> {
+  if (!isCanonicalAgencyAggregatorEnabled()) return;
+  const aggregator = args.deps.agencyProjectsCanonical;
+  if (!aggregator) return;
+
+  // Coerce string-shaped agencyIds (parseFilters output) back to numbers
+  // — the canonical aggregator's `IN (:...mainAgencyIds)` parameter
+  // accepts numbers from PostgreSQL's bigint coercion, and the
+  // `government_agencies.id` column is a serial integer.
+  const rawAgencyIds = args.filters?.agencyIds ?? [];
+  const agencyIds: number[] = [];
+  for (const v of rawAgencyIds) {
+    const n = Number(v);
+    if (Number.isFinite(n) && Number.isInteger(n) && n > 0) {
+      agencyIds.push(n);
+    }
+  }
+
+  // Non-agency questions stay on the legacy path. The canonical
+  // aggregator only understands "agency-scoped" queries — answering a
+  // generic "how many projects in plan X" without an agency filter is
+  // out of scope for PR1 / PR2.
+  if (agencyIds.length === 0) return;
+
+  const legacyEntry = {
+    count: Number.isFinite(args.legacyCount) ? args.legacyCount : 0,
+    budget:
+      typeof args.legacyBudget === 'number' && Number.isFinite(args.legacyBudget)
+        ? args.legacyBudget
+        : 0,
+  };
+
+  const canonical = await aggregator.computeWithLegacyComparison(
+    { agencyIds, planId: args.planId },
+    args.legacyKind === 'dashboard'
+      ? { dashboard: legacyEntry }
+      : { crossPlan: legacyEntry },
+  );
+
+  // In-place override of the value-bearing scalars + per-book rollup.
+  // Field names are unchanged — the LLM response template stays stable.
+  const env = args.envelope as { data: Record<string, unknown> };
+  env.data.projectCount = canonical.count;
+  if (env.data.totalBudget !== undefined || canonical.budgetTotal > 0) {
+    env.data.totalBudget = canonical.budgetTotal;
+  }
+  env.data.byBook = canonical.byBook;
+}
 
 /**
  * Cross-plan classification resolver for dashboard snapshot: surfaces
@@ -4593,6 +4715,35 @@ const getCrossPlanInsights: ExecutiveToolHandler = async (
     },
     { shape: 'crossPlanInsights' },
   );
+
+  // Wave 103 PR2 — canonical aggregator reroute (Q2's tool path).
+  //
+  // Cross-plan tool by definition has NO `planId` (the schema forbids
+  // it; we pass `planId: undefined` so the aggregator's "all books"
+  // default applies — matching this tool's semantic). When the flag
+  // is ON AND the caller narrowed to a specific agency, the canonical
+  // aggregator answers `count` / `budgetTotal` / `byBook`. The legacy
+  // `plans[]` per-plan rollup remains intact (it powers the LLM's
+  // per-book breakdown and is computed from `listUnifiedProjects`).
+  //
+  // Side-by-side telemetry on the legacy crossPlan count is logged
+  // inside `computeWithLegacyComparison`. §17.2 / §17.3 / §11 / §14 /
+  // §15 — see helper docstring above.
+  try {
+    await applyCanonicalAggregatorReroute({
+      deps,
+      envelope,
+      filters,
+      legacyCount: (envelope as unknown as { data: Record<string, unknown> })
+        .data.projectCount as number,
+      legacyBudget: (envelope as unknown as { data: Record<string, unknown> })
+        .data.totalBudget as number | undefined,
+      planId: undefined,
+      legacyKind: 'crossPlan',
+    });
+  } catch {
+    // §17.2 advisory only — fall back to the legacy envelope intact.
+  }
 
   mergeEnrichmentDocumentedPartials(envelope, capturedResults);
 

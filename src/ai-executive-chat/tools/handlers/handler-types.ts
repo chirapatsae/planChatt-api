@@ -9,6 +9,12 @@ import type {
   IUnifiedProjectAggregator,
 } from '../../aggregation/interfaces';
 import type { ProjectLineageService } from '../../aggregation/services/project-lineage.service';
+// Wave 103 PR2 — canonical agency-projects aggregator. Behind feature flag
+// `EXECUTIVE_AI_CANONICAL_AGENCY_AGGREGATOR` (default OFF). Optional in the
+// deps bag so existing unit tests / golden fixtures that build the bag by
+// hand do not need to stub it. Production wiring in `AiExecutiveChatService`
+// always provides the concrete service.
+import type { AgencyProjectsCanonicalAggregatorService } from '../../aggregation/services/agency-projects-canonical-aggregator.service';
 
 /**
  * Caller-identity snapshot resolved once per turn and passed into every
@@ -60,6 +66,12 @@ export interface ExecutiveToolHandlerDeps {
   // absent. Production wiring continues to provide the real service via
   // the ai-executive-chat module.
   projectLineage?: ProjectLineageService;
+  // Wave 103 PR2 — canonical agency-projects aggregator. Optional so the
+  // wide test surface continues to work without an explicit stub. The
+  // `getExecutiveDashboardSnapshot` and `getCrossPlanInsights` handlers
+  // guard `if (!deps.agencyProjectsCanonical)` and silently fall through
+  // to the legacy code path when absent. §17.2 advisory; §17.3 read-only.
+  agencyProjectsCanonical?: AgencyProjectsCanonicalAggregatorService;
 }
 
 /**

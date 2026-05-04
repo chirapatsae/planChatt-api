@@ -53,6 +53,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
 import { Budget } from 'src/budget/entities/budget.entity';
 import { AgencyEnrichmentService } from './services/agency-enrichment.service';
+import { AgencyProjectsCanonicalAggregatorService } from './services/agency-projects-canonical-aggregator.service';
 import { BookTimelineService } from './services/book-timeline.service';
 import { BudgetAggregatorService } from './services/budget-aggregator.service';
 import { ProjectLineageService } from './services/project-lineage.service';
@@ -153,6 +154,13 @@ import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.ent
     // "ไทม์ไลน์โครงการ X". §10 + §14.2 — walks the row's own plan chain
     // to find HEAD-of-lineage; §17.2 advisory; §17.3 read-only.
     ProjectLineageService,
+    // Wave 103 PR1 — single source of truth for agency-project counts /
+    // budget totals across Executive AI tools. Behind feature flag
+    // `EXECUTIVE_AI_CANONICAL_AGENCY_AGGREGATOR` (default OFF). PR2
+    // reroutes existing tool handlers; PR1 only registers the provider
+    // so it's resolvable in DI graph and unit tests. §17.2 advisory,
+    // §17.3 read-only, §11 / §14 / §15 lineage-aware.
+    AgencyProjectsCanonicalAggregatorService,
   ],
   // Re-export `TypeOrmModule` so concrete providers (BE-W54-02..05,
   // BE-W54-07) resolve the repositories through this module once
@@ -174,6 +182,10 @@ import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.ent
     // Wave 61 — Mode 3 lineage tools. Exposed by class for now (no DI
     // token); Tier C tool handlers inject the concrete class.
     ProjectLineageService,
+    // Wave 103 PR1 — exposed by class so PR2 tool handlers can inject
+    // the concrete service when the canonical-aggregator feature flag
+    // is on.
+    AgencyProjectsCanonicalAggregatorService,
   ],
 })
 export class AggregationModule {}
