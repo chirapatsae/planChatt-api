@@ -102,6 +102,31 @@ export class User {
   @Column({ name: 'email_verified_at', type: 'timestamptz', nullable: true })
   emailVerifiedAt: Date | null;
 
+  /**
+   * W106 (DB-PR1): Durable presence anchor. Updated by BE-PR1's debounced
+   * heartbeat path (≤1 write per 30s per user). The live presence state
+   * lives in Redis (`presence:user:<id>` with EXPIRE); this column is the
+   * fall-back used to render "ออฟไลน์ — ใช้งานล่าสุด N นาทีที่แล้ว"
+   * when the WS signal is unavailable (server restart, browser closed,
+   * WS blocked).
+   *
+   * Nullable by design: a user who has never logged in (or who has not
+   * logged in since the feature shipped) stays NULL. We deliberately do
+   * NOT default to CURRENT_TIMESTAMP — that would imply every existing
+   * user is currently online.
+   *
+   * §17.3 — this is metadata on the User entity, NOT a workflow audit
+   * column. It MUST NOT be confused with TrackingStatus (§12). It does
+   * not gate any workflow transition (§17.2 advisory framing applies by
+   * analogy: presence is non-authoritative).
+   *
+   * Index `idx_users_last_seen_at` (plain b-tree) supports future
+   * "recently seen" / stale-cleanup sweep queries from BE-PR1.
+   */
+  @Index('idx_users_last_seen_at')
+  @Column({ name: 'last_seen_at', type: 'timestamptz', nullable: true })
+  lastSeenAt: Date | null;
+
   @DeleteDateColumn({ nullable: true, name: 'delete_at' })
   @Exclude()
   deletedAt?: Date;

@@ -170,6 +170,21 @@ import { LineUserBinding } from './line/entities/line-user-binding.entity';
 // injection token, but the metadata MUST also be listed here or
 // TypeORM throws `EntityMetadataNotFoundError` at boot.
 import { LineBindingAdminAction } from './notifications/line/entities/line-binding-admin-action.entity';
+// Wave 106 BE-PR1 — user presence subsystem (REST + WS hardening + Redis
+// tracker + cron sweeper). PresenceModule owns its own ioredis client
+// (separate from Bull's connection pool) and exposes PresenceService for
+// the WebsocketGateway. §4.1 / §17.2 — presence is advisory metadata only.
+import { PresenceModule } from './presence/presence.module';
+// Wave 107 DB-PR1 — System Usage Statistics persistence. Same root
+// DataSource registration footgun as the AI / LINE entities above:
+// `forFeature` in `SystemUsageModule` provides the repo injection
+// tokens, but the metadata MUST also be listed in the root
+// `entities[]` or TypeORM throws `EntityMetadataNotFoundError` at
+// boot. CLAUDE.md §17.3 — neither entity has a FK into project /
+// plan / tracking / users tables.
+import { SystemUsageModule } from './system-usage/system-usage.module';
+import { SystemUsageDailyRollup } from './system-usage/entities/system-usage-daily-rollup.entity';
+import { StatsAccessLog } from './system-usage/entities/stats-access-log.entity';
 
 
 @Module({
@@ -269,6 +284,12 @@ import { LineBindingAdminAction } from './notifications/line/entities/line-bindi
         // `TypeOrmModule.forFeature([...])`; root registration here
         // unblocks the repo injection in `LineBindingsController`.
         LineBindingAdminAction,
+        // Wave 107 DB-PR1 — System Usage Statistics. Owned by
+        // `SystemUsageModule` via `forFeature`; root registration here
+        // is required so TypeORM resolves metadata at boot (no FK to
+        // project / plan / tracking / users tables — §17.3).
+        SystemUsageDailyRollup,
+        StatsAccessLog,
       ],
       synchronize: true,
       extra: {
@@ -316,6 +337,13 @@ import { LineBindingAdminAction } from './notifications/line/entities/line-bindi
     // exported stats services resolve cleanly.
     NotificationsAdminModule,
     UserNotificationsModule,
+    // Wave 106 BE-PR1 — must be imported BEFORE WebsocketModule because
+    // WebsocketModule's gateway constructor depends on PresenceService.
+    PresenceModule,
+    // Wave 107 DB-PR1 — entity-only module (no controllers / services
+    // until BE-PR1 / BE-PR2). Order is irrelevant; placed near
+    // PresenceModule for thematic locality with W106 telemetry work.
+    SystemUsageModule,
     WebsocketModule,
     EventsModule,
     AttachmentEventModule,
