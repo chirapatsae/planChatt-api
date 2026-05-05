@@ -49,4 +49,14 @@ export class UserNotificationsController {
     return this.userNotificationsService.markAsRead(id);
   }
 
-} 
+  /**
+   * Mark every unread notification for the caller as read. Returns
+   * `{ markedCount: number }`. Idempotent — repeat calls return 0 once
+   * the inbox is fully drained.
+   */
+  @Patch('mark-all-read')
+  markAllAsRead(@Request() req: Request & { user: JwtPayloadUser }) {
+    return this.userNotificationsService.markAllAsRead(req.user.userId);
+  }
+
+}

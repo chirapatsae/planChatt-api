@@ -111,6 +111,32 @@ export class UserNotificationsService {
     }
   }
 
+  /**
+   * Mark every unread `UserNotification` for the given user as read.
+   * Returns how many rows were affected (0 when there is nothing to flip).
+   *
+   * Owner-scoped via `user_id`; no privilege escalation. Idempotent —
+   * already-read rows are skipped by the WHERE clause.
+   */
+  async markAllAsRead(userId: string): Promise<{ markedCount: number }> {
+    try {
+      const result = await this.userNotificationRepository
+        .createQueryBuilder()
+        .update(UserNotification)
+        .set({
+          status: UserNotificationStatus.READ,
+          readAt: () => 'NOW()',
+        })
+        .where('user_id = :userId', { userId })
+        .andWhere('status = :unread', { unread: UserNotificationStatus.UNREAD })
+        .execute();
+      return { markedCount: result.affected ?? 0 };
+    } catch (error) {
+      handleException(this.logger, error);
+      return { markedCount: 0 };
+    }
+  }
+
   async createBulk(announcement: any, workHistories: any[]): Promise<UserNotification[]> {
     try {
       // Check existing notifications by announcement_id and user_id

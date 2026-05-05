@@ -336,6 +336,7 @@ import { StatsAccessLog } from './system-usage/entities/stats-access-log.entity'
     // both NotificationsEmailModule and NotificationsLineModule so the
     // exported stats services resolve cleanly.
     NotificationsAdminModule,
+    // W108 BE-PR1 — user notification inbox API. Imported AFTER
     UserNotificationsModule,
     // Wave 106 BE-PR1 — must be imported BEFORE WebsocketModule because
     // WebsocketModule's gateway constructor depends on PresenceService.
