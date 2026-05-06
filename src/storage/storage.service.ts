@@ -18,15 +18,28 @@ export class StorageService {
      * Saves a file locally and returns the relative path/URL to be served statically.
      * @param file The Multer file object
      * @param folder The subfolder name (e.g. 'profiles')
+     * @param overrideExt Optional sniffed extension (e.g. '.jpg') from a
+     *   magic-byte check. When provided, this is used instead of
+     *   `path.extname(file.originalname)`. Callers that perform a sniff
+     *   (e.g. UsersService.uploadProfileImage) MUST pass the sniffed
+     *   extension to close the rename-extension attack (BE-IMPL-01 P2-E).
      * @returns The relative URL path (e.g. '/uploads/profiles/some-uuid.jpg')
      */
-    async saveFile(file: Express.Multer.File, folder: string): Promise<string> {
+    async saveFile(
+        file: Express.Multer.File,
+        folder: string,
+        overrideExt?: string,
+    ): Promise<string> {
         try {
             const folderPath = path.join(this.baseUploadDir, folder);
             this.ensureDirectoryExists(folderPath);
 
-            // Extract original extension safely
-            const extension = path.extname(file.originalname).toLowerCase();
+            // Prefer caller-provided sniffed extension (BE-IMPL-01 P0-3 / P2-E);
+            // fall back to originalname's extension only when the caller has
+            // not sniffed.
+            const extension = overrideExt
+                ? overrideExt.toLowerCase()
+                : path.extname(file.originalname).toLowerCase();
             // Generate a unique filename: uuid + extension
             const filename = `${uuidv4()}${extension}`;
             const filePath = path.join(folderPath, filename);

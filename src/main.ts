@@ -44,9 +44,31 @@ async function bootstrap() {
     allowedHeaders: ['Content-Type', 'Authorization', 'Secret-Key'],
   });
   app.set('trust proxy', true);
-  // Serve static files from uploads directory
-  app.useStaticAssets(join(__dirname, '..', 'uploads'), {
+  // Serve static files from uploads directory.
+  //
+  // BE-IMPL-01 P2-A — UUID-based filenames change per upload, so URLs
+  // are version-safe and we can declare profile-image responses
+  // immutable. The header is scoped to the `profiles/` subfolder via
+  // `setHeaders`. Other subfolders (event attachments, etc.) get the
+  // Express default (no `Cache-Control`) so we do not over-cache
+  // content with mutable URLs.
+  // Use `process.cwd()` (= `backend/`) instead of `__dirname + '..'`
+  // because `nest start --watch` compiles to `dist/src/main.js` and
+  // `__dirname + '..'` would resolve to `dist/uploads` (empty) instead
+  // of the actual `backend/uploads` where files are stored. Mirrors the
+  // public assets pattern on the next call.
+  app.useStaticAssets(join(process.cwd(), 'uploads'), {
     prefix: '/uploads/',
+    setHeaders: (res, filePath) => {
+      // Normalize separator for cross-platform safety.
+      const normalized = filePath.replace(/\\/g, '/');
+      if (normalized.includes('/uploads/profiles/')) {
+        res.setHeader(
+          'Cache-Control',
+          'public, max-age=31536000, immutable',
+        );
+      }
+    },
   });
   // Serve public assets (LINE flex icons, brand logos) at root so URLs like
   // `${APP_URL}/line-icons/project-submitted-owner.png` resolve. Used by the

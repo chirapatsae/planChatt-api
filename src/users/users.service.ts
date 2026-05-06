@@ -2,6 +2,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -526,12 +527,37 @@ export class UsersService {
 
   /**
    * Permanently deletes a user by ID.
+   *
+   * BE-IMPL-01 P1-3 — PDPA hygiene. Profile-image bytes are personal
+   * data; hard-deleting the row without removing the file leaves the
+   * image accessible via UUID URL. Read the URL BEFORE the row
+   * disappears, then delete the file alongside the row. Storage
+   * failure is logged + swallowed; the DB delete is the canonical PDPA
+   * action and must still succeed. Soft-delete intentionally leaves
+   * the file in place because `restore()` would otherwise break.
    */
   async remove(id: string): Promise<{ message: string }> {
     try {
+      // Capture the orphan URL before the row is deleted.
+      const existing = await this.userRepository.findOne({
+        where: { id },
+        select: ['id', 'profileImageUrl'],
+      });
+      const orphanUrl = existing?.profileImageUrl ?? null;
+
       const result = await this.userRepository.delete(id);
       if (result.affected === 0) {
         throw new NotFoundException(`User with ID ${id} not found`);
+      }
+
+      if (orphanUrl) {
+        this.storageService
+          .deleteFileIfExist(orphanUrl)
+          .catch((err) =>
+            this.logger.warn(
+              `remove: orphan profile-image cleanup failed for ${orphanUrl}: ${err?.constructor?.name ?? 'UnknownError'}`,
+            ),
+          );
       }
       return { message: `User with ID ${id} has been permanently removed.` };
     } catch (error) {
@@ -557,28 +583,188 @@ export class UsersService {
   }
 
   /**
-   * Uploads and updates a user's profile image.
+   * BE-IMPL-01 P0-3 — Magic-byte sniff. Defends against a `.exe → .jpg`
+   * rename and against MIME drift (claimed `image/png` but bytes are
+   * `image/jpeg`). Throws UnprocessableEntityException with Thai message
+   * on mismatch (matches BE-01 endpoint contract — FE-01 mapper checks
+   * substrings `ไฟล์เสียหาย` and `ชนิดของไฟล์`).
+   *
+   * Returns the canonical MIME + canonical extension chosen from the
+   * SNIFFED bytes — callers MUST use these instead of `originalname`
+   * when computing the storage filename (closes BE-01 §B.6 P2-E
+   * filename-from-claim risk).
+   *
+   * Implementation note: `file-type@^19+` is ESM-only and breaks the
+   * project's CJS build (`No "exports" main defined`). Since this
+   * feature only accepts three image formats, an inline magic-byte
+   * check is simpler, dep-free, and doesn't fight the build pipeline:
+   *
+   *   JPEG: FF D8 FF
+   *   PNG : 89 50 4E 47 0D 0A 1A 0A
+   *   WebP: 52 49 46 46 .. .. .. .. 57 45 42 50  ("RIFF....WEBP")
    */
-  async uploadProfileImage(id: string, file: Express.Multer.File): Promise<User> {
+  private async sniffImage(
+    file: Express.Multer.File,
+  ): Promise<{
+    mime: 'image/jpeg' | 'image/png' | 'image/webp';
+    ext: '.jpg' | '.png' | '.webp';
+  }> {
+    const buf = file.buffer;
+    let sniffedMime: 'image/jpeg' | 'image/png' | 'image/webp' | null = null;
+
+    if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+      sniffedMime = 'image/jpeg';
+    } else if (
+      buf.length >= 8 &&
+      buf[0] === 0x89 &&
+      buf[1] === 0x50 &&
+      buf[2] === 0x4e &&
+      buf[3] === 0x47 &&
+      buf[4] === 0x0d &&
+      buf[5] === 0x0a &&
+      buf[6] === 0x1a &&
+      buf[7] === 0x0a
+    ) {
+      sniffedMime = 'image/png';
+    } else if (
+      buf.length >= 12 &&
+      buf[0] === 0x52 && // R
+      buf[1] === 0x49 && // I
+      buf[2] === 0x46 && // F
+      buf[3] === 0x46 && // F
+      buf[8] === 0x57 && // W
+      buf[9] === 0x45 && // E
+      buf[10] === 0x42 && // B
+      buf[11] === 0x50 // P
+    ) {
+      sniffedMime = 'image/webp';
+    }
+
+    if (!sniffedMime) {
+      throw new UnprocessableEntityException(
+        'ไฟล์เสียหายหรือไม่ใช่รูปภาพจริง',
+      );
+    }
+
+    // MIME-drift guard — reject when the client-claimed MIME contradicts
+    // the sniffed bytes. Some browsers send octet-stream for unknown
+    // types; tolerate that case to avoid false positives.
+    const claimed = file.mimetype?.toLowerCase() ?? '';
+    if (
+      claimed &&
+      claimed !== sniffedMime &&
+      claimed !== 'application/octet-stream'
+    ) {
+      throw new UnprocessableEntityException('ชนิดของไฟล์ไม่ตรงกับเนื้อหา');
+    }
+
+    const extByMime: Record<string, '.jpg' | '.png' | '.webp'> = {
+      'image/jpeg': '.jpg',
+      'image/png': '.png',
+      'image/webp': '.webp',
+    };
+    return {
+      mime: sniffedMime,
+      ext: extByMime[sniffedMime],
+    };
+  }
+
+  /**
+   * Uploads and updates a user's profile image.
+   *
+   * BE-IMPL-01 P0-3 + P1-1 — Order (crash-safe):
+   *   1. magic-byte sniff
+   *   2. write new file
+   *   3. save DB pointing at new file
+   *   4. delete old file (best-effort; failure logged but swallowed)
+   *
+   * If save-DB throws, the just-written new file is rolled back so we
+   * do not orphan it. If delete-old throws, the new image is already
+   * saved + DB consistent; the orphan is logged for a future cleanup
+   * cron.
+   */
+  async uploadProfileImage(
+    id: string,
+    file: Express.Multer.File,
+  ): Promise<User> {
     try {
       const user = await this.userRepository.findOne({ where: { id } });
       if (!user) {
         throw new NotFoundException(`User with ID ${id} not found`);
       }
 
-      // 1. Delete old image if it exists to save space
-      if (user.profileImageUrl) {
-        await this.storageService.deleteFileIfExist(user.profileImageUrl);
+      // 1. Magic-byte sniff (P0-3) — choose extension from sniffed bytes.
+      const sniffed = await this.sniffImage(file);
+
+      // 2. Write new file FIRST. If this fails the old image is untouched.
+      const oldUrl = user.profileImageUrl;
+      const imageUrl = await this.storageService.saveFile(
+        file,
+        'profiles',
+        sniffed.ext,
+      );
+
+      // 3. Save DB pointing at the new file. If save fails, schedule the
+      //    just-written file for cleanup so we don't orphan it on rollback.
+      try {
+        user.profileImageUrl = imageUrl;
+        const updatedUser = await this.userRepository.save(user);
+
+        // 4. Best-effort cleanup of old file. Failure is logged + swallowed
+        //    — DB is already consistent and user sees the new image.
+        if (oldUrl) {
+          this.storageService
+            .deleteFileIfExist(oldUrl)
+            .catch((err) =>
+              this.logger.warn(
+                `uploadProfileImage: orphan-old-file cleanup failed for ${oldUrl}: ${err?.constructor?.name ?? 'UnknownError'}`,
+              ),
+            );
+        }
+
+        // W89 — return all PII columns decrypted, not just citizenId.
+        return await this.decryptUserPii(updatedUser);
+      } catch (saveErr) {
+        // Roll back the just-written new file so we don't orphan it.
+        await this.storageService
+          .deleteFileIfExist(imageUrl)
+          .catch(() => undefined);
+        throw saveErr;
       }
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
 
-      // 2. Save new image using StorageService
-      const imageUrl = await this.storageService.saveFile(file, 'profiles');
-
-      // 3. Update database
-      user.profileImageUrl = imageUrl;
+  /**
+   * BE-IMPL-01 P1-2 — Removes the user's profile image (idempotent).
+   * If `profileImageUrl` is already null, no-ops and returns the user
+   * unchanged. Otherwise: clears the column FIRST, persists DB, then
+   * deletes the storage file (best-effort). DB consistency wins over
+   * storage cleanup — orphaned files are logged for a future cron.
+   */
+  async removeProfileImage(id: string): Promise<User> {
+    try {
+      const user = await this.userRepository.findOne({ where: { id } });
+      if (!user) {
+        throw new NotFoundException(`User with ID ${id} not found`);
+      }
+      if (!user.profileImageUrl) {
+        // Idempotent — already cleared, return decrypted user.
+        return await this.decryptUserPii(user);
+      }
+      const oldUrl = user.profileImageUrl;
+      // Cast through unknown because the entity declares
+      // `profileImageUrl?: string` (no `| null`); SQL stores NULL.
+      user.profileImageUrl = null as unknown as string;
       const updatedUser = await this.userRepository.save(user);
-
-      // W89 — return all PII columns decrypted, not just citizenId.
+      this.storageService
+        .deleteFileIfExist(oldUrl)
+        .catch((err) =>
+          this.logger.warn(
+            `removeProfileImage: orphan cleanup failed for ${oldUrl}: ${err?.constructor?.name ?? 'UnknownError'}`,
+          ),
+        );
       return await this.decryptUserPii(updatedUser);
     } catch (error) {
       handleException(this.logger, error);
