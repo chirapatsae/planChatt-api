@@ -118,11 +118,11 @@ function sortLikeHydration(rows: CapturedRow[]): CapturedRow[] {
 // White-box helpers — the four persist* methods are private on the
 // service; we reach through the instance exactly like the existing
 // `hydration-ordering.spec.ts` does.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 type PersistUserFn = (...args: any[]) => Promise<unknown>;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 type PersistToolFn = (...args: any[]) => Promise<unknown>;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 type PersistFinalFn = (...args: any[]) => Promise<unknown>;
 
 async function simulateFourRowTurn(
@@ -132,7 +132,9 @@ async function simulateFourRowTurn(
   turnBaseIndex: number,
 ): Promise<void> {
   // Row 0 — user
-  await (svc as unknown as { persistUserMessage: PersistUserFn }).persistUserMessage(
+  await (
+    svc as unknown as { persistUserMessage: PersistUserFn }
+  ).persistUserMessage(
     manager,
     conversationId,
     'wh-owner',
@@ -142,7 +144,9 @@ async function simulateFourRowTurn(
   );
   // Row 1 — tool round #1 (assistant-tool-call + tool-result are one
   // persisted row in the current helper design; see BE-W45-01).
-  await (svc as unknown as { persistToolRound: PersistToolFn }).persistToolRound(
+  await (
+    svc as unknown as { persistToolRound: PersistToolFn }
+  ).persistToolRound(
     manager,
     { conversationId, userMessageId: 'u', turnBaseIndex },
     1,
@@ -150,7 +154,9 @@ async function simulateFourRowTurn(
     { toolCalls: [], result: { ok: true } },
   );
   // Row 2 — tool round #2 (second hop).
-  await (svc as unknown as { persistToolRound: PersistToolFn }).persistToolRound(
+  await (
+    svc as unknown as { persistToolRound: PersistToolFn }
+  ).persistToolRound(
     manager,
     { conversationId, userMessageId: 'u', turnBaseIndex },
     2,
@@ -281,9 +287,11 @@ describe('BE-W50-01 / turn_index ordering', () => {
 
     await simulateFourRowTurn(svc, manager, CONV, 0);
 
-    const toDto = (svc as unknown as {
-      toMessageDto: (row: AiExecutiveMessage) => { isStale: boolean };
-    }).toMessageDto.bind(svc);
+    const toDto = (
+      svc as unknown as {
+        toMessageDto: (row: AiExecutiveMessage) => { isStale: boolean };
+      }
+    ).toMessageDto.bind(svc);
 
     rows.forEach((r) => {
       const dto = toDto(r as AiExecutiveMessage);

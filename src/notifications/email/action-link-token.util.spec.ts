@@ -20,7 +20,8 @@ const FIXED_PROJECT_ID = '00000000-0000-0000-0000-000000000001';
 const FIXED_EXPIRY = 1900000000;
 const FIXED_SECRET = 'fixed-test-secret';
 
-const farFuture = (): number => Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60;
+const farFuture = (): number =>
+  Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60;
 
 describe('action-link-token.util', () => {
   // -------------------------------------------------------------------------
@@ -79,7 +80,6 @@ describe('action-link-token.util', () => {
 
     it('rejects projectId that is not a string (typeof number)', () => {
       const result = verifyActionLinkToken({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         projectId: 123 as any,
         token: 'a'.repeat(64),
         expiry: farFuture(),
@@ -91,7 +91,7 @@ describe('action-link-token.util', () => {
     it('rejects token that is not a string', () => {
       const result = verifyActionLinkToken({
         projectId: FIXED_PROJECT_ID,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
         token: 12345 as any,
         expiry: farFuture(),
         secret: FIXED_SECRET,
@@ -284,7 +284,10 @@ describe('action-link-token.util', () => {
     it('uses NOTIFY_ACTION_LINK_SECRET when set', () => {
       process.env[ENV_KEY] = 'env-secret-value';
       const expiry = farFuture();
-      const token = signActionLinkToken({ projectId: FIXED_PROJECT_ID, expiry });
+      const token = signActionLinkToken({
+        projectId: FIXED_PROJECT_ID,
+        expiry,
+      });
       // Verifier with explicit matching secret arg should succeed.
       const ok = verifyActionLinkToken({
         projectId: FIXED_PROJECT_ID,
@@ -306,7 +309,10 @@ describe('action-link-token.util', () => {
     it('falls back to dev-insecure-secret when env is empty string', () => {
       process.env[ENV_KEY] = '';
       const expiry = farFuture();
-      const token = signActionLinkToken({ projectId: FIXED_PROJECT_ID, expiry });
+      const token = signActionLinkToken({
+        projectId: FIXED_PROJECT_ID,
+        expiry,
+      });
       const result = verifyActionLinkToken({
         projectId: FIXED_PROJECT_ID,
         token,
@@ -319,7 +325,10 @@ describe('action-link-token.util', () => {
     it('falls back to dev-insecure-secret when env is unset', () => {
       delete process.env[ENV_KEY];
       const expiry = farFuture();
-      const token = signActionLinkToken({ projectId: FIXED_PROJECT_ID, expiry });
+      const token = signActionLinkToken({
+        projectId: FIXED_PROJECT_ID,
+        expiry,
+      });
       const result = verifyActionLinkToken({
         projectId: FIXED_PROJECT_ID,
         token,
@@ -332,7 +341,10 @@ describe('action-link-token.util', () => {
     it('signer + verifier agree end-to-end using only env-resolved secret on both sides', () => {
       process.env[ENV_KEY] = 'shared-env-secret';
       const expiry = farFuture();
-      const token = signActionLinkToken({ projectId: FIXED_PROJECT_ID, expiry });
+      const token = signActionLinkToken({
+        projectId: FIXED_PROJECT_ID,
+        expiry,
+      });
       const result = verifyActionLinkToken({
         projectId: FIXED_PROJECT_ID,
         token,
@@ -350,11 +362,10 @@ describe('action-link-token.util', () => {
     it('does not throw for any pathological combination', () => {
       expect(() =>
         verifyActionLinkToken({
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           projectId: undefined as any,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
           token: null as any,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
           expiry: 'not-a-number' as any,
         }),
       ).not.toThrow();

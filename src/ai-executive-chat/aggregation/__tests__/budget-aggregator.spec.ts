@@ -17,7 +17,10 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-import { BudgetAggregatorService, BUDGET_AGGREGATOR_IN_CHUNK_SIZE } from '../services/budget-aggregator.service';
+import {
+  BudgetAggregatorService,
+  BUDGET_AGGREGATOR_IN_CHUNK_SIZE,
+} from '../services/budget-aggregator.service';
 import type { ProjectKey, UnifiedProject } from '../types';
 
 // ────────────────────────────────────────────────────────────────
@@ -269,9 +272,7 @@ describe('BE-W54-03 / BudgetAggregator', () => {
       const out = await svc(dataSource).totalsForUnifiedProjects(projects);
       expect(out.size).toBe(5001);
       // Exactly two chunk calls for the `project_group_id` FK.
-      const mainCalls = calls.filter(
-        (c) => c.fkColumn === 'project_group_id',
-      );
+      const mainCalls = calls.filter((c) => c.fkColumn === 'project_group_id');
       expect(mainCalls).toHaveLength(2);
       expect(mainCalls[0].ids).toHaveLength(5000);
       expect(mainCalls[1].ids).toHaveLength(1);
@@ -286,9 +287,7 @@ describe('BE-W54-03 / BudgetAggregator', () => {
         projects.push(makeProject('main', `id-${i}`));
       }
       await svc(dataSource).totalsForUnifiedProjects(projects);
-      const mainCalls = calls.filter(
-        (c) => c.fkColumn === 'project_group_id',
-      );
+      const mainCalls = calls.filter((c) => c.fkColumn === 'project_group_id');
       expect(mainCalls).toHaveLength(2);
       expect(mainCalls[0].ids).toHaveLength(5000);
       expect(mainCalls[1].ids).toHaveLength(5000);
@@ -300,9 +299,7 @@ describe('BE-W54-03 / BudgetAggregator', () => {
     it('explicit SUM=0 row is present in Map as 0', async () => {
       const { dataSource } = makeDataSource({
         rows: (c) =>
-          c.fkColumn === 'project_group_id'
-            ? [{ id: 'p1', sum: '0' }]
-            : [],
+          c.fkColumn === 'project_group_id' ? [{ id: 'p1', sum: '0' }] : [],
       });
       const out = await svc(dataSource).totalsForUnifiedProjects([
         makeProject('main', 'p1'),
@@ -314,9 +311,7 @@ describe('BE-W54-03 / BudgetAggregator', () => {
     it('project with no matching Budget row is ABSENT from Map (caller defaults to 0)', async () => {
       const { dataSource } = makeDataSource({
         rows: (c) =>
-          c.fkColumn === 'project_group_id'
-            ? [{ id: 'p1', sum: '50' }]
-            : [],
+          c.fkColumn === 'project_group_id' ? [{ id: 'p1', sum: '50' }] : [],
       });
       const out = await svc(dataSource).totalsForUnifiedProjects([
         makeProject('main', 'p1'),
@@ -373,9 +368,7 @@ describe('BE-W54-03 / BudgetAggregator', () => {
             : null,
       });
       await expect(
-        svc(dataSource).totalsForUnifiedProjects([
-          makeProject('main', 'p1'),
-        ]),
+        svc(dataSource).totalsForUnifiedProjects([makeProject('main', 'p1')]),
       ).rejects.toThrow(/simulated pg outage/);
     });
   });

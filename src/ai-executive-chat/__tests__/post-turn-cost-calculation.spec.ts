@@ -45,11 +45,7 @@ describe('AiExecutiveChatService — deductPostTurnUsage cost calculation (W68-F
     const captured: CapturedCall[] = [];
     const quotaService = {
       checkAndLogUsage: jest.fn(
-        async (
-          userId: string,
-          costUsd: number,
-          meta: CapturedCall['meta'],
-        ) => {
+        async (userId: string, costUsd: number, meta: CapturedCall['meta']) => {
           captured.push({ userId, costUsd, meta });
         },
       ),
@@ -214,12 +210,7 @@ describe('AiExecutiveChatService — deductPostTurnUsage cost calculation (W68-F
   it('zero token defensive — input=0, output=0 → cost=0', async () => {
     const { captured, deductPostTurnUsage } = makeHarness();
 
-    await deductPostTurnUsage(
-      'user-1',
-      { hops: 1, modelUsed: 'gpt-4o' },
-      0,
-      0,
-    );
+    await deductPostTurnUsage('user-1', { hops: 1, modelUsed: 'gpt-4o' }, 0, 0);
 
     expect(captured[0].costUsd).toBe(0);
   });
@@ -247,9 +238,9 @@ describe('AiExecutiveChatService source — PER_HOP_ESTIMATE_THB removed (W68-FI
     // Belt-and-braces guard against silent re-introduction of the bug.
     // If a future refactor restores the constant + the buggy formula,
     // this test fails immediately.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+
     const fs = require('fs');
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+
     const path = require('path');
     const src = fs.readFileSync(
       path.resolve(__dirname, '../ai-executive-chat.service.ts'),
@@ -267,9 +258,8 @@ describe('AiExecutiveChatService source — PER_HOP_ESTIMATE_THB removed (W68-FI
   });
 
   it('imports calculateAiCost from cost-calculator', () => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const fs = require('fs');
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+
     const path = require('path');
     const src = fs.readFileSync(
       path.resolve(__dirname, '../ai-executive-chat.service.ts'),

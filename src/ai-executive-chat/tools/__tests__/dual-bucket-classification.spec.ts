@@ -101,8 +101,7 @@ function makeDualDeps(opts: {
 }
 
 describe('W57-BE-AGG-04 / dual-bucket classification (no planId)', () => {
-  const handler =
-    EXECUTIVE_TOOL_HANDLERS.getProjectClassificationBreakdown;
+  const handler = EXECUTIVE_TOOL_HANDLERS.getProjectClassificationBreakdown;
 
   it('returns shape="dual-bucket" with both partitions when planId is omitted', async () => {
     const deps = makeDualDeps({
@@ -122,17 +121,12 @@ describe('W57-BE-AGG-04 / dual-bucket classification (no planId)', () => {
         { issueid: 'I2', issuename: 'Issue 2', projectcount: '2' },
       ],
     });
-    const out = (await handler({}, makeCtx(), deps)) as Record<
-      string,
-      unknown
-    >;
+    const out = await handler({}, makeCtx(), deps);
     expect(out.shape).toBe('dual-bucket');
     expect(out.planId).toBeUndefined();
     const partitions = out.partitions as Array<Record<string, unknown>>;
     expect(partitions).toHaveLength(2);
-    const strat = partitions.find(
-      (p) => p.reportFormat === 'STRATEGY_BASED',
-    );
+    const strat = partitions.find((p) => p.reportFormat === 'STRATEGY_BASED');
     const issue = partitions.find((p) => p.reportFormat === 'ISSUE_BASED');
     expect(strat).toBeDefined();
     expect(issue).toBeDefined();
@@ -142,22 +136,14 @@ describe('W57-BE-AGG-04 / dual-bucket classification (no planId)', () => {
 
   it('emits the dual-bucket-classification advisory', async () => {
     const deps = makeDualDeps({ strategyRows: [], issueRows: [] });
-    const out = (await handler({}, makeCtx(), deps)) as Record<
-      string,
-      unknown
-    >;
+    const out = await handler({}, makeCtx(), deps);
     expect(Array.isArray(out.advisories)).toBe(true);
-    expect(out.advisories as string[]).toContain(
-      'dual-bucket-classification',
-    );
+    expect(out.advisories as string[]).toContain('dual-bucket-classification');
   });
 
   it('returns empty partitions cleanly when no plans exist in either format', async () => {
     const deps = makeDualDeps({ strategyRows: [], issueRows: [] });
-    const out = (await handler({}, makeCtx(), deps)) as Record<
-      string,
-      unknown
-    >;
+    const out = await handler({}, makeCtx(), deps);
     const partitions = out.partitions as Array<Record<string, unknown>>;
     expect(partitions).toHaveLength(2);
     for (const p of partitions) {
@@ -181,11 +167,7 @@ describe('W57-BE-AGG-04 / dual-bucket classification (no planId)', () => {
       ],
       issueRows: [],
     });
-    const out = (await handler(
-      { planId: '   ' },
-      makeCtx(),
-      deps,
-    )) as Record<string, unknown>;
+    const out = await handler({ planId: '   ' }, makeCtx(), deps);
     expect(out.shape).toBe('dual-bucket');
   });
 });

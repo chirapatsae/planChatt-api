@@ -51,7 +51,10 @@ import type {
 // that exercise the new fields override these defaults explicitly.
 function mkProject(
   overrides: Partial<GroupedExecutiveStatusBreakdownProject> &
-    Pick<GroupedExecutiveStatusBreakdownProject, 'projectId' | 'projectKind' | 'name'>,
+    Pick<
+      GroupedExecutiveStatusBreakdownProject,
+      'projectId' | 'projectKind' | 'name'
+    >,
 ): GroupedExecutiveStatusBreakdownProject {
   return {
     pageNumber: null,
@@ -121,7 +124,9 @@ function makeDeps(drill: GroupedExecutiveStatusBreakdown = { books: [] }): {
     budget: {
       totalsForUnifiedProjects: jest.fn().mockResolvedValue(new Map()),
     } as never,
-    status: { latestStatusFor: jest.fn().mockResolvedValue(new Map()) } as never,
+    status: {
+      latestStatusFor: jest.fn().mockResolvedValue(new Map()),
+    } as never,
     geo: {
       annotate: jest.fn().mockResolvedValue({
         labels: new Map(),
@@ -195,7 +200,11 @@ describe('W67-FIX-B / status drill-down', () => {
                 groupLabel: 'รอตรวจสอบ',
                 count: 1,
                 projects: [
-                  mkProject({ projectId: 'pg1', projectKind: 'main', name: 'A' }),
+                  mkProject({
+                    projectId: 'pg1',
+                    projectKind: 'main',
+                    name: 'A',
+                  }),
                 ],
                 truncatedRemainder: 0,
               },
@@ -230,7 +239,11 @@ describe('W67-FIX-B / status drill-down', () => {
                 groupLabel: 'รอตรวจสอบ',
                 count: 1,
                 projects: [
-                  mkProject({ projectId: 'm1', projectKind: 'main', name: 'M-pend' }),
+                  mkProject({
+                    projectId: 'm1',
+                    projectKind: 'main',
+                    name: 'M-pend',
+                  }),
                 ],
                 truncatedRemainder: 0,
               },
@@ -239,10 +252,26 @@ describe('W67-FIX-B / status drill-down', () => {
                 groupLabel: 'รออนุมัติ',
                 count: 4,
                 projects: [
-                  mkProject({ projectId: 'm2', projectKind: 'main', name: 'M-pa-1' }),
-                  mkProject({ projectId: 'm3', projectKind: 'main', name: 'M-pa-2' }),
-                  mkProject({ projectId: 'm4', projectKind: 'main', name: 'M-pa-3' }),
-                  mkProject({ projectId: 'm5', projectKind: 'main', name: 'M-pa-4' }),
+                  mkProject({
+                    projectId: 'm2',
+                    projectKind: 'main',
+                    name: 'M-pa-1',
+                  }),
+                  mkProject({
+                    projectId: 'm3',
+                    projectKind: 'main',
+                    name: 'M-pa-2',
+                  }),
+                  mkProject({
+                    projectId: 'm4',
+                    projectKind: 'main',
+                    name: 'M-pa-3',
+                  }),
+                  mkProject({
+                    projectId: 'm5',
+                    projectKind: 'main',
+                    name: 'M-pa-4',
+                  }),
                 ],
                 truncatedRemainder: 0,
               },
@@ -264,8 +293,7 @@ describe('W67-FIX-B / status drill-down', () => {
           {
             bookKey: 'p1::revised::dpr1',
             bookKind: 'revised',
-            bookLabel:
-              'แผนพัฒนาท้องถิ่น พ.ศ. 2571-2575 / เล่มแก้ไขครั้งที่ 1',
+            bookLabel: 'แผนพัฒนาท้องถิ่น พ.ศ. 2571-2575 / เล่มแก้ไขครั้งที่ 1',
             planLabel: 'แผนพัฒนาท้องถิ่น พ.ศ. 2571-2575',
             roundLabel: 'เล่มแก้ไขครั้งที่ 1',
             statuses: [
@@ -274,7 +302,11 @@ describe('W67-FIX-B / status drill-down', () => {
                 groupLabel: 'อนุมัติ',
                 count: 1,
                 projects: [
-                  mkProject({ projectId: 'r1', projectKind: 'revised', name: 'R-app-1' }),
+                  mkProject({
+                    projectId: 'r1',
+                    projectKind: 'revised',
+                    name: 'R-app-1',
+                  }),
                 ],
                 truncatedRemainder: 0,
               },
@@ -394,7 +426,11 @@ describe('W67-FIX-B / status drill-down', () => {
                 groupLabel: 'รอตรวจสอบ',
                 count: 1,
                 projects: [
-                  mkProject({ projectId: 'm1', projectKind: 'main', name: 'A' }),
+                  mkProject({
+                    projectId: 'm1',
+                    projectKind: 'main',
+                    name: 'A',
+                  }),
                 ],
                 truncatedRemainder: 0,
               },
@@ -628,7 +664,9 @@ describe('W67-FIX-B / status drill-down', () => {
       )) as unknown as ExecutiveEnvelope<Record<string, unknown>>;
       const books = env.data.statusBreakdownByBook as typeof drill.books;
       const project = books[0].statuses[0].projects[0];
-      expect(project.bookLabel).toBe(`${books[0].planLabel} / ${books[0].roundLabel}`);
+      expect(project.bookLabel).toBe(
+        `${books[0].planLabel} / ${books[0].roundLabel}`,
+      );
       expect(project.pageNumber).toBe(7);
     });
   });

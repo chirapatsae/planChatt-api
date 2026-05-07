@@ -4,155 +4,274 @@
  * Threat model:
  *  - Non-whitelisted roles (`user`, `staff-lead` literal) authenticate
  *    and POST to `/v1/ai/executive-chat/messages`. The guard chain is
- *    `JwtAuthGuard → ExecutiveRoleGuard → AiQuotaGuard → AiCooldownGuard`.
- *    `ExecutiveRoleGuard` is the first line of defense.
+ *    `JwtAuthGuard → RolesGuard → WorkStatusApprovedGuard → AiQuotaGuard
+ *    → AiCooldownGuard`. Together `RolesGuard` + `WorkStatusApprovedGuard`
+ *    are the first two lines of defense.
  *  - A c-level / staff / admin with `workStatus != approved` (suspended,
  *    move, pending) tries the same endpoint.
  *  - A super-admin tries to claim exemption from quota / cooldown
  *    (explicitly forbidden by §17.11).
  *
- * Defense:
- *  - `ExecutiveRoleGuard` allows ONLY {`staff`, `admin`, `super-admin`,
- *    `c-level`} with `workStatus == 'approved'`; rejects everyone else
- *    with 403 EXECUTIVE_ROLE_REQUIRED. The canonical executive role in
- *    this codebase is `c-level` (see `update-work-history.dto.ts` —
- *    `CLEVEL = 'c-level'`). Staff are included because the FE sidebar
- *    menu registers the route for `['staff','admin','super-admin',
- *    'c-level']`; excluding them would 403 on a visible menu entry.
+ * Defense (post auth-roles-guard-unification BE-04):
+ *  - The bespoke `ExecutiveRoleGuard` was retired. Executive-scope
+ *    admission is now the canonical pair `@Roles(...EXEC_READ)` +
+ *    `RolesGuard` (token-claim role check) followed by
+ *    `WorkStatusApprovedGuard` (live `workStatus = approved` DB read).
+ *    `EXEC_READ = staff + admin + super-admin + c-level` (see
+ *    `src/auth/role-groups.ts`); rejects everyone else with
+ *    403 FORBIDDEN_ROLE. `WorkStatusApprovedGuard` rejects non-approved
+ *    workStatus with 403 WORK_STATUS_NOT_APPROVED.
  *  - `AiQuotaGuard` has NO role exemption — super-admin with exhausted
  *    quota still gets 429.
  *  - `AiCooldownGuard` has NO role exemption either.
  *
- * This spec tests `ExecutiveRoleGuard` directly against a mocked
- * WorkHistory repo (it's the landed code path). Quota/cooldown role-bypass
- * tests are structural/contract-based because the real guards require
- * a full DI-wired module (deferred to BE-W44-02 + BE-W44-03 integration).
+ * This spec tests `RolesGuard` + `WorkStatusApprovedGuard` directly
+ * against a mocked WorkHistory repo (the landed code path post-BE-04).
+ * Quota/cooldown role-bypass tests are structural/contract-based because
+ * the real guards require a full DI-wired module (deferred to BE-W44-02
+ * + BE-W44-03 integration).
+ *
+ * BE-06 note: this spec previously tested the bespoke `ExecutiveRoleGuard`
+ * directly. After BE-04 retired that guard, BE-06 rewrote the spec to
+ * exercise the canonical pair against the same matrix (every prior
+ * assertion has a counterpart below).
  */
 
-import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
-import { ExecutionContext } from '@nestjs/common';
+import {
+  ExecutionContext,
+  ForbiddenException,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { Test } from '@nestjs/testing';
 import * as fs from 'fs';
 import * as path from 'path';
-import { ExecutiveRoleGuard } from '../../guards/executive-role.guard';
+import { Role } from '../../../auth/roles.enum';
+import { ROLES_KEY } from '../../../auth/roles.decorator';
+import { RolesGuard } from '../../../auth/roles.guard';
+import { WorkStatusApprovedGuard } from '../../../auth/work-status-approved.guard';
+import { EXEC_READ } from '../../../auth/role-groups';
 
 type Repo = { findOne: jest.Mock };
 
-function mkCtx(user: { userId?: string } | undefined): ExecutionContext {
+function mkCtx(
+  user: { userId?: string; role?: string } | undefined,
+): ExecutionContext {
+  const handler = (): void => undefined;
+  class FakeController {}
   return {
+    getHandler: () => handler,
+    getClass: () => FakeController,
     switchToHttp: () => ({
       getRequest: () => ({ user }),
       getResponse: () => ({}),
+      getNext: () => ({}),
     }),
+    switchToRpc: () => ({}) as never,
+    switchToWs: () => ({}) as never,
+    getArgs: () => [] as never,
+    getArgByIndex: () => undefined as never,
+    getType: () => 'http' as never,
   } as unknown as ExecutionContext;
 }
 
-function mkWh(role: string, workStatus: string) {
+function mkWh(workStatus: string) {
   return {
     id: 'wh-1',
     isCurrent: true,
     workStatus: { name: workStatus },
-    role: { name: role },
   };
+}
+
+/**
+ * Run the canonical executive-scope guard chain (the post-BE-04 landed
+ * shape):
+ *   1. RolesGuard with `@Roles(...EXEC_READ)` metadata
+ *   2. WorkStatusApprovedGuard live DB read
+ *
+ * Both must pass for admission. Either rejection short-circuits with the
+ * appropriate error.
+ */
+async function runChain(
+  rolesGuard: RolesGuard,
+  workStatusGuard: WorkStatusApprovedGuard,
+  ctx: ExecutionContext,
+): Promise<true> {
+  const rolesOk = rolesGuard.canActivate(ctx);
+  if (rolesOk !== true) throw new Error('RolesGuard returned non-true');
+  const wsOk = await workStatusGuard.canActivate(ctx);
+  if (wsOk !== true)
+    throw new Error('WorkStatusApprovedGuard returned non-true');
+  return true;
 }
 
 describe('SEC-W44-01 / role-bypass (§17.11 integrity; role admission)', () => {
   let repo: Repo;
-  let guard: ExecutiveRoleGuard;
+  let rolesGuard: RolesGuard;
+  let workStatusGuard: WorkStatusApprovedGuard;
+  let reflector: Reflector;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     repo = { findOne: jest.fn() };
-    guard = new ExecutiveRoleGuard(repo as never);
+    const moduleRef = await Test.createTestingModule({
+      providers: [RolesGuard, Reflector],
+    }).compile();
+    rolesGuard = moduleRef.get(RolesGuard);
+    reflector = moduleRef.get(Reflector);
+    // Stub reflector to always return EXEC_READ (mirrors `@Roles(...EXEC_READ)`
+    // metadata applied to every executive-chat endpoint).
+    jest
+      .spyOn(reflector, 'getAllAndOverride')
+      .mockImplementation((key: unknown) => {
+        if (key === ROLES_KEY) return [...EXEC_READ] as never;
+        return undefined as never;
+      });
+    workStatusGuard = new WorkStatusApprovedGuard(repo as never);
   });
 
-  describe('ExecutiveRoleGuard', () => {
-    it('unauthenticated request (no req.user) → 401 UNAUTHENTICATED', async () => {
+  describe('Canonical RolesGuard + WorkStatusApprovedGuard chain', () => {
+    it('unauthenticated request (no req.user) → 401 UNAUTHENTICATED at WorkStatusApprovedGuard', async () => {
+      // RolesGuard rejects first because `req.user` is undefined → 403
+      // FORBIDDEN_ROLE. (The pre-BE-04 ExecutiveRoleGuard short-circuited
+      // with 401 UNAUTHENTICATED in the same scenario; the canonical
+      // pair throws 403 because RolesGuard runs first and treats
+      // missing user as a role mismatch. This is documented behavior —
+      // the JwtAuthGuard upstream is the one that issues 401 in
+      // production; the test bypasses that layer.)
+      expect(() => rolesGuard.canActivate(mkCtx(undefined))).toThrow(
+        ForbiddenException,
+      );
+      // WorkStatusApprovedGuard alone (skipping RolesGuard) issues 401:
       await expect(
-        guard.canActivate(mkCtx(undefined)),
+        workStatusGuard.canActivate(mkCtx(undefined)),
       ).rejects.toBeInstanceOf(UnauthorizedException);
     });
 
-    it('role = "user" → 403 EXECUTIVE_ROLE_REQUIRED', async () => {
-      repo.findOne.mockResolvedValueOnce(mkWh('user', 'approved'));
-      await expect(
-        guard.canActivate(mkCtx({ userId: 'u1' })),
-      ).rejects.toBeInstanceOf(ForbiddenException);
-      await expect(
-        guard.canActivate(mkCtx({ userId: 'u1' })),
-      ).rejects.toThrow('EXECUTIVE_ROLE_REQUIRED');
+    it('role = "user" → 403 FORBIDDEN_ROLE at RolesGuard', () => {
+      // RolesGuard rejects before workStatus is read.
+      expect(() =>
+        rolesGuard.canActivate(mkCtx({ userId: 'u1', role: 'user' })),
+      ).toThrow(ForbiddenException);
+      try {
+        rolesGuard.canActivate(mkCtx({ userId: 'u1', role: 'user' }));
+      } catch (e) {
+        expect((e as ForbiddenException).message).toBe('FORBIDDEN_ROLE');
+      }
     });
 
     it('role = "staff" + workStatus = "approved" → PASS (Wave 44 H1 fix)', async () => {
       // FE sidebar menu exposes the route to `staff`; BE must match.
-      repo.findOne.mockResolvedValue(mkWh('staff', 'approved'));
+      repo.findOne.mockResolvedValue(mkWh('approved'));
       await expect(
-        guard.canActivate(mkCtx({ userId: 'u1' })),
+        runChain(
+          rolesGuard,
+          workStatusGuard,
+          mkCtx({ userId: 'u1', role: Role.STAFF }),
+        ),
       ).resolves.toBe(true);
     });
 
-    it('role = "staff-lead" → 403 (literal "staff-lead" is NOT a canonical role)', async () => {
+    it('role = "staff-lead" → 403 FORBIDDEN_ROLE (literal "staff-lead" is NOT a canonical role)', () => {
       // `staff-lead` is a logical role aggregate in CLAUDE.md, not a
-      // DB role name. The guard checks actual DB role names. If a
-      // future row exists with literal `staff-lead`, it is rejected.
-      repo.findOne.mockResolvedValue(mkWh('staff-lead', 'approved'));
-      await expect(
-        guard.canActivate(mkCtx({ userId: 'u1' })),
-      ).rejects.toThrow('EXECUTIVE_ROLE_REQUIRED');
+      // DB role name. RolesGuard checks against the Role enum strings
+      // and rejects unknown values.
+      expect(() =>
+        rolesGuard.canActivate(mkCtx({ userId: 'u1', role: 'staff-lead' })),
+      ).toThrow('FORBIDDEN_ROLE');
     });
 
-    it('role = "c-level" + workStatus = "suspended" → 403', async () => {
-      repo.findOne.mockResolvedValue(mkWh('c-level', 'suspended'));
+    it('role = "c-level" + workStatus = "suspended" → 403 WORK_STATUS_NOT_APPROVED', async () => {
+      // RolesGuard passes (c-level is in EXEC_READ). WorkStatusApprovedGuard
+      // rejects on the live workStatus read.
+      repo.findOne.mockResolvedValue(mkWh('suspended'));
+      expect(
+        rolesGuard.canActivate(mkCtx({ userId: 'u1', role: Role.C_LEVEL })),
+      ).toBe(true);
       await expect(
-        guard.canActivate(mkCtx({ userId: 'u1' })),
-      ).rejects.toThrow('EXECUTIVE_ROLE_REQUIRED');
+        workStatusGuard.canActivate(
+          mkCtx({ userId: 'u1', role: Role.C_LEVEL }),
+        ),
+      ).rejects.toThrow('WORK_STATUS_NOT_APPROVED');
     });
 
-    it('role = "c-level" + workStatus = "pending" → 403', async () => {
-      repo.findOne.mockResolvedValue(mkWh('c-level', 'pending'));
+    it('role = "c-level" + workStatus = "pending" → 403 WORK_STATUS_NOT_APPROVED', async () => {
+      repo.findOne.mockResolvedValue(mkWh('pending'));
+      expect(
+        rolesGuard.canActivate(mkCtx({ userId: 'u1', role: Role.C_LEVEL })),
+      ).toBe(true);
       await expect(
-        guard.canActivate(mkCtx({ userId: 'u1' })),
-      ).rejects.toThrow('EXECUTIVE_ROLE_REQUIRED');
+        workStatusGuard.canActivate(
+          mkCtx({ userId: 'u1', role: Role.C_LEVEL }),
+        ),
+      ).rejects.toThrow('WORK_STATUS_NOT_APPROVED');
     });
 
     it('role = "c-level" + workStatus = "approved" → PASS', async () => {
-      repo.findOne.mockResolvedValue(mkWh('c-level', 'approved'));
+      repo.findOne.mockResolvedValue(mkWh('approved'));
       await expect(
-        guard.canActivate(mkCtx({ userId: 'u1' })),
+        runChain(
+          rolesGuard,
+          workStatusGuard,
+          mkCtx({ userId: 'u1', role: Role.C_LEVEL }),
+        ),
       ).resolves.toBe(true);
     });
 
-    it('legacy string "executive" → 403 (not a canonical role)', async () => {
-      repo.findOne.mockResolvedValue(mkWh('executive', 'approved'));
-      await expect(
-        guard.canActivate(mkCtx({ userId: 'u1' })),
-      ).rejects.toThrow('EXECUTIVE_ROLE_REQUIRED');
+    it('legacy string "executive" → 403 FORBIDDEN_ROLE (not a canonical role)', () => {
+      expect(() =>
+        rolesGuard.canActivate(mkCtx({ userId: 'u1', role: 'executive' })),
+      ).toThrow('FORBIDDEN_ROLE');
     });
 
     it('role = "admin" + workStatus = "approved" → PASS', async () => {
-      repo.findOne.mockResolvedValue(mkWh('admin', 'approved'));
+      repo.findOne.mockResolvedValue(mkWh('approved'));
       await expect(
-        guard.canActivate(mkCtx({ userId: 'u1' })),
+        runChain(
+          rolesGuard,
+          workStatusGuard,
+          mkCtx({ userId: 'u1', role: Role.ADMIN }),
+        ),
       ).resolves.toBe(true);
     });
 
     it('role = "super-admin" + workStatus = "approved" → PASS', async () => {
-      repo.findOne.mockResolvedValue(mkWh('super-admin', 'approved'));
+      repo.findOne.mockResolvedValue(mkWh('approved'));
       await expect(
-        guard.canActivate(mkCtx({ userId: 'u1' })),
+        runChain(
+          rolesGuard,
+          workStatusGuard,
+          mkCtx({ userId: 'u1', role: Role.SUPER_ADMIN }),
+        ),
       ).resolves.toBe(true);
     });
 
-    it('case-insensitive role match (DB row is "C-Level")', async () => {
-      repo.findOne.mockResolvedValue(mkWh('C-Level', 'approved'));
-      await expect(
-        guard.canActivate(mkCtx({ userId: 'u1' })),
-      ).resolves.toBe(true);
+    it('mixed-case role claim "C-Level" → 403 FORBIDDEN_ROLE (case-sensitive match)', () => {
+      // BEHAVIORAL DIFFERENCE vs the pre-BE-04 ExecutiveRoleGuard:
+      // the bespoke guard normalized via `.toLowerCase()` and would
+      // accept "C-Level". The canonical RolesGuard is case-sensitive
+      // (per BE-01 / SEC-01 #2 — tokens MUST be issued with lowercase
+      // hyphenated role values; case-normalization should happen at
+      // the JWT chokepoint, NOT inside the guard). A token claim of
+      // "C-Level" is treated as a mismatch and rejected. This is the
+      // documented contract per `src/auth/README.md`.
+      expect(() =>
+        rolesGuard.canActivate(mkCtx({ userId: 'u1', role: 'C-Level' })),
+      ).toThrow('FORBIDDEN_ROLE');
     });
 
-    it('no current WorkHistory → 403 EXECUTIVE_ROLE_REQUIRED', async () => {
+    it('no current WorkHistory → 403 WORK_STATUS_NOT_APPROVED', async () => {
+      // RolesGuard passes (role = c-level is in EXEC_READ).
+      // WorkStatusApprovedGuard finds no row → workStatusName === '' →
+      // rejects with WORK_STATUS_NOT_APPROVED.
       repo.findOne.mockResolvedValue(null);
+      expect(
+        rolesGuard.canActivate(mkCtx({ userId: 'u1', role: Role.C_LEVEL })),
+      ).toBe(true);
       await expect(
-        guard.canActivate(mkCtx({ userId: 'u1' })),
-      ).rejects.toThrow('EXECUTIVE_ROLE_REQUIRED');
+        workStatusGuard.canActivate(
+          mkCtx({ userId: 'u1', role: Role.C_LEVEL }),
+        ),
+      ).rejects.toThrow('WORK_STATUS_NOT_APPROVED');
     });
   });
 
@@ -172,10 +291,7 @@ describe('SEC-W44-01 / role-bypass (§17.11 integrity; role admission)', () => {
 
     it('AiCooldownGuard source code contains no role-branching exemption', () => {
       const src = fs.readFileSync(
-        path.resolve(
-          __dirname,
-          '../../../ai/guards/ai-cooldown.guard.ts',
-        ),
+        path.resolve(__dirname, '../../../ai/guards/ai-cooldown.guard.ts'),
         'utf8',
       );
       expect(src).not.toMatch(/role\.name.*===.*['"]super-admin['"]/);
@@ -193,7 +309,7 @@ describe('SEC-W44-01 / role-bypass (§17.11 integrity; role admission)', () => {
        *  429 regardless of role. */
     });
 
-    it('role=user hitting POST /messages → 403 via ExecutiveRoleGuard BEFORE reaching the service', () => {
+    it('role=user hitting POST /messages → 403 via RolesGuard BEFORE reaching the service', () => {
       /** Full supertest against the Nest app — confirms guard order. */
     });
   });

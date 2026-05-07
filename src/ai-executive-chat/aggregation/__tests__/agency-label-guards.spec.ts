@@ -30,17 +30,28 @@ import { PENDING_RESPONSIBLE_AGENCY_DISCLOSURE } from '../constants/revision-rou
 describe('Wave 58 W58-BE-AGG-02 / agency-label-guards', () => {
   describe('FORBIDDEN_AGENCY_LABEL_PATTERNS — regex blacklist', () => {
     it('rejects "หน่วยงานที่ 2" (the smoking-gun D6 pattern)', () => {
-      expect(FORBIDDEN_AGENCY_LABEL_PATTERNS.some((rx) => rx.test('หน่วยงานที่ 2'))).toBe(true);
+      expect(
+        FORBIDDEN_AGENCY_LABEL_PATTERNS.some((rx) => rx.test('หน่วยงานที่ 2')),
+      ).toBe(true);
     });
 
     it('rejects "หน่วยงานที่2" (no whitespace) and "หน่วยงานที่   42" (multi-space)', () => {
-      expect(FORBIDDEN_AGENCY_LABEL_PATTERNS.some((rx) => rx.test('หน่วยงานที่2'))).toBe(true);
-      expect(FORBIDDEN_AGENCY_LABEL_PATTERNS.some((rx) => rx.test('หน่วยงานที่   42'))).toBe(true);
+      expect(
+        FORBIDDEN_AGENCY_LABEL_PATTERNS.some((rx) => rx.test('หน่วยงานที่2')),
+      ).toBe(true);
+      expect(
+        FORBIDDEN_AGENCY_LABEL_PATTERNS.some((rx) =>
+          rx.test('หน่วยงานที่   42'),
+        ),
+      ).toBe(true);
     });
 
     it('rejects "agency#3", "agency 3", "AGENCY 7", "Agency # 12" (case-insensitive)', () => {
       for (const v of ['agency#3', 'agency 3', 'AGENCY 7', 'Agency # 12']) {
-        expect({ v, hit: FORBIDDEN_AGENCY_LABEL_PATTERNS.some((rx) => rx.test(v)) }).toEqual({
+        expect({
+          v,
+          hit: FORBIDDEN_AGENCY_LABEL_PATTERNS.some((rx) => rx.test(v)),
+        }).toEqual({
           v,
           hit: true,
         });
@@ -56,7 +67,10 @@ describe('Wave 58 W58-BE-AGG-02 / agency-label-guards', () => {
         'หน่วยงานสาธารณสุข', // contains "หน่วยงาน" but not the "หน่วยงานที่ N" pattern
       ];
       for (const v of ok) {
-        expect({ v, hit: FORBIDDEN_AGENCY_LABEL_PATTERNS.some((rx) => rx.test(v)) }).toEqual({
+        expect({
+          v,
+          hit: FORBIDDEN_AGENCY_LABEL_PATTERNS.some((rx) => rx.test(v)),
+        }).toEqual({
           v,
           hit: false,
         });
@@ -78,7 +92,9 @@ describe('Wave 58 W58-BE-AGG-02 / agency-label-guards', () => {
     });
 
     it('does NOT match the empty string', () => {
-      expect(FORBIDDEN_AGENCY_LABEL_PATTERNS.some((rx) => rx.test(''))).toBe(false);
+      expect(FORBIDDEN_AGENCY_LABEL_PATTERNS.some((rx) => rx.test(''))).toBe(
+        false,
+      );
     });
   });
 

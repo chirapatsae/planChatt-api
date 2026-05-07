@@ -365,7 +365,13 @@ describe('Wave 103 PR4 — count-consistency golden fixtures', () => {
     // Aggregator does not surface classification fields — confirms
     // format-agnostic shape (no `indicator`, no `developmentIssueId`).
     expect(Object.keys(out.byBook[0])).toEqual(
-      expect.arrayContaining(['bookId', 'bookName', 'isLatest', 'count', 'budget']),
+      expect.arrayContaining([
+        'bookId',
+        'bookName',
+        'isLatest',
+        'count',
+        'budget',
+      ]),
     );
   });
 

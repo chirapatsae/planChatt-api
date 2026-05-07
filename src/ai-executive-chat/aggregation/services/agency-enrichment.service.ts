@@ -66,13 +66,9 @@ export const UNRESOLVED_AGENCY_LABEL = 'ไม่ระบุ' as const;
 
 @Injectable()
 export class AgencyEnrichmentService implements IAgencyEnrichment {
-  constructor(
-    @InjectDataSource() private readonly dataSource: DataSource,
-  ) {}
+  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
-  async annotate(
-    projects: UnifiedProject[],
-  ): Promise<AgencyEnrichmentResult> {
+  async annotate(projects: UnifiedProject[]): Promise<AgencyEnrichmentResult> {
     const labels = new Map<string, AgencyLabel>();
     const missingDimensions: MissingDimension[] = [];
     const advisories: string[] = [];

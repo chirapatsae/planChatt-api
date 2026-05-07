@@ -4,10 +4,16 @@ import { AiExecutiveConversation } from './entities/ai-executive-conversation.en
 import { AiExecutiveMessage } from './entities/ai-executive-message.entity';
 // Wave 44 BE-W44-01 — controller skeleton + executive-role guard.
 import { AiExecutiveChatController } from './ai-executive-chat.controller';
-import { ExecutiveRoleGuard } from './guards/executive-role.guard';
-// Wave 44 BE-W44-01 — WorkHistory repository is required by the role
-// guard. Registered here with `forFeature` so the guard can inject the
-// repository without depending on any owning module's provider export.
+// auth-roles-guard-unification BE-04 — bespoke `ExecutiveRoleGuard`
+// retired. The controller now composes the canonical
+// `RolesGuard` + `WorkStatusApprovedGuard` pair and `@Roles(...EXEC_READ)`
+// metadata for executive-scope admission.
+import { RolesGuard } from 'src/auth/roles.guard';
+import { WorkStatusApprovedGuard } from 'src/auth/work-status-approved.guard';
+// Wave 44 BE-W44-01 — WorkHistory repository is required by the
+// `WorkStatusApprovedGuard` live-read of §2 workStatus. Registered here
+// with `forFeature` so the guard can inject the repository without
+// depending on any owning module's provider export.
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 // Wave 44 — quota guard lives in AiUsageQuotasModule. Importing the
 // module gives us access to `AiQuotaGuard` via its `exports[]`.
@@ -52,7 +58,9 @@ import { AggregationModule } from './aggregation/aggregation.module';
  *
  * BE-W44-01 extends DB-W44-01's entity-only skeleton with:
  *   - the controller skeleton (501 stubs where BE-W44-02 owns logic)
- *   - the `ExecutiveRoleGuard` admission check
+ *   - the canonical `RolesGuard` + `WorkStatusApprovedGuard` admission
+ *     pair (auth-roles-guard-unification BE-04 — replaces the prior
+ *     bespoke `ExecutiveRoleGuard`)
  *   - imports for the quota + cooldown guards used by the guard chain
  *
  * BE-W44-02 will add:
@@ -70,9 +78,10 @@ import { AggregationModule } from './aggregation/aggregation.module';
     TypeOrmModule.forFeature([
       AiExecutiveConversation,
       AiExecutiveMessage,
-      // ExecutiveRoleGuard loads the caller's current WorkHistory. The
-      // entity is also registered in the Work-History owning module;
-      // re-registration for injection is safe and additive.
+      // `WorkStatusApprovedGuard` loads the caller's current WorkHistory
+      // for the §2 live-read. The entity is also registered in the
+      // Work-History owning module; re-registration for injection is
+      // safe and additive.
       WorkHistory,
       // PRIV-W44-01 — admin-delete audit row.
       AiUsageLog,
@@ -88,7 +97,12 @@ import { AggregationModule } from './aggregation/aggregation.module';
   ],
   controllers: [AiExecutiveChatController],
   providers: [
-    ExecutiveRoleGuard,
+    // auth-roles-guard-unification BE-04 — canonical role + workStatus
+    // guards. `RolesGuard` is stateless (depends only on `Reflector`).
+    // `WorkStatusApprovedGuard` injects `Repository<WorkHistory>` from
+    // the `forFeature` registration above.
+    RolesGuard,
+    WorkStatusApprovedGuard,
     // Local cooldown wiring — mirrors AiModule's factory-based store.
     {
       provide: AI_COOLDOWN_STORE,

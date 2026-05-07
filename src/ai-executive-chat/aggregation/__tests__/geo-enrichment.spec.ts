@@ -89,7 +89,7 @@ function makeDataSource(opts: {
       // RevisedProjectGroup, or SupplementProjectGroup.
       const name =
         typeof target === 'function'
-          ? (target as { name?: string }).name ?? ''
+          ? ((target as { name?: string }).name ?? '')
           : '';
       const alias: 'pg' | 'rpg' | 'spg' =
         name === 'RevisedProjectGroup'
@@ -192,10 +192,7 @@ describe('BE-W54-05 / W55-BE-04 / GeoEnrichment', () => {
       const { dataSource, calls } = makeDataSource({
         rows: () => [],
       });
-      await svc(dataSource).annotate([
-        mk('main', 'p1'),
-        mk('revised', 'r1'),
-      ]);
+      await svc(dataSource).annotate([mk('main', 'p1'), mk('revised', 'r1')]);
       const aliases = calls.map((c) => c.alias).sort();
       expect(aliases).toEqual(['pg', 'rpg']);
     });
@@ -298,7 +295,11 @@ describe('BE-W54-05 / W55-BE-04 / GeoEnrichment', () => {
         rows: (c) =>
           c.alias === 'spg'
             ? [
-                { spgid: 's1', amphoeid: '3001', amphoename: 'เมืองนครราชสีมา' },
+                {
+                  spgid: 's1',
+                  amphoeid: '3001',
+                  amphoename: 'เมืองนครราชสีมา',
+                },
                 { spgid: 's2', amphoeid: '3002', amphoename: 'ครบุรี' },
               ]
             : [],
@@ -438,12 +439,7 @@ describe('BE-W54-05 / W55-BE-04 / GeoEnrichment', () => {
 
     it('source file declares SUPPLEMENT_GEO_ADVISORY as `export const`', () => {
       const src = readFileSync(
-        join(
-          __dirname,
-          '..',
-          'services',
-          'geo-enrichment.service.ts',
-        ),
+        join(__dirname, '..', 'services', 'geo-enrichment.service.ts'),
         'utf8',
       );
       expect(src).toMatch(/export\s+const\s+SUPPLEMENT_GEO_ADVISORY\s*=/);

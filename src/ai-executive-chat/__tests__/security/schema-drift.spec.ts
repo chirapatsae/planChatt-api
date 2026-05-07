@@ -30,9 +30,10 @@ import type { ToolJsonSchema } from '../../tools/executive-tool.types';
 describe('SEC-W44-01 / schema-drift (§17.9)', () => {
   it('every tool paramsSchema has additionalProperties:false (strict-mode Ajv-ready)', () => {
     for (const [name, spec] of Object.entries(EXECUTIVE_TOOL_REGISTRY)) {
-      expect({ name, addProps: spec.paramsSchema.additionalProperties }).toEqual(
-        { name, addProps: false },
-      );
+      expect({
+        name,
+        addProps: spec.paramsSchema.additionalProperties,
+      }).toEqual({ name, addProps: false });
     }
   });
 

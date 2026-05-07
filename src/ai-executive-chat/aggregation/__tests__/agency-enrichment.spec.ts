@@ -78,14 +78,14 @@ function makeDataSource(opts: {
     getRepository: (target: unknown) => {
       const name =
         typeof target === 'function'
-          ? (target as { name?: string }).name ?? ''
+          ? ((target as { name?: string }).name ?? '')
           : '';
       const alias: 'pg' | 'rpg' | 'spg' =
         name === 'RevisedProjectGroup'
           ? 'rpg'
           : name === 'SupplementProjectGroup'
-          ? 'spg'
-          : 'pg';
+            ? 'spg'
+            : 'pg';
       return { createQueryBuilder: (_a: string) => qbFactory(alias) };
     },
   };
@@ -260,12 +260,7 @@ describe('BE-W54-05 / AgencyEnrichment', () => {
 
     it('service join predicate excludes soft-deleted agencies', () => {
       const src = readFileSync(
-        join(
-          __dirname,
-          '..',
-          'services',
-          'agency-enrichment.service.ts',
-        ),
+        join(__dirname, '..', 'services', 'agency-enrichment.service.ts'),
         'utf8',
       );
       expect(src).toMatch(/ga\.deleted_at IS NULL/);
@@ -276,12 +271,7 @@ describe('BE-W54-05 / AgencyEnrichment', () => {
   describe('§17 PII discipline + label integrity', () => {
     it('never formats the numeric id as an `agency#<id>` label at runtime', () => {
       const src = readFileSync(
-        join(
-          __dirname,
-          '..',
-          'services',
-          'agency-enrichment.service.ts',
-        ),
+        join(__dirname, '..', 'services', 'agency-enrichment.service.ts'),
         'utf8',
       );
       // Strip comments — block doc-comments intentionally reference the
@@ -316,12 +306,7 @@ describe('BE-W54-05 / AgencyEnrichment', () => {
 
     it('does not project any person-level PII fields at runtime', () => {
       const src = readFileSync(
-        join(
-          __dirname,
-          '..',
-          'services',
-          'agency-enrichment.service.ts',
-        ),
+        join(__dirname, '..', 'services', 'agency-enrichment.service.ts'),
         'utf8',
       );
       // Strip comments — the file's doc comment lists the banned PII
@@ -345,12 +330,7 @@ describe('BE-W54-05 / AgencyEnrichment', () => {
 
     it('source file declares UNRESOLVED_AGENCY_LABEL as `export const`', () => {
       const src = readFileSync(
-        join(
-          __dirname,
-          '..',
-          'services',
-          'agency-enrichment.service.ts',
-        ),
+        join(__dirname, '..', 'services', 'agency-enrichment.service.ts'),
         'utf8',
       );
       expect(src).toMatch(/export\s+const\s+UNRESOLVED_AGENCY_LABEL\s*=/);

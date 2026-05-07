@@ -167,13 +167,10 @@ function makeRedactingPiiRedactor() {
       return '[REDACTED_PHONE]';
     });
     // Email.
-    out = out.replace(
-      /\b[\w.+-]+@[\w-]+\.[\w.-]+\b/g,
-      () => {
-        email += 1;
-        return '[REDACTED_EMAIL]';
-      },
-    );
+    out = out.replace(/\b[\w.+-]+@[\w-]+\.[\w.-]+\b/g, () => {
+      email += 1;
+      return '[REDACTED_EMAIL]';
+    });
     calls.push({ input, output: out, endpoint: ctx.endpoint });
     return {
       output: out,
@@ -425,13 +422,7 @@ describe('SEC-W51-01 / auto-title hardening (§17.9 + §17.11)', () => {
 
     const svc = makeService(repo, redactor, llm, quota);
     await expect(
-      callGenerate(
-        svc,
-        'conv-sec-01',
-        'user-xyz',
-        'สวัสดีครับ',
-        sink.response,
-      ),
+      callGenerate(svc, 'conv-sec-01', 'user-xyz', 'สวัสดีครับ', sink.response),
     ).resolves.toBeUndefined();
 
     expect(getUpdateCount()).toBe(0);
@@ -490,13 +481,7 @@ describe('SEC-W51-01 / auto-title hardening (§17.9 + §17.11)', () => {
     const sink = makeFakeResponse();
 
     const svc = makeService(repo, redactor, llm, quota);
-    await callGenerate(
-      svc,
-      'conv-sec-01',
-      'user-xyz',
-      'ขอสรุป',
-      sink.response,
-    );
+    await callGenerate(svc, 'conv-sec-01', 'user-xyz', 'ขอสรุป', sink.response);
 
     expect(getUpdateCount()).toBe(0);
     expect(rows['conv-sec-01'].titleSource).toBe('default-placeholder');

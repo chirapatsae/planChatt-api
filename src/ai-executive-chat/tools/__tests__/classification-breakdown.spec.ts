@@ -142,8 +142,7 @@ function assertNoPii(envelope: unknown): void {
 
 describe('BE-W53-04 / getProjectClassificationBreakdown (§17.7 + §16.5)', () => {
   describe('registry contract', () => {
-    const spec =
-      EXECUTIVE_TOOL_REGISTRY.getProjectClassificationBreakdown;
+    const spec = EXECUTIVE_TOOL_REGISTRY.getProjectClassificationBreakdown;
 
     it('is registered', () => {
       expect(spec).toBeDefined();
@@ -185,8 +184,7 @@ describe('BE-W53-04 / getProjectClassificationBreakdown (§17.7 + §16.5)', () =
   });
 
   describe('handler branching', () => {
-    const handler =
-      EXECUTIVE_TOOL_HANDLERS.getProjectClassificationBreakdown;
+    const handler = EXECUTIVE_TOOL_HANDLERS.getProjectClassificationBreakdown;
 
     it('role guard: user role throws EXECUTIVE_ROLE_REQUIRED', async () => {
       const deps = makeDeps({

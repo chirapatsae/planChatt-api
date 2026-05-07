@@ -1,7 +1,6 @@
 import {
   BadRequestException,
   Controller,
-  ForbiddenException,
   Get,
   HttpCode,
   HttpException,
@@ -14,11 +13,13 @@ import { Request } from 'express';
 
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
+import { Roles } from 'src/auth/roles.decorator';
+import { RolesGuard } from 'src/auth/roles.guard';
+import { EXEC_READ } from 'src/auth/role-groups';
 
 import { EmailStatsService } from '../email/email-stats.service';
 import { LineStatsService } from '../line/line-stats.service';
 import { QuotaQueryDto } from './dto/quota-query.dto';
-import { EXEC_READ_ROLES } from './roles';
 
 /**
  * Wave 97 — Combined email + LINE quota endpoint.
@@ -99,21 +100,30 @@ export class NotificationQuotaController {
     private readonly lineStats: LineStatsService,
   ) {}
 
-  @UseGuards(JwtAuthGuard)
+  /**
+   * BE-03 (auth-roles-guard-unification Phase 3) — canonical
+   * `@UseGuards(JwtAuthGuard, RolesGuard)` + `@Roles(...EXEC_READ)`
+   * replaces the pre-BE-03 inline `assertExecRead` helper. The
+   * exec-read allow-list (staff / admin / super-admin / c-level) is
+   * preserved byte-for-byte (SEC-01 H3 expansion). §17.11 — no role
+   * exemption.
+   */
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...EXEC_READ)
   @Get('quota')
   @HttpCode(HttpStatus.OK)
   async quota(
     @Req() req: Request & { user: JwtPayloadUser },
     @Query() query: QuotaQueryDto,
   ): Promise<QuotaResponse> {
-    this.assertExecRead(req.user);
     this.assertCooldown(req.user.userId, 'quota');
 
     const channel = query.channel ?? 'both';
 
     // Validate range: 90-day cap (only when both endpoints are present).
     if (query.from && query.to) {
-      const span = new Date(query.to).getTime() - new Date(query.from).getTime();
+      const span =
+        new Date(query.to).getTime() - new Date(query.from).getTime();
       if (Number.isNaN(span) || span < 0) {
         throw new BadRequestException('from / to ไม่ถูกต้อง');
       }
@@ -218,7 +228,10 @@ export class NotificationQuotaController {
     const { quotaTotal, sentCount } = args;
     const remaining = Math.max(0, quotaTotal - sentCount);
     const rawPct = quotaTotal > 0 ? (sentCount / quotaTotal) * 100 : 0;
-    const percentUsed = Math.min(100, Math.max(0, Math.round(rawPct * 100) / 100));
+    const percentUsed = Math.min(
+      100,
+      Math.max(0, Math.round(rawPct * 100) / 100),
+    );
 
     let bandStatus: 'ok' | 'warn' | 'critical';
     if (percentUsed >= CRITICAL_THRESHOLD) bandStatus = 'critical';
@@ -292,16 +305,8 @@ export class NotificationQuotaController {
   }
 
   // ---------------------------------------------------------------------------
-  // Guards
+  // Helpers
   // ---------------------------------------------------------------------------
-
-  private assertExecRead(user: JwtPayloadUser): void {
-    if (!user || !EXEC_READ_ROLES.has(user.role)) {
-      throw new ForbiddenException(
-        'เฉพาะ staff / admin / super-admin / c-level เท่านั้นที่สามารถดูข้อมูลโควต้าได้',
-      );
-    }
-  }
 
   private assertCooldown(userId: string, endpoint: string): void {
     const key = `${userId}:${endpoint}`;

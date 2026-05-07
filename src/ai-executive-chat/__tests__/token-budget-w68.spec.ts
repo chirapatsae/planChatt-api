@@ -48,9 +48,13 @@ describe('W68-FIX-02 token-budget regression', () => {
       // Match the literal declaration line. A future PR that bumps
       // this back to `8 * 1024` would silently re-inflate hop-3 token
       // usage by ~3-4k tokens and re-trigger the OpenAI 429.
-      expect(SOURCE).toMatch(/const\s+TOOL_RESULT_MAX_BYTES\s*=\s*4\s*\*\s*1024\s*;/);
+      expect(SOURCE).toMatch(
+        /const\s+TOOL_RESULT_MAX_BYTES\s*=\s*4\s*\*\s*1024\s*;/,
+      );
       // Belt-and-braces: the old 8 KB literal must be gone.
-      expect(SOURCE).not.toMatch(/const\s+TOOL_RESULT_MAX_BYTES\s*=\s*8\s*\*\s*1024\s*;/);
+      expect(SOURCE).not.toMatch(
+        /const\s+TOOL_RESULT_MAX_BYTES\s*=\s*8\s*\*\s*1024\s*;/,
+      );
     });
 
     it('CONTEXT_MESSAGE_CAP is pinned at 8', () => {

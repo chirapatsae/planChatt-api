@@ -55,8 +55,7 @@ export function classifyOriginFromWorkHistory(
   wh: OriginWorkHistoryShape | null | undefined,
 ): OriginType {
   if (!wh) return 'lao-coordinated';
-  const amphoeId =
-    wh.amphoe?.id == null ? '' : String(wh.amphoe.id);
+  const amphoeId = wh.amphoe?.id == null ? '' : String(wh.amphoe.id);
   const laoId =
     wh.localAdministrativeOrganization?.id == null
       ? ''

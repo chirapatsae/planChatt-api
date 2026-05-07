@@ -52,7 +52,7 @@ function makeDataSource(rowsByRepo: Record<string, RawRow[]> = {}) {
     getRepository: (target: unknown) => {
       const n =
         typeof target === 'function'
-          ? (target as { name?: string }).name ?? 'Unknown'
+          ? ((target as { name?: string }).name ?? 'Unknown')
           : 'Unknown';
       return { createQueryBuilder: () => qbFactory(n) };
     },
@@ -120,7 +120,8 @@ describe('W57-BE-AGG-03 / project-own attribution', () => {
     // In-memory bucket the same way an aggregator would.
     const buckets = new Map<string, number>();
     for (const p of out) {
-      const key = p.amphoeId == null ? '__province_level__' : String(p.amphoeId);
+      const key =
+        p.amphoeId == null ? '__province_level__' : String(p.amphoeId);
       buckets.set(key, (buckets.get(key) ?? 0) + 1);
     }
     expect(buckets.get('3007')).toBe(1);

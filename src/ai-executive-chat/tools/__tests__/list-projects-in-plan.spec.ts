@@ -240,7 +240,11 @@ describe('BE-W48-03 / listProjectsInPlan', () => {
           budget: null,
         },
       ]);
-      const out = await handler({ planId: UUID_PLAN, groupBy: "flat" }, makeCtx(), deps);
+      const out = await handler(
+        { planId: UUID_PLAN, groupBy: 'flat' },
+        makeCtx(),
+        deps,
+      );
 
       expect(out.planId).toBe(UUID_PLAN);
       expect(Array.isArray(out.items)).toBe(true);
@@ -291,7 +295,11 @@ describe('BE-W48-03 / listProjectsInPlan', () => {
           budget: '500',
         },
       ]);
-      const out = await handler({ planId: UUID_PLAN, groupBy: "flat" }, makeCtx(), deps);
+      const out = await handler(
+        { planId: UUID_PLAN, groupBy: 'flat' },
+        makeCtx(),
+        deps,
+      );
       const serialized = JSON.stringify(out);
       for (const forbidden of [
         'createdBy',
@@ -305,7 +313,11 @@ describe('BE-W48-03 / listProjectsInPlan', () => {
 
     it('empty result returns items: [] with planId and asOf', async () => {
       const deps = makeDeps([]);
-      const out = await handler({ planId: UUID_PLAN, groupBy: "flat" }, makeCtx(), deps);
+      const out = await handler(
+        { planId: UUID_PLAN, groupBy: 'flat' },
+        makeCtx(),
+        deps,
+      );
       expect(out.items).toEqual([]);
       expect(out.planId).toBe(UUID_PLAN);
       expect(typeof out.asOf).toBe('string');
@@ -314,11 +326,7 @@ describe('BE-W48-03 / listProjectsInPlan', () => {
     it('re-asserts role via assertExecutiveRole (§17.11)', async () => {
       const deps = makeDeps([]);
       await expect(
-        handler(
-          { planId: UUID_PLAN },
-          makeCtx({ roleName: 'user' }),
-          deps,
-        ),
+        handler({ planId: UUID_PLAN }, makeCtx({ roleName: 'user' }), deps),
       ).rejects.toThrow(/EXECUTIVE_ROLE_REQUIRED/);
     });
 
@@ -344,7 +352,11 @@ describe('BE-W48-03 / listProjectsInPlan', () => {
           budget: '1000',
         },
       ]);
-      const out = await handler({ planId: UUID_PLAN, groupBy: "flat" }, makeCtx(), deps);
+      const out = await handler(
+        { planId: UUID_PLAN, groupBy: 'flat' },
+        makeCtx(),
+        deps,
+      );
       const spec = EXECUTIVE_TOOL_REGISTRY.listProjectsInPlan;
       const res = validateAgainstSchema(spec.returnSchema, out);
       expect(res.ok).toBe(true);
@@ -426,12 +438,16 @@ describe('BE-W48-03 / listProjectsInPlan', () => {
 
     it('BE-W49-01: valid UUID with zero seeded rows returns empty items (no throw, no soft-error message)', async () => {
       const deps = makeDeps([]);
-      const out = await handler({ planId: UUID_PLAN, groupBy: "flat" }, makeCtx(), deps);
+      const out = await handler(
+        { planId: UUID_PLAN, groupBy: 'flat' },
+        makeCtx(),
+        deps,
+      );
       expect(out.items).toEqual([]);
       expect(out.planId).toBe(UUID_PLAN);
       expect(typeof out.asOf).toBe('string');
       // Happy-path envelopes MUST NOT carry the soft-error `message`.
-      expect('message' in (out as Record<string, unknown>)).toBe(false);
+      expect('message' in out).toBe(false);
     });
 
     it('BE-W49-01: valid UUID with seeded rows returns normal items (regression guard)', async () => {
@@ -445,14 +461,18 @@ describe('BE-W48-03 / listProjectsInPlan', () => {
           budget: '1000',
         },
       ]);
-      const out = await handler({ planId: UUID_PLAN, groupBy: "flat" }, makeCtx(), deps);
+      const out = await handler(
+        { planId: UUID_PLAN, groupBy: 'flat' },
+        makeCtx(),
+        deps,
+      );
       expect(out.planId).toBe(UUID_PLAN);
       const items = out.items as Array<Record<string, unknown>>;
       expect(items).toHaveLength(1);
       expect(items[0].projectId).toBe(UUID_PG1);
       expect(items[0].statusTh).toBe('อนุมัติ');
       // Happy-path envelope MUST NOT carry the soft-error `message`.
-      expect('message' in (out as Record<string, unknown>)).toBe(false);
+      expect('message' in out).toBe(false);
     });
 
     it('BE-W49-01: UUID guard runs AFTER assertExecutiveRole — non-executive with non-UUID planId still throws role error', async () => {
@@ -503,7 +523,11 @@ describe('BE-W48-03 / listProjectsInPlan', () => {
           budget: null,
         },
       ]);
-      const out = await handler({ planId: UUID_PLAN, groupBy: "flat" }, makeCtx(), deps);
+      const out = await handler(
+        { planId: UUID_PLAN, groupBy: 'flat' },
+        makeCtx(),
+        deps,
+      );
       const items = out.items as Array<Record<string, unknown>>;
       expect(items).toHaveLength(3);
       for (const it of items) {
@@ -527,7 +551,11 @@ describe('BE-W48-03 / listProjectsInPlan', () => {
           budget: '0',
         },
       ]);
-      const out = await handler({ planId: UUID_PLAN, groupBy: "flat" }, makeCtx(), deps);
+      const out = await handler(
+        { planId: UUID_PLAN, groupBy: 'flat' },
+        makeCtx(),
+        deps,
+      );
       const items = out.items as Array<Record<string, unknown>>;
       expect(items[0].currentStatus).toBe('WEIRD_STATUS');
       expect(items[0].statusTh).toBe('WEIRD_STATUS');

@@ -99,7 +99,7 @@ function makeDataSource(rowsByRepo: Record<string, unknown[]> = {}) {
     getRepository: (target: unknown) => {
       const repoName =
         typeof target === 'function'
-          ? (target as { name?: string }).name ?? 'Unknown'
+          ? ((target as { name?: string }).name ?? 'Unknown')
           : 'Unknown';
       return {
         createQueryBuilder: (_alias: string) => qbFactory(repoName),
@@ -143,9 +143,7 @@ describe('W55-SEC-01 / SQL-injection audit — applyFilters (§17.9)', () => {
     expect(captures).toHaveLength(1);
     const cap = captures[0];
     // The clause MUST use a named placeholder, not the raw string.
-    const amphoeClause = cap.whereClauses.find((c) =>
-      c.includes('amphoe_id'),
-    );
+    const amphoeClause = cap.whereClauses.find((c) => c.includes('amphoe_id'));
     expect(amphoeClause).toBeDefined();
     expect(amphoeClause).toContain(':...amphoeIdsFilter');
     expect(amphoeClause).not.toContain(SQLI_AMPHOE);
@@ -204,9 +202,7 @@ describe('W55-SEC-01 / SQL-injection audit — applyFilters (§17.9)', () => {
     });
     const cap = captures[0];
     // Status name flows through a named param, never concatenated.
-    const statusClause = cap.whereClauses.find((c) =>
-      c.includes('st_f.name'),
-    );
+    const statusClause = cap.whereClauses.find((c) => c.includes('st_f.name'));
     expect(statusClause).toBeDefined();
     expect(statusClause).toContain(':...statusFilter');
     expect(statusClause).not.toContain(SQLI_STATUS);
@@ -227,9 +223,7 @@ describe('W55-SEC-01 / SQL-injection audit — applyFilters (§17.9)', () => {
       filters: { dateRange: { from: SQLI_DATE_FROM, to: SQLI_DATE_TO } },
     });
     const cap = captures[0];
-    const dateClause = cap.whereClauses.find((c) =>
-      c.includes('created_at'),
-    );
+    const dateClause = cap.whereClauses.find((c) => c.includes('created_at'));
     expect(dateClause).toBeDefined();
     expect(dateClause).toContain(':dateFrom');
     expect(dateClause).toContain(':dateTo');
@@ -270,9 +264,7 @@ describe('W55-SEC-01 / SQL-injection audit — applyFilters (§17.9)', () => {
       filters: { originType: ['agency-normal'] },
     });
     const cap = captures[0];
-    const originClause = cap.whereClauses.find((c) =>
-      c.includes('wh_amp.id'),
-    );
+    const originClause = cap.whereClauses.find((c) => c.includes('wh_amp.id'));
     expect(originClause).toBeDefined();
     expect(originClause).toContain(':originAgencyAmphoeId');
     expect(originClause).toContain(':originAgencyLaoId');
@@ -320,7 +312,9 @@ describe('W55-SEC-01 / PII audit — W55-BE-07 creator-chain JOIN', () => {
     'email',
   ];
 
-  async function runAndCollectSelectExpressions(scope: 'main' | 'revised' | 'supplement') {
+  async function runAndCollectSelectExpressions(
+    scope: 'main' | 'revised' | 'supplement',
+  ) {
     const { dataSource, captures } = makeDataSource({
       ProjectGroup: [],
       RevisedProjectGroup: [],

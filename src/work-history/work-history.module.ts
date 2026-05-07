@@ -13,6 +13,7 @@ import { WorkStatus } from 'src/work-status/entities/work-status.entity';
 import { WebsocketModule } from 'src/websocket/websocket.module';
 import { AnnouncementsModule } from 'src/announcements/announcements.module';
 import { UsersModule } from 'src/users/users.module';
+import { RolesGuard } from 'src/auth/roles.guard';
 
 @Module({
   imports: [
@@ -31,7 +32,7 @@ import { UsersModule } from 'src/users/users.module';
     UsersModule,
   ],
   controllers: [WorkHistoryController],
-  providers: [WorkHistoryService],
+  providers: [WorkHistoryService, RolesGuard],
   exports: [WorkHistoryService],
 })
 export class WorkHistoryModule {}

@@ -72,7 +72,7 @@ function makeDataSource(opts: {
       from: (target: unknown, _alias?: string) => {
         const name =
           typeof target === 'function'
-            ? (target as { name?: string }).name ?? 'UnknownEntity'
+            ? ((target as { name?: string }).name ?? 'UnknownEntity')
             : String(target);
         call.subQueryFromTables.push(name);
         return subQb;
@@ -141,7 +141,7 @@ function makeDataSource(opts: {
     getRepository: (target: unknown) => {
       const repoName =
         typeof target === 'function'
-          ? (target as { name?: string }).name ?? 'Unknown'
+          ? ((target as { name?: string }).name ?? 'Unknown')
           : 'Unknown';
       return {
         createQueryBuilder: (_alias: string) => qbFactory(repoName),
@@ -503,7 +503,9 @@ describe('W71-BE-PROJECT-BUDGET / groupedExecutiveStatusBreakdown', () => {
           SupplementProjectGroup: [[], []],
         },
       });
-      await svc(dataSource).groupedExecutiveStatusBreakdown({ scope: ['main'] });
+      await svc(dataSource).groupedExecutiveStatusBreakdown({
+        scope: ['main'],
+      });
       // The fetchProjectsForBookStatus PG sample call MUST register an
       // addSelect with alias 'budget' AND a sub-query whose where binds
       // `b.project_group_id = pg.id`.

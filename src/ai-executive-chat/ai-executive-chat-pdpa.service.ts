@@ -62,7 +62,8 @@ export class AiExecutiveChatPdpaService {
     });
     if (!wh) throw new ForbiddenException('WORK_HISTORY_NOT_FOUND');
     const status = wh.workStatus?.name?.toLowerCase() ?? '';
-    if (status !== 'approved') throw new ForbiddenException('WORK_STATUS_NOT_APPROVED');
+    if (status !== 'approved')
+      throw new ForbiddenException('WORK_STATUS_NOT_APPROVED');
     return wh.id;
   }
 
@@ -74,7 +75,8 @@ export class AiExecutiveChatPdpaService {
     if (!wh) throw new ForbiddenException('WORK_HISTORY_NOT_FOUND');
     const role = wh.role?.name?.toLowerCase() ?? '';
     const status = wh.workStatus?.name?.toLowerCase() ?? '';
-    if (status !== 'approved') throw new ForbiddenException('WORK_STATUS_NOT_APPROVED');
+    if (status !== 'approved')
+      throw new ForbiddenException('WORK_STATUS_NOT_APPROVED');
     if (!AiExecutiveChatPdpaService.ADMIN_ROLES.has(role)) {
       throw new ForbiddenException('ADMIN_ROLE_REQUIRED');
     }

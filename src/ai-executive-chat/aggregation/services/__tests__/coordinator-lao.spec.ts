@@ -123,13 +123,23 @@ function makeFakeDataSource(opts: {
  * differs per kind. Provide minimal realistic rows so the helper opens
  * exactly one main book and runs exactly one sample fetch.
  */
-function mainCountRow(planId: string, planName: string, status: string, cnt: number): RawRow {
+function mainCountRow(
+  planId: string,
+  planName: string,
+  status: string,
+  cnt: number,
+): RawRow {
   // Cast through unknown — the fake QB is duck-typed; the COUNT row
   // shape differs from the per-bucket SELECT shape that drives
   // RawRow's strict columns. Spread comes first; explicit
   // RawRow defaults follow only for fields not in the COUNT shape.
   return {
-    ...({ planid: planId, planname: planName, statusname: status, cnt: String(cnt) } as unknown as RawRow),
+    ...({
+      planid: planId,
+      planname: planName,
+      statusname: status,
+      cnt: String(cnt),
+    } as unknown as RawRow),
     id: '',
   };
 }
@@ -180,7 +190,9 @@ describe('W67-COORDINATOR-LAO / drill projection', () => {
         },
       });
       const svc = new UnifiedProjectAggregator(ds);
-      const env = await svc.groupedExecutiveStatusBreakdown({ scope: ['main'] });
+      const env = await svc.groupedExecutiveStatusBreakdown({
+        scope: ['main'],
+      });
 
       const projects = env.books[0].statuses[0].projects;
       expect(projects).toHaveLength(1);
@@ -210,7 +222,9 @@ describe('W67-COORDINATOR-LAO / drill projection', () => {
         },
       });
       const svc = new UnifiedProjectAggregator(ds);
-      const env = await svc.groupedExecutiveStatusBreakdown({ scope: ['main'] });
+      const env = await svc.groupedExecutiveStatusBreakdown({
+        scope: ['main'],
+      });
 
       const project = env.books[0].statuses[0].projects[0];
       expect(project.coordinatorLaoName).toBeNull();
@@ -238,7 +252,9 @@ describe('W67-COORDINATOR-LAO / drill projection', () => {
         },
       });
       const svc = new UnifiedProjectAggregator(ds);
-      const env = await svc.groupedExecutiveStatusBreakdown({ scope: ['main'] });
+      const env = await svc.groupedExecutiveStatusBreakdown({
+        scope: ['main'],
+      });
 
       const project = env.books[0].statuses[0].projects[0];
       expect(project.coordinatorLaoName).toBeNull();
@@ -270,7 +286,9 @@ describe('W67-COORDINATOR-LAO / drill projection', () => {
         },
       });
       const svc = new UnifiedProjectAggregator(ds);
-      const env = await svc.groupedExecutiveStatusBreakdown({ scope: ['main'] });
+      const env = await svc.groupedExecutiveStatusBreakdown({
+        scope: ['main'],
+      });
 
       const project = env.books[0].statuses[0].projects[0];
       expect(project.coordinatorLaoName).toBeNull();
@@ -282,9 +300,7 @@ describe('W67-COORDINATOR-LAO / drill projection', () => {
       const ds = makeFakeDataSource({
         countRows: {
           main: [],
-          revised: [
-            revisedCountRow('plan-1', 'แผน A', 'dpr-1', 'Pending', 1),
-          ],
+          revised: [revisedCountRow('plan-1', 'แผน A', 'dpr-1', 'Pending', 1)],
           supplement: [],
         },
         sampleRows: {

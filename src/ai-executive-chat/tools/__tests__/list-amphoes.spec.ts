@@ -52,7 +52,7 @@ function makeDataSource(rows: AmphoeRow[]) {
     if (!pat) return rows;
     // Strip leading/trailing % and apply case-insensitive substring
     // match — mirrors the SQL `LOWER(a.name) LIKE LOWER(:pat)` predicate.
-    const stripped = (pat as string).replace(/^%/, '').replace(/%$/, '').toLowerCase();
+    const stripped = pat.replace(/^%/, '').replace(/%$/, '').toLowerCase();
     return rows.filter((r) => r.name.toLowerCase().includes(stripped));
   });
   return {
@@ -60,7 +60,9 @@ function makeDataSource(rows: AmphoeRow[]) {
       if (entity === Amphoe) {
         return { createQueryBuilder: () => qb };
       }
-      throw new Error(`Unexpected entity in listAmphoes spec: ${String(entity)}`);
+      throw new Error(
+        `Unexpected entity in listAmphoes spec: ${String(entity)}`,
+      );
     },
   };
 }
@@ -72,7 +74,9 @@ const CTX: ExecutiveCallerContext = {
   workStatusName: 'approved',
 };
 
-function buildDeps(ds: ReturnType<typeof makeDataSource>): ExecutiveToolHandlerDeps {
+function buildDeps(
+  ds: ReturnType<typeof makeDataSource>,
+): ExecutiveToolHandlerDeps {
   return {
     dataSource: ds as never,
     unifiedProject: {} as never,
@@ -115,7 +119,13 @@ describe('W67-AMPHOE-FIX-PROMPT-01 / listAmphoes resolver tool', () => {
     it('returnSchema declares items + envelope shape', () => {
       const spec = EXECUTIVE_TOOL_REGISTRY.listAmphoes;
       expect(spec.returnSchema.required).toEqual(
-        expect.arrayContaining(['items', 'asOf', 'missingDimensions', 'advisories', 'partial']),
+        expect.arrayContaining([
+          'items',
+          'asOf',
+          'missingDimensions',
+          'advisories',
+          'partial',
+        ]),
       );
       const itemsItems = spec.returnSchema.properties?.items?.items;
       expect(itemsItems?.required).toEqual(
@@ -134,7 +144,9 @@ describe('W67-AMPHOE-FIX-PROMPT-01 / listAmphoes resolver tool', () => {
       expect(result.items as unknown[]).toHaveLength(SAMPLE_AMPHOES.length);
       const items = result.items as Array<{ amphoeId: string; name: string }>;
       const names = items.map((i) => i.name);
-      expect(names).toEqual(expect.arrayContaining(['เมืองนครราชสีมา', 'ขามสะแกแสง']));
+      expect(names).toEqual(
+        expect.arrayContaining(['เมืองนครราชสีมา', 'ขามสะแกแสง']),
+      );
       // PK must be a string (per Amphoe.id type — string PK).
       expect(typeof items[0].amphoeId).toBe('string');
     });

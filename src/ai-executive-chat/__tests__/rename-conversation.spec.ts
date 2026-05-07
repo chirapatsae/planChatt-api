@@ -61,8 +61,7 @@ function makeService(args: {
   svc: AiExecutiveChatPdpaService;
   conversationSave: jest.Mock;
 } {
-  const conversationSave =
-    args.conversationSave ?? jest.fn(async (row) => row);
+  const conversationSave = args.conversationSave ?? jest.fn(async (row) => row);
   const conversationRepo = {
     findOne: args.conversationFindOne ?? jest.fn(),
     save: conversationSave,
@@ -110,7 +109,11 @@ describe('BE-W51-01 / renameConversation', () => {
     });
 
     const before = Date.now();
-    const out = await svc.renameConversation(USER_ID, 'conv-abc', '  หัวข้อใหม่  ');
+    const out = await svc.renameConversation(
+      USER_ID,
+      'conv-abc',
+      '  หัวข้อใหม่  ',
+    );
     const after = Date.now();
 
     expect(out).toEqual({ id: 'conv-abc', title: 'หัวข้อใหม่' });

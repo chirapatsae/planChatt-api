@@ -7,12 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import {
-  DataSource,
-  EntityManager,
-  IsNull,
-  Repository,
-} from 'typeorm';
+import { DataSource, EntityManager, IsNull, Repository } from 'typeorm';
 import type { Response } from 'express';
 import { createHash } from 'crypto';
 
@@ -138,8 +133,7 @@ import type {
 
 type ChatMessageParam = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 type ChatToolDefinition = OpenAI.Chat.Completions.ChatCompletionTool;
-type ChatCompletionChoice =
-  OpenAI.Chat.Completions.ChatCompletion.Choice;
+type ChatCompletionChoice = OpenAI.Chat.Completions.ChatCompletion.Choice;
 
 // W68-FIX-02 (2026-04-28) — reduced from 8192 → 4096 to fit under
 // the org's 30k TPM ceiling. Tool result snippets > 4KB get
@@ -437,82 +431,84 @@ export class AiExecutiveChatService {
       //   user rows") overrides the weaker UX wish ("error row visible
       //   on history reload"). See BE-W44-02.1 report deviation note.
       // ─────────────────────────────────────────────────────────────
-      finalMetaForDone = await this.dataSource.transaction<AssistantTurnMeta>(async (manager) => {
-        // Snapshot the turn base index under the transaction so every
-        // row-hash downstream is deterministic and monotonically unique.
-        const turnBaseIndex = await manager
-          .getRepository(AiExecutiveMessage)
-          .count({ where: { conversationId: conversation.id } });
+      finalMetaForDone = await this.dataSource.transaction<AssistantTurnMeta>(
+        async (manager) => {
+          // Snapshot the turn base index under the transaction so every
+          // row-hash downstream is deterministic and monotonically unique.
+          const turnBaseIndex = await manager
+            .getRepository(AiExecutiveMessage)
+            .count({ where: { conversationId: conversation.id } });
 
-        // §17.4 idempotency guard (task §7.4). If the exact same
-        // NFC-normalised user payload landed in this conversation in
-        // the last 30 seconds, reuse that row id rather than inserting
-        // a duplicate. The hash MUST match `rowHash` below with the
-        // SAME `turnBaseIndex` — so the re-use window is bounded by
-        // "no other rows have been written since".
-        const userPayloadHash = this.rowHash({
-          conversationId: conversation.id,
-          role: 'user',
-          turnIndex: turnBaseIndex,
-          normalizedPayload: dto.message,
-        });
+          // §17.4 idempotency guard (task §7.4). If the exact same
+          // NFC-normalised user payload landed in this conversation in
+          // the last 30 seconds, reuse that row id rather than inserting
+          // a duplicate. The hash MUST match `rowHash` below with the
+          // SAME `turnBaseIndex` — so the re-use window is bounded by
+          // "no other rows have been written since".
+          const userPayloadHash = this.rowHash({
+            conversationId: conversation.id,
+            role: 'user',
+            turnIndex: turnBaseIndex,
+            normalizedPayload: dto.message,
+          });
 
-        let userMessage: AiExecutiveMessage;
-        const cutoff = new Date(Date.now() - 30_000);
-        const existing = await manager
-          .getRepository(AiExecutiveMessage)
-          .createQueryBuilder('m')
-          .where('m.conversation_id = :cid', { cid: conversation.id })
-          .andWhere('m.role = :role', { role: 'user' })
-          .andWhere('m.content_hash = :hash', { hash: userPayloadHash })
-          .andWhere('m.created_at >= :cutoff', { cutoff })
-          .andWhere('m.deleted_at IS NULL')
-          .orderBy('m.created_at', 'DESC')
-          .getOne();
+          let userMessage: AiExecutiveMessage;
+          const cutoff = new Date(Date.now() - 30_000);
+          const existing = await manager
+            .getRepository(AiExecutiveMessage)
+            .createQueryBuilder('m')
+            .where('m.conversation_id = :cid', { cid: conversation.id })
+            .andWhere('m.role = :role', { role: 'user' })
+            .andWhere('m.content_hash = :hash', { hash: userPayloadHash })
+            .andWhere('m.created_at >= :cutoff', { cutoff })
+            .andWhere('m.deleted_at IS NULL')
+            .orderBy('m.created_at', 'DESC')
+            .getOne();
 
-        if (existing) {
-          userMessage = existing;
-        } else {
-          userMessage = await this.persistUserMessage(
-            manager,
-            conversation.id,
-            caller.workHistoryId,
-            dto.message,
-            userPayloadHash,
+          if (existing) {
+            userMessage = existing;
+          } else {
+            userMessage = await this.persistUserMessage(
+              manager,
+              conversation.id,
+              caller.workHistoryId,
+              dto.message,
+              userPayloadHash,
+              turnBaseIndex,
+            );
+          }
+
+          // Wave 44 C3 — field name aligned with FE
+          // `SseMessageStart.messageId`. Emitted BEFORE commit so the
+          // user bubble appears immediately; on rollback the FE will
+          // still see `error` + `done{ok:false}` next.
+          this.emit(response, 'message_start', {
+            conversationId: conversation.id,
+            messageId: userMessage.id,
+          });
+
+          const seed: TurnPersistenceSeed = {
+            conversationId: conversation.id,
+            userMessageId: userMessage.id,
             turnBaseIndex,
+          };
+
+          // Run the tool-call loop inside the same transaction so
+          // assistant/tool rows are all-or-nothing with the user row.
+          const finalMeta = await this.runToolLoop(
+            manager,
+            llmMessages,
+            tools,
+            caller,
+            seed,
+            response,
+            modelOverride,
+            redactionTotals,
+            redactedUser,
           );
-        }
-
-        // Wave 44 C3 — field name aligned with FE
-        // `SseMessageStart.messageId`. Emitted BEFORE commit so the
-        // user bubble appears immediately; on rollback the FE will
-        // still see `error` + `done{ok:false}` next.
-        this.emit(response, 'message_start', {
-          conversationId: conversation.id,
-          messageId: userMessage.id,
-        });
-
-        const seed: TurnPersistenceSeed = {
-          conversationId: conversation.id,
-          userMessageId: userMessage.id,
-          turnBaseIndex,
-        };
-
-        // Run the tool-call loop inside the same transaction so
-        // assistant/tool rows are all-or-nothing with the user row.
-        const finalMeta = await this.runToolLoop(
-          manager,
-          llmMessages,
-          tools,
-          caller,
-          seed,
-          response,
-          modelOverride,
-          redactionTotals,
-          redactedUser,
-        );
-        return finalMeta;
-      });
+          return finalMeta;
+        },
+      );
 
       if (finalMetaForDone) {
         // Wave 44 C3 / M2 — FE `SseDoneFrame` reads `modelUsed` and
@@ -532,7 +528,9 @@ export class AiExecutiveChatService {
         }`,
       );
       const status =
-        err instanceof HttpException ? err.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
+        err instanceof HttpException
+          ? err.getStatus()
+          : HttpStatus.INTERNAL_SERVER_ERROR;
       const body =
         err instanceof HttpException
           ? err.getResponse()
@@ -636,7 +634,10 @@ export class AiExecutiveChatService {
     // from preview per RCA §6.1 + task §6.1 bullet 3.
     const previewRows = await this.messageRepo
       .createQueryBuilder('m')
-      .select('DISTINCT ON (m.conversation_id) m.conversation_id', 'conversationId')
+      .select(
+        'DISTINCT ON (m.conversation_id) m.conversation_id',
+        'conversationId',
+      )
       .addSelect('m.content_text', 'contentText')
       .where('m.conversation_id IN (:...ids)', { ids })
       .andWhere('m.deleted_at IS NULL')
@@ -674,7 +675,9 @@ export class AiExecutiveChatService {
       // §12 — metadata only; no tracking_status coupling.
       // §17.3 — no FK; plain scalar passthrough.
       titleSource: c.titleSource ?? 'default-placeholder',
-      titleGeneratedAt: c.titleGeneratedAt ? c.titleGeneratedAt.toISOString() : null,
+      titleGeneratedAt: c.titleGeneratedAt
+        ? c.titleGeneratedAt.toISOString()
+        : null,
     }));
   }
 
@@ -895,7 +898,10 @@ export class AiExecutiveChatService {
       // quota-model-override.ts). The wasDowngraded flag tracks the
       // mini → nano drop within the 4.1 family.
       if (mid.modelOverride && mid.modelOverride !== meta.modelUsed) {
-        if (mid.modelOverride === 'gpt-4.1-nano' && meta.modelUsed === 'gpt-4.1-mini') {
+        if (
+          mid.modelOverride === 'gpt-4.1-nano' &&
+          meta.modelUsed === 'gpt-4.1-mini'
+        ) {
           meta.wasDowngraded = true;
         }
         meta.modelUsed = mid.modelOverride;
@@ -976,7 +982,12 @@ export class AiExecutiveChatService {
           wasDowngraded: meta.wasDowngraded,
           hops: meta.hops,
         });
-        await this.deductPostTurnUsage(caller.userId, meta, totalInputTokens, totalOutputTokens);
+        await this.deductPostTurnUsage(
+          caller.userId,
+          meta,
+          totalInputTokens,
+          totalOutputTokens,
+        );
         // Wave 51 BE-W51-02 — after the first-turn terminal assistant
         // message completes AND post-turn usage is deducted, fire the
         // auto-title generator if this is truly the conversation's first
@@ -1123,7 +1134,7 @@ export class AiExecutiveChatService {
         let rawResult: Record<string, unknown>;
         try {
           rawResult = await this.invokeTool(
-            spec.name as ExecutiveToolName,
+            spec.name,
             (parsed.value ?? {}) as Record<string, unknown>,
             caller,
           );
@@ -1238,7 +1249,12 @@ export class AiExecutiveChatService {
       meta,
       lastToolTarget,
     );
-    await this.deductPostTurnUsage(caller.userId, meta, totalInputTokens, totalOutputTokens);
+    await this.deductPostTurnUsage(
+      caller.userId,
+      meta,
+      totalInputTokens,
+      totalOutputTokens,
+    );
     return meta;
   }
 
@@ -1344,7 +1360,9 @@ export class AiExecutiveChatService {
     return `<<<TOOL_RESULT name="${toolName}">>>\n${safe}\n<<<END_TOOL_RESULT>>>`;
   }
 
-  private capToolResult(result: Record<string, unknown>): Record<string, unknown> {
+  private capToolResult(
+    result: Record<string, unknown>,
+  ): Record<string, unknown> {
     const json = JSON.stringify(result);
     if (Buffer.byteLength(json, 'utf8') <= TOOL_RESULT_MAX_BYTES) {
       return result;

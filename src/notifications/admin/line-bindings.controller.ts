@@ -1,7 +1,6 @@
 import {
   Body,
   Controller,
-  ForbiddenException,
   HttpCode,
   HttpException,
   HttpStatus,
@@ -19,6 +18,9 @@ import { IsNull, Repository } from 'typeorm';
 
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
+import { Roles } from 'src/auth/roles.decorator';
+import { RolesGuard } from 'src/auth/roles.guard';
+import { SUPER_ADMIN_ONLY } from 'src/auth/role-groups';
 import { LineUserBindingService } from 'src/line/line-user-binding.service';
 import { User } from 'src/users/entities/user.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
@@ -36,12 +38,16 @@ import { ForceUnlinkLineBindingDto } from './dto/force-unlink-line-binding.dto';
  *   - docs/tasks/wave97/W97-API-BINDINGS.md (sibling list / reveal endpoints
  *     added by the parallel W97-API-BINDINGS node)
  *
- * Pattern (W22 baseline; see W97-INVESTIGATE A3/A4):
- *   - Inline `assertSuperAdmin()` — there is no `@Roles()` decorator in
- *     this codebase.
+ * Pattern (auth-roles-guard-unification BE-03b — W22 baseline updated):
+ *   - Role gate: canonical `@UseGuards(JwtAuthGuard, RolesGuard)` +
+ *     `@Roles(...SUPER_ADMIN_ONLY)` per the auth-roles-guard-unification
+ *     migration. Inline `assertSuperAdmin()` and the local
+ *     `SUPER_ADMIN_ROLES` set were removed; `RolesGuard` reads the JWT
+ *     `role` claim and throws `ForbiddenException('FORBIDDEN_ROLE')`.
  *   - Inline `Map<string,number>` cooldown / rate limit — there is no
  *     shared throttling decorator. Force-unlink uses a 1-hour window
- *     with a 5-call burst (W97-API-FORCE-UNLINK §9).
+ *     with a 5-call burst (W97-API-FORCE-UNLINK §9). This is rate-limit
+ *     logic, NOT a role gate, and intentionally remains inline.
  *
  * Source-of-truth guardrails (CLAUDE.md):
  *   - §4.1   — force-unlink is governance, not workflow authority.
@@ -56,7 +62,6 @@ import { ForceUnlinkLineBindingDto } from './dto/force-unlink-line-binding.dto';
  *   - W86    — terminating consent is itself an auditable PDPA event.
  */
 
-const SUPER_ADMIN_ROLES = new Set(['super-admin']);
 /**
  * W97-API-FORCE-UNLINK §9 — 5 force-unlinks per actor per hour.
  *
@@ -108,7 +113,8 @@ export class LineBindingsAdminController {
    * MAIL kill-switch in `EmailService`) skips the send and surfaces
    * `userNotified: false` — the unlink itself still succeeds.
    */
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...SUPER_ADMIN_ONLY)
   @Post(':id/force-unlink')
   @HttpCode(HttpStatus.OK)
   @UsePipes(
@@ -128,7 +134,6 @@ export class LineBindingsAdminController {
     userNotified: boolean;
     auditId: string;
   }> {
-    this.assertSuperAdmin(req.user);
     this.assertForceUnlinkRateLimit(req.user.userId);
 
     // Resolve actor's current WorkHistory (CLAUDE.md §4 — we record
@@ -390,16 +395,8 @@ export class LineBindingsAdminController {
   }
 
   // ---------------------------------------------------------------------------
-  // Guards
+  // Rate limit
   // ---------------------------------------------------------------------------
-
-  private assertSuperAdmin(user: JwtPayloadUser): void {
-    if (!user || !SUPER_ADMIN_ROLES.has(user.role)) {
-      throw new ForbiddenException(
-        'เฉพาะ super-admin เท่านั้นที่สามารถดำเนินการนี้ได้',
-      );
-    }
-  }
 
   /**
    * W97-API-FORCE-UNLINK §9 — 5 force-unlinks per actor per hour.

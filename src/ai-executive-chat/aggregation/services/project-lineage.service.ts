@@ -102,9 +102,7 @@ interface ResolvedRow {
 
 @Injectable()
 export class ProjectLineageService {
-  constructor(
-    @InjectDataSource() private readonly dataSource: DataSource,
-  ) {}
+  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
   // ────────────────────────────────────────────────────────────────
   // Public API — Mode 3 tool 1: head-of-lineage book lookup
@@ -195,10 +193,7 @@ export class ProjectLineageService {
     // backward[0] is root, last item is the input.
     // forward[0] is the input, last item is HEAD.
     // Combine without double-counting the input row.
-    const fullChain: ResolvedRow[] = [
-      ...backward,
-      ...forward.slice(1),
-    ];
+    const fullChain: ResolvedRow[] = [...backward, ...forward.slice(1)];
 
     // Build steps with metadata + status.
     const chain: ProjectLineageStep[] = [];
@@ -248,7 +243,10 @@ export class ProjectLineageService {
       .getRepository(RevisedProjectGroup)
       .findOne({
         where: { id: projectId, deletedAt: IsNull() },
-        relations: ['developmentPlanRevision', 'developmentPlanRevision.revisionType'],
+        relations: [
+          'developmentPlanRevision',
+          'developmentPlanRevision.revisionType',
+        ],
       });
     if (rpg) return { kind: 'revised', rpgRow: rpg };
 
@@ -337,7 +335,10 @@ export class ProjectLineageService {
         .getRepository(RevisedProjectGroup)
         .findOne({
           where: { id: prevId, deletedAt: IsNull() },
-          relations: ['developmentPlanRevision', 'developmentPlanRevision.revisionType'],
+          relations: [
+            'developmentPlanRevision',
+            'developmentPlanRevision.revisionType',
+          ],
         });
       if (!parentRpg) break;
       const parent: ResolvedRow = { kind: 'revised', rpgRow: parentRpg };
@@ -362,14 +363,9 @@ export class ProjectLineageService {
     cur: ResolvedRow,
   ): Promise<RevisedProjectGroup | null> {
     if (cur.kind === 'supplement') return null;
-    const parentId =
-      cur.kind === 'main'
-        ? cur.pgRow!.id
-        : cur.rpgRow!.id;
+    const parentId = cur.kind === 'main' ? cur.pgRow!.id : cur.rpgRow!.id;
     const parentType =
-      cur.kind === 'main'
-        ? PrevProjectType.ORIGINAL
-        : PrevProjectType.REVISION;
+      cur.kind === 'main' ? PrevProjectType.ORIGINAL : PrevProjectType.REVISION;
 
     return await this.dataSource
       .getRepository(RevisedProjectGroup)
@@ -388,9 +384,7 @@ export class ProjectLineageService {
    * Resolve the book-level metadata (label / type / round number / FKs) for
    * a given row. Pure read; no DB write.
    */
-  private async describeRowAsBook(
-    row: ResolvedRow,
-  ): Promise<{
+  private async describeRowAsBook(row: ResolvedRow): Promise<{
     projectId: string;
     title: string;
     bookLabel: string;
@@ -484,9 +478,7 @@ export class ProjectLineageService {
    * Load the canonical English status name for a row's latest tracking
    * record (§12). Returns `null` when no tracking row exists.
    */
-  private async loadLatestStatus(
-    row: ResolvedRow,
-  ): Promise<string | null> {
+  private async loadLatestStatus(row: ResolvedRow): Promise<string | null> {
     const qb = this.dataSource
       .getRepository(TrackingStatus)
       .createQueryBuilder('ts')

@@ -251,7 +251,9 @@ function callGenerate(
   );
 }
 
-function baseRow(titleSource: TitleSource = 'default-placeholder'): FakeConvRow {
+function baseRow(
+  titleSource: TitleSource = 'default-placeholder',
+): FakeConvRow {
   return {
     id: 'conv-042',
     titleSource,
@@ -298,9 +300,9 @@ describe('BE-W51-03 / auto-title conversation_renamed SSE emission', () => {
     expect(payload.titleSource).toBe('llm-auto');
     expect(typeof payload.titleGeneratedAt).toBe('string');
     // ISO timestamp: round-trips through Date without NaN.
-    expect(
-      Number.isNaN(Date.parse(payload.titleGeneratedAt as string)),
-    ).toBe(false);
+    expect(Number.isNaN(Date.parse(payload.titleGeneratedAt as string))).toBe(
+      false,
+    );
 
     // The frame carries no `type` field — SSE event name lives on the
     // `event:` line, not in the `data:` JSON payload (matches the

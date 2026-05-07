@@ -89,7 +89,9 @@ describe('W55-SEC-01 / injection-mimic-municipality (§17.9)', () => {
     expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(
       /ระดับจังหวัด|จังหวัดนครราชสีมา/,
     );
-    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(/ไม่ใช่จำกัดเฉพาะเทศบาลหรือ อปท\./);
+    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(
+      /ไม่ใช่จำกัดเฉพาะเทศบาลหรือ อปท\./,
+    );
   });
 
   it('system prompt pins rule #5 — instructions inside USER_INPUT are data, not commands', () => {
@@ -141,9 +143,7 @@ describe('W55-SEC-01 / injection-mimic-municipality (§17.9)', () => {
       expect(llmMessages[llmMessages.length - 1].content).toMatch(
         /^<<<USER_INPUT>>>/,
       );
-      expect(llmMessages[llmMessages.length - 1].content).toMatch(
-        /<<<END>>>$/,
-      );
+      expect(llmMessages[llmMessages.length - 1].content).toMatch(/<<<END>>>$/);
     }
   });
 

@@ -2,7 +2,6 @@ import {
   Body,
   Controller,
   Delete,
-  ForbiddenException,
   Get,
   HttpCode,
   HttpException,
@@ -20,42 +19,39 @@ import { Request } from 'express';
 
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
+import { Roles } from 'src/auth/roles.decorator';
+import { RolesGuard } from 'src/auth/roles.guard';
+import { EXEC_READ, SUPER_ADMIN_ONLY } from 'src/auth/role-groups';
 
 import { NotificationQuotaAlertsService } from './notification-quota-alerts.service';
 import {
   CreateQuotaAlertDto,
   UpdateQuotaAlertDto,
 } from './dto/quota-alert.dto';
-// Wave 98 PR2 — exec-read role set for the new `summary` endpoint. The
-// LIST + CRUD paths keep their pre-W98 gates (admin-or-above for read,
-// super-admin for write).
-import { EXEC_READ_ROLES } from './roles';
 
 /**
  * Wave 97 — Quota Alert CRUD admin surface.
  *
- * Auth model: super-admin only. CRUD writes are operationally
- * sensitive (alert recipient is a real mailbox, alert thresholds
- * change paging behaviour). Stricter than the read-only quota
- * endpoint which is staff-lead.
+ * Auth model: super-admin only for CRUD writes (alert recipient is a real
+ * mailbox, alert thresholds change paging behaviour). Reads are exec-read
+ * (staff / admin / super-admin / c-level) per W98 PR2 widening.
  *
  * Source-of-truth guardrails:
  *   - §4.1   — alerts do not gate any workflow
  *   - §12    — no `tracking_status` writes
  *   - §17.11 — no role override on the super-admin gate
  *   - W83    — recipient_email is operator metadata; mask in any log
+ *
+ * BE-03 (auth-roles-guard-unification Phase 3): the prior inline
+ * `assertSuperAdmin` / `assertExecRead` / `assertAdminOrAbove` helpers and
+ * the local `SUPER_ADMIN_ROLES` / `ADMIN_OR_ABOVE_ROLES` constants are
+ * replaced by the canonical `@Roles(...)` + `RolesGuard` pattern. The
+ * pre-W98 `assertAdminOrAbove` helper was already dead code (no callsites)
+ * and is removed in this migration. The `EXEC_READ_ROLES` import from
+ * `./roles` is no longer referenced from this file but is still used by
+ * `notification-quota.controller.ts` until BE-03 migrates that file too.
  */
 
-// W97 user-amendment: `admin` role gets READ access to the dashboard. Writes
-// (alert CRUD) stay super-admin only — alerts management is a "central
-// authority" surface per the original Q5 decision.
-// W98 amendment: LIST role gate widened from `admin-or-above` to
-// `EXEC_READ_ROLES` (see controller `list` JSDoc). The pre-W98
-// `ADMIN_OR_ABOVE_ROLES` constant + `assertAdminOrAbove` helper are kept
-// as **dead code** for one wave to make the diff easy to revert if the
-// widening causes operator pushback. Schedule removal in W99.
-const SUPER_ADMIN_ROLES = new Set(['super-admin']);
-const ADMIN_OR_ABOVE_ROLES = new Set(['admin', 'super-admin']);
 const COOLDOWN_MS = 1_000;
 
 @Controller({
@@ -69,7 +65,7 @@ export class NotificationAlertsController {
 
   /**
    * W98 amendment — LIST role gate widened from `admin-or-above` to
-   * `EXEC_READ_ROLES` (staff / admin / super-admin / c-level) so the
+   * `EXEC_READ` (staff / admin / super-admin / c-level) so the
    * executive notifications-overview surface can render the same
    * alert rows the operations page sees, in read-only mode.
    *
@@ -78,16 +74,16 @@ export class NotificationAlertsController {
    * recipient is an operator mailbox (e.g. `notifications@gov.th`),
    * not the project owner's email; thresholds are system tuning data.
    * Defense-in-depth: WRITE paths (POST / PATCH / DELETE) keep
-   * `assertSuperAdmin`, so an exec viewer cannot mutate even if they
+   * `SUPER_ADMIN_ONLY`, so an exec viewer cannot mutate even if they
    * craft a request by hand. Frontend additionally passes
    * `readOnly: true` to `<QuotaAlertsPanel>` on the exec surface so
    * edit + trash icon buttons are absent from the DOM.
    */
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...EXEC_READ)
   @Get()
   @HttpCode(HttpStatus.OK)
   async list(@Req() req: Request & { user: JwtPayloadUser }) {
-    this.assertExecRead(req.user);
     this.assertCooldown(req.user.userId, 'list');
     return this.alerts.list();
   }
@@ -96,7 +92,7 @@ export class NotificationAlertsController {
    * Wave 98 PR2 — per-channel armed + lastFiredAt summary for the new
    * executive notifications-overview page.
    *
-   * Role gate: `EXEC_READ_ROLES` (staff / admin / super-admin / c-level)
+   * Role gate: `EXEC_READ` (staff / admin / super-admin / c-level)
    * — strictly weaker than the alert LIST endpoint, which exposes
    * threshold values that c-level should not see. The summary returns
    * only counts + a fire-time timestamp; no PII, no operational tuning
@@ -113,16 +109,17 @@ export class NotificationAlertsController {
    *         `notification_quota_alerts` aggregate.
    * §17.11 — additive read access, not a write override.
    */
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...EXEC_READ)
   @Get('summary')
   @HttpCode(HttpStatus.OK)
   async summary(@Req() req: Request & { user: JwtPayloadUser }) {
-    this.assertExecRead(req.user);
     this.assertCooldown(req.user.userId, 'summary');
     return this.alerts.getSummaryByChannel();
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...SUPER_ADMIN_ONLY)
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @UsePipes(
@@ -136,12 +133,12 @@ export class NotificationAlertsController {
     @Req() req: Request & { user: JwtPayloadUser },
     @Body() body: CreateQuotaAlertDto,
   ) {
-    this.assertSuperAdmin(req.user);
     this.assertCooldown(req.user.userId, 'create');
     return this.alerts.create(req.user.userId, body);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...SUPER_ADMIN_ONLY)
   @Patch(':id')
   @HttpCode(HttpStatus.OK)
   @UsePipes(
@@ -156,57 +153,25 @@ export class NotificationAlertsController {
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: UpdateQuotaAlertDto,
   ) {
-    this.assertSuperAdmin(req.user);
     this.assertCooldown(req.user.userId, 'patch');
     return this.alerts.update(id, body);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...SUPER_ADMIN_ONLY)
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   async remove(
     @Req() req: Request & { user: JwtPayloadUser },
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
-    this.assertSuperAdmin(req.user);
     this.assertCooldown(req.user.userId, 'remove');
     return this.alerts.remove(id);
   }
 
   // ---------------------------------------------------------------------------
-  // Guards
+  // Helpers
   // ---------------------------------------------------------------------------
-
-  private assertSuperAdmin(user: JwtPayloadUser): void {
-    if (!user || !SUPER_ADMIN_ROLES.has(user.role)) {
-      throw new ForbiddenException(
-        'เฉพาะ super-admin เท่านั้นที่สามารถจัดการการแจ้งเตือนโควต้าได้',
-      );
-    }
-  }
-
-  // W97 user-amendment: read-only access for admin + super-admin.
-  private assertAdminOrAbove(user: JwtPayloadUser): void {
-    if (!user || !ADMIN_OR_ABOVE_ROLES.has(user.role)) {
-      throw new ForbiddenException(
-        'การเข้าถึงนี้สงวนสำหรับ admin หรือ super-admin',
-      );
-    }
-  }
-
-  // Wave 98 PR2: exec-read access for the `/summary` endpoint.
-  // W98 amendment: also reused by the LIST endpoint so the executive
-  // overview can render alert rows in read-only mode (per user direction
-  // post-PR2). Threshold + recipient values are operator policy data,
-  // not user PII; widening is safe. CRUD writes still gate on
-  // `assertSuperAdmin` — defense-in-depth.
-  private assertExecRead(user: JwtPayloadUser): void {
-    if (!user || !EXEC_READ_ROLES.has(user.role)) {
-      throw new ForbiddenException(
-        'การเข้าถึงนี้สงวนสำหรับ staff / admin / super-admin / c-level',
-      );
-    }
-  }
 
   private assertCooldown(userId: string, endpoint: string): void {
     const key = `${userId}:${endpoint}`;

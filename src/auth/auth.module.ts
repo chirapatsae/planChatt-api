@@ -38,4 +38,4 @@ import { EmailVerificationController } from './email-verification/email-verifica
   controllers: [AuthController, EmailVerificationController],
   providers: [AuthService, JwtStrategy, AuthEmailService],
 })
-export class AuthModule { }
+export class AuthModule {}

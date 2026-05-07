@@ -169,9 +169,7 @@ export class AgencyProjectsCanonicalAggregatorService {
     AgencyProjectsCanonicalAggregatorService.name,
   );
 
-  constructor(
-    @InjectDataSource() private readonly dataSource: DataSource,
-  ) {}
+  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
   /**
    * Compute the canonical envelope for the given agency scope.

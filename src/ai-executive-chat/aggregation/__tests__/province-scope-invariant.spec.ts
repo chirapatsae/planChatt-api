@@ -58,9 +58,10 @@ interface StubCall {
   params: Record<string, unknown>;
 }
 
-function makeDataSource(
-  rowsByRepo: Record<string, unknown[]> = {},
-): { dataSource: unknown; calls: StubCall[] } {
+function makeDataSource(rowsByRepo: Record<string, unknown[]> = {}): {
+  dataSource: unknown;
+  calls: StubCall[];
+} {
   const calls: StubCall[] = [];
 
   function qbFactory(repositoryName: string) {
@@ -100,7 +101,7 @@ function makeDataSource(
     getRepository: (target: unknown) => {
       const name =
         typeof target === 'function'
-          ? (target as { name?: string }).name ?? 'Unknown'
+          ? ((target as { name?: string }).name ?? 'Unknown')
           : 'Unknown';
       return {
         createQueryBuilder: (_alias: string) => qbFactory(name),
@@ -167,8 +168,7 @@ function findCallerDerivedPredicates(
     const allReferenced = refNames.every((name) => bindNames.includes(name));
     if (!allReferenced) continue; // defensive — only score bound refs
     const nonSentinel = refNames.some(
-      (name) =>
-        name !== 'originAgencyAmphoeId' && name !== 'originAgencyLaoId',
+      (name) => name !== 'originAgencyAmphoeId' && name !== 'originAgencyLaoId',
     );
     if (nonSentinel) offenders.push(clause);
   }

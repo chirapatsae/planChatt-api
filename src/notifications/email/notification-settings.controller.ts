@@ -1,7 +1,6 @@
 import {
   Body,
   Controller,
-  ForbiddenException,
   Get,
   HttpCode,
   HttpException,
@@ -16,14 +15,12 @@ import { Request } from 'express';
 
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
+import { Roles } from 'src/auth/roles.decorator';
+import { RolesGuard } from 'src/auth/roles.guard';
+import { EXEC_READ, SUPER_ADMIN_ONLY } from 'src/auth/role-groups';
 
 import { NotificationSettingsService } from './notification-settings.service';
 import { UpdateEmailSettingsDto } from './dto/update-email-settings.dto';
-// Wave 98 PR2 — widen GET role gate to exec-read so the executive
-// notifications-overview page can render the kill-switch state chip. PATCH
-// remains super-admin only (declared inline below as the local
-// SUPER_ADMIN_ROLES constant).
-import { EXEC_READ_ROLES } from '../admin/roles';
 
 /**
  * Wave 22 B2 — Global email kill-switch admin surface.
@@ -47,9 +44,8 @@ import { EXEC_READ_ROLES } from '../admin/roles';
 // unified `/admin/notifications` dashboard. PATCH (flipping the switch)
 // stays super-admin-only — admins VIEW but only super-admin disables.
 //
-// Wave 98 PR2: GET widens further to `EXEC_READ_ROLES` (adds c-level) for
-// the executive notifications-overview page. PATCH gate is unchanged.
-const SUPER_ADMIN_ROLES = new Set(['super-admin']);
+// Wave 98 PR2: GET widens further to EXEC_READ (adds c-level) for the
+// executive notifications-overview page. PATCH gate is unchanged.
 const COOLDOWN_MS = 1_000;
 
 @Controller({
@@ -59,20 +55,19 @@ const COOLDOWN_MS = 1_000;
 export class NotificationSettingsController {
   private readonly lastCall = new Map<string, number>();
 
-  constructor(
-    private readonly settingsService: NotificationSettingsService,
-  ) {}
+  constructor(private readonly settingsService: NotificationSettingsService) {}
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...EXEC_READ)
   @Get()
   @HttpCode(HttpStatus.OK)
   async get(@Req() req: Request & { user: JwtPayloadUser }) {
-    this.assertExecRead(req.user);
     this.assertCooldown(req.user.userId, 'get');
     return this.settingsService.getSettings();
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...SUPER_ADMIN_ONLY)
   @Patch()
   @HttpCode(HttpStatus.OK)
   @UsePipes(
@@ -86,7 +81,6 @@ export class NotificationSettingsController {
     @Req() req: Request & { user: JwtPayloadUser },
     @Body() body: UpdateEmailSettingsDto,
   ) {
-    this.assertSuperAdmin(req.user);
     this.assertCooldown(req.user.userId, 'patch');
     return this.settingsService.updateSettings(
       { userId: req.user.userId },
@@ -100,28 +94,8 @@ export class NotificationSettingsController {
   }
 
   // ---------------------------------------------------------------------------
-  // Guards
+  // Helpers
   // ---------------------------------------------------------------------------
-
-  private assertSuperAdmin(user: JwtPayloadUser): void {
-    if (!user || !SUPER_ADMIN_ROLES.has(user.role)) {
-      throw new ForbiddenException(
-        'เฉพาะ super-admin เท่านั้นที่สามารถจัดการการเปิด/ปิดการส่งอีเมลได้',
-      );
-    }
-  }
-
-  // Wave 98 PR2: read-only access for the exec-read role set
-  // (staff / admin / super-admin / c-level). The executive
-  // notifications-overview page renders the kill-switch state chip from
-  // this response. PATCH still routes through `assertSuperAdmin`.
-  private assertExecRead(user: JwtPayloadUser): void {
-    if (!user || !EXEC_READ_ROLES.has(user.role)) {
-      throw new ForbiddenException(
-        'การเข้าถึงนี้สงวนสำหรับ staff / admin / super-admin / c-level',
-      );
-    }
-  }
 
   /**
    * Lightweight per-user per-endpoint cooldown. Mirrors

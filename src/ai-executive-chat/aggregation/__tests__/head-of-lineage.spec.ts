@@ -69,9 +69,7 @@ describe('W57-BE-AGG-01 / HEAD-of-lineage helpers', () => {
     const out = applyHeadFilterForRevisedProjectGroup(qb, 'rpg');
     expect(out).toBe(qb);
     expect(calls[0].args[0]).toBe(RevisedProjectGroup);
-    expect(String(calls[0].args[2])).toContain(
-      "prev_project_type = 'revised'",
-    );
+    expect(String(calls[0].args[2])).toContain("prev_project_type = 'revised'");
     expect(String(calls[0].args[2])).toContain('deleted_at IS NULL');
   });
 

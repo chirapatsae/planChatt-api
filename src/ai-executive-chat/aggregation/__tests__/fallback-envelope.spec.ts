@@ -86,11 +86,9 @@ describe('BE-W54-08 / fallback envelope — all 6 MissingDimension values', () =
   it.each(cases)(
     '%s — failure → partial:true, matching Thai advisory, no raw leak',
     async (dim) => {
-      const env = await svc().runDimensions(
-        [failing(dim)],
-        () => ({}),
-        { shape: 'planOverview' },
-      );
+      const env = await svc().runDimensions([failing(dim)], () => ({}), {
+        shape: 'planOverview',
+      });
 
       expect(env.partial).toBe(true);
       expect(env.missingDimensions).toHaveLength(1);

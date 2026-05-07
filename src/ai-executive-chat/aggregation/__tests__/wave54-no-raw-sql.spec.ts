@@ -100,9 +100,9 @@ describe('BE-W54-08 / no raw SQL budgets literal under tools/ + aggregation/', (
 
   it('sanity — scanner picks up files from BOTH trees', () => {
     expect(files.length).toBeGreaterThanOrEqual(10);
-    expect(
-      files.some((p) => p.endsWith('executive-tool-handlers.ts')),
-    ).toBe(true);
+    expect(files.some((p) => p.endsWith('executive-tool-handlers.ts'))).toBe(
+      true,
+    );
     expect(
       files.some((p) => p.endsWith('resilience-envelope.service.ts')),
     ).toBe(true);

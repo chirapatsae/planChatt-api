@@ -57,9 +57,11 @@ describe('W67-LAO-RESOLVER / applyFilters({ laoIds })', () => {
         const svc = makeService();
         const { qb, calls } = makeFakeQb();
         const filters = { laoIds: ['3001027', '3007001'] };
-        (svc as unknown as {
-          applyFilters: (qb: unknown, filters: unknown, kind: Kind) => void;
-        }).applyFilters(qb, filters, kind);
+        (
+          svc as unknown as {
+            applyFilters: (qb: unknown, filters: unknown, kind: Kind) => void;
+          }
+        ).applyFilters(qb, filters, kind);
 
         const alias = ALIAS_BY_KIND[kind];
         const laoCall = calls.find((c) =>
@@ -83,9 +85,11 @@ describe('W67-LAO-RESOLVER / applyFilters({ laoIds })', () => {
       const svc = makeService();
       const { qb, calls } = makeFakeQb();
       const filters = { laoIds: ['3001027'] };
-      (svc as unknown as {
-        applyFilters: (qb: unknown, filters: unknown, kind: Kind) => void;
-      }).applyFilters(qb, filters, 'supplement');
+      (
+        svc as unknown as {
+          applyFilters: (qb: unknown, filters: unknown, kind: Kind) => void;
+        }
+      ).applyFilters(qb, filters, 'supplement');
 
       const noMatch = calls.find((c) => c.clause === '1 = 0');
       expect(noMatch).toBeDefined();
@@ -103,9 +107,11 @@ describe('W67-LAO-RESOLVER / applyFilters({ laoIds })', () => {
       const filters = {
         laoIds: ['  3001027 ', '', '3007001', '   '],
       };
-      (svc as unknown as {
-        applyFilters: (qb: unknown, filters: unknown, kind: Kind) => void;
-      }).applyFilters(qb, filters, 'main');
+      (
+        svc as unknown as {
+          applyFilters: (qb: unknown, filters: unknown, kind: Kind) => void;
+        }
+      ).applyFilters(qb, filters, 'main');
 
       const laoCall = calls.find((c) =>
         c.clause.includes('local_administrative_organization_id IN'),
@@ -118,9 +124,11 @@ describe('W67-LAO-RESOLVER / applyFilters({ laoIds })', () => {
       const svc = makeService();
       const { qb, calls } = makeFakeQb();
       const filters = { laoIds: ['', '   ', '\t'] };
-      (svc as unknown as {
-        applyFilters: (qb: unknown, filters: unknown, kind: Kind) => void;
-      }).applyFilters(qb, filters, 'main');
+      (
+        svc as unknown as {
+          applyFilters: (qb: unknown, filters: unknown, kind: Kind) => void;
+        }
+      ).applyFilters(qb, filters, 'main');
 
       // The all-blank branch emits `1 = 0` and DOES NOT emit the IN-clause.
       const noMatch = calls.find((c) => c.clause === '1 = 0');
@@ -135,9 +143,11 @@ describe('W67-LAO-RESOLVER / applyFilters({ laoIds })', () => {
       const svc = makeService();
       const { qb, calls } = makeFakeQb();
       const filters = {};
-      (svc as unknown as {
-        applyFilters: (qb: unknown, filters: unknown, kind: Kind) => void;
-      }).applyFilters(qb, filters, 'main');
+      (
+        svc as unknown as {
+          applyFilters: (qb: unknown, filters: unknown, kind: Kind) => void;
+        }
+      ).applyFilters(qb, filters, 'main');
 
       const laoCall = calls.find((c) =>
         c.clause.includes('local_administrative_organization_id IN'),

@@ -87,8 +87,7 @@ describe('SEC-W44-01 / pii-exfiltration (SEC-W44-02 integration)', () => {
 
   it('mixed PII in a single message is fully scrubbed and counts accumulate', () => {
     const payload = {
-      message:
-        'ข้อมูล: 1-2345-67890-12-3 โทร 081-234-5678 อีเมล a@b.th',
+      message: 'ข้อมูล: 1-2345-67890-12-3 โทร 081-234-5678 อีเมล a@b.th',
     };
     const { output, counts } = redactor.redactForPrompt(
       payload,
@@ -98,13 +97,15 @@ describe('SEC-W44-01 / pii-exfiltration (SEC-W44-02 integration)', () => {
     expect(output.message).not.toContain('1-2345-67890-12-3');
     expect(output.message).not.toContain('081-234-5678');
     expect(output.message).not.toContain('a@b.th');
-    expect(counts.thaiId + counts.thaiPhone + counts.email).toBeGreaterThanOrEqual(
-      3,
-    );
+    expect(
+      counts.thaiId + counts.thaiPhone + counts.email,
+    ).toBeGreaterThanOrEqual(3);
   });
 
   it('telemetry is emitted with `event=pii.redact endpoint=executive-chat` and counts (not the payload)', () => {
-    const logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    const logSpy = jest
+      .spyOn(Logger.prototype, 'log')
+      .mockImplementation(() => undefined);
     try {
       redactor.redactForPrompt(
         { message: 'เลขบัตร 1234567890123' },
@@ -160,11 +161,11 @@ describe('SEC-W44-01 / pii-exfiltration (SEC-W44-02 integration)', () => {
       { endpoint: 'executive-chat', fieldPath: 'tool.searchProjectsByKeyword' },
     );
     const user = (
-      ((output.items[0] as Record<string, unknown>).createdBy as Record<
+      (output.items[0] as Record<string, unknown>).createdBy as Record<
         string,
         unknown
-      >).user as Record<string, unknown>
-    );
+      >
+    ).user as Record<string, unknown>;
     expect(user.firstName).toBeUndefined();
     expect(user.lastName).toBeUndefined();
   });

@@ -62,9 +62,6 @@ export class UpdateEmailSettingsDto {
    * and throws 409 SETTINGS_STALE on mismatch.
    */
   @IsOptional()
-  @IsISO8601(
-    {},
-    { message: 'expectedUpdatedAt ต้องเป็น ISO 8601 timestamp' },
-  )
+  @IsISO8601({}, { message: 'expectedUpdatedAt ต้องเป็น ISO 8601 timestamp' })
   expectedUpdatedAt?: string;
 }

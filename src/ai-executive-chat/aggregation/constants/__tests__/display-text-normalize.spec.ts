@@ -143,7 +143,7 @@ describe('normalizeDisplayText (W63-BE-AGG-01)', () => {
     it.each(SAMPLES.map((s) => [JSON.stringify(s), s]))(
       'f(f(%s)) === f(%s)',
       (_label, input) => {
-        const once = normalizeDisplayText(input as string | null | undefined);
+        const once = normalizeDisplayText(input);
         const twice = normalizeDisplayText(once);
         expect(twice).toBe(once);
       },

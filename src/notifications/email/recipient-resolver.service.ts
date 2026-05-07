@@ -66,7 +66,9 @@ export class RecipientResolverService {
    * Resolve the owner of a project by its createdBy WorkHistory id.
    * Used by PROJECT_RETURNED_FOR_REVISION and PROJECT_APPROVED events.
    */
-  async resolveOwner(createdByWorkHistoryId: string): Promise<ProjectNotificationRecipient[]> {
+  async resolveOwner(
+    createdByWorkHistoryId: string,
+  ): Promise<ProjectNotificationRecipient[]> {
     if (!createdByWorkHistoryId) return [];
     const wh = await this.workHistoryRepo.findOne({
       where: { id: createdByWorkHistoryId },
@@ -80,7 +82,9 @@ export class RecipientResolverService {
    * Resolve staff-lead recipients who are responsible for the given amphoe.
    * Used for PROJECT_SUBMITTED on main-plan projects.
    */
-  async resolveStaffLeadByAmphoe(amphoeId: string | number): Promise<ProjectNotificationRecipient[]> {
+  async resolveStaffLeadByAmphoe(
+    amphoeId: string | number,
+  ): Promise<ProjectNotificationRecipient[]> {
     if (!amphoeId) return [];
     const rows = await this.amphoeRespRepo
       .createQueryBuilder('resp')
@@ -95,7 +99,9 @@ export class RecipientResolverService {
       .andWhere('role.name IN (:...roles)', { roles: STAFF_LEAD_ROLES })
       .getMany();
 
-    const whList = rows.map((r) => r.workHistory).filter((wh): wh is WorkHistory => !!wh);
+    const whList = rows
+      .map((r) => r.workHistory)
+      .filter((wh): wh is WorkHistory => !!wh);
     return this.filterAndCap(whList, 'resolveStaffLeadByAmphoe');
   }
 
@@ -103,7 +109,9 @@ export class RecipientResolverService {
    * Resolve staff-lead recipients responsible for a government agency.
    * Used for PROJECT_SUBMITTED on revision/change projects.
    */
-  async resolveStaffLeadByAgency(agencyId: string | number): Promise<ProjectNotificationRecipient[]> {
+  async resolveStaffLeadByAgency(
+    agencyId: string | number,
+  ): Promise<ProjectNotificationRecipient[]> {
     if (!agencyId) return [];
     const rows = await this.agencyRespRepo
       .createQueryBuilder('resp')
@@ -118,7 +126,9 @@ export class RecipientResolverService {
       .andWhere('role.name IN (:...roles)', { roles: STAFF_LEAD_ROLES })
       .getMany();
 
-    const whList = rows.map((r) => r.workHistory).filter((wh): wh is WorkHistory => !!wh);
+    const whList = rows
+      .map((r) => r.workHistory)
+      .filter((wh): wh is WorkHistory => !!wh);
     return this.filterAndCap(whList, 'resolveStaffLeadByAgency');
   }
 
@@ -247,7 +257,10 @@ export class RecipientResolverService {
 
   // ---------------------------------------------------------------------------
 
-  private filterAndCap(workHistories: WorkHistory[], source: string): ProjectNotificationRecipient[] {
+  private filterAndCap(
+    workHistories: WorkHistory[],
+    source: string,
+  ): ProjectNotificationRecipient[] {
     const seen = new Set<string>();
     const kept: ProjectNotificationRecipient[] = [];
     let skippedPreference = 0;

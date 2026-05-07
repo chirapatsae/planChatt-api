@@ -163,8 +163,7 @@ const PROMPTS: Prompt[] = [
   {
     id: 1,
     thai: 'โครงการในเล่มแก้ไขปีนี้มีอะไรบ้าง',
-    english:
-      'What are the projects in this year’s revision book?',
+    english: 'What are the projects in this year’s revision book?',
     toolCalls: [
       { tool: 'listActivePlans', params: {} },
       {
@@ -224,7 +223,8 @@ const PROMPTS: Prompt[] = [
       },
     ],
     expectedShape: 'dashboardSnapshot',
-    finalToolNameRx: /^(detectWorkflowAgingProjects|getExecutiveDashboardSnapshot)$/,
+    finalToolNameRx:
+      /^(detectWorkflowAgingProjects|getExecutiveDashboardSnapshot)$/,
   },
   {
     id: 5,
@@ -267,7 +267,7 @@ describe('BE-W54-08 / Wave 54 bilingual success-criteria prompts (§4)', () => {
     it.each(PROMPTS.map((p) => [p.id, p.thai, p]))(
       '#%s — %s',
       async (_id, _thai, p) => {
-        const prompt = p as Prompt;
+        const prompt = p;
         expect(prompt.toolCalls.length).toBeLessThanOrEqual(2);
         expect(prompt.toolCalls.length).toBeGreaterThanOrEqual(1);
         const finalCall = prompt.toolCalls[prompt.toolCalls.length - 1];

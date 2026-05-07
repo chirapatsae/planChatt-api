@@ -135,9 +135,7 @@ function conv(
   } as AiExecutiveConversation;
 }
 
-function msg(
-  overrides: Partial<AiExecutiveMessage> = {},
-): AiExecutiveMessage {
+function msg(overrides: Partial<AiExecutiveMessage> = {}): AiExecutiveMessage {
   const base: Partial<AiExecutiveMessage> = {
     id: 'msg-1',
     conversationId: 'conv-1',
@@ -301,17 +299,20 @@ describe('BE-W46-01 / listConversationsForOwner', () => {
 
   it('applies the owner_work_history_id + deleted_at IS NULL filter and LIMIT 200', async () => {
     // Capture the actual WHERE / limit calls via a spy on the qb chain.
-    let whereCall: { sql: string; params: Record<string, unknown> } | null = null;
+    let whereCall: { sql: string; params: Record<string, unknown> } | null =
+      null;
     let limitVal: number | null = null;
     let deletedClause = false;
     let orderClause: string | null = null;
 
     const chainable: Record<string, jest.Mock> = {};
     const chain = jest.fn().mockReturnValue(chainable);
-    chainable.where = jest.fn((sql: string, params: Record<string, unknown>) => {
-      whereCall = { sql, params };
-      return chainable;
-    });
+    chainable.where = jest.fn(
+      (sql: string, params: Record<string, unknown>) => {
+        whereCall = { sql, params };
+        return chainable;
+      },
+    );
     chainable.andWhere = jest.fn((sql: string) => {
       if (sql.includes('deleted_at IS NULL')) deletedClause = true;
       return chainable;
@@ -377,7 +378,9 @@ describe('BE-W46-01 / listMessagesForConversation', () => {
 
   it('throws 404 CONVERSATION_NOT_FOUND when the caller is not the owner (enumeration guard)', async () => {
     const svc = makeService({
-      findOne: jest.fn().mockResolvedValue(conv({ ownerWorkHistoryId: OTHER_WH })),
+      findOne: jest
+        .fn()
+        .mockResolvedValue(conv({ ownerWorkHistoryId: OTHER_WH })),
     });
     await expect(
       svc.listMessagesForConversation('conv-1', OWNER_WH),

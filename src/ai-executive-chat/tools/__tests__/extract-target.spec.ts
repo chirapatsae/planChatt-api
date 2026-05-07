@@ -75,7 +75,9 @@ describe('BE-W45-01 / extractTargetFromToolResult', () => {
     // `listActivePlans` is a real tool but NOT in the registry.
     expect(extractTargetFromToolResult('listActivePlans', result)).toBeNull();
     // An entirely unknown name is also null.
-    expect(extractTargetFromToolResult('totallyUnknownTool', result)).toBeNull();
+    expect(
+      extractTargetFromToolResult('totallyUnknownTool', result),
+    ).toBeNull();
   });
 
   it('rejects the zero-UUID even if a tool result returns it', () => {

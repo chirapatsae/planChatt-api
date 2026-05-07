@@ -149,7 +149,10 @@ function makeFakePiiRedactor(overrides?: {
 
 function makeFakeLlmClient(
   handler:
-    | { content: string; usage?: { prompt_tokens: number; completion_tokens: number } }
+    | {
+        content: string;
+        usage?: { prompt_tokens: number; completion_tokens: number };
+      }
     | ((params: unknown) => Promise<unknown>)
     | Error,
 ) {
@@ -259,7 +262,9 @@ function callGenerate(
   );
 }
 
-function baseRow(titleSource: TitleSource = 'default-placeholder'): FakeConvRow {
+function baseRow(
+  titleSource: TitleSource = 'default-placeholder',
+): FakeConvRow {
   return {
     id: 'conv-001',
     titleSource,
@@ -326,7 +331,9 @@ describe('BE-W51-02 / generateAutoTitleIfEligible', () => {
   });
 
   it('idempotent pre-check — titleSource=llm-auto ⇒ LLM NOT called, no write', async () => {
-    const { repo, getUpdateCount } = makeFakeConversationRepo(baseRow('llm-auto'));
+    const { repo, getUpdateCount } = makeFakeConversationRepo(
+      baseRow('llm-auto'),
+    );
     const redactor = makeFakePiiRedactor();
     const llm = makeFakeLlmClient({ content: '{"title":"ชื่อใหม่"}' });
     const quota = makeFakeQuotaService();
@@ -340,7 +347,9 @@ describe('BE-W51-02 / generateAutoTitleIfEligible', () => {
   });
 
   it('idempotent pre-check — titleSource=user-rename ⇒ LLM NOT called, no write', async () => {
-    const { repo, getUpdateCount } = makeFakeConversationRepo(baseRow('user-rename'));
+    const { repo, getUpdateCount } = makeFakeConversationRepo(
+      baseRow('user-rename'),
+    );
     const redactor = makeFakePiiRedactor();
     const llm = makeFakeLlmClient({ content: '{"title":"ชื่อใหม่"}' });
     const quota = makeFakeQuotaService();
@@ -514,7 +523,7 @@ describe('BE-W51-02 / generateAutoTitleIfEligible', () => {
     expect(quota.checkAndLogUsage).not.toHaveBeenCalled();
   });
 
-  it('non-first-turn is not this method\'s concern — caller is responsible for the gate, but when invoked directly the method still respects the titleSource pre-check', async () => {
+  it("non-first-turn is not this method's concern — caller is responsible for the gate, but when invoked directly the method still respects the titleSource pre-check", async () => {
     // The caller in `runToolLoop` only invokes this method when
     // `seed.turnBaseIndex === 0`. Belt-and-braces: if a future caller
     // invokes it on an already-renamed row, the pre-check MUST still

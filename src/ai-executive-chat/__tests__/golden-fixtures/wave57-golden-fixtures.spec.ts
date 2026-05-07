@@ -261,10 +261,7 @@ function makeDeps(stub: SpecStub): {
   const geoResult = {
     labels:
       stub.geoLabels ??
-      new Map<
-        string,
-        { amphoeId: number | null; amphoeName: string | null }
-      >(),
+      new Map<string, { amphoeId: number | null; amphoeName: string | null }>(),
     missingDimensions: stub.geoWithSupplementAdvisory
       ? (['geo:supplement'] as Array<'geo:supplement'>)
       : ([] as string[]),
@@ -277,10 +274,7 @@ function makeDeps(stub: SpecStub): {
   const agencyResult = {
     labels:
       stub.agencyLabels ??
-      new Map<
-        string,
-        { agencyId: number | null; agencyName: string | null }
-      >(),
+      new Map<string, { agencyId: number | null; agencyName: string | null }>(),
     missingDimensions: [],
     advisories: [],
   };
@@ -453,14 +447,14 @@ describe('Wave 57 W57-QA-01 / golden fixture suite', () => {
       // spec asserts the rejection path on a non-UUID planId — the
       // canonical safety guard added at line 1166.
       const { deps } = makeDeps({ projects: [] });
-      const env = (await EXECUTIVE_TOOL_HANDLERS.listProjectsInPlan(
+      const env = await EXECUTIVE_TOOL_HANDLERS.listProjectsInPlan(
         {
           planId: 'not-a-uuid',
           scope: 'revised',
         },
         makeCtx(),
         deps,
-      )) as Record<string, unknown>;
+      );
       expect(env.planId).toBe('00000000-0000-0000-0000-000000000000');
       expect(Array.isArray(env.items)).toBe(true);
       expect((env.items as unknown[]).length).toBe(0);
@@ -490,23 +484,33 @@ describe('Wave 57 W57-QA-01 / golden fixture suite', () => {
       const { deps, listUnifiedProjectsSpy } = makeDeps({
         projects: PLAN_A_HEAD_PROJECTS,
         geoLabels: new Map([
-          ['a-pg-head', { amphoeId: AMPHOE_MUANG, amphoeName: 'เมืองนครราชสีมา' }],
+          [
+            'a-pg-head',
+            { amphoeId: AMPHOE_MUANG, amphoeName: 'เมืองนครราชสีมา' },
+          ],
           ['a-rpg-head1', { amphoeId: AMPHOE_KRABURI, amphoeName: 'ครบุรี' }],
-          ['a-rpg-head2', { amphoeId: AMPHOE_PAKTHONGCHAI, amphoeName: 'ปักธงชัย' }],
-          ['a-spg-1', { amphoeId: AMPHOE_MUANG, amphoeName: 'เมืองนครราชสีมา' }],
+          [
+            'a-rpg-head2',
+            { amphoeId: AMPHOE_PAKTHONGCHAI, amphoeName: 'ปักธงชัย' },
+          ],
+          [
+            'a-spg-1',
+            { amphoeId: AMPHOE_MUANG, amphoeName: 'เมืองนครราชสีมา' },
+          ],
         ]),
       });
 
-      const envelope = (await EXECUTIVE_TOOL_HANDLERS.getExecutiveDashboardSnapshot(
-        {
-          planId: PLAN_A_ID,
-          scope: ['all'],
-          groupBy: ['amphoe'],
-          includeGeo: true,
-        },
-        makeCtx(),
-        deps,
-      )) as unknown as ExecutiveEnvelope<Record<string, unknown>>;
+      const envelope =
+        (await EXECUTIVE_TOOL_HANDLERS.getExecutiveDashboardSnapshot(
+          {
+            planId: PLAN_A_ID,
+            scope: ['all'],
+            groupBy: ['amphoe'],
+            includeGeo: true,
+          },
+          makeCtx(),
+          deps,
+        )) as unknown as ExecutiveEnvelope<Record<string, unknown>>;
 
       expect(envelope.shape).toBe('dashboardSnapshot');
       const buckets = envelope.data.buckets as Record<
@@ -613,16 +617,17 @@ describe('Wave 57 W57-QA-01 / golden fixture suite', () => {
         ]),
       });
 
-      const envelope = (await EXECUTIVE_TOOL_HANDLERS.getExecutiveDashboardSnapshot(
-        {
-          planId: PLAN_A_ID,
-          scope: ['all'],
-          groupBy: ['strategy'],
-          includeBudget: true,
-        },
-        makeCtx(),
-        deps,
-      )) as unknown as ExecutiveEnvelope<Record<string, unknown>>;
+      const envelope =
+        (await EXECUTIVE_TOOL_HANDLERS.getExecutiveDashboardSnapshot(
+          {
+            planId: PLAN_A_ID,
+            scope: ['all'],
+            groupBy: ['strategy'],
+            includeBudget: true,
+          },
+          makeCtx(),
+          deps,
+        )) as unknown as ExecutiveEnvelope<Record<string, unknown>>;
 
       expect(envelope.shape).toBe('dashboardSnapshot');
       const buckets = envelope.data.buckets as Record<
@@ -656,15 +661,16 @@ describe('Wave 57 W57-QA-01 / golden fixture suite', () => {
         projects: PLAN_B_HEAD_PROJECTS,
       });
 
-      const envelope = (await EXECUTIVE_TOOL_HANDLERS.getExecutiveDashboardSnapshot(
-        {
-          planId: PLAN_B_ID,
-          scope: ['all'],
-          groupBy: ['issue'],
-        },
-        makeCtx(),
-        deps,
-      )) as unknown as ExecutiveEnvelope<Record<string, unknown>>;
+      const envelope =
+        (await EXECUTIVE_TOOL_HANDLERS.getExecutiveDashboardSnapshot(
+          {
+            planId: PLAN_B_ID,
+            scope: ['all'],
+            groupBy: ['issue'],
+          },
+          makeCtx(),
+          deps,
+        )) as unknown as ExecutiveEnvelope<Record<string, unknown>>;
 
       expect(envelope.shape).toBe('dashboardSnapshot');
       const buckets = envelope.data.buckets as Record<
@@ -751,16 +757,17 @@ describe('Wave 57 W57-QA-01 / golden fixture suite', () => {
         status: STATUS_FIXTURE_PLAN_A,
       });
 
-      const envelope = (await EXECUTIVE_TOOL_HANDLERS.getExecutiveDashboardSnapshot(
-        {
-          planId: PLAN_A_ID,
-          scope: ['all'],
-          groupBy: ['status'],
-          includeStatus: true,
-        },
-        makeCtx(),
-        deps,
-      )) as unknown as ExecutiveEnvelope<Record<string, unknown>>;
+      const envelope =
+        (await EXECUTIVE_TOOL_HANDLERS.getExecutiveDashboardSnapshot(
+          {
+            planId: PLAN_A_ID,
+            scope: ['all'],
+            groupBy: ['status'],
+            includeStatus: true,
+          },
+          makeCtx(),
+          deps,
+        )) as unknown as ExecutiveEnvelope<Record<string, unknown>>;
 
       expect(envelope.shape).toBe('dashboardSnapshot');
       const buckets = envelope.data.buckets as Record<
@@ -800,22 +807,32 @@ describe('Wave 57 W57-QA-01 / golden fixture suite', () => {
       const { deps, listUnifiedProjectsSpy } = makeDeps({
         projects: PLAN_A_HEAD_PROJECTS,
         agencyLabels: new Map([
-          ['a-pg-head', { agencyId: PAO_AGENCY_ID, agencyName: 'อบจ.นครราชสีมา' }],
-          ['a-rpg-head1', { agencyId: SUB_AGENCY_ID, agencyName: 'หน่วยงาน B' }],
-          ['a-spg-1', { agencyId: PAO_AGENCY_ID, agencyName: 'อบจ.นครราชสีมา' }],
+          [
+            'a-pg-head',
+            { agencyId: PAO_AGENCY_ID, agencyName: 'อบจ.นครราชสีมา' },
+          ],
+          [
+            'a-rpg-head1',
+            { agencyId: SUB_AGENCY_ID, agencyName: 'หน่วยงาน B' },
+          ],
+          [
+            'a-spg-1',
+            { agencyId: PAO_AGENCY_ID, agencyName: 'อบจ.นครราชสีมา' },
+          ],
         ]),
       });
 
-      const envelope = (await EXECUTIVE_TOOL_HANDLERS.getExecutiveDashboardSnapshot(
-        {
-          planId: PLAN_A_ID,
-          scope: ['all'],
-          groupBy: ['responsibleAgency'],
-          includeAgency: true,
-        },
-        makeCtx(),
-        deps,
-      )) as unknown as ExecutiveEnvelope<Record<string, unknown>>;
+      const envelope =
+        (await EXECUTIVE_TOOL_HANDLERS.getExecutiveDashboardSnapshot(
+          {
+            planId: PLAN_A_ID,
+            scope: ['all'],
+            groupBy: ['responsibleAgency'],
+            includeAgency: true,
+          },
+          makeCtx(),
+          deps,
+        )) as unknown as ExecutiveEnvelope<Record<string, unknown>>;
 
       expect(envelope.shape).toBe('dashboardSnapshot');
       const buckets = envelope.data.buckets as Record<

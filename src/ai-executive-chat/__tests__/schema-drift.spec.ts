@@ -20,9 +20,13 @@ describe('BE-W44-02 / tool-schema-validator', () => {
   });
 
   it('accepts well-formed JSON payload', () => {
-    const res = parseToolCallArguments('{"planId":"11111111-1111-1111-1111-111111111111"}');
+    const res = parseToolCallArguments(
+      '{"planId":"11111111-1111-1111-1111-111111111111"}',
+    );
     expect(res.ok).toBe(true);
-    expect(res.value).toEqual({ planId: '11111111-1111-1111-1111-111111111111' });
+    expect(res.value).toEqual({
+      planId: '11111111-1111-1111-1111-111111111111',
+    });
   });
 
   it('missing required field is an error, not a silent default', () => {
@@ -58,7 +62,9 @@ describe('BE-W44-02 / tool-schema-validator', () => {
 
   it('uuid format is enforced', () => {
     const spec = EXECUTIVE_TOOL_REGISTRY.getBudgetSummaryByPlan;
-    const res = validateAgainstSchema(spec.paramsSchema, { planId: 'not-a-uuid' });
+    const res = validateAgainstSchema(spec.paramsSchema, {
+      planId: 'not-a-uuid',
+    });
     expect(res.ok).toBe(false);
     expect(res.error).toMatch(/UUID/);
   });

@@ -141,29 +141,33 @@ describe('BE-W48-01 / deterministic hydration ordering', () => {
     // count reaches 4, exactly matching the RCA failure scenario.
 
     // Row 1 — user
-    await (svc as unknown as {
-      persistUserMessage: (
-        m: unknown,
-        c: string,
-        w: string,
-        t: string,
-        h: string,
-        turnIndex: number,
-      ) => Promise<unknown>;
-    }).persistUserMessage(manager, CONV_ID, WH_ID, 'hello', 'hash-user', 0);
+    await (
+      svc as unknown as {
+        persistUserMessage: (
+          m: unknown,
+          c: string,
+          w: string,
+          t: string,
+          h: string,
+          turnIndex: number,
+        ) => Promise<unknown>;
+      }
+    ).persistUserMessage(manager, CONV_ID, WH_ID, 'hello', 'hash-user', 0);
 
     await tick();
 
     // Row 2 — tool round #1
-    await (svc as unknown as {
-      persistToolRound: (
-        m: unknown,
-        seed: unknown,
-        offset: number,
-        name: string,
-        payload: unknown,
-      ) => Promise<unknown>;
-    }).persistToolRound(
+    await (
+      svc as unknown as {
+        persistToolRound: (
+          m: unknown,
+          seed: unknown,
+          offset: number,
+          name: string,
+          payload: unknown,
+        ) => Promise<unknown>;
+      }
+    ).persistToolRound(
       manager,
       { conversationId: CONV_ID, userMessageId: 'u1', turnBaseIndex: 0 },
       1,
@@ -175,15 +179,17 @@ describe('BE-W48-01 / deterministic hydration ordering', () => {
 
     // Row 3 — tool round #2 (simulates the second persisted tool row
     // that pushes the turn to 4 rows in the RCA scenario)
-    await (svc as unknown as {
-      persistToolRound: (
-        m: unknown,
-        seed: unknown,
-        offset: number,
-        name: string,
-        payload: unknown,
-      ) => Promise<unknown>;
-    }).persistToolRound(
+    await (
+      svc as unknown as {
+        persistToolRound: (
+          m: unknown,
+          seed: unknown,
+          offset: number,
+          name: string,
+          payload: unknown,
+        ) => Promise<unknown>;
+      }
+    ).persistToolRound(
       manager,
       { conversationId: CONV_ID, userMessageId: 'u1', turnBaseIndex: 0 },
       2,
@@ -194,18 +200,20 @@ describe('BE-W48-01 / deterministic hydration ordering', () => {
     await tick();
 
     // Row 4 — assistant final
-    await (svc as unknown as {
-      persistAssistantFinal: (
-        m: unknown,
-        seed: unknown,
-        offset: number,
-        text: string,
-        meta: unknown,
-        ti: number,
-        to: number,
-        inherited: unknown,
-      ) => Promise<unknown>;
-    }).persistAssistantFinal(
+    await (
+      svc as unknown as {
+        persistAssistantFinal: (
+          m: unknown,
+          seed: unknown,
+          offset: number,
+          text: string,
+          meta: unknown,
+          ti: number,
+          to: number,
+          inherited: unknown,
+        ) => Promise<unknown>;
+      }
+    ).persistAssistantFinal(
       manager,
       { conversationId: CONV_ID, userMessageId: 'u1', turnBaseIndex: 0 },
       3,
@@ -242,43 +250,55 @@ describe('BE-W48-01 / deterministic hydration ordering', () => {
     const svc = makeService();
     const { manager, rows } = makeFakeManager();
 
-    await (svc as unknown as { persistUserMessage: (...a: unknown[]) => Promise<unknown> })
-      .persistUserMessage(manager, CONV_ID, WH_ID, 'hi', 'hash-u', 0);
+    await (
+      svc as unknown as {
+        persistUserMessage: (...a: unknown[]) => Promise<unknown>;
+      }
+    ).persistUserMessage(manager, CONV_ID, WH_ID, 'hi', 'hash-u', 0);
     await tick();
-    await (svc as unknown as { persistToolRound: (...a: unknown[]) => Promise<unknown> })
-      .persistToolRound(
-        manager,
-        { conversationId: CONV_ID, userMessageId: 'u', turnBaseIndex: 0 },
-        1,
-        'listActivePlans',
-        { toolCalls: [], result: {} },
-      );
+    await (
+      svc as unknown as {
+        persistToolRound: (...a: unknown[]) => Promise<unknown>;
+      }
+    ).persistToolRound(
+      manager,
+      { conversationId: CONV_ID, userMessageId: 'u', turnBaseIndex: 0 },
+      1,
+      'listActivePlans',
+      { toolCalls: [], result: {} },
+    );
     await tick();
-    await (svc as unknown as { persistToolRound: (...a: unknown[]) => Promise<unknown> })
-      .persistToolRound(
-        manager,
-        { conversationId: CONV_ID, userMessageId: 'u', turnBaseIndex: 0 },
-        2,
-        'getBudgetSummaryByPlan',
-        { toolCalls: [], result: {} },
-      );
+    await (
+      svc as unknown as {
+        persistToolRound: (...a: unknown[]) => Promise<unknown>;
+      }
+    ).persistToolRound(
+      manager,
+      { conversationId: CONV_ID, userMessageId: 'u', turnBaseIndex: 0 },
+      2,
+      'getBudgetSummaryByPlan',
+      { toolCalls: [], result: {} },
+    );
     await tick();
-    await (svc as unknown as { persistAssistantFinal: (...a: unknown[]) => Promise<unknown> })
-      .persistAssistantFinal(
-        manager,
-        { conversationId: CONV_ID, userMessageId: 'u', turnBaseIndex: 0 },
-        3,
-        'final answer',
-        {
-          finishReason: 'stop',
-          modelUsed: 'gpt-4o',
-          wasDowngraded: false,
-          hops: 2,
-        },
-        1,
-        1,
-        { id: null, kind: null },
-      );
+    await (
+      svc as unknown as {
+        persistAssistantFinal: (...a: unknown[]) => Promise<unknown>;
+      }
+    ).persistAssistantFinal(
+      manager,
+      { conversationId: CONV_ID, userMessageId: 'u', turnBaseIndex: 0 },
+      3,
+      'final answer',
+      {
+        finishReason: 'stop',
+        modelUsed: 'gpt-4o',
+        wasDowngraded: false,
+        hops: 2,
+      },
+      1,
+      1,
+      { id: null, kind: null },
+    );
 
     // Simulate 3 hydration passes (refresh-the-page) and assert the
     // order is identical every time. Pre-fix this failed because the
@@ -296,23 +316,29 @@ describe('BE-W48-01 / deterministic hydration ordering', () => {
     const svc = makeService();
     const { manager, rows } = makeFakeManager();
 
-    await (svc as unknown as { persistUserMessage: (...a: unknown[]) => Promise<unknown> })
-      .persistUserMessage(manager, CONV_ID, WH_ID, 'probe', 'hash-u2', 0);
+    await (
+      svc as unknown as {
+        persistUserMessage: (...a: unknown[]) => Promise<unknown>;
+      }
+    ).persistUserMessage(manager, CONV_ID, WH_ID, 'probe', 'hash-u2', 0);
     await tick();
-    await (svc as unknown as { persistAssistantSoftStop: (...a: unknown[]) => Promise<unknown> })
-      .persistAssistantSoftStop(
-        manager,
-        { conversationId: CONV_ID, userMessageId: 'u', turnBaseIndex: 0 },
-        1,
-        {
-          finishReason: 'max_hops',
-          modelUsed: 'gpt-4o',
-          wasDowngraded: false,
-          hops: 6,
-          softStopReason: 'max_hops',
-        },
-        { id: null, kind: null },
-      );
+    await (
+      svc as unknown as {
+        persistAssistantSoftStop: (...a: unknown[]) => Promise<unknown>;
+      }
+    ).persistAssistantSoftStop(
+      manager,
+      { conversationId: CONV_ID, userMessageId: 'u', turnBaseIndex: 0 },
+      1,
+      {
+        finishReason: 'max_hops',
+        modelUsed: 'gpt-4o',
+        wasDowngraded: false,
+        hops: 6,
+        softStopReason: 'max_hops',
+      },
+      { id: null, kind: null },
+    );
 
     expect(rows).toHaveLength(2);
     expect(rows[0].createdAt.getTime()).toBeLessThan(
@@ -324,8 +350,11 @@ describe('BE-W48-01 / deterministic hydration ordering', () => {
     const svc = makeService();
     const { manager, rows } = makeFakeManager();
 
-    await (svc as unknown as { persistUserMessage: (...a: unknown[]) => Promise<unknown> })
-      .persistUserMessage(manager, CONV_ID, WH_ID, 'probe', 'hash-u3', 0);
+    await (
+      svc as unknown as {
+        persistUserMessage: (...a: unknown[]) => Promise<unknown>;
+      }
+    ).persistUserMessage(manager, CONV_ID, WH_ID, 'probe', 'hash-u3', 0);
 
     expect(rows).toHaveLength(1);
     // Both must be present; neither is aliased onto the other. The AI
@@ -350,38 +379,49 @@ describe('BE-W48-01 / deterministic hydration ordering', () => {
     const svc = makeService();
     const { manager, rows } = makeFakeManager();
 
-    await (svc as unknown as { persistUserMessage: (...a: unknown[]) => Promise<unknown> })
-      .persistUserMessage(manager, CONV_ID, WH_ID, 'probe', 'hash-u4', 0);
+    await (
+      svc as unknown as {
+        persistUserMessage: (...a: unknown[]) => Promise<unknown>;
+      }
+    ).persistUserMessage(manager, CONV_ID, WH_ID, 'probe', 'hash-u4', 0);
     await tick();
-    await (svc as unknown as { persistToolRound: (...a: unknown[]) => Promise<unknown> })
-      .persistToolRound(
-        manager,
-        { conversationId: CONV_ID, userMessageId: 'u', turnBaseIndex: 0 },
-        1,
-        'listActivePlans',
-        { toolCalls: [], result: {} },
-      );
+    await (
+      svc as unknown as {
+        persistToolRound: (...a: unknown[]) => Promise<unknown>;
+      }
+    ).persistToolRound(
+      manager,
+      { conversationId: CONV_ID, userMessageId: 'u', turnBaseIndex: 0 },
+      1,
+      'listActivePlans',
+      { toolCalls: [], result: {} },
+    );
     await tick();
-    await (svc as unknown as { persistAssistantFinal: (...a: unknown[]) => Promise<unknown> })
-      .persistAssistantFinal(
-        manager,
-        { conversationId: CONV_ID, userMessageId: 'u', turnBaseIndex: 0 },
-        2,
-        'ok',
-        {
-          finishReason: 'stop',
-          modelUsed: 'gpt-4o',
-          wasDowngraded: false,
-          hops: 1,
-        },
-        0,
-        0,
-        { id: null, kind: null },
-      );
+    await (
+      svc as unknown as {
+        persistAssistantFinal: (...a: unknown[]) => Promise<unknown>;
+      }
+    ).persistAssistantFinal(
+      manager,
+      { conversationId: CONV_ID, userMessageId: 'u', turnBaseIndex: 0 },
+      2,
+      'ok',
+      {
+        finishReason: 'stop',
+        modelUsed: 'gpt-4o',
+        wasDowngraded: false,
+        hops: 1,
+      },
+      0,
+      0,
+      { id: null, kind: null },
+    );
 
-    const toDto = (svc as unknown as {
-      toMessageDto: (row: AiExecutiveMessage) => { isStale: boolean };
-    }).toMessageDto.bind(svc);
+    const toDto = (
+      svc as unknown as {
+        toMessageDto: (row: AiExecutiveMessage) => { isStale: boolean };
+      }
+    ).toMessageDto.bind(svc);
 
     rows.forEach((r) => {
       const dto = toDto(r as AiExecutiveMessage);

@@ -44,29 +44,42 @@ function makeDeps(): {
 } {
   const listUnifiedProjects = jest.fn().mockResolvedValue([]);
   const runDimensions = jest.fn(
-    async (_tasks: unknown[], assemble: (r: unknown[]) => unknown, options: { shape: string }) => ({
-      shape: options.shape,
-      data: assemble([]),
-      asOf: new Date().toISOString(),
-      missingDimensions: [],
-      advisories: [],
-      partial: false,
-    } as unknown as ExecutiveEnvelope<unknown>),
+    async (
+      _tasks: unknown[],
+      assemble: (r: unknown[]) => unknown,
+      options: { shape: string },
+    ) =>
+      ({
+        shape: options.shape,
+        data: assemble([]),
+        asOf: new Date().toISOString(),
+        missingDimensions: [],
+        advisories: [],
+        partial: false,
+      }) as unknown as ExecutiveEnvelope<unknown>,
   );
   const deps: ExecutiveToolHandlerDeps = {
     dataSource: {} as never,
     unifiedProject: { listUnifiedProjects } as never,
-    budget: { totalsForUnifiedProjects: jest.fn().mockResolvedValue(new Map()) } as never,
-    status: { latestStatusFor: jest.fn().mockResolvedValue(new Map()) } as never,
+    budget: {
+      totalsForUnifiedProjects: jest.fn().mockResolvedValue(new Map()),
+    } as never,
+    status: {
+      latestStatusFor: jest.fn().mockResolvedValue(new Map()),
+    } as never,
     geo: {
-      annotate: jest
-        .fn()
-        .mockResolvedValue({ labels: new Map(), missingDimensions: [], advisories: [] }),
+      annotate: jest.fn().mockResolvedValue({
+        labels: new Map(),
+        missingDimensions: [],
+        advisories: [],
+      }),
     } as never,
     agency: {
-      annotate: jest
-        .fn()
-        .mockResolvedValue({ labels: new Map(), missingDimensions: [], advisories: [] }),
+      annotate: jest.fn().mockResolvedValue({
+        labels: new Map(),
+        missingDimensions: [],
+        advisories: [],
+      }),
     } as never,
     resilience: { runDimensions } as never,
   };

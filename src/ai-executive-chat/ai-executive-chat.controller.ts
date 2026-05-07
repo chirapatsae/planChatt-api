@@ -23,8 +23,14 @@ import { AiCooldown } from 'src/ai/decorators/ai-cooldown.decorator';
 // not arm the cooldown window.
 import { AiQuotaGuard } from 'src/ai-usage-quotas/guards/ai-quota.guard';
 import { AiQuotaWeight } from 'src/ai-usage-quotas/decorators/ai-quota-weight.decorator';
-// Wave 44 N1 — executive-scope admission gate.
-import { ExecutiveRoleGuard } from './guards/executive-role.guard';
+// auth-roles-guard-unification BE-04 — executive-scope admission is now
+// expressed via the canonical `@Roles(...) + RolesGuard` pair plus the
+// `WorkStatusApprovedGuard` for the §2 live-read. The bespoke
+// `ExecutiveRoleGuard` is retired in this wave.
+import { RolesGuard } from 'src/auth/roles.guard';
+import { WorkStatusApprovedGuard } from 'src/auth/work-status-approved.guard';
+import { Roles } from 'src/auth/roles.decorator';
+import { EXEC_READ } from 'src/auth/role-groups';
 import { PostChatMessageDto } from './dto/send-message.dto';
 import {
   ChatConversationSummaryDto,
@@ -50,7 +56,13 @@ import { QuotaOrgCapService } from 'src/ai-usage-quotas/quota-org-cap.service';
  *   - §17.11 — no role exemption on quota / cooldown.
  *
  * Guard chain (order matters):
- *   JwtAuthGuard → ExecutiveRoleGuard → AiQuotaGuard → AiCooldownGuard
+ *   JwtAuthGuard → RolesGuard → WorkStatusApprovedGuard → AiQuotaGuard → AiCooldownGuard
+ *
+ * (Pre-BE-04 the role + workStatus pair was a single bespoke
+ * `ExecutiveRoleGuard`. Per auth-roles-guard-unification §7.6 / BE-01
+ * §6 the canonical chain places the cheap token-claim role check
+ * before the live workStatus DB read. EXEC_READ = staff + admin +
+ * super-admin + c-level matches the prior `ALLOWED_ROLES` exactly.)
  *
  * BE-W44-01 skeleton returns 501 for `POST /messages`. BE-W44-02 owns
  * SSE streaming + the LLM tool-call loop. `GET /conversations` and
@@ -66,12 +78,12 @@ import { QuotaOrgCapService } from 'src/ai-usage-quotas/quota-org-cap.service';
  *   - DELETE /admin/conversations/:id    — admin override (audit-logged)
  *
  * The admin override uses its own guard stack (JwtAuthGuard only, no
- * ExecutiveRoleGuard at the class level for the admin path is
- * intentionally re-evaluated at the service layer — the admin route
- * is open to admin/super-admin, and the service MUST enforce the
- * role check itself). To keep the controller simple we still route
- * through JwtAuthGuard here and delegate full admin-role enforcement
- * to `AiExecutiveChatPdpaService.adminDeleteConversation`.
+ * RolesGuard / WorkStatusApprovedGuard at the class level for the
+ * admin path is intentionally re-evaluated at the service layer — the
+ * admin route is open to admin/super-admin, and the service MUST
+ * enforce the role check itself). To keep the controller simple we
+ * still route through JwtAuthGuard here and delegate full admin-role
+ * enforcement to `AiExecutiveChatPdpaService.adminDeleteConversation`.
  */
 @Controller({
   path: 'ai/executive-chat',
@@ -87,7 +99,8 @@ export class AiExecutiveChatController {
 
   // ─────────────────────────────────────────────────────────────────
   // Chat surfaces (BE-W44-01 skeleton — unchanged)
-  // Guard chain: JwtAuthGuard → ExecutiveRoleGuard → (quota/cooldown)
+  // Guard chain: JwtAuthGuard → RolesGuard → WorkStatusApprovedGuard
+  //   → (quota/cooldown)
   // ─────────────────────────────────────────────────────────────────
 
   /**
@@ -96,7 +109,14 @@ export class AiExecutiveChatController {
    * BE-W44-01 returns 501. BE-W44-02 replaces with SSE stream.
    */
   @Post('messages')
-  @UseGuards(JwtAuthGuard, ExecutiveRoleGuard, AiQuotaGuard, AiCooldownGuard)
+  @UseGuards(
+    JwtAuthGuard,
+    RolesGuard,
+    WorkStatusApprovedGuard,
+    AiQuotaGuard,
+    AiCooldownGuard,
+  )
+  @Roles(...EXEC_READ)
   @AiQuotaWeight('executive-chat')
   @AiCooldown('executive-chat', 6, 'body.conversationId')
   async sendMessage(
@@ -131,14 +151,14 @@ export class AiExecutiveChatController {
    * the service layer; no admin bypass.
    */
   @Get('conversations')
-  @UseGuards(JwtAuthGuard, ExecutiveRoleGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
+  @Roles(...EXEC_READ)
   async listConversations(
     @Req() req: Request & { user: JwtPayloadUser },
   ): Promise<{ conversations: ChatConversationSummaryDto[] }> {
     if (!req.user?.userId) throw new UnauthorizedException('UNAUTHENTICATED');
-    const conversations = await this.chatService.listConversationsForOwnerByUserId(
-      req.user.userId,
-    );
+    const conversations =
+      await this.chatService.listConversationsForOwnerByUserId(req.user.userId);
     return { conversations };
   }
 
@@ -151,7 +171,8 @@ export class AiExecutiveChatController {
    * row carries `isStale: false` per §17.4 snapshot-only.
    */
   @Get('conversations/:id/messages')
-  @UseGuards(JwtAuthGuard, ExecutiveRoleGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
+  @Roles(...EXEC_READ)
   async listMessages(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Req() req: Request & { user: JwtPayloadUser },
@@ -172,7 +193,8 @@ export class AiExecutiveChatController {
    * update; non-owner returns 404 (enumeration guard §17.3).
    */
   @Patch('conversations/:id')
-  @UseGuards(JwtAuthGuard, ExecutiveRoleGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
+  @Roles(...EXEC_READ)
   async renameConversation(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Req() req: Request & { user: JwtPayloadUser },
@@ -198,17 +220,17 @@ export class AiExecutiveChatController {
    * 248-257) expecting `{ usedThb, remainingThb, capThb, resetAt?,
    * orgConsumedThb?, orgCapThb? }`. This endpoint READS quota state;
    * it MUST NOT itself consume quota or trigger cooldown, so the
-   * guard chain is trimmed to `JwtAuthGuard → ExecutiveRoleGuard`.
+   * guard chain is trimmed to `JwtAuthGuard → RolesGuard →
+   * WorkStatusApprovedGuard` (no `AiQuotaGuard` / `AiCooldownGuard`).
    * Task explicitly documents this carve-out.
    *
    * §17.11 — this read path is NOT a workflow transition; returning
    * null-safe zeroes on missing data is advisory-compliant.
    */
   @Get('quota')
-  @UseGuards(JwtAuthGuard, ExecutiveRoleGuard)
-  async getQuota(
-    @Req() req: Request & { user: JwtPayloadUser },
-  ): Promise<{
+  @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
+  @Roles(...EXEC_READ)
+  async getQuota(@Req() req: Request & { user: JwtPayloadUser }): Promise<{
     usedThb: number;
     remainingThb: number;
     capThb: number;
@@ -219,8 +241,7 @@ export class AiExecutiveChatController {
     if (!req.user?.userId) throw new UnauthorizedException('UNAUTHENTICATED');
     const snap = await this.quotaService.getQuotaSnapshotForUi(req.user.userId);
     const orgCapThb = this.orgCapService.getOrgCapThb();
-    const orgConsumedThb =
-      await this.orgCapService.getOrgMonthlyConsumedThb();
+    const orgConsumedThb = await this.orgCapService.getOrgMonthlyConsumedThb();
     return {
       usedThb: snap?.usedThb ?? 0,
       remainingThb: snap?.remainingThb ?? 0,
@@ -246,7 +267,8 @@ export class AiExecutiveChatController {
    * guard). Cascades to messages via explicit soft-delete.
    */
   @Delete('conversations/:id')
-  @UseGuards(JwtAuthGuard, ExecutiveRoleGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
+  @Roles(...EXEC_READ)
   async deleteConversation(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Req() req: Request & { user: JwtPayloadUser },
@@ -271,10 +293,9 @@ export class AiExecutiveChatController {
    * body and the browser turns it into a Blob transparently.
    */
   @Post('export-my-data')
-  @UseGuards(JwtAuthGuard, ExecutiveRoleGuard)
-  async exportMyData(
-    @Req() req: Request & { user: JwtPayloadUser },
-  ) {
+  @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
+  @Roles(...EXEC_READ)
+  async exportMyData(@Req() req: Request & { user: JwtPayloadUser }) {
     if (!req.user?.userId) throw new UnauthorizedException('UNAUTHENTICATED');
     return this.pdpaService.exportOwnData(req.user.userId);
   }
@@ -296,7 +317,8 @@ export class AiExecutiveChatController {
    * DELETE lands here cleanly.
    */
   @Delete('conversations')
-  @UseGuards(JwtAuthGuard, ExecutiveRoleGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
+  @Roles(...EXEC_READ)
   async deleteAllConversations(
     @Req() req: Request & { user: JwtPayloadUser },
     @Body() body: { confirm?: boolean },
@@ -312,9 +334,10 @@ export class AiExecutiveChatController {
   // PRIV-W44-01 — PDPA admin override
   //
   // Admin / super-admin only. Role enforcement lives at the service
-  // layer (not ExecutiveRoleGuard — that gate accepts `executive`
-  // which we do NOT want here). Audit row written to `ai_usage_logs`
-  // on every successful delete per §17.11.
+  // layer (not the canonical `RolesGuard` — the EXEC_READ group
+  // accepts `staff` and `c-level` which we do NOT want here). Audit
+  // row written to `ai_usage_logs` on every successful delete per
+  // §17.11.
   // ─────────────────────────────────────────────────────────────────
 
   /**
@@ -331,7 +354,11 @@ export class AiExecutiveChatController {
     @Param('id', new ParseUUIDPipe()) id: string,
     @Req() req: Request & { user: JwtPayloadUser },
     @Body() body: { reason?: string } = {},
-  ): Promise<{ id: string; ownerWorkHistoryId: string; deletedMessages: number }> {
+  ): Promise<{
+    id: string;
+    ownerWorkHistoryId: string;
+    deletedMessages: number;
+  }> {
     if (!req.user?.userId) throw new UnauthorizedException('UNAUTHENTICATED');
     return this.pdpaService.adminDeleteConversation(
       id,

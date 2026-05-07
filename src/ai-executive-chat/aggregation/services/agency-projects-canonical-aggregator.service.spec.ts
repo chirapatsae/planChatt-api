@@ -50,8 +50,7 @@ function makeQbMock(rows: RawRow[]): Record<string, unknown> {
     qb[m] = passthrough;
   }
   qb.getRawMany = (): Promise<RawRow[]> => Promise.resolve(rows);
-  qb.getRawOne = (): Promise<RawRow | undefined> =>
-    Promise.resolve(rows[0]);
+  qb.getRawOne = (): Promise<RawRow | undefined> => Promise.resolve(rows[0]);
   return qb;
 }
 
@@ -249,7 +248,7 @@ describe('AgencyProjectsCanonicalAggregatorService', () => {
       });
       // Capture the Logger output via a spy on the prototype.
       const warnSpy = jest
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         .spyOn((svc as any).logger, 'warn')
         .mockImplementation(() => undefined);
 
@@ -272,7 +271,7 @@ describe('AgencyProjectsCanonicalAggregatorService', () => {
     it('handles missing legacy values with n/a placeholder', async () => {
       const svc = makeService({});
       const warnSpy = jest
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         .spyOn((svc as any).logger, 'warn')
         .mockImplementation(() => undefined);
       await svc.computeWithLegacyComparison({ agencyIds: [42] }, {});

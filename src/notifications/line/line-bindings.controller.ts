@@ -1,7 +1,6 @@
 import {
   Body,
   Controller,
-  ForbiddenException,
   Get,
   HttpCode,
   HttpException,
@@ -22,6 +21,9 @@ import * as crypto from 'crypto';
 
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
+import { Roles } from 'src/auth/roles.decorator';
+import { RolesGuard } from 'src/auth/roles.guard';
+import { ADMIN_OR_ABOVE } from 'src/auth/role-groups';
 import { LineUserBinding } from 'src/line/entities/line-user-binding.entity';
 import { User } from 'src/users/entities/user.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
@@ -31,14 +33,14 @@ import { ListLineBindingsQueryDto } from './dto/list-line-bindings.dto';
 import { RevealLineBindingBodyDto } from './dto/reveal-line-binding.dto';
 
 /**
- * W97-API-BINDINGS — Super-admin LINE binding registry endpoints.
+ * W97-API-BINDINGS — LINE binding registry endpoints.
  *
  * Source of truth:
  *   - docs/tasks/wave97/W97-API-BINDINGS.md
  *   - W97-INVESTIGATE fact sheet
  *   - W97-MIGRATION (`line_binding_admin_actions` table)
  *
- * Endpoints (super-admin ONLY — staff-lead returns 403):
+ * Endpoints (admin + super-admin per W97 user-amendment; user role returns 403):
  *
  *   GET  /v1/admin/notifications/line-bindings
  *     Paginated, filterable list with masked `lineUserId` and masked
@@ -68,8 +70,6 @@ import { RevealLineBindingBodyDto } from './dto/reveal-line-binding.dto';
 // W97 user-amendment: list (GET) + reveal (POST) become accessible to admin
 // in addition to super-admin. Force-unlink stays super-admin-only because it
 // terminates user consent — central authority only.
-const SUPER_ADMIN_ROLES = new Set(['super-admin']);
-const ADMIN_OR_ABOVE_ROLES = new Set(['admin', 'super-admin']);
 /** 30 reveals per actor per rolling 60-minute window. */
 const REVEAL_WINDOW_MS = 60 * 60 * 1000;
 const REVEAL_MAX_PER_WINDOW = 30;
@@ -112,7 +112,8 @@ export class LineBindingsController {
   // GET /v1/admin/notifications/line-bindings
   // ---------------------------------------------------------------------------
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...ADMIN_OR_ABOVE)
   @Get()
   @HttpCode(HttpStatus.OK)
   async list(
@@ -135,8 +136,6 @@ export class LineBindingsController {
     page: number;
     pageSize: number;
   }> {
-    this.assertAdminOrAbove(req.user);
-
     const status = query.status ?? 'active';
     const page = Math.max(1, query.page ?? 1);
     const pageSize = Math.min(
@@ -215,9 +214,10 @@ export class LineBindingsController {
       userEmailMasked: this.maskEmailLike(r.email),
       lineDisplayName: r.display_name,
       lineUserIdMasked: this.maskLineUserId(r.line_user_id),
-      linkedAt: r.linked_at instanceof Date
-        ? r.linked_at.toISOString()
-        : new Date(r.linked_at).toISOString(),
+      linkedAt:
+        r.linked_at instanceof Date
+          ? r.linked_at.toISOString()
+          : new Date(r.linked_at).toISOString(),
       unlinkedAt:
         r.unlinked_at == null
           ? null
@@ -241,7 +241,8 @@ export class LineBindingsController {
   // POST /v1/admin/notifications/line-bindings/:id/reveal
   // ---------------------------------------------------------------------------
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...ADMIN_OR_ABOVE)
   @Post(':id/reveal')
   @HttpCode(HttpStatus.OK)
   async reveal(
@@ -256,7 +257,6 @@ export class LineBindingsController {
     unlinkedAt: string | null;
     revealAuditId: string;
   }> {
-    this.assertAdminOrAbove(req.user);
     this.assertRevealRateLimit(req.user.userId);
 
     // Resolve actor's current WorkHistory for audit context (CLAUDE.md §4
@@ -312,8 +312,9 @@ export class LineBindingsController {
           requestIp,
           requestUserAgent,
         });
-        const insertedId = (insertResult.identifiers?.[0]?.id ??
-          null) as string | null;
+        const insertedId = (insertResult.identifiers?.[0]?.id ?? null) as
+          | string
+          | null;
 
         return { binding: row, auditId: insertedId };
       },
@@ -351,25 +352,8 @@ export class LineBindingsController {
   }
 
   // ---------------------------------------------------------------------------
-  // Guards
+  // Helpers
   // ---------------------------------------------------------------------------
-
-  private assertSuperAdmin(user: JwtPayloadUser): void {
-    if (!user || !SUPER_ADMIN_ROLES.has(user.role)) {
-      throw new ForbiddenException(
-        'เฉพาะ super-admin เท่านั้นที่สามารถเข้าถึงข้อมูลการเชื่อมต่อ LINE ได้',
-      );
-    }
-  }
-
-  // W97 user-amendment: list + reveal accept admin in addition to super-admin.
-  private assertAdminOrAbove(user: JwtPayloadUser): void {
-    if (!user || !ADMIN_OR_ABOVE_ROLES.has(user.role)) {
-      throw new ForbiddenException(
-        'การเข้าถึงนี้สงวนสำหรับ admin หรือ super-admin',
-      );
-    }
-  }
 
   /**
    * Sliding-window rate limit: at most `REVEAL_MAX_PER_WINDOW`
@@ -520,4 +504,3 @@ export class LineBindingsController {
     return ua.length > 512 ? ua.slice(0, 512) : ua;
   }
 }
-

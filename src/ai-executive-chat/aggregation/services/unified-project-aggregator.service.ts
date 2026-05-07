@@ -79,11 +79,7 @@ import {
 // W67-FIX-02 — only canonical statuses in EXEC_VISIBLE_STATUSES are
 // surfaced in the breakdown (Ready is excluded by §17.2 / Q8 default).
 import { EXEC_VISIBLE_STATUSES } from '../constants/status-buckets';
-import type {
-  PlanReportFormat,
-  ProjectKind,
-  UnifiedProject,
-} from '../types';
+import type { PlanReportFormat, ProjectKind, UnifiedProject } from '../types';
 // Wave 57 W57-BE-AGG-02 — single source of truth for §1 + §5 origin
 // classification. The private `toOriginType` helper now delegates to
 // `classifyOriginFromIdScalars` so the magic constants `'3001'` /
@@ -207,9 +203,7 @@ type SupplementRawRow = {
 
 @Injectable()
 export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
-  constructor(
-    @InjectDataSource() private readonly dataSource: DataSource,
-  ) {}
+  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
   /**
    * List unified projects across the requested scope(s).
@@ -245,8 +239,10 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
     // (DSL omitted) short-circuits `applyFilters` inside each loader.
     const filters = query.filters;
 
-    const { mainBudget, revisedBudget, supplementBudget } =
-      this.splitBudget(scopeSet, limit);
+    const { mainBudget, revisedBudget, supplementBudget } = this.splitBudget(
+      scopeSet,
+      limit,
+    );
 
     // ── Parallel reads across the three kinds ──────────────────────
     const [mainRows, revisedRows, supplementRows] = await Promise.all([
@@ -265,49 +261,55 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
     const items: UnifiedProject[] = [];
 
     for (const r of mainRows) {
-      items.push(this.toUnified('main', r.id, r.title, r.planid, r.reportformat, {
-        amphoeId: r.amphoeid,
-        agencyId: r.agencyid,
-        strategyId: r.strategyid,
-        tacticId: r.tacticid,
-        planLevelId: r.planlevelid,
-        indicator: r.indicator,
-        issueId: r.issueid,
-        creatorAmphoeId: r.creator_amphoe_id,
-        creatorLaoId: r.creator_lao_id,
-      }));
+      items.push(
+        this.toUnified('main', r.id, r.title, r.planid, r.reportformat, {
+          amphoeId: r.amphoeid,
+          agencyId: r.agencyid,
+          strategyId: r.strategyid,
+          tacticId: r.tacticid,
+          planLevelId: r.planlevelid,
+          indicator: r.indicator,
+          issueId: r.issueid,
+          creatorAmphoeId: r.creator_amphoe_id,
+          creatorLaoId: r.creator_lao_id,
+        }),
+      );
     }
 
     for (const r of revisedRows) {
-      items.push(this.toUnified('revised', r.id, r.title, r.planid, r.reportformat, {
-        amphoeId: r.amphoeid,
-        agencyId: r.agencyid,
-        strategyId: r.strategyid,
-        tacticId: r.tacticid,
-        planLevelId: r.planlevelid,
-        indicator: r.indicator,
-        issueId: r.issueid,
-        creatorAmphoeId: r.creator_amphoe_id,
-        creatorLaoId: r.creator_lao_id,
-      }));
+      items.push(
+        this.toUnified('revised', r.id, r.title, r.planid, r.reportformat, {
+          amphoeId: r.amphoeid,
+          agencyId: r.agencyid,
+          strategyId: r.strategyid,
+          tacticId: r.tacticid,
+          planLevelId: r.planlevelid,
+          indicator: r.indicator,
+          issueId: r.issueid,
+          creatorAmphoeId: r.creator_amphoe_id,
+          creatorLaoId: r.creator_lao_id,
+        }),
+      );
     }
 
     for (const r of supplementRows) {
-      items.push(this.toUnified('supplement', r.id, r.title, r.planid, r.reportformat, {
-        // Wave 55 W55-BE-04 — SPG now has `amphoe_id` (W55-DB-01).
-        // Historical rows may still be NULL; `GeoEnrichmentService`
-        // emits the per-row `geo:supplement` missingDimension in that
-        // case.
-        amphoeId: r.amphoeid,
-        agencyId: r.agencyid,
-        strategyId: r.strategyid,
-        tacticId: r.tacticid,
-        planLevelId: r.planlevelid,
-        indicator: r.indicator,
-        issueId: r.issueid,
-        creatorAmphoeId: r.creator_amphoe_id,
-        creatorLaoId: r.creator_lao_id,
-      }));
+      items.push(
+        this.toUnified('supplement', r.id, r.title, r.planid, r.reportformat, {
+          // Wave 55 W55-BE-04 — SPG now has `amphoe_id` (W55-DB-01).
+          // Historical rows may still be NULL; `GeoEnrichmentService`
+          // emits the per-row `geo:supplement` missingDimension in that
+          // case.
+          amphoeId: r.amphoeid,
+          agencyId: r.agencyid,
+          strategyId: r.strategyid,
+          tacticId: r.tacticid,
+          planLevelId: r.planlevelid,
+          indicator: r.indicator,
+          issueId: r.issueid,
+          creatorAmphoeId: r.creator_amphoe_id,
+          creatorLaoId: r.creator_lao_id,
+        }),
+      );
     }
 
     return items;
@@ -761,7 +763,9 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
           this.fetchProjectsForBookStatus({
             book,
             status,
-            planId: book.planLabel ? this.extractPlanIdFromKey(book.bookKey) : null,
+            planId: book.planLabel
+              ? this.extractPlanIdFromKey(book.bookKey)
+              : null,
             includeHistorical,
             filters,
           }),
@@ -777,15 +781,16 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
     // `includeHistoricalVersions=true`) and falls back to a normalized
     // name-exact match honoring §14.2 head-of-lineage on the candidate
     // side.
-    await this.annotateLinkedRelated(bookMap, planId, includeHistorical, filters);
+    await this.annotateLinkedRelated(
+      bookMap,
+      planId,
+      includeHistorical,
+      filters,
+    );
 
     // ── Drop empty buckets + sort ───────────────────────────────────
-    const STATUS_ORDER: GroupedExecutiveStatusBreakdownStatusGroup['group'][] = [
-      'pending_review',
-      'awaiting_approval',
-      'approved',
-      'rejected',
-    ];
+    const STATUS_ORDER: GroupedExecutiveStatusBreakdownStatusGroup['group'][] =
+      ['pending_review', 'awaiting_approval', 'approved', 'rejected'];
     const KIND_ORDER: GroupedExecutiveStatusBreakdownBook['bookKind'][] = [
       'main',
       'revised',
@@ -954,7 +959,8 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
     } else if (book.bookKind === 'revised') {
       // bookKey: `${planId}::revised::${dprId}` — pull dprId from key
       const parts = book.bookKey.split('::');
-      const dprId = parts.length === 3 && parts[1] === 'revised' ? parts[2] : null;
+      const dprId =
+        parts.length === 3 && parts[1] === 'revised' ? parts[2] : null;
       if (!dprId) return;
       const qb = this.dataSource
         .getRepository(RevisedProjectGroup)
@@ -1225,9 +1231,8 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
               if (candidates.length === 0) return;
               // Tie-break: most recent createdAt wins.
               let best = candidates[0];
-              let bestAt = createdAtById.get(
-                `${best.projectKind}:${best.projectId}`,
-              ) ?? 0;
+              let bestAt =
+                createdAtById.get(`${best.projectKind}:${best.projectId}`) ?? 0;
               for (let i = 1; i < candidates.length; i++) {
                 const c = candidates[i];
                 const at =
@@ -1612,9 +1617,10 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
 
   /** Clamp limit into [1, 50], default 20. */
   private clampLimit(raw: number | undefined): number {
-    const n = typeof raw === 'number' && Number.isFinite(raw)
-      ? Math.floor(raw)
-      : LIMIT_DEFAULT;
+    const n =
+      typeof raw === 'number' && Number.isFinite(raw)
+        ? Math.floor(raw)
+        : LIMIT_DEFAULT;
     if (n < 1) return 1;
     if (n > LIMIT_CEILING) return LIMIT_CEILING;
     return n;
@@ -1664,26 +1670,21 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
 
     if (requestedCount === 3) {
       const mainBudget = Math.max(1, Math.ceil(limit * SCOPE_SPLIT_MAIN));
-      const revisedBudget = Math.max(
-        1,
-        Math.ceil(limit * SCOPE_SPLIT_REVISED),
-      );
+      const revisedBudget = Math.max(1, Math.ceil(limit * SCOPE_SPLIT_REVISED));
       // Supplement absorbs the remainder so the grand total === `limit`
       // (design §3.1 "bound result size by `limit` across all three
       // kinds"). When `limit` is small (e.g. 1 or 2), the ceil() calls
       // above can saturate early; clamp the supplement budget to >= 0.
-      const supplementBudget = Math.max(
-        0,
-        limit - mainBudget - revisedBudget,
-      );
+      const supplementBudget = Math.max(0, limit - mainBudget - revisedBudget);
       return { mainBudget, revisedBudget, supplementBudget };
     }
 
     // Exactly two kinds. Split proportionally between the two shares.
     const mainShare = wantMain ? SCOPE_SPLIT_MAIN : 0;
     const revisedShare = wantRevised ? SCOPE_SPLIT_REVISED : 0;
-    const supplementShare =
-      wantSupplement ? 1 - SCOPE_SPLIT_MAIN - SCOPE_SPLIT_REVISED : 0;
+    const supplementShare = wantSupplement
+      ? 1 - SCOPE_SPLIT_MAIN - SCOPE_SPLIT_REVISED
+      : 0;
     const totalShare = mainShare + revisedShare + supplementShare;
 
     const allocate = (share: number, want: boolean): number =>
@@ -1942,7 +1943,9 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
    * zero raw table literals. Idempotent: calling with `undefined`
    * filters is a no-op.
    */
-  private applyFilters<T extends ProjectGroup | RevisedProjectGroup | SupplementProjectGroup>(
+  private applyFilters<
+    T extends ProjectGroup | RevisedProjectGroup | SupplementProjectGroup,
+  >(
     qb: SelectQueryBuilder<T>,
     filters: UnifiedProjectQuery['filters'],
     kind: ProjectKind,
@@ -2134,10 +2137,9 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
       if (numericIds.length === 0) {
         qb.andWhere('1 = 0');
       } else {
-        qb.andWhere(
-          `${alias}.responsible_agency_id IN (:...agencyIdsFilter)`,
-          { agencyIdsFilter: numericIds },
-        );
+        qb.andWhere(`${alias}.responsible_agency_id IN (:...agencyIdsFilter)`, {
+          agencyIdsFilter: numericIds,
+        });
       }
     }
 
@@ -2149,8 +2151,7 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
     // rows per project; a project with no rows contributes 0 (COALESCE).
     const br = filters.budgetRange;
     if (br && (typeof br.min === 'number' || typeof br.max === 'number')) {
-      const budgetTable =
-        this.dataSource.getMetadata(Budget).tableName;
+      const budgetTable = this.dataSource.getMetadata(Budget).tableName;
       const scalar =
         `COALESCE((SELECT SUM(b_f.quantity) FROM "${budgetTable}" b_f ` +
         `WHERE b_f.${fkColumn} = ${alias}.id), 0)`;
@@ -2175,10 +2176,10 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
       const hasFrom = typeof dr.from === 'string' && dr.from.length > 0;
       const hasTo = typeof dr.to === 'string' && dr.to.length > 0;
       if (hasFrom && hasTo) {
-        qb.andWhere(
-          `${alias}.created_at BETWEEN :dateFrom AND :dateTo`,
-          { dateFrom: dr.from, dateTo: dr.to },
-        );
+        qb.andWhere(`${alias}.created_at BETWEEN :dateFrom AND :dateTo`, {
+          dateFrom: dr.from,
+          dateTo: dr.to,
+        });
       } else if (hasFrom) {
         qb.andWhere(`${alias}.created_at >= :dateFrom`, {
           dateFrom: dr.from,
@@ -2215,7 +2216,7 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
       } else {
         const wantAgency = canonical.has('agency-normal');
         const agencyPredicate =
-          "wh_amp.id = :originAgencyAmphoeId AND wh_lao.id = :originAgencyLaoId";
+          'wh_amp.id = :originAgencyAmphoeId AND wh_lao.id = :originAgencyLaoId';
         if (wantAgency) {
           qb.andWhere(agencyPredicate, {
             originAgencyAmphoeId: UnifiedProjectAggregator.AGENCY_AMPHOE_ID,

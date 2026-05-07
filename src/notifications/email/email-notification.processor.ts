@@ -32,7 +32,9 @@ import { TemplateContextError } from './template-renderer.service';
 export class EmailNotificationProcessor {
   private readonly logger = new Logger(EmailNotificationProcessor.name);
 
-  constructor(private readonly notificationsEmailService: NotificationsEmailService) {}
+  constructor(
+    private readonly notificationsEmailService: NotificationsEmailService,
+  ) {}
 
   @Process(NOTIFICATIONS_EMAIL_JOB)
   async handleEmailJob(job: Job<ProjectNotificationJobPayload>): Promise<void> {

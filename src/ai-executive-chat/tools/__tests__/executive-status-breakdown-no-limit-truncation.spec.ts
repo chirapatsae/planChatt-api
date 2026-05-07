@@ -150,7 +150,7 @@ function makeCountDataSource(opts: {
     getRepository: (target: unknown) => {
       const repoName =
         typeof target === 'function'
-          ? (target as { name?: string }).name ?? 'Unknown'
+          ? ((target as { name?: string }).name ?? 'Unknown')
           : 'Unknown';
       return {
         createQueryBuilder: (_alias: string) => qbFactory(repoName),
@@ -238,9 +238,7 @@ describe('W67-FIX-02 — UnifiedProjectAggregator.countExecutiveStatusBreakdown'
         scope: ['main', 'revised'],
       });
       const pg = calls.find((c) => c.repositoryName === 'ProjectGroup');
-      const rpg = calls.find(
-        (c) => c.repositoryName === 'RevisedProjectGroup',
-      );
+      const rpg = calls.find((c) => c.repositoryName === 'RevisedProjectGroup');
       expect(pg).toBeDefined();
       expect(rpg).toBeDefined();
       // Each kind attaches RevisedProjectGroup as the anti-join target.

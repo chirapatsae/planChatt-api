@@ -20,9 +20,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-import {
-  EXECUTIVE_CHAT_SYSTEM_PROMPT,
-} from '../prompts/executive-chat-system-prompt';
+import { EXECUTIVE_CHAT_SYSTEM_PROMPT } from '../prompts/executive-chat-system-prompt';
 import { validateAgainstSchema } from '../tools/tool-schema-validator';
 import { getExecutiveToolSpec } from '../tools/tool-registry';
 

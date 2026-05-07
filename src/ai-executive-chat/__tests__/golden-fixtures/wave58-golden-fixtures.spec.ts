@@ -243,7 +243,9 @@ describe('Wave 58 / Q-G17 — planActivityStatus + rule #28 vocab (D2)', () => {
 describe('Wave 58 / Q-G18 — cross-turn continuity rule #27d (D5)', () => {
   it('rule #27d is present in EXECUTIVE_CHAT_SYSTEM_PROMPT', () => {
     expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain('27d');
-    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain('cross-turn plan continuity');
+    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain(
+      'cross-turn plan continuity',
+    );
   });
 
   it('rule #27d directs the LLM to the correct empty-result advisory', () => {
@@ -324,9 +326,9 @@ describe('Wave 58 / Q-G19 — agency placeholder defense (D3 + D6)', () => {
     expect(
       checkAgencyLabelPlaceholder({ responsibleAgencyName: undefined }).ok,
     ).toBe(true);
-    expect(
-      checkAgencyLabelPlaceholder({ responsibleAgencyName: '' }).ok,
-    ).toBe(true);
+    expect(checkAgencyLabelPlaceholder({ responsibleAgencyName: '' }).ok).toBe(
+      true,
+    );
   });
 
   it('FORBIDDEN_AGENCY_LABEL_PATTERNS guards both responsibleAgencyName AND disclosure fields', () => {
@@ -351,7 +353,9 @@ describe('Wave 58 / Q-G19 — agency placeholder defense (D3 + D6)', () => {
 
   it('rule #27b is present in EXECUTIVE_CHAT_SYSTEM_PROMPT', () => {
     expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain('27b');
-    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain('responsible-agency rendering');
+    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain(
+      'responsible-agency rendering',
+    );
   });
 
   it('rule #27b cites the forbidden synthesised label "หน่วยงานที่ N" verbatim', () => {

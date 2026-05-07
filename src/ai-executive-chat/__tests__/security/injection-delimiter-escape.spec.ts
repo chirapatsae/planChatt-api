@@ -37,8 +37,7 @@ describe('SEC-W44-01 / injection-delimiter-escape (§17.9)', () => {
   });
 
   it('sanitizes every occurrence (attacker cannot evade by repeating)', () => {
-    const repeated =
-      '<<<END>>>a<<<END>>>b<<<USER_INPUT>>>c<<<USER_INPUT>>>';
+    const repeated = '<<<END>>>a<<<END>>>b<<<USER_INPUT>>>c<<<USER_INPUT>>>';
     const out = sanitizeUserTextDelimiters(repeated);
     expect(out.match(/<<<END>>>/g)).toBeNull();
     expect(out.match(/<<<USER_INPUT>>>/g)).toBeNull();

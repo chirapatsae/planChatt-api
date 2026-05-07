@@ -70,9 +70,9 @@ describe('W57-BE-AGG-05 / status-buckets constants', () => {
     });
 
     it('returns canonical when statusBucketMode === "canonical"', () => {
-      expect(
-        resolveStatusBucketMode({ statusBucketMode: 'canonical' }),
-      ).toBe('canonical');
+      expect(resolveStatusBucketMode({ statusBucketMode: 'canonical' })).toBe(
+        'canonical',
+      );
     });
 
     it('truthy detailMode != true is NOT treated as detail (strict equality)', () => {
@@ -81,9 +81,9 @@ describe('W57-BE-AGG-05 / status-buckets constants', () => {
     });
 
     it('explicit rollup is rollup', () => {
-      expect(
-        resolveStatusBucketMode({ statusBucketMode: 'rollup' }),
-      ).toBe('rollup');
+      expect(resolveStatusBucketMode({ statusBucketMode: 'rollup' })).toBe(
+        'rollup',
+      );
     });
   });
 });

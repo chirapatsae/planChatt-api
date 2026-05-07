@@ -14,7 +14,10 @@
  */
 
 import { EXECUTIVE_TOOL_HANDLERS } from '../handlers/executive-tool-handlers';
-import type { ExecutiveCallerContext, ExecutiveToolHandlerDeps } from '../handlers/handler-types';
+import type {
+  ExecutiveCallerContext,
+  ExecutiveToolHandlerDeps,
+} from '../handlers/handler-types';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { PENDING_RESPONSIBLE_AGENCY_DISCLOSURE } from '../../aggregation/constants/revision-round-label';

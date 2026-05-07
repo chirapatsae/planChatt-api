@@ -56,9 +56,9 @@ describe('W57-BE-AGG-02 / classifyOriginFromWorkHistory', () => {
         localAdministrativeOrganization: null,
       }),
     ).toBe('lao-coordinated');
-    expect(
-      classifyOriginFromWorkHistory({ amphoe: { id: '3001' } }),
-    ).toBe('lao-coordinated');
+    expect(classifyOriginFromWorkHistory({ amphoe: { id: '3001' } })).toBe(
+      'lao-coordinated',
+    );
   });
 
   it('coerces numeric ids consistently', () => {

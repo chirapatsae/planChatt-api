@@ -161,9 +161,7 @@ describe('BE-W54-08 / DSL contract — EXECUTIVE_QUERY_SCHEMA byte-identity', ()
 
   describe('per-tool planId forks', () => {
     it('getPlanOverview.required includes planId', () => {
-      expect(planOverview.required).toEqual(
-        expect.arrayContaining(['planId']),
-      );
+      expect(planOverview.required).toEqual(expect.arrayContaining(['planId']));
     });
 
     it('getExecutiveDashboardSnapshot.planId is { type: uuid } without required/not override', () => {
@@ -224,7 +222,7 @@ describe('BE-W54-08 / DSL contract — EXECUTIVE_QUERY_SCHEMA byte-identity', ()
     });
   });
 
-  describe("W67-LAO-RESOLVER — groupBy enum + filters.laoIds shared across Tier-C tools", () => {
+  describe('W67-LAO-RESOLVER — groupBy enum + filters.laoIds shared across Tier-C tools', () => {
     it.each([
       ['getPlanOverview', planOverview],
       ['getExecutiveDashboardSnapshot', dashboardSnapshot],

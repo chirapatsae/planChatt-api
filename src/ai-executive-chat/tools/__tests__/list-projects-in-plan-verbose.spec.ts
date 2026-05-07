@@ -94,9 +94,7 @@ describe('W68-FIX-05 — renderBookCompletenessMarkdown verbose gate', () => {
       expect(md).toContain('### เล่มหลัก');
       expect(md).toContain('1. **โครงการทดสอบหนึ่ง**');
       expect(md).toContain('   - สถานะ: อนุมัติ');
-      expect(md).toContain(
-        '   - หน่วยงานรับผิดชอบ: กองยุทธศาสตร์และงบประมาณ',
-      );
+      expect(md).toContain('   - หน่วยงานรับผิดชอบ: กองยุทธศาสตร์และงบประมาณ');
       expect(md).toContain('   - งบประมาณ: 1,500,000 บาท');
       expect(md).toContain('   - หน้า: 7');
     });
@@ -147,10 +145,9 @@ describe('W68-FIX-05 — renderBookCompletenessMarkdown verbose gate', () => {
     it('renders ประเด็นการพัฒนา for ISSUE_BASED rows (§16.5 mutex)', () => {
       const groups = buildFixtureGroups();
       // Flip the row to the ISSUE_BASED shape (indicator null, label set)
-      const project = groups[0].projects[0] as Record<string, unknown>;
+      const project = groups[0].projects[0];
       project.indicator = null;
-      project.developmentIssueLabel =
-        'ประเด็นการพัฒนาด้านโครงสร้างพื้นฐาน';
+      project.developmentIssueLabel = 'ประเด็นการพัฒนาด้านโครงสร้างพื้นฐาน';
       const md = renderBookCompletenessMarkdown(groups, { verbose: true });
       expect(md).toContain(
         '   - ประเด็นการพัฒนา: ประเด็นการพัฒนาด้านโครงสร้างพื้นฐาน',

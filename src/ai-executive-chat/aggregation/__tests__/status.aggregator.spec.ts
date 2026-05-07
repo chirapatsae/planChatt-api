@@ -267,9 +267,7 @@ describe('BE-W54-04 / StatusAggregator', () => {
         ],
       });
       const svc = new StatusAggregator(h.dataSource);
-      const result = await svc.latestStatusFor([
-        mkProject('revised', 'rpg-1'),
-      ]);
+      const result = await svc.latestStatusFor([mkProject('revised', 'rpg-1')]);
       expect(result.size).toBe(1);
       expect(result.get('revised:rpg-1')).toEqual({
         statusName: 'Approved',
@@ -315,13 +313,25 @@ describe('BE-W54-04 / StatusAggregator', () => {
     it('merges three-kind rows into a single Map keyed by `${kind}:${id}`', async () => {
       const h = makeQbHarness({
         project_group_id: [
-          { projectid: 'pg-1', statusname: 'Pending', createat: '2026-04-23T00:00:00.000Z' },
+          {
+            projectid: 'pg-1',
+            statusname: 'Pending',
+            createat: '2026-04-23T00:00:00.000Z',
+          },
         ],
         revised_project_group_id: [
-          { projectid: 'rpg-1', statusname: 'Approved', createat: '2026-04-23T01:00:00.000Z' },
+          {
+            projectid: 'rpg-1',
+            statusname: 'Approved',
+            createat: '2026-04-23T01:00:00.000Z',
+          },
         ],
         supplement_project_group_id: [
-          { projectid: 'spg-1', statusname: 'Returned_For_Revision', createat: '2026-04-23T02:00:00.000Z' },
+          {
+            projectid: 'spg-1',
+            statusname: 'Returned_For_Revision',
+            createat: '2026-04-23T02:00:00.000Z',
+          },
         ],
       });
       const svc = new StatusAggregator(h.dataSource);
@@ -354,9 +364,15 @@ describe('BE-W54-04 / StatusAggregator', () => {
   describe('isLatest guard enforcement', () => {
     it('every emitted query carries `ts.isLatest = :latest` with latest=true', async () => {
       const h = makeQbHarness({
-        project_group_id: [{ projectid: 'pg-1', statusname: 'Approved', createat: new Date() }],
-        revised_project_group_id: [{ projectid: 'rpg-1', statusname: 'Approved', createat: new Date() }],
-        supplement_project_group_id: [{ projectid: 'spg-1', statusname: 'Approved', createat: new Date() }],
+        project_group_id: [
+          { projectid: 'pg-1', statusname: 'Approved', createat: new Date() },
+        ],
+        revised_project_group_id: [
+          { projectid: 'rpg-1', statusname: 'Approved', createat: new Date() },
+        ],
+        supplement_project_group_id: [
+          { projectid: 'spg-1', statusname: 'Approved', createat: new Date() },
+        ],
       });
       const svc = new StatusAggregator(h.dataSource);
       await svc.latestStatusFor([
@@ -376,7 +392,11 @@ describe('BE-W54-04 / StatusAggregator', () => {
     it('returns a Map that omits keys for projects with no tracking row', async () => {
       const h = makeQbHarness({
         project_group_id: [
-          { projectid: 'pg-present', statusname: 'Pending', createat: new Date('2026-04-23') },
+          {
+            projectid: 'pg-present',
+            statusname: 'Pending',
+            createat: new Date('2026-04-23'),
+          },
         ],
         // pg-missing intentionally NOT in the result set.
       });
@@ -394,7 +414,11 @@ describe('BE-W54-04 / StatusAggregator', () => {
     it('maps known canonical status names to Thai', async () => {
       const h = makeQbHarness({
         project_group_id: [
-          { projectid: 'pg-1', statusname: 'Pending_Approval', createat: new Date() },
+          {
+            projectid: 'pg-1',
+            statusname: 'Pending_Approval',
+            createat: new Date(),
+          },
           { projectid: 'pg-2', statusname: 'Pull_Back', createat: new Date() },
         ],
       });
@@ -429,8 +453,16 @@ describe('BE-W54-04 / StatusAggregator', () => {
     it('keeps the row with the newer createAt when two latest rows collide', async () => {
       const h = makeQbHarness({
         project_group_id: [
-          { projectid: 'pg-1', statusname: 'Pending', createat: '2026-04-01T00:00:00.000Z' },
-          { projectid: 'pg-1', statusname: 'Approved', createat: '2026-04-23T00:00:00.000Z' },
+          {
+            projectid: 'pg-1',
+            statusname: 'Pending',
+            createat: '2026-04-01T00:00:00.000Z',
+          },
+          {
+            projectid: 'pg-1',
+            statusname: 'Approved',
+            createat: '2026-04-23T00:00:00.000Z',
+          },
         ],
       });
       const svc = new StatusAggregator(h.dataSource);

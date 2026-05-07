@@ -18,6 +18,12 @@ import { QuotaAlertWorkerService } from './quota-alert-worker.service';
 // W97-API-FORCE-UNLINK — super-admin force-unlink endpoint. Sibling
 // W97-API-BINDINGS adds list/reveal methods on the same controller class.
 import { LineBindingsAdminController } from './line-bindings.controller';
+// BE-03 (auth-roles-guard-unification Phase 3) — RolesGuard is consumed
+// via per-method `@UseGuards(JwtAuthGuard, RolesGuard)` in
+// `NotificationAlertsController` and `NotificationQuotaController`.
+// Register it as a provider so Nest's DI can resolve it (mirrors BE-02's
+// edit to `WorkHistoryModule`).
+import { RolesGuard } from 'src/auth/roles.guard';
 
 /**
  * Wave 97 — Admin notification dashboard module.
@@ -58,8 +64,8 @@ import { LineBindingsAdminController } from './line-bindings.controller';
       WorkHistory,
     ]),
     NotificationsEmailModule, // exports EmailStatsService
-    NotificationsLineModule,  // exports LineStatsService (added W97)
-    EmailModule,              // exports EmailService (W90 chokepoint)
+    NotificationsLineModule, // exports LineStatsService (added W97)
+    EmailModule, // exports EmailService (W90 chokepoint)
     // W98 follow-up — `QuotaAlertWorkerService` resolves admin /
     // super-admin emails dynamically when an alert row has no
     // `recipientEmail`; needs `UsersService.decryptUserPii(...)`.
@@ -79,6 +85,9 @@ import { LineBindingsAdminController } from './line-bindings.controller';
   providers: [
     NotificationQuotaAlertsService,
     QuotaAlertWorkerService,
+    // BE-03 — canonical role gate, used by NotificationAlertsController
+    // and NotificationQuotaController.
+    RolesGuard,
   ],
   exports: [NotificationQuotaAlertsService],
 })

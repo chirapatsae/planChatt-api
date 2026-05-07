@@ -74,7 +74,10 @@ const FK_CONFIG: ReadonlyArray<{
     | 'project_group_id'
     | 'revised_project_group_id'
     | 'supplement_project_group_id';
-  rawKey: 'project_group_id' | 'revised_project_group_id' | 'supplement_project_group_id';
+  rawKey:
+    | 'project_group_id'
+    | 'revised_project_group_id'
+    | 'supplement_project_group_id';
 }> = [
   {
     kind: 'main',
@@ -102,7 +105,7 @@ interface LatestRawRow {
 
 /** Composite key helper — mirrors `ProjectKey = `${kind}:${id}``. */
 function toKey(kind: ProjectKind, projectId: string): ProjectKey {
-  return `${kind}:${projectId}` as ProjectKey;
+  return `${kind}:${projectId}`;
 }
 
 /** Chunk an array at the Postgres-parameter-safe boundary. */
@@ -131,9 +134,7 @@ function toIso(value: Date | string | null | undefined): string | null {
 
 @Injectable()
 export class StatusAggregator implements IStatusAggregator {
-  constructor(
-    @InjectDataSource() private readonly dataSource: DataSource,
-  ) {}
+  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
   /**
    * Returns the latest status per `UnifiedProject`. Projects without any

@@ -14,8 +14,7 @@
  *     role checks live at Tier C.
  */
 
-export const UNIFIED_PROJECT_AGGREGATOR =
-  Symbol('UNIFIED_PROJECT_AGGREGATOR');
+export const UNIFIED_PROJECT_AGGREGATOR = Symbol('UNIFIED_PROJECT_AGGREGATOR');
 export const BUDGET_AGGREGATOR = Symbol('BUDGET_AGGREGATOR');
 export const STATUS_AGGREGATOR = Symbol('STATUS_AGGREGATOR');
 export const GEO_ENRICHMENT = Symbol('GEO_ENRICHMENT');

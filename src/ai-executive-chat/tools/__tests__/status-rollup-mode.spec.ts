@@ -63,10 +63,7 @@ describe('W57-BE-AGG-05 / getProjectStatusBreakdown bucket mode', () => {
       { status: 'Pending_Approval', cnt: '2' },
       { status: 'Approved', cnt: '7' },
     ]);
-    const out = (await handler({ scope: 'main' }, fakeCtx(), deps)) as Record<
-      string,
-      unknown
-    >;
+    const out = await handler({ scope: 'main' }, fakeCtx(), deps);
     const items = out.items as Array<Record<string, unknown>>;
     const rollup = items.find((i) => i.status === 'awaiting_approval');
     expect(rollup).toBeDefined();
@@ -74,9 +71,7 @@ describe('W57-BE-AGG-05 / getProjectStatusBreakdown bucket mode', () => {
     expect(rollup!.statusTh).toBe('รออนุมัติ');
     // Verified / Pending_Approval should NOT appear individually (rolled up).
     expect(items.find((i) => i.status === 'Verified')).toBeUndefined();
-    expect(
-      items.find((i) => i.status === 'Pending_Approval'),
-    ).toBeUndefined();
+    expect(items.find((i) => i.status === 'Pending_Approval')).toBeUndefined();
     // Pending now appears as its own canonical row (W67 — moved out of pipeline).
     const pending = items.find((i) => i.status === 'Pending');
     expect(pending).toBeDefined();
@@ -96,11 +91,11 @@ describe('W57-BE-AGG-05 / getProjectStatusBreakdown bucket mode', () => {
       { status: 'Pending_Approval', cnt: '2' },
       { status: 'Approved', cnt: '7' },
     ]);
-    const out = (await handler(
+    const out = await handler(
       { scope: 'main', detailMode: true },
       fakeCtx(),
       deps,
-    )) as Record<string, unknown>;
+    );
     const items = out.items as Array<Record<string, unknown>>;
     const map = new Map<string, number>();
     for (const i of items) map.set(String(i.status), Number(i.count));
@@ -122,11 +117,11 @@ describe('W57-BE-AGG-05 / getProjectStatusBreakdown bucket mode', () => {
       { status: 'Approved', cnt: '7' },
       // No Ready row — the stub mimics the WHERE filter result.
     ]);
-    const out = (await handler(
+    const out = await handler(
       { scope: 'main', detailMode: true },
       fakeCtx(),
       deps,
-    )) as Record<string, unknown>;
+    );
     const items = out.items as Array<Record<string, unknown>>;
     expect(items.find((i) => i.status === 'Ready')).toBeUndefined();
   });
@@ -141,10 +136,7 @@ describe('W57-BE-AGG-05 / getPendingCountsByScope bucket mode', () => {
       { status: 'Verified', cnt: '3' },
       { status: 'Pending_Approval', cnt: '1' },
     ]);
-    const out = (await handler({ scope: 'main' }, fakeCtx(), deps)) as Record<
-      string,
-      unknown
-    >;
+    const out = await handler({ scope: 'main' }, fakeCtx(), deps);
     const items = out.items as Array<Record<string, unknown>>;
     expect(items).toHaveLength(1);
     expect(items[0].scope).toBe('main');
@@ -161,11 +153,11 @@ describe('W57-BE-AGG-05 / getPendingCountsByScope bucket mode', () => {
       { status: 'Verified', cnt: '3' },
       { status: 'Pending_Approval', cnt: '1' },
     ]);
-    const out = (await handler(
+    const out = await handler(
       { scope: 'main', detailMode: true },
       fakeCtx(),
       deps,
-    )) as Record<string, unknown>;
+    );
     const items = out.items as Array<Record<string, unknown>>;
     expect(items).toHaveLength(3);
     expect(out.advisories as string[]).not.toContain(

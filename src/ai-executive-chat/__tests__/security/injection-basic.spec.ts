@@ -27,8 +27,14 @@
  * chat service + adapter land.
  */
 
-import { EXECUTIVE_TOOL_NAMES, EXECUTIVE_TOOL_REGISTRY } from '../../tools/tool-registry';
-import { sanitizeUserTextDelimiters, wrapUserText } from 'src/ai/utils/wrap-user-text';
+import {
+  EXECUTIVE_TOOL_NAMES,
+  EXECUTIVE_TOOL_REGISTRY,
+} from '../../tools/tool-registry';
+import {
+  sanitizeUserTextDelimiters,
+  wrapUserText,
+} from 'src/ai/utils/wrap-user-text';
 
 describe('SEC-W44-01 / injection-basic (§17.9)', () => {
   const ATTACK_PAYLOADS = [
@@ -40,7 +46,8 @@ describe('SEC-W44-01 / injection-basic (§17.9)', () => {
   ];
 
   it('registry contains NO tool whose name suggests a mutation (approve/reject/update/delete)', () => {
-    const MUTATION_REGEX = /approve|reject|update|delete|remove|save|mutate|grant/i;
+    const MUTATION_REGEX =
+      /approve|reject|update|delete|remove|save|mutate|grant/i;
     for (const name of EXECUTIVE_TOOL_NAMES) {
       expect(name).not.toMatch(MUTATION_REGEX);
     }

@@ -77,7 +77,11 @@ function makeDeps(): {
     advisories: [],
   });
   const runDimensions = jest.fn(
-    async (_tasks: unknown[], assemble: (results: unknown[]) => unknown, options: { shape: string }) => {
+    async (
+      _tasks: unknown[],
+      assemble: (results: unknown[]) => unknown,
+      options: { shape: string },
+    ) => {
       const data = assemble([]);
       return {
         shape: options.shape,

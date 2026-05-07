@@ -14,6 +14,7 @@ import { NotificationEmailLog } from '../entities/notification-email-log.entity'
 import { NotificationSetting } from '../entities/notification-settings.entity';
 import { NotificationSettingsAudit } from '../entities/notification-settings-audit.entity';
 import { EmailModule } from 'src/util/email/email.module';
+import { RolesGuard } from 'src/auth/roles.guard';
 
 import {
   NotificationsEmailService,
@@ -82,6 +83,7 @@ import { ActionLinkVerifyController } from './action-link-verify.controller';
     TemplateRendererService,
     EmailStatsService,
     NotificationSettingsService,
+    RolesGuard,
   ],
   exports: [
     NotificationsEmailService,

@@ -34,11 +34,14 @@ import { SystemUsageController } from './system-usage.controller';
 import { SystemUsageQueryService } from './services/system-usage-query.service';
 import { StatsAccessLogService } from './services/stats-access-log.service';
 import { AccessLogInterceptor } from './interceptors/access-log.interceptor';
+// BE-03 (auth-roles-guard-unification Phase 3) — RolesGuard is consumed
+// via per-method `@UseGuards(JwtAuthGuard, RolesGuard)` in
+// `SystemUsageController`. Register it as a provider so Nest's DI can
+// resolve it (mirrors BE-02's edit to `WorkHistoryModule`).
+import { RolesGuard } from 'src/auth/roles.guard';
 
 @Module({
-  imports: [
-    TypeOrmModule.forFeature([SystemUsageDailyRollup, StatsAccessLog]),
-  ],
+  imports: [TypeOrmModule.forFeature([SystemUsageDailyRollup, StatsAccessLog])],
   controllers: [SystemUsageController],
   providers: [
     // W107-BE-PR1 — nightly cron + onModuleInit index ensure. The cron
@@ -50,6 +53,8 @@ import { AccessLogInterceptor } from './interceptors/access-log.interceptor';
     SystemUsageQueryService,
     StatsAccessLogService,
     AccessLogInterceptor,
+    // BE-03 — canonical role gate, used by SystemUsageController.
+    RolesGuard,
   ],
   exports: [TypeOrmModule, RollupCronService, StatsAccessLogService],
 })

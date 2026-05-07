@@ -23,7 +23,9 @@ export const REPORT_FORMAT_TH: Record<string, string> = {
   ISSUE_BASED: 'แบบประเด็นการพัฒนา',
 };
 
-export function resolveReportFormatLabel(value: string | null | undefined): string {
+export function resolveReportFormatLabel(
+  value: string | null | undefined,
+): string {
   if (!value) return '';
   return REPORT_FORMAT_TH[value] ?? '';
 }

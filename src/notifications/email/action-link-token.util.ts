@@ -35,7 +35,11 @@ function resolveSecret(secret?: string): string {
   return 'dev-insecure-secret';
 }
 
-function computeHmacHex(projectId: string, expiry: number, secret: string): string {
+function computeHmacHex(
+  projectId: string,
+  expiry: number,
+  secret: string,
+): string {
   const payload = `${projectId}|${expiry}`;
   return crypto.createHmac('sha256', secret).update(payload).digest('hex');
 }
@@ -79,7 +83,12 @@ export function verifyActionLinkToken(args: {
   if (typeof token !== 'string') {
     return { valid: false, reason: 'malformed' };
   }
-  if (typeof expiry !== 'number' || !Number.isFinite(expiry) || !Number.isInteger(expiry) || expiry <= 0) {
+  if (
+    typeof expiry !== 'number' ||
+    !Number.isFinite(expiry) ||
+    !Number.isInteger(expiry) ||
+    expiry <= 0
+  ) {
     return { valid: false, reason: 'malformed' };
   }
   // Normalize hex casing — `digest('hex')` returns lowercase, but a client
@@ -91,7 +100,8 @@ export function verifyActionLinkToken(args: {
   }
 
   // --- expired check --------------------------------------------------------
-  const now = typeof args.now === 'number' ? args.now : Math.floor(Date.now() / 1000);
+  const now =
+    typeof args.now === 'number' ? args.now : Math.floor(Date.now() / 1000);
   if (now > expiry) {
     return { valid: false, reason: 'expired' };
   }

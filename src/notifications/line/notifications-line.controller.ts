@@ -74,10 +74,15 @@ export class NotificationsLineController {
   ) {}
 
   @Post('test')
-  async sendTestMessage(@Req() req: any): Promise<{ ok: true; sandboxed: boolean }> {
+  async sendTestMessage(
+    @Req() req: any,
+  ): Promise<{ ok: true; sandboxed: boolean }> {
     const userId: string | undefined = req?.user?.userId;
     if (!userId) {
-      throw new HttpException('Authenticated user context missing', HttpStatus.UNAUTHORIZED);
+      throw new HttpException(
+        'Authenticated user context missing',
+        HttpStatus.UNAUTHORIZED,
+      );
     }
 
     // Cooldown check.

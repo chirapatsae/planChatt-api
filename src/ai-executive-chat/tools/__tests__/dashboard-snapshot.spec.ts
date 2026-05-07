@@ -83,17 +83,25 @@ function makeDeps(): {
       countExecutiveStatusBreakdown,
       groupedExecutiveStatusBreakdown,
     } as never,
-    budget: { totalsForUnifiedProjects: jest.fn().mockResolvedValue(new Map()) } as never,
-    status: { latestStatusFor: jest.fn().mockResolvedValue(new Map()) } as never,
+    budget: {
+      totalsForUnifiedProjects: jest.fn().mockResolvedValue(new Map()),
+    } as never,
+    status: {
+      latestStatusFor: jest.fn().mockResolvedValue(new Map()),
+    } as never,
     geo: {
-      annotate: jest
-        .fn()
-        .mockResolvedValue({ labels: new Map(), missingDimensions: [], advisories: [] }),
+      annotate: jest.fn().mockResolvedValue({
+        labels: new Map(),
+        missingDimensions: [],
+        advisories: [],
+      }),
     } as never,
     agency: {
-      annotate: jest
-        .fn()
-        .mockResolvedValue({ labels: new Map(), missingDimensions: [], advisories: [] }),
+      annotate: jest.fn().mockResolvedValue({
+        labels: new Map(),
+        missingDimensions: [],
+        advisories: [],
+      }),
     } as never,
     resilience: { runDimensions } as never,
   };
@@ -107,9 +115,9 @@ describe('BE-W54-08 / getExecutiveDashboardSnapshot', () => {
         EXECUTIVE_TOOL_REGISTRY.getExecutiveDashboardSnapshot,
       ).toBeDefined();
       expect(EXECUTIVE_TOOL_NAMES).toContain('getExecutiveDashboardSnapshot');
-      expect(
-        typeof EXECUTIVE_TOOL_HANDLERS.getExecutiveDashboardSnapshot,
-      ).toBe('function');
+      expect(typeof EXECUTIVE_TOOL_HANDLERS.getExecutiveDashboardSnapshot).toBe(
+        'function',
+      );
     });
   });
 
@@ -151,13 +159,8 @@ describe('BE-W54-08 / getExecutiveDashboardSnapshot', () => {
   });
 
   describe('groupBy dimensions forwarded correctly', () => {
-    const cases: Array<'status' | 'amphoe' | 'agency' | 'strategy' | 'issue'> = [
-      'status',
-      'amphoe',
-      'agency',
-      'strategy',
-      'issue',
-    ];
+    const cases: Array<'status' | 'amphoe' | 'agency' | 'strategy' | 'issue'> =
+      ['status', 'amphoe', 'agency', 'strategy', 'issue'];
 
     it.each(cases)(
       'groupBy=[%s] — dispatches a runDimensions call with the right shape',

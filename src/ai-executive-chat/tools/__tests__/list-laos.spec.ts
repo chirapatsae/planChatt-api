@@ -71,8 +71,10 @@ function makeDataSource(rows: LaoRow[]) {
       filtered = filtered.filter((r) => r.amphoeId === amphoeId);
     }
     if (pat !== undefined) {
-      const stripped = (pat as string).replace(/^%/, '').replace(/%$/, '').toLowerCase();
-      filtered = filtered.filter((r) => r.name.toLowerCase().includes(stripped));
+      const stripped = pat.replace(/^%/, '').replace(/%$/, '').toLowerCase();
+      filtered = filtered.filter((r) =>
+        r.name.toLowerCase().includes(stripped),
+      );
     }
     if (typeFilter !== undefined) {
       // W68-FIX-11 — strict equality match (mirrors handler's
@@ -93,9 +95,7 @@ function makeDataSource(rows: LaoRow[]) {
       if (entity === LocalAdministrativeOrganization) {
         return { createQueryBuilder: () => qb };
       }
-      throw new Error(
-        `Unexpected entity in listLaos spec: ${String(entity)}`,
-      );
+      throw new Error(`Unexpected entity in listLaos spec: ${String(entity)}`);
     },
   };
 }
@@ -107,7 +107,9 @@ const CTX: ExecutiveCallerContext = {
   workStatusName: 'approved',
 };
 
-function buildDeps(ds: ReturnType<typeof makeDataSource>): ExecutiveToolHandlerDeps {
+function buildDeps(
+  ds: ReturnType<typeof makeDataSource>,
+): ExecutiveToolHandlerDeps {
   return {
     dataSource: ds as never,
     unifiedProject: {} as never,
@@ -472,7 +474,11 @@ describe('W67-LAO-RESOLVER / listLaos resolver tool', () => {
         workStatusName: 'pending',
       };
       await expect(
-        EXECUTIVE_TOOL_HANDLERS.listLaos({ amphoeId: '3001' }, pendingCtx, deps),
+        EXECUTIVE_TOOL_HANDLERS.listLaos(
+          { amphoeId: '3001' },
+          pendingCtx,
+          deps,
+        ),
       ).rejects.toThrow(/EXECUTIVE_ROLE_REQUIRED/);
     });
 

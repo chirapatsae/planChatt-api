@@ -84,7 +84,7 @@ function makeDeps(rows: FakeRow[]): {
         if (typeof target === 'string') {
           seenSqlFragments.push(`FROM ${target}`);
         } else if (target && typeof target === 'function') {
-          seenSqlFragments.push(`FROM <entity:${(target as Function).name}>`);
+          seenSqlFragments.push(`FROM <entity:${target.name}>`);
         }
         return subQb;
       },
@@ -201,7 +201,11 @@ describe('Wave 53 — user-reported production reproductions (2026-04-24)', () =
   it('Prompt 1 — "ขอรายชื่อโครงการในแผน X" returns budget as number, no "relation does not exist"', async () => {
     const { deps, seenSqlFragments } = makeDeps([cannedRow]);
     // W60c — legacy flat shape requires explicit groupBy: 'flat'
-    const out = await handler({ planId: UUID_PLAN, groupBy: 'flat' }, makeCtx(), deps);
+    const out = await handler(
+      { planId: UUID_PLAN, groupBy: 'flat' },
+      makeCtx(),
+      deps,
+    );
     expect(out.planId).toBe(UUID_PLAN);
     const items = out.items as Array<Record<string, unknown>>;
     expect(items.length).toBeGreaterThan(0);
@@ -224,7 +228,11 @@ describe('Wave 53 — user-reported production reproductions (2026-04-24)', () =
         budget: '1000',
       },
     ]);
-    const out = await handler({ planId: UUID_PLAN, groupBy: 'flat' }, makeCtx(), deps);
+    const out = await handler(
+      { planId: UUID_PLAN, groupBy: 'flat' },
+      makeCtx(),
+      deps,
+    );
     const items = out.items as Array<Record<string, unknown>>;
     expect(items).toHaveLength(2);
     for (const it of items) {

@@ -121,14 +121,12 @@ export class FlexTemplateRendererService {
       `[แจ้งความคืบหน้า] โครงการของท่านผ่านการตรวจสอบ: ${p}`,
     PROJECT_RETURNED_FOR_REVISION: (p) =>
       `[แจ้งเตือน] โครงการของท่านถูกส่งกลับเพื่อแก้ไข: ${p}`,
-    PROJECT_APPROVED: (p) =>
-      `[แจ้งเตือน] โครงการของท่านได้รับการอนุมัติ: ${p}`,
+    PROJECT_APPROVED: (p) => `[แจ้งเตือน] โครงการของท่านได้รับการอนุมัติ: ${p}`,
     PROJECT_REJECTED_OWNER: (p) =>
       `[แจ้งผล] โครงการของท่านไม่ผ่านการพิจารณา (เกินศักยภาพ): ${p}`,
     // W96F — staff-side altText. Wording mirrors the email SUBJECT_MAP for
     // the same events so staff see a consistent message across channels.
-    PROJECT_SUBMITTED: (p) =>
-      `[แจ้งเตือน] มีโครงการใหม่รอการตรวจสอบ: ${p}`,
+    PROJECT_SUBMITTED: (p) => `[แจ้งเตือน] มีโครงการใหม่รอการตรวจสอบ: ${p}`,
     PROJECT_PULLED_BACK: (p) =>
       `[แจ้งเตือน] โครงการถูกถอนออกจากการตรวจสอบ: ${p}`,
     EMAIL_VERIFICATION_REQUEST: null,
@@ -248,9 +246,7 @@ export class FlexTemplateRendererService {
     }
 
     for (const dir of candidates) {
-      if (
-        fs.existsSync(path.join(dir, 'project-submitted-owner.json'))
-      ) {
+      if (fs.existsSync(path.join(dir, 'project-submitted-owner.json'))) {
         return dir;
       }
     }

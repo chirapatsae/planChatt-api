@@ -83,8 +83,7 @@ function makeDataSource(opts: {
         // head-of-lineage anti-join fired. String targets (relation
         // names like `pg.developmentPlan`) are NOT lineage joins — skip.
         if (typeof target === 'function') {
-          const name =
-            (target as { name?: string }).name ?? 'UnknownEntity';
+          const name = (target as { name?: string }).name ?? 'UnknownEntity';
           call.leftJoinTargets.push(name);
         }
         return qb;
@@ -117,7 +116,9 @@ function makeDataSource(opts: {
   const dataSource = {
     getRepository: (target: unknown) => {
       const repoName =
-        typeof target === 'function' ? (target as { name?: string }).name ?? 'Unknown' : 'Unknown';
+        typeof target === 'function'
+          ? ((target as { name?: string }).name ?? 'Unknown')
+          : 'Unknown';
       return {
         createQueryBuilder: (_alias: string) => qbFactory(repoName),
       };
@@ -719,7 +720,10 @@ describe('BE-W54-02 / UnifiedProjectAggregator', () => {
       });
       expect(calls).toHaveLength(1);
       const call = calls[0];
-      expect(call.params.statusFilter).toEqual(['Approved', 'Pending_Approval']);
+      expect(call.params.statusFilter).toEqual([
+        'Approved',
+        'Pending_Approval',
+      ]);
       expect(
         call.whereChain.some((w) =>
           w.includes('st_f.name IN (:...statusFilter)'),
@@ -737,9 +741,9 @@ describe('BE-W54-02 / UnifiedProjectAggregator', () => {
       });
       const call = calls[0];
       expect(call.params.statusFilter).toBeUndefined();
-      expect(
-        call.whereChain.some((w) => w.includes('statusFilter')),
-      ).toBe(false);
+      expect(call.whereChain.some((w) => w.includes('statusFilter'))).toBe(
+        false,
+      );
     });
 
     // ── filters.amphoeIds ─────────────────────────────────────────
@@ -825,9 +829,9 @@ describe('BE-W54-02 / UnifiedProjectAggregator', () => {
       });
       const call = calls[0];
       expect(call.params.agencyIdsFilter).toEqual([42]);
-      expect(
-        call.whereChain.some((w) => w.includes('agencyIdsFilter')),
-      ).toBe(true);
+      expect(call.whereChain.some((w) => w.includes('agencyIdsFilter'))).toBe(
+        true,
+      );
     });
 
     it('filters.agencyIds of all-invalid collapses to WHERE 1=0 (no crash)', async () => {
@@ -849,9 +853,11 @@ describe('BE-W54-02 / UnifiedProjectAggregator', () => {
         rowsByRepo: { ProjectGroup: [row('pg-1')] },
       });
       // Stub DataSource.getMetadata(Budget) for the table-name lookup.
-      (dataSource as unknown as {
-        getMetadata: (e: unknown) => { tableName: string };
-      }).getMetadata = () => ({ tableName: 'budget' });
+      (
+        dataSource as unknown as {
+          getMetadata: (e: unknown) => { tableName: string };
+        }
+      ).getMetadata = () => ({ tableName: 'budget' });
 
       await svc(dataSource).listUnifiedProjects({
         scope: ['main'],
@@ -878,9 +884,11 @@ describe('BE-W54-02 / UnifiedProjectAggregator', () => {
           RevisedProjectGroup: [row('rpg-1')],
         },
       });
-      (dataSource as unknown as {
-        getMetadata: (e: unknown) => { tableName: string };
-      }).getMetadata = () => ({ tableName: 'budget' });
+      (
+        dataSource as unknown as {
+          getMetadata: (e: unknown) => { tableName: string };
+        }
+      ).getMetadata = () => ({ tableName: 'budget' });
 
       await svc(dataSource).listUnifiedProjects({
         scope: ['main'],

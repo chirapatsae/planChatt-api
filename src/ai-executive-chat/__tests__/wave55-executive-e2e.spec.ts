@@ -43,10 +43,7 @@ import type {
 } from '../tools/handlers/handler-types';
 import { EXECUTIVE_CHAT_SYSTEM_PROMPT } from '../prompts/executive-chat-system-prompt';
 import { wrapUserText } from 'src/ai/utils/wrap-user-text';
-import type {
-  ExecutiveEnvelope,
-  UnifiedProject,
-} from '../aggregation/types';
+import type { ExecutiveEnvelope, UnifiedProject } from '../aggregation/types';
 import type { LatestStatus } from '../aggregation/interfaces';
 import { GEO_SUPPLEMENT_EXCLUDED } from '../aggregation/advisory-copy';
 
@@ -266,7 +263,10 @@ interface SpecStub {
   /** Toggle ON when the fixture contains >=1 SPG row with amphoeId=null. */
   geoWithSupplementAdvisory?: boolean;
   /** Explicit geo labels for amphoe roll-up. */
-  geoLabels?: Map<string, { amphoeId: number | null; amphoeName: string | null }>;
+  geoLabels?: Map<
+    string,
+    { amphoeId: number | null; amphoeName: string | null }
+  >;
 }
 
 function makeDeps(stub: SpecStub): {
@@ -284,10 +284,7 @@ function makeDeps(stub: SpecStub): {
   const geoResult = {
     labels:
       stub.geoLabels ??
-      new Map<
-        string,
-        { amphoeId: number | null; amphoeName: string | null }
-      >(),
+      new Map<string, { amphoeId: number | null; amphoeName: string | null }>(),
     missingDimensions: stub.geoWithSupplementAdvisory
       ? (['geo:supplement'] as Array<'geo:supplement'>)
       : ([] as string[]),
@@ -471,14 +468,15 @@ describe('W55-QA-02 / Wave 55 executive question suite (structural E2E)', () => 
         projects: ALL_PROVINCE_HEAD_PROJECTS,
       });
 
-      const envelope = (await EXECUTIVE_TOOL_HANDLERS.getExecutiveDashboardSnapshot(
-        {
-          scope: ['all'],
-          groupBy: ['originType'],
-        },
-        makeCtx(),
-        deps,
-      )) as unknown as ExecutiveEnvelope<Record<string, unknown>>;
+      const envelope =
+        (await EXECUTIVE_TOOL_HANDLERS.getExecutiveDashboardSnapshot(
+          {
+            scope: ['all'],
+            groupBy: ['originType'],
+          },
+          makeCtx(),
+          deps,
+        )) as unknown as ExecutiveEnvelope<Record<string, unknown>>;
 
       expect(envelope.shape).toBe('dashboardSnapshot');
       expect(envelope.data.projectCount).toBe(7);
@@ -636,16 +634,17 @@ describe('W55-QA-02 / Wave 55 executive question suite (structural E2E)', () => 
         status: revisedStatus,
       });
 
-      const envelope = (await EXECUTIVE_TOOL_HANDLERS.getExecutiveDashboardSnapshot(
-        {
-          planId: PLAN_A_ID,
-          scope: ['revised'],
-          groupBy: ['status'],
-          includeStatus: true,
-        },
-        makeCtx(),
-        deps,
-      )) as unknown as ExecutiveEnvelope<Record<string, unknown>>;
+      const envelope =
+        (await EXECUTIVE_TOOL_HANDLERS.getExecutiveDashboardSnapshot(
+          {
+            planId: PLAN_A_ID,
+            scope: ['revised'],
+            groupBy: ['status'],
+            includeStatus: true,
+          },
+          makeCtx(),
+          deps,
+        )) as unknown as ExecutiveEnvelope<Record<string, unknown>>;
 
       expect(envelope.shape).toBe('dashboardSnapshot');
       const buckets = envelope.data.buckets as Record<
@@ -683,19 +682,16 @@ describe('W55-QA-02 / Wave 55 executive question suite (structural E2E)', () => 
         string,
         { amphoeId: number | null; amphoeName: string | null }
       >([
-        ['a-pg-head', { amphoeId: AMPHOE_MUANG, amphoeName: 'เมืองนครราชสีมา' }],
         [
-          'a-rpg-head1',
-          { amphoeId: AMPHOE_KRABURI, amphoeName: 'ครบุรี' },
+          'a-pg-head',
+          { amphoeId: AMPHOE_MUANG, amphoeName: 'เมืองนครราชสีมา' },
         ],
+        ['a-rpg-head1', { amphoeId: AMPHOE_KRABURI, amphoeName: 'ครบุรี' }],
         [
           'a-rpg-head2',
           { amphoeId: AMPHOE_PAKTHONGCHAI, amphoeName: 'ปักธงชัย' },
         ],
-        [
-          'a-spg-1',
-          { amphoeId: AMPHOE_MUANG, amphoeName: 'เมืองนครราชสีมา' },
-        ],
+        ['a-spg-1', { amphoeId: AMPHOE_MUANG, amphoeName: 'เมืองนครราชสีมา' }],
         // a-spg-null is intentionally absent from labels — GeoEnrichment
         // returns that row via missingDimensions/advisories instead.
       ]);
@@ -709,16 +705,17 @@ describe('W55-QA-02 / Wave 55 executive question suite (structural E2E)', () => 
       // getPlanOverview aggregates into `data.geoLabelCount` rather than
       // emitting a buckets[] payload — so Q5 is most accurately served by
       // `getExecutiveDashboardSnapshot` with a planId + groupBy amphoe.
-      const envelope = (await EXECUTIVE_TOOL_HANDLERS.getExecutiveDashboardSnapshot(
-        {
-          planId: PLAN_A_ID,
-          scope: ['all'],
-          groupBy: ['amphoe'],
-          includeGeo: true,
-        },
-        makeCtx(),
-        deps,
-      )) as unknown as ExecutiveEnvelope<Record<string, unknown>>;
+      const envelope =
+        (await EXECUTIVE_TOOL_HANDLERS.getExecutiveDashboardSnapshot(
+          {
+            planId: PLAN_A_ID,
+            scope: ['all'],
+            groupBy: ['amphoe'],
+            includeGeo: true,
+          },
+          makeCtx(),
+          deps,
+        )) as unknown as ExecutiveEnvelope<Record<string, unknown>>;
 
       expect(envelope.shape).toBe('dashboardSnapshot');
       const buckets = envelope.data.buckets as Record<

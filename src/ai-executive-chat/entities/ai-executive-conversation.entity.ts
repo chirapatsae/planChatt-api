@@ -140,9 +140,6 @@ export class AiExecutiveConversation {
    * lives on `AiExecutiveMessage.conversationId` with ON DELETE CASCADE.
    * No foreign key leaves the `ai_*` boundary.
    */
-  @OneToMany(
-    () => AiExecutiveMessage,
-    (message) => message.conversation,
-  )
+  @OneToMany(() => AiExecutiveMessage, (message) => message.conversation)
   messages: AiExecutiveMessage[];
 }

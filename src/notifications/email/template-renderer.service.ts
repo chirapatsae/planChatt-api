@@ -40,12 +40,17 @@ export class TemplateContextError extends Error {
 export class TemplateRendererService {
   private readonly logger = new Logger(TemplateRendererService.name);
   private readonly templateDir: string;
-  private readonly compiled = new Map<string, (ctx: Record<string, unknown>) => string>();
+  private readonly compiled = new Map<
+    string,
+    (ctx: Record<string, unknown>) => string
+  >();
   private readonly partials = new Map<string, string>();
 
   constructor() {
     this.templateDir = TemplateRendererService.resolveTemplateDir();
-    this.logger.log(`[Notify] template directory resolved: ${this.templateDir}`);
+    this.logger.log(
+      `[Notify] template directory resolved: ${this.templateDir}`,
+    );
     this.loadPartials();
   }
 
@@ -116,7 +121,11 @@ export class TemplateRendererService {
    * rendered string (HTML). The caller is responsible for deriving a
    * plaintext representation and assembling the final EmailMessage.
    */
-  render(templateName: string, context: Record<string, unknown>, requiredFields: string[] = []): string {
+  render(
+    templateName: string,
+    context: Record<string, unknown>,
+    requiredFields: string[] = [],
+  ): string {
     const missing = requiredFields.filter((f) => {
       const value = this.lookup(context, f);
       return value === undefined || value === null || value === '';
@@ -129,7 +138,9 @@ export class TemplateRendererService {
     if (!compiled) {
       const filePath = path.join(this.templateDir, `${templateName}.hbs`);
       if (!fs.existsSync(filePath)) {
-        throw new TemplateContextError(templateName, [`<file-not-found:${filePath}>`]);
+        throw new TemplateContextError(templateName, [
+          `<file-not-found:${filePath}>`,
+        ]);
       }
       const source = fs.readFileSync(filePath, 'utf8');
       compiled = this.compile(source);
@@ -165,14 +176,17 @@ export class TemplateRendererService {
 
   private compile(source: string): (ctx: Record<string, unknown>) => string {
     // Expand partials once at compile time.
-    const expanded = source.replace(/\{\{>\s*([a-zA-Z0-9_-]+)\s*\}\}/g, (_match, name: string) => {
-      const partial = this.partials.get(name);
-      if (!partial) {
-        this.logger.warn(`[Notify] partial-missing: ${name}`);
-        return '';
-      }
-      return partial;
-    });
+    const expanded = source.replace(
+      /\{\{>\s*([a-zA-Z0-9_-]+)\s*\}\}/g,
+      (_match, name: string) => {
+        const partial = this.partials.get(name);
+        if (!partial) {
+          this.logger.warn(`[Notify] partial-missing: ${name}`);
+          return '';
+        }
+        return partial;
+      },
+    );
 
     return (ctx: Record<string, unknown>) => this.evaluate(expanded, ctx);
   }
@@ -213,14 +227,18 @@ export class TemplateRendererService {
     // {{#if var}}...{{/if}} (non-nested, single-line or multi-line)
     out = out.replace(
       /\{\{#if\s+([a-zA-Z0-9_.]+)\s*\}\}([\s\S]*?)\{\{\/if\}\}/g,
-      (_m, key: string, body: string) => (this.truthy(this.lookup(ctx, key)) ? body : ''),
+      (_m, key: string, body: string) =>
+        this.truthy(this.lookup(ctx, key)) ? body : '',
     );
 
     // {{{raw}}} — no escape
-    out = out.replace(/\{\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}\}/g, (_m, key: string) => {
-      const v = this.lookup(ctx, key);
-      return v === undefined || v === null ? '' : String(v);
-    });
+    out = out.replace(
+      /\{\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}\}/g,
+      (_m, key: string) => {
+        const v = this.lookup(ctx, key);
+        return v === undefined || v === null ? '' : String(v);
+      },
+    );
 
     // {{var}} — HTML-escaped (default-safe)
     out = out.replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (_m, key: string) => {

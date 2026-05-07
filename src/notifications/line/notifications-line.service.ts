@@ -169,10 +169,11 @@ export class NotificationsLineService {
       // = false) are dropped. We compute the drop set ourselves so we can
       // audit each one with the appropriate status.
       const linkedRecipients =
-        await this.recipientResolver.enrichWithLineBindings(
-          event.recipients,
-        );
-      const linkedByUserId = new Map<string, ProjectNotificationLineRecipient>();
+        await this.recipientResolver.enrichWithLineBindings(event.recipients);
+      const linkedByUserId = new Map<
+        string,
+        ProjectNotificationLineRecipient
+      >();
       for (const r of linkedRecipients) {
         linkedByUserId.set(r.userId, r);
       }
@@ -543,9 +544,9 @@ export class NotificationsLineService {
    * (the conservative classification — assume binding missing rather
    * than mis-attribute to preference).
    */
-  private async classifyDropReason(userId: string): Promise<
-    'skipped-preference' | 'skipped-not-linked'
-  > {
+  private async classifyDropReason(
+    userId: string,
+  ): Promise<'skipped-preference' | 'skipped-not-linked'> {
     if (!userId) return 'skipped-not-linked';
     try {
       const user = await this.userRepo.findOne({
@@ -669,4 +670,3 @@ export class NotificationsLineService {
     return 'project-group';
   }
 }
-

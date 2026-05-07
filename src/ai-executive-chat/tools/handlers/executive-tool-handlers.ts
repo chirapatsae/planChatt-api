@@ -208,7 +208,7 @@ function resolveStatusThFromDb(
  * future caller that already has a status-count map in hand and wants
  * the four-bucket fold.
  */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+
 function buildExecutiveStatusBreakdown(
   countByStatus: Map<string, number> | Iterable<[string, number]>,
 ): {
@@ -538,9 +538,7 @@ const getPendingCountsByScope: ExecutiveToolHandler = async (
   // Wave 57 W57-BE-AGG-05 — Q5: extend the default rollup to ALL three
   // pipeline statuses (Pending + Verified + Pending_Approval). Detail
   // mode preserves them individually.
-  const bucketMode = resolveStatusBucketMode(
-    params as Record<string, unknown>,
-  );
+  const bucketMode = resolveStatusBucketMode(params);
   const statuses = [...APPROVAL_PIPELINE_STATUSES];
 
   const items: Array<{
@@ -556,7 +554,11 @@ const getPendingCountsByScope: ExecutiveToolHandler = async (
     resolveStatusThFromDb(statusLabels, name) ?? toThaiStatus(name);
 
   if (scope === 'all' || scope === 'main') {
-    const mainCounts = await countLatestStatus(deps, 'project_group_id', statuses);
+    const mainCounts = await countLatestStatus(
+      deps,
+      'project_group_id',
+      statuses,
+    );
     if (bucketMode === 'rollup') {
       const total = mainCounts.reduce((s, r) => s + r.count, 0);
       if (total > 0) {
@@ -791,8 +793,7 @@ const getBudgetSummaryByPlan: ExecutiveToolHandler = async (
     .andWhere('pg.development_plan_id = :planId', { planId });
   applyHeadFilterForProjectGroup(mainQb, 'pg');
   const mainRow =
-    (await mainQb.getRawOne<{ sum: string | null; cnt: string }>()) ??
-    emptyAgg;
+    (await mainQb.getRawOne<{ sum: string | null; cnt: string }>()) ?? emptyAgg;
 
   const revisedQb = deps.dataSource
     .getRepository(Budget)
@@ -870,8 +871,7 @@ const searchProjectsByKeyword: ExecutiveToolHandler = async (
   // shape are unchanged per §17.9.  Each scope branch anchors to the
   // plan via the same entity chain used by `getBudgetSummaryByPlan`.
   const planIdRaw = params.planId != null ? String(params.planId) : null;
-  const planId =
-    planIdRaw && UUID_RX.test(planIdRaw) ? planIdRaw : null;
+  const planId = planIdRaw && UUID_RX.test(planIdRaw) ? planIdRaw : null;
 
   if (keyword.length === 0) {
     return { items: [], asOf: nowIso() };
@@ -1247,9 +1247,7 @@ const getProjectStatusBreakdown: ExecutiveToolHandler = async (
   const planId = params.planId ? String(params.planId) : null;
   const scope = String(params.scope ?? 'all');
   // Wave 57 W57-BE-AGG-05 — Q5 dual-mode + Q8 Ready hidden.
-  const bucketMode = resolveStatusBucketMode(
-    params as Record<string, unknown>,
-  );
+  const bucketMode = resolveStatusBucketMode(params);
   // Default: hide Ready. Caller may opt in via `includeReady: true`.
   const includeReady = params.includeReady === true;
   const visibleStatuses = includeReady
@@ -1293,16 +1291,16 @@ const getProjectStatusBreakdown: ExecutiveToolHandler = async (
       .groupBy('status.name');
 
     if (s === 'main') {
-      qb = qb.innerJoin('ts.projectGroupId', 'pg').andWhere(
-        'pg.deletedAt IS NULL',
-      );
+      qb = qb
+        .innerJoin('ts.projectGroupId', 'pg')
+        .andWhere('pg.deletedAt IS NULL');
       if (planId) {
         qb = qb.andWhere('pg.development_plan_id = :planId', { planId });
       }
     } else if (s === 'revision') {
-      qb = qb.innerJoin('ts.revisedProjectGroupId', 'rpg').andWhere(
-        'rpg.deletedAt IS NULL',
-      );
+      qb = qb
+        .innerJoin('ts.revisedProjectGroupId', 'rpg')
+        .andWhere('rpg.deletedAt IS NULL');
       if (planId) {
         qb = qb
           .innerJoin('rpg.developmentPlanRevision', 'dpr')
@@ -1310,9 +1308,9 @@ const getProjectStatusBreakdown: ExecutiveToolHandler = async (
           .andWhere('dpr.development_plan_id = :planId', { planId });
       }
     } else {
-      qb = qb.innerJoin('ts.supplementProjectGroupId', 'spg').andWhere(
-        'spg.deletedAt IS NULL',
-      );
+      qb = qb
+        .innerJoin('ts.supplementProjectGroupId', 'spg')
+        .andWhere('spg.deletedAt IS NULL');
       if (planId) {
         qb = qb
           .innerJoin('spg.developmentPlanSupplement', 'dps')
@@ -1649,13 +1647,11 @@ const highlightBudgetOutliers: ExecutiveToolHandler = async (
 ) => {
   assertExecutiveRole(ctx);
   const planId = String(params.planId);
-  const method = (params.method === 'stddev' ? 'stddev' : 'percentile') as
-    | 'percentile'
-    | 'stddev';
+  const method = params.method === 'stddev' ? 'stddev' : 'percentile';
   const defaultThreshold = method === 'percentile' ? 0.95 : 2.0;
   const threshold =
     typeof params.threshold === 'number' && Number.isFinite(params.threshold)
-      ? (params.threshold as number)
+      ? params.threshold
       : defaultThreshold;
   const limit = Math.min(Math.max(Number(params.limit ?? 10), 1), 30);
 
@@ -1780,8 +1776,7 @@ const highlightBudgetOutliers: ExecutiveToolHandler = async (
         reason: `อยู่ในเปอร์เซ็นไทล์ที่ ${Math.round(threshold * 100)}`,
       }));
   } else {
-    const mean =
-      budgets.reduce((sum, b) => sum + b.budget, 0) / budgets.length;
+    const mean = budgets.reduce((sum, b) => sum + b.budget, 0) / budgets.length;
     const variance =
       budgets.reduce((sum, b) => sum + (b.budget - mean) ** 2, 0) /
       budgets.length;
@@ -1880,7 +1875,8 @@ const listProjectsInPlan: ExecutiveToolHandler = async (params, ctx, deps) => {
   // showed). With structured groups[], the LLM iterates groups and is
   // far less likely to silently collapse one. Direct backend callers
   // (W53 contract tests) opt back into flat by passing `groupBy: 'flat'`.
-  const groupByRaw = params.groupBy != null ? String(params.groupBy) : 'byBookCompleteness';
+  const groupByRaw =
+    params.groupBy != null ? String(params.groupBy) : 'byBookCompleteness';
   const groupBy = groupByRaw === 'flat' ? '' : groupByRaw;
   const groupByRound = groupBy === 'byRevisionRound';
   // Wave 60 W60-BE-AGG-01 — opt-in book-completeness mode. Differs from
@@ -2530,7 +2526,7 @@ export function renderBookCompletenessMarkdown(
     lines.push(`### ${g.revisionRoundLabel}`);
     lines.push('');
     g.projects.forEach((p, idx) => {
-      const item = p as Record<string, unknown>;
+      const item = p;
       const title = String(item.name ?? '');
       const status = String(item.statusTh ?? item.currentStatus ?? '');
       const agencyName =
@@ -2767,7 +2763,10 @@ function composeGeoCoordinates(
   startLng: number | string | null | undefined,
   endLat: number | string | null | undefined,
   endLng: number | string | null | undefined,
-): { start: { lat: number; lng: number } | null; end: { lat: number; lng: number } | null } | null {
+): {
+  start: { lat: number; lng: number } | null;
+  end: { lat: number; lng: number } | null;
+} | null {
   const start = coerceLatLng(startLat, startLng);
   const end = coerceLatLng(endLat, endLng);
   if (start == null && end == null) return null;
@@ -3187,10 +3186,7 @@ const getProjectClassificationBreakdown: ExecutiveToolHandler = async (
           })),
         },
       ],
-      advisories: [
-        'dual-bucket-classification',
-        HEAD_OF_LINEAGE_ADVISORY,
-      ],
+      advisories: ['dual-bucket-classification', HEAD_OF_LINEAGE_ADVISORY],
       asOf: nowIso(),
     };
   }
@@ -3562,17 +3558,19 @@ const getProjectLocationBreakdown: ExecutiveToolHandler = async (
       absorbCount(r.amphoeid, r.amphoename, Number(r.cnt) || 0);
     }
 
-    const budgetRows: Array<{ amphoeid: string | null; sumbudget: string | null }> =
-      await deps.dataSource
-        .getRepository(Budget)
-        .createQueryBuilder('b')
-        .innerJoin('b.projectGroupId', 'pg')
-        .select('pg.amphoe_id', 'amphoeid')
-        .addSelect('COALESCE(SUM(b.quantity), 0)', 'sumbudget')
-        .where('pg.deletedAt IS NULL')
-        .andWhere('pg.development_plan_id = :planId', { planId })
-        .groupBy('pg.amphoe_id')
-        .getRawMany();
+    const budgetRows: Array<{
+      amphoeid: string | null;
+      sumbudget: string | null;
+    }> = await deps.dataSource
+      .getRepository(Budget)
+      .createQueryBuilder('b')
+      .innerJoin('b.projectGroupId', 'pg')
+      .select('pg.amphoe_id', 'amphoeid')
+      .addSelect('COALESCE(SUM(b.quantity), 0)', 'sumbudget')
+      .where('pg.deletedAt IS NULL')
+      .andWhere('pg.development_plan_id = :planId', { planId })
+      .groupBy('pg.amphoe_id')
+      .getRawMany();
     for (const r of budgetRows) {
       absorbBudget(r.amphoeid, Number(r.sumbudget) || 0);
     }
@@ -3602,19 +3600,21 @@ const getProjectLocationBreakdown: ExecutiveToolHandler = async (
       absorbCount(r.amphoeid, r.amphoename, Number(r.cnt) || 0);
     }
 
-    const budgetRows: Array<{ amphoeid: string | null; sumbudget: string | null }> =
-      await deps.dataSource
-        .getRepository(Budget)
-        .createQueryBuilder('b')
-        .innerJoin('b.revisedProjectGroupId', 'rpg')
-        .innerJoin('rpg.developmentPlanRevision', 'dpr')
-        .select('rpg.amphoe_id', 'amphoeid')
-        .addSelect('COALESCE(SUM(b.quantity), 0)', 'sumbudget')
-        .where('rpg.deletedAt IS NULL')
-        .andWhere('dpr.deletedAt IS NULL')
-        .andWhere('dpr.development_plan_id = :planId', { planId })
-        .groupBy('rpg.amphoe_id')
-        .getRawMany();
+    const budgetRows: Array<{
+      amphoeid: string | null;
+      sumbudget: string | null;
+    }> = await deps.dataSource
+      .getRepository(Budget)
+      .createQueryBuilder('b')
+      .innerJoin('b.revisedProjectGroupId', 'rpg')
+      .innerJoin('rpg.developmentPlanRevision', 'dpr')
+      .select('rpg.amphoe_id', 'amphoeid')
+      .addSelect('COALESCE(SUM(b.quantity), 0)', 'sumbudget')
+      .where('rpg.deletedAt IS NULL')
+      .andWhere('dpr.deletedAt IS NULL')
+      .andWhere('dpr.development_plan_id = :planId', { planId })
+      .groupBy('rpg.amphoe_id')
+      .getRawMany();
     for (const r of budgetRows) {
       absorbBudget(r.amphoeid, Number(r.sumbudget) || 0);
     }
@@ -3777,8 +3777,9 @@ function parseFilters(raw: unknown): UnifiedFilters | undefined {
   const out: UnifiedFilters = {};
 
   if (Array.isArray(src.status)) {
-    const vals = src.status
-      .filter((v): v is string => typeof v === 'string' && v.length > 0);
+    const vals = src.status.filter(
+      (v): v is string => typeof v === 'string' && v.length > 0,
+    );
     if (vals.length > 0) out.status = vals;
   }
   if (Array.isArray(src.amphoeIds)) {
@@ -4088,8 +4089,7 @@ const getExecutiveDashboardSnapshot: ExecutiveToolHandler = async (
   assertExecutiveRole(ctx);
 
   const planIdRaw = params.planId != null ? String(params.planId) : null;
-  const planId =
-    planIdRaw && UUID_RX.test(planIdRaw) ? planIdRaw : undefined;
+  const planId = planIdRaw && UUID_RX.test(planIdRaw) ? planIdRaw : undefined;
   const scope = normaliseDslScope(params.scope);
   const limit = clampLimit(params.limit);
   const groupBy = parseGroupBy(params.groupBy);
@@ -4110,8 +4110,7 @@ const getExecutiveDashboardSnapshot: ExecutiveToolHandler = async (
   const includeBudget = Boolean(params.includeBudget);
   const includeStatus =
     params.includeStatus !== false || groupBy.includes('status');
-  const includeGeo =
-    Boolean(params.includeGeo) || groupBy.includes('amphoe');
+  const includeGeo = Boolean(params.includeGeo) || groupBy.includes('amphoe');
   const includeAgency =
     Boolean(params.includeAgency) ||
     groupBy.includes('agency') ||
@@ -4230,10 +4229,7 @@ const getExecutiveDashboardSnapshot: ExecutiveToolHandler = async (
             const label = agencyResult?.labels.get(p.projectId);
             bucketKey = label?.agencyName ?? 'ไม่ระบุ';
           } else if (key === 'strategy') {
-            if (
-              includeClassification &&
-              p.planReportFormat === 'ISSUE_BASED'
-            ) {
+            if (includeClassification && p.planReportFormat === 'ISSUE_BASED') {
               continue;
             }
             // W68-FIX-06 (D4) — emit Thai name (not FK UUID) so the LLM
@@ -4254,10 +4250,7 @@ const getExecutiveDashboardSnapshot: ExecutiveToolHandler = async (
             const cl = classificationLabels?.get(p.projectId);
             bucketKey = cl?.issueName ?? '(ไม่ระบุ)';
           } else if (key === 'planLevel') {
-            if (
-              includeClassification &&
-              p.planReportFormat === 'ISSUE_BASED'
-            ) {
+            if (includeClassification && p.planReportFormat === 'ISSUE_BASED') {
               continue;
             }
             // W68-FIX-06 (D4) — Thai Plan.name (the §16.5 "plan-level"
@@ -4344,13 +4337,14 @@ const getExecutiveDashboardSnapshot: ExecutiveToolHandler = async (
   // call used so the count window matches the list semantics.
   if (includeStatus) {
     try {
-      const breakdown =
-        await deps.unifiedProject.countExecutiveStatusBreakdown({
+      const breakdown = await deps.unifiedProject.countExecutiveStatusBreakdown(
+        {
           planId,
           scope,
           filters,
           includeHistoricalVersions,
-        });
+        },
+      );
       // Cast through `unknown` because `envelope` is typed as the
       // ExecutiveEnvelope generic; the field merge here is a benign
       // augmentation of `data` post-runDimensions and matches the
@@ -4503,7 +4497,8 @@ async function applyCanonicalAggregatorReroute(args: {
   const legacyEntry = {
     count: Number.isFinite(args.legacyCount) ? args.legacyCount : 0,
     budget:
-      typeof args.legacyBudget === 'number' && Number.isFinite(args.legacyBudget)
+      typeof args.legacyBudget === 'number' &&
+      Number.isFinite(args.legacyBudget)
         ? args.legacyBudget
         : 0,
   };
@@ -4659,8 +4654,7 @@ const getCrossPlanInsights: ExecutiveToolHandler = async (
       );
 
       // Optional groupBy cross-plan roll-up.
-      const buckets: Record<string, Array<{ key: string; count: number }>> =
-        {};
+      const buckets: Record<string, Array<{ key: string; count: number }>> = {};
       for (const key of groupBy) {
         const byBucket = new Map<string, number>();
         for (const p of projects) {
@@ -4885,7 +4879,7 @@ const listProjectsWithoutResponsibleAgency: ExecutiveToolHandler = async (
   const scopeRaw = String(params.scope ?? 'all').toLowerCase();
   const scope: 'all' | 'main' | 'edit' | 'change' =
     scopeRaw === 'main' || scopeRaw === 'edit' || scopeRaw === 'change'
-      ? (scopeRaw as 'main' | 'edit' | 'change')
+      ? scopeRaw
       : 'all';
 
   const limit = Math.min(Math.max(Number(params.limit ?? 50), 1), 100);
@@ -5487,7 +5481,10 @@ const listLaos: ExecutiveToolHandler = async (params, ctx, deps) => {
 // ────────────────────────────────────────────────────────────────────
 async function fetchLaoLabelsForUnifiedProjects(
   deps: ExecutiveToolHandlerDeps,
-  projects: Array<{ projectKind: 'main' | 'revised' | 'supplement'; projectId: string }>,
+  projects: Array<{
+    projectKind: 'main' | 'revised' | 'supplement';
+    projectId: string;
+  }>,
 ): Promise<Map<string, { laoId: string; laoName: string }>> {
   const labels = new Map<string, { laoId: string; laoName: string }>();
   if (!projects || projects.length === 0) return labels;
@@ -5637,11 +5634,7 @@ export async function fetchClassificationLabelsForUnifiedProjects(
     return deps.dataSource
       .getRepository(ProjectGroup)
       .createQueryBuilder('pg')
-      .leftJoin(
-        Strategy,
-        's',
-        's.id = pg.strategy_id AND s.deleted_at IS NULL',
-      )
+      .leftJoin(Strategy, 's', 's.id = pg.strategy_id AND s.deleted_at IS NULL')
       .leftJoin(Tactic, 't', 't.id = pg.tactic_id AND t.deleted_at IS NULL')
       .leftJoin(Plan, 'pl', 'pl.id = pg.plan_id AND pl.deleted_at IS NULL')
       .leftJoin(
@@ -5776,7 +5769,8 @@ const listAgencies: ExecutiveToolHandler = async (params, ctx, deps) => {
 
   qb.orderBy('a.name', 'ASC');
 
-  const rows: Array<{ id: string | number; name: string }> = await qb.getRawMany();
+  const rows: Array<{ id: string | number; name: string }> =
+    await qb.getRawMany();
 
   return {
     // W68-FIX-07 (2026-04-28): emit `agencyId` as integer to match

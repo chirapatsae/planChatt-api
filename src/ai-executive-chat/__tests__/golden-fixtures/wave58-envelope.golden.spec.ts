@@ -134,7 +134,8 @@ function makeDeps(rowMap: RowMap): ExecutiveToolHandlerDeps {
       getRepository: (entity: { name: string } | string) => {
         const name =
           typeof entity === 'string' ? entity : (entity?.name ?? 'unknown');
-        const rows = (rowMap as Record<string, unknown[] | undefined>)[name] ?? [];
+        const rows =
+          (rowMap as Record<string, unknown[] | undefined>)[name] ?? [];
         return {
           createQueryBuilder: () => makeQb(rows),
         };
@@ -387,12 +388,12 @@ describe('Wave 58 / golden / FX-D3D4-FLAT — listProjectsInPlan default mode (D
       RevisedProjectGroup: REVISED_FIXTURE_ROWS,
       SupplementProjectGroup: [],
     });
-    return (await handler(
+    return await handler(
       // W60c — flat shape requires explicit opt-in.
       { planId: PLAN_ID, scope: 'all', limit: 50, groupBy: 'flat' },
       makeCtx(),
       deps,
-    )) as Record<string, unknown>;
+    );
   }
 
   it('every project row has responsibleAgencyName key present', async () => {
@@ -521,7 +522,7 @@ describe('Wave 58 / golden / FX-D3D4-GROUPED — listProjectsInPlan groupBy=byRe
       RevisedProjectGroup: REVISED_FIXTURE_ROWS,
       SupplementProjectGroup: [],
     });
-    return (await handler(
+    return await handler(
       {
         planId: PLAN_ID,
         scope: 'all',
@@ -530,7 +531,7 @@ describe('Wave 58 / golden / FX-D3D4-GROUPED — listProjectsInPlan groupBy=byRe
       },
       makeCtx(),
       deps,
-    )) as Record<string, unknown>;
+    );
   }
 
   it('emits `groups[]` (not `items[]`) when groupBy=byRevisionRound', async () => {
@@ -644,12 +645,12 @@ describe('Wave 58 / golden / FX-D7 — listProjectsInPlan pageNumber surface (D7
       RevisedProjectGroup: REVISED_FIXTURE_ROWS,
       SupplementProjectGroup: [],
     });
-    return (await handler(
+    return await handler(
       // W60c — flat shape requires explicit opt-in.
       { planId: PLAN_ID, scope: 'all', limit: 50, groupBy: 'flat' },
       makeCtx(),
       deps,
-    )) as Record<string, unknown>;
+    );
   }
 
   it('every project row has a `pageNumber` key (number | null)', async () => {
@@ -703,11 +704,7 @@ describe('Wave 58 / golden / FX-D2 — listActivePlans planActivityStatus (D2 / 
 
   async function invokeWith(rowMap: RowMap): Promise<Record<string, unknown>> {
     const deps = makeDeps(rowMap);
-    return (await handler(
-      { includeClosed: true, limit: 50 },
-      makeCtx(),
-      deps,
-    )) as Record<string, unknown>;
+    return await handler({ includeClosed: true, limit: 50 }, makeCtx(), deps);
   }
 
   function findPlan(
@@ -979,7 +976,7 @@ describe('Wave 59 / FX-DA — listActivePlans default returns all plans', () => 
 
   it('default (no params) returns BOTH the latest and the historical plan', async () => {
     const deps = makeDeps(makeFixture());
-    const out = (await handler({}, makeCtx(), deps)) as Record<string, unknown>;
+    const out = await handler({}, makeCtx(), deps);
     const items = out.items as Array<Record<string, unknown>>;
     expect(items).toHaveLength(2);
     const ids = items.map((p) => p.planId).sort();
@@ -1008,11 +1005,7 @@ describe('Wave 59 / FX-DA — listActivePlans default returns all plans', () => 
       DevelopmentPlanRevision: [],
       DevelopmentPlanSupplement: [],
     });
-    const out = (await handler(
-      { latestOnly: true },
-      makeCtx(),
-      deps,
-    )) as Record<string, unknown>;
+    const out = await handler({ latestOnly: true }, makeCtx(), deps);
     const items = out.items as Array<Record<string, unknown>>;
     expect(items).toHaveLength(1);
     expect(items[0].planId).toBe(PLAN_W59_LATEST);
@@ -1020,11 +1013,7 @@ describe('Wave 59 / FX-DA — listActivePlans default returns all plans', () => 
 
   it('latestOnly: false explicitly is equivalent to default (all plans)', async () => {
     const deps = makeDeps(makeFixture());
-    const out = (await handler(
-      { latestOnly: false },
-      makeCtx(),
-      deps,
-    )) as Record<string, unknown>;
+    const out = await handler({ latestOnly: false }, makeCtx(), deps);
     const items = out.items as Array<Record<string, unknown>>;
     expect(items).toHaveLength(2);
   });
@@ -1093,11 +1082,11 @@ describe('Wave 59 / FX-DB — listProjectsInPlan objective + objectiveTruncated'
       RevisedProjectGroup: [],
       SupplementProjectGroup: [],
     });
-    return (await handler(
+    return await handler(
       { planId: PLAN_ID, scope: 'main', limit: 50, groupBy: 'flat' },
       makeCtx(),
       deps,
-    )) as Record<string, unknown>;
+    );
   }
 
   it('every project row has both `objective` and `objectiveTruncated` keys', async () => {
@@ -1229,11 +1218,11 @@ describe('Wave 59 / FX-DC — listProjectsInPlan location triple', () => {
       RevisedProjectGroup: [],
       SupplementProjectGroup: [],
     });
-    return (await handler(
+    return await handler(
       { planId: PLAN_ID, scope: 'main', limit: 50, groupBy: 'flat' },
       makeCtx(),
       deps,
-    )) as Record<string, unknown>;
+    );
   }
 
   it('every row has amphoeName / laoName / geoCoordinates keys', async () => {
@@ -1445,7 +1434,7 @@ describe('Wave 60 / FX-BookCompleteness — listProjectsInPlan groupBy=byBookCom
   }
 
   async function invokeBookCompleteness(): Promise<Record<string, unknown>> {
-    return (await handler(
+    return await handler(
       {
         planId: PLAN_ID,
         scope: 'all',
@@ -1454,11 +1443,11 @@ describe('Wave 60 / FX-BookCompleteness — listProjectsInPlan groupBy=byBookCom
       },
       makeCtx(),
       makeW60Deps(),
-    )) as Record<string, unknown>;
+    );
   }
 
   async function invokeByRevisionRound(): Promise<Record<string, unknown>> {
-    return (await handler(
+    return await handler(
       {
         planId: PLAN_ID,
         scope: 'all',
@@ -1467,17 +1456,17 @@ describe('Wave 60 / FX-BookCompleteness — listProjectsInPlan groupBy=byBookCom
       },
       makeCtx(),
       makeW60Deps(),
-    )) as Record<string, unknown>;
+    );
   }
 
   async function invokeFlatDefault(): Promise<Record<string, unknown>> {
-    return (await handler(
+    return await handler(
       // W60c (2026-04-25) — handler default flipped to byBookCompleteness;
       // legacy flat shape requires explicit `groupBy: 'flat'`.
       { planId: PLAN_ID, scope: 'all', limit: 50, groupBy: 'flat' },
       makeCtx(),
       makeW60Deps(),
-    )) as Record<string, unknown>;
+    );
   }
 
   // W60c round 4 (2026-04-25) — Mode A envelope contract changed:

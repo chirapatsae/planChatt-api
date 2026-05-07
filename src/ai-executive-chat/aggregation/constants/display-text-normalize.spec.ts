@@ -83,12 +83,8 @@ describe('formatNumberedListMarkdown (W64-FE-03)', () => {
   });
 
   it('preserves Thai content per item', () => {
-    const out = formatNumberedListMarkdown(
-      '1. ศึกษา 2. ออกแบบ 3. ก่อสร้าง',
-    );
-    expect(out).toBe(
-      '\n     1. ศึกษา\n     2. ออกแบบ\n     3. ก่อสร้าง',
-    );
+    const out = formatNumberedListMarkdown('1. ศึกษา 2. ออกแบบ 3. ก่อสร้าง');
+    expect(out).toBe('\n     1. ศึกษา\n     2. ออกแบบ\n     3. ก่อสร้าง');
   });
 
   it('does not split decimals', () => {

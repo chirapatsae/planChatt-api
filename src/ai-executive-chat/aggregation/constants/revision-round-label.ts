@@ -42,11 +42,11 @@ export function resolveRevisionRoundLabel(args: {
 }): string {
   const { type, number, description } = args;
   if (type === 'main') return REVISION_ROUND_LABEL_MAIN;
-  const trimmed =
-    typeof description === 'string' ? description.trim() : '';
+  const trimmed = typeof description === 'string' ? description.trim() : '';
   if (trimmed.length > 0) return trimmed;
   // Fallback templates — round number is a positive integer scalar.
-  const n = number == null || !Number.isFinite(Number(number)) ? 1 : Number(number);
+  const n =
+    number == null || !Number.isFinite(Number(number)) ? 1 : Number(number);
   switch (type) {
     case 'edit':
       return `เล่มแก้ไขครั้งที่ ${n}`;

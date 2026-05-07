@@ -115,17 +115,25 @@ function makeDeps(projects: FixtureProjects): ExecutiveToolHandlerDeps {
     unifiedProject: {
       listUnifiedProjects: jest.fn().mockResolvedValue(projects),
     } as never,
-    budget: { totalsForUnifiedProjects: jest.fn().mockResolvedValue(new Map()) } as never,
-    status: { latestStatusFor: jest.fn().mockResolvedValue(new Map()) } as never,
+    budget: {
+      totalsForUnifiedProjects: jest.fn().mockResolvedValue(new Map()),
+    } as never,
+    status: {
+      latestStatusFor: jest.fn().mockResolvedValue(new Map()),
+    } as never,
     geo: {
-      annotate: jest
-        .fn()
-        .mockResolvedValue({ labels: new Map(), missingDimensions: [], advisories: [] }),
+      annotate: jest.fn().mockResolvedValue({
+        labels: new Map(),
+        missingDimensions: [],
+        advisories: [],
+      }),
     } as never,
     agency: {
-      annotate: jest
-        .fn()
-        .mockResolvedValue({ labels: new Map(), missingDimensions: [], advisories: [] }),
+      annotate: jest.fn().mockResolvedValue({
+        labels: new Map(),
+        missingDimensions: [],
+        advisories: [],
+      }),
     } as never,
     // Use the REAL resilience service so classification failures surface
     // via the real runDimensions → missingDimensions/advisories pipeline.

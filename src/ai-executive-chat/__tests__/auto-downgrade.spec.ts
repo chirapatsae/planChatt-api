@@ -19,11 +19,7 @@
 import { resolveModel } from '../../ai-usage-quotas/quota-model-override';
 import { AiQuotaGuard } from '../../ai-usage-quotas/guards/ai-quota.guard';
 
-function quotaStub(
-  quotaLimit: number,
-  quotaUsed: number,
-  remaining: number,
-) {
+function quotaStub(quotaLimit: number, quotaUsed: number, remaining: number) {
   return {
     getQuotaSnapshot: jest.fn().mockResolvedValue({
       id: 'q1',

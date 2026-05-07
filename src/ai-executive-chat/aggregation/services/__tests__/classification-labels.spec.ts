@@ -34,9 +34,7 @@ type Row = {
   issuename: string | null;
 };
 
-function makeDataSource(opts: {
-  rows?: (call: QbCall) => Row[];
-}) {
+function makeDataSource(opts: { rows?: (call: QbCall) => Row[] }) {
   const calls: QbCall[] = [];
   const rows = opts.rows ?? (() => []);
 
@@ -66,14 +64,14 @@ function makeDataSource(opts: {
     getRepository: (target: unknown) => {
       const name =
         typeof target === 'function'
-          ? (target as { name?: string }).name ?? ''
+          ? ((target as { name?: string }).name ?? '')
           : '';
       const alias: 'pg' | 'rpg' | 'spg' =
         name === 'RevisedProjectGroup'
           ? 'rpg'
           : name === 'SupplementProjectGroup'
-          ? 'spg'
-          : 'pg';
+            ? 'spg'
+            : 'pg';
       return { createQueryBuilder: (_a: string) => qbFactory(alias) };
     },
   };
@@ -325,9 +323,9 @@ describe('W68-FIX-06 / fetchClassificationLabelsForUnifiedProjects', () => {
       expect(
         /s\.id = pg\.strategy_id AND s\.deleted_at IS NULL/.test(src),
       ).toBe(true);
-      expect(
-        /t\.id = pg\.tactic_id AND t\.deleted_at IS NULL/.test(src),
-      ).toBe(true);
+      expect(/t\.id = pg\.tactic_id AND t\.deleted_at IS NULL/.test(src)).toBe(
+        true,
+      );
       expect(/pl\.id = pg\.plan_id AND pl\.deleted_at IS NULL/.test(src)).toBe(
         true,
       );

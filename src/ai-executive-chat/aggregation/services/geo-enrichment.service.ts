@@ -89,9 +89,7 @@ const SUPPLEMENT_GEO_DIMENSION: MissingDimension = 'geo:supplement';
 
 @Injectable()
 export class GeoEnrichmentService implements IGeoEnrichment {
-  constructor(
-    @InjectDataSource() private readonly dataSource: DataSource,
-  ) {}
+  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
   async annotate(projects: UnifiedProject[]): Promise<GeoEnrichmentResult> {
     const labels = new Map<string, AmphoeLabel>();
@@ -175,10 +173,12 @@ export class GeoEnrichmentService implements IGeoEnrichment {
     return { labels, missingDimensions, advisories };
   }
 
-  private async fetchMainAmphoeLabels(
-    ids: string[],
-  ): Promise<
-    Array<{ projectId: string; amphoeId: number | null; amphoeName: string | null }>
+  private async fetchMainAmphoeLabels(ids: string[]): Promise<
+    Array<{
+      projectId: string;
+      amphoeId: number | null;
+      amphoeName: string | null;
+    }>
   > {
     if (ids.length === 0) return [];
 
@@ -210,10 +210,12 @@ export class GeoEnrichmentService implements IGeoEnrichment {
     }));
   }
 
-  private async fetchRevisedAmphoeLabels(
-    ids: string[],
-  ): Promise<
-    Array<{ projectId: string; amphoeId: number | null; amphoeName: string | null }>
+  private async fetchRevisedAmphoeLabels(ids: string[]): Promise<
+    Array<{
+      projectId: string;
+      amphoeId: number | null;
+      amphoeName: string | null;
+    }>
   > {
     if (ids.length === 0) return [];
 
@@ -248,10 +250,12 @@ export class GeoEnrichmentService implements IGeoEnrichment {
    * whose `amphoeId` is non-null in the incoming batch — rows without
    * a FK never reach this method and never incur a query cost.
    */
-  private async fetchSupplementAmphoeLabels(
-    ids: string[],
-  ): Promise<
-    Array<{ projectId: string; amphoeId: number | null; amphoeName: string | null }>
+  private async fetchSupplementAmphoeLabels(ids: string[]): Promise<
+    Array<{
+      projectId: string;
+      amphoeId: number | null;
+      amphoeName: string | null;
+    }>
   > {
     if (ids.length === 0) return [];
 

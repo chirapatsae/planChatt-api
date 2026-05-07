@@ -36,9 +36,7 @@ export interface AgencyLabelGuardFail {
   pattern: string;
 }
 
-export type AgencyLabelGuardResult =
-  | AgencyLabelGuardOk
-  | AgencyLabelGuardFail;
+export type AgencyLabelGuardResult = AgencyLabelGuardOk | AgencyLabelGuardFail;
 
 /**
  * Validate a single project-row envelope against the placeholder
@@ -90,12 +88,10 @@ export class AgencyLabelPlaceholderError extends Error {
   }
 }
 
-export function assertAgencyLabelPlaceholderFree(
-  row: {
-    responsibleAgencyName?: string | null;
-    responsibleAgencyDisclosure?: string | null;
-  },
-): void {
+export function assertAgencyLabelPlaceholderFree(row: {
+  responsibleAgencyName?: string | null;
+  responsibleAgencyDisclosure?: string | null;
+}): void {
   const r = checkAgencyLabelPlaceholder(row);
   if (!r.ok) throw new AgencyLabelPlaceholderError(r);
 }

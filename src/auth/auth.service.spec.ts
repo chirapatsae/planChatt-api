@@ -184,8 +184,14 @@ describe('AuthService', () => {
     it('should login existing user and return accessToken (success)', async () => {
       (jwt.decode as jest.Mock).mockReturnValue(validDecoded);
       (hashCitizenId as jest.Mock).mockReturnValue(hashedCid);
-      userRepository.findOne.mockResolvedValue({ ...user, userActivityLogs: [] } as any);
-      userService.update.mockResolvedValue({ ...user, userActivityLogs: [] } as any);
+      userRepository.findOne.mockResolvedValue({
+        ...user,
+        userActivityLogs: [],
+      } as any);
+      userService.update.mockResolvedValue({
+        ...user,
+        userActivityLogs: [],
+      } as any);
       jwtService.sign.mockReturnValue('signed-token');
 
       const result = await service.handleOAuthLogin(
@@ -209,7 +215,10 @@ describe('AuthService', () => {
       (jwt.decode as jest.Mock).mockReturnValue(validDecoded);
       (hashCitizenId as jest.Mock).mockReturnValue(hashedCid);
       userRepository.findOne.mockResolvedValue(null);
-      userService.create.mockResolvedValue({ ...user, isFirstLogin: true } as any);
+      userService.create.mockResolvedValue({
+        ...user,
+        isFirstLogin: true,
+      } as any);
       jwtService.sign.mockReturnValue('signed-token');
 
       const result = await service.handleOAuthLogin(
@@ -273,7 +282,10 @@ describe('AuthService', () => {
     it('should handle user with no workHistory gracefully', async () => {
       (jwt.decode as jest.Mock).mockReturnValue(validDecoded);
       (hashCitizenId as jest.Mock).mockReturnValue(hashedCid);
-      userRepository.findOne.mockResolvedValue({ ...user, workHistory: [] } as any);
+      userRepository.findOne.mockResolvedValue({
+        ...user,
+        workHistory: [],
+      } as any);
       userService.update.mockResolvedValue({ ...user, workHistory: [] } as any);
       jwtService.sign.mockReturnValue('signed-token');
       const result = await service.handleOAuthLogin(

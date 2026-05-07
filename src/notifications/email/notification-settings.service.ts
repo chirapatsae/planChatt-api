@@ -217,10 +217,7 @@ export class NotificationSettingsService {
       expectedUpdatedAt?: string;
     },
   ): Promise<SettingsView> {
-    if (
-      body.emailEnabled === undefined &&
-      body.lineEnabled === undefined
-    ) {
+    if (body.emailEnabled === undefined && body.lineEnabled === undefined) {
       throw new BadRequestException(
         'ต้องระบุอย่างน้อยหนึ่งช่องทาง (emailEnabled หรือ lineEnabled)',
       );
@@ -260,8 +257,7 @@ export class NotificationSettingsService {
           throw new ConflictException({
             statusCode: 409,
             error: 'SETTINGS_STALE',
-            message:
-              'การตั้งค่าถูกแก้ไขโดยผู้อื่น โปรดโหลดใหม่ก่อนเปลี่ยนแปลง',
+            message: 'การตั้งค่าถูกแก้ไขโดยผู้อื่น โปรดโหลดใหม่ก่อนเปลี่ยนแปลง',
           });
         }
       }
@@ -317,9 +313,7 @@ export class NotificationSettingsService {
       }
       if (trimmedReason.length > 0) {
         if (trimmedReason.length < 12 || trimmedReason.length > 200) {
-          throw new BadRequestException(
-            'reason ต้องมีความยาว 12-200 ตัวอักษร',
-          );
+          throw new BadRequestException('reason ต้องมีความยาว 12-200 ตัวอักษร');
         }
       }
 
@@ -435,9 +429,7 @@ export class NotificationSettingsService {
     row: NotificationSettingsAudit | null,
   ): SettingsAuditView | null {
     if (!row) return null;
-    const action: 'enable' | 'disable' = row.nextEnabled
-      ? 'enable'
-      : 'disable';
+    const action: 'enable' | 'disable' = row.nextEnabled ? 'enable' : 'disable';
     const fullName = row.changedBy
       ? [row.changedBy.firstname, row.changedBy.lastname]
           .filter((s) => typeof s === 'string' && s.trim().length > 0)

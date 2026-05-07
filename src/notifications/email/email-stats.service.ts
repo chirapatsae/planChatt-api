@@ -62,7 +62,8 @@ export class EmailStatsService {
   ): { fromDate: Date; toDate: Date } {
     const now = new Date();
     const defaultFrom = new Date(
-      now.getTime() - EmailStatsService.DEFAULT_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+      now.getTime() -
+        EmailStatsService.DEFAULT_WINDOW_DAYS * 24 * 60 * 60 * 1000,
     );
 
     const parsedFrom = from ? new Date(from) : defaultFrom;
@@ -78,7 +79,9 @@ export class EmailStatsService {
    * Build a `fullName` from a User row. Handles nulls / whitespace so the
    * dashboard never renders a bare dash + whitespace combo.
    */
-  private buildFullName(user?: { firstname?: string | null; lastname?: string | null } | null): string {
+  private buildFullName(
+    user?: { firstname?: string | null; lastname?: string | null } | null,
+  ): string {
     if (!user) return '—';
     const first = (user.firstname ?? '').trim();
     const last = (user.lastname ?? '').trim();
@@ -94,7 +97,9 @@ export class EmailStatsService {
    *
    * Returns a map keyed by user id.
    */
-  private async resolveRoleNames(userIds: string[]): Promise<Map<string, string | null>> {
+  private async resolveRoleNames(
+    userIds: string[],
+  ): Promise<Map<string, string | null>> {
     const roleByUser = new Map<string, string | null>();
     if (userIds.length === 0) return roleByUser;
 
@@ -551,7 +556,13 @@ export class EmailStatsService {
 
     const eventMap = new Map<
       string,
-      { eventType: string; sent: number; failed: number; skipped: number; total: number }
+      {
+        eventType: string;
+        sent: number;
+        failed: number;
+        skipped: number;
+        total: number;
+      }
     >();
     for (const r of eventRows) {
       const n = Number(r.count) || 0;

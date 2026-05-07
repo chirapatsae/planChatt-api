@@ -34,8 +34,6 @@ export class ActionLinkVerifyMalformedFilter implements ExceptionFilter {
   catch(_exception: BadRequestException, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
     const res = ctx.getResponse<Response>();
-    res
-      .status(HttpStatus.OK)
-      .json({ valid: false, reason: 'malformed' });
+    res.status(HttpStatus.OK).json({ valid: false, reason: 'malformed' });
   }
 }

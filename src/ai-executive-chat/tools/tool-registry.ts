@@ -2065,9 +2065,7 @@ export const EXECUTIVE_TOOL_REGISTRY: Record<
 export function getExecutiveToolSpec(
   name: string,
 ): ExecutiveToolSpec | undefined {
-  return (EXECUTIVE_TOOL_REGISTRY as Record<string, ExecutiveToolSpec>)[
-    name
-  ];
+  return (EXECUTIVE_TOOL_REGISTRY as Record<string, ExecutiveToolSpec>)[name];
 }
 
 export const EXECUTIVE_TOOL_NAMES: ReadonlyArray<ExecutiveToolName> =

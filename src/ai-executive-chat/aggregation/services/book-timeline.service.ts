@@ -71,9 +71,7 @@ export interface LatestProjectsByBookPartition {
 
 @Injectable()
 export class BookTimelineService {
-  constructor(
-    @InjectDataSource() private readonly dataSource: DataSource,
-  ) {}
+  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
   /**
    * Return the head of the §15.2 global timeline for the given
@@ -83,9 +81,7 @@ export class BookTimelineService {
    *
    * Filters `deleted_at IS NULL` on every UNION arm (§15.7).
    */
-  async getLatestBookForPlan(
-    planId: string,
-  ): Promise<LatestBookResult | null> {
+  async getLatestBookForPlan(planId: string): Promise<LatestBookResult | null> {
     if (!planId) return null;
 
     // DPR arm — newest non-soft-deleted revision (any type).
@@ -142,9 +138,7 @@ export class BookTimelineService {
     if (dprDate >= dpsDate && dprRow) {
       const lower = (dprRow.rtname ?? '').toLowerCase();
       const kind: LatestBookKind =
-        lower === 'change' || lower.includes('เปลี่ยนแปลง')
-          ? 'change'
-          : 'edit';
+        lower === 'change' || lower.includes('เปลี่ยนแปลง') ? 'change' : 'edit';
       return {
         kind,
         rowId: dprRow.id,

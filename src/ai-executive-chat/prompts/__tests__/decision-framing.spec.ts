@@ -182,9 +182,7 @@ describe('EXECUTIVE_CHAT_SYSTEM_PROMPT — decision-framing rules', () => {
 
     it('rule #18 — getLatestBookForPlan helper for "เล่มล่าสุด"', () => {
       expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain('getLatestBookForPlan');
-      expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain(
-        'UNION DPR + Supplement',
-      );
+      expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain('UNION DPR + Supplement');
     });
 
     it('rule #19 — Ready visibility hidden by default', () => {
@@ -231,9 +229,7 @@ describe('EXECUTIVE_CHAT_SYSTEM_PROMPT — decision-framing rules', () => {
     });
 
     it('rule #25 — amphoe vs LAO attribution', () => {
-      expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain(
-        '`project.amphoe_id = X`',
-      );
+      expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain('`project.amphoe_id = X`');
       expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain(
         '`project.local_administrative_organization_id = A`',
       );
@@ -282,7 +278,7 @@ describe('EXECUTIVE_CHAT_SYSTEM_PROMPT — decision-framing rules', () => {
       expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain('lao-filter-required');
     });
 
-    it('rule #25b — declares groupBy=[\'lao\'] for per-LAO breakdowns', () => {
+    it("rule #25b — declares groupBy=['lao'] for per-LAO breakdowns", () => {
       expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain("groupBy=['lao']");
     });
 
@@ -349,11 +345,15 @@ describe('EXECUTIVE_CHAT_SYSTEM_PROMPT — decision-framing rules', () => {
       // Both sides of the AI dispatch (initial type-pinned call + fallback
       // without type) MUST be cited verbatim so the LLM has no excuse to
       // skip the (i)/(ii)/(iii) sequence.
-      expect(tail).toContain('listLaos({ type: "อบต.", nameContains: "โคกกรวด" })');
+      expect(tail).toContain(
+        'listLaos({ type: "อบต.", nameContains: "โคกกรวด" })',
+      );
       expect(tail).toContain('listLaos({ nameContains: "โคกกรวด" })');
       // Anti-silent-substitution lock — must explicitly forbid returning
       // the alternative type without disclosure.
-      expect(tail).toContain('ห้าม return ข้อมูลเทศบาลตำบลโดยตรงโดยไม่บอก type-mismatch');
+      expect(tail).toContain(
+        'ห้าม return ข้อมูลเทศบาลตำบลโดยตรงโดยไม่บอก type-mismatch',
+      );
     });
 
     it('tool-instructions catalog discloses W68-FIX-11 type filter on listLaos', () => {
@@ -382,7 +382,10 @@ describe('EXECUTIVE_CHAT_SYSTEM_PROMPT — decision-framing rules', () => {
 
     it('rule #25c — documents the system semantic (อบจ. ดำเนินการ / อปท. ประสานแผน)', () => {
       const idx = EXECUTIVE_CHAT_SYSTEM_PROMPT.indexOf('25c.');
-      const tail = EXECUTIVE_CHAT_SYSTEM_PROMPT.slice(idx, idx + RULE_25C_TAIL_BYTES);
+      const tail = EXECUTIVE_CHAT_SYSTEM_PROMPT.slice(
+        idx,
+        idx + RULE_25C_TAIL_BYTES,
+      );
       // The "system semantic" paragraph is the foundation of v3.
       expect(tail).toContain('System semantic');
       expect(tail).toContain('ระบบ Project Bank ดำเนินการโดย อบจ.นครราชสีมา');
@@ -392,7 +395,10 @@ describe('EXECUTIVE_CHAT_SYSTEM_PROMPT — decision-framing rules', () => {
 
     it('rule #25c — pins the two execution-stage criteria (responsible_agency_id NOT NULL AND isBooked=true)', () => {
       const idx = EXECUTIVE_CHAT_SYSTEM_PROMPT.indexOf('25c.');
-      const tail = EXECUTIVE_CHAT_SYSTEM_PROMPT.slice(idx, idx + RULE_25C_TAIL_BYTES);
+      const tail = EXECUTIVE_CHAT_SYSTEM_PROMPT.slice(
+        idx,
+        idx + RULE_25C_TAIL_BYTES,
+      );
       expect(tail).toContain('responsible_agency_id IS NOT NULL');
       expect(tail).toContain('isBooked = true');
       expect(tail).toContain('นำเข้าเล่มแผน');
@@ -400,7 +406,10 @@ describe('EXECUTIVE_CHAT_SYSTEM_PROMPT — decision-framing rules', () => {
 
     it('rule #25c — maps อบจ-bucket triggers to filters.hasResponsibleAgency=true AND filters.isBooked=true', () => {
       const idx = EXECUTIVE_CHAT_SYSTEM_PROMPT.indexOf('25c.');
-      const tail = EXECUTIVE_CHAT_SYSTEM_PROMPT.slice(idx, idx + RULE_25C_TAIL_BYTES);
+      const tail = EXECUTIVE_CHAT_SYSTEM_PROMPT.slice(
+        idx,
+        idx + RULE_25C_TAIL_BYTES,
+      );
       // Verbatim: filter keys + true values must appear in the rule body.
       expect(tail).toContain('filters.hasResponsibleAgency: true');
       expect(tail).toContain('filters.isBooked: true');
@@ -427,7 +436,10 @@ describe('EXECUTIVE_CHAT_SYSTEM_PROMPT — decision-framing rules', () => {
 
     it('rule #25c — maps อปท-bucket triggers to filters.excludeLaoIds=["3001027"] (unchanged from v2)', () => {
       const idx = EXECUTIVE_CHAT_SYSTEM_PROMPT.indexOf('25c.');
-      const tail = EXECUTIVE_CHAT_SYSTEM_PROMPT.slice(idx, idx + RULE_25C_TAIL_BYTES);
+      const tail = EXECUTIVE_CHAT_SYSTEM_PROMPT.slice(
+        idx,
+        idx + RULE_25C_TAIL_BYTES,
+      );
       expect(tail).toContain("filters.excludeLaoIds: ['3001027']");
       const laoTriggers = [
         '"อปท"',
@@ -447,7 +459,10 @@ describe('EXECUTIVE_CHAT_SYSTEM_PROMPT — decision-framing rules', () => {
 
     it('rule #25c — explicitly forbids "ไม่พบข้อมูล อบจ" / "ไม่พบข้อมูล อปท" fallback', () => {
       const idx = EXECUTIVE_CHAT_SYSTEM_PROMPT.indexOf('25c.');
-      const tail = EXECUTIVE_CHAT_SYSTEM_PROMPT.slice(idx, idx + RULE_25C_TAIL_BYTES);
+      const tail = EXECUTIVE_CHAT_SYSTEM_PROMPT.slice(
+        idx,
+        idx + RULE_25C_TAIL_BYTES,
+      );
       expect(tail).toContain('ห้าม fallback');
       expect(tail).toContain('ไม่พบข้อมูล อบจ');
       expect(tail).toContain('ไม่พบข้อมูล อปท');
@@ -455,7 +470,10 @@ describe('EXECUTIVE_CHAT_SYSTEM_PROMPT — decision-framing rules', () => {
 
     it('rule #25c — disambiguates from originType (creator-based per CLAUDE.md §1+§5)', () => {
       const idx = EXECUTIVE_CHAT_SYSTEM_PROMPT.indexOf('25c.');
-      const tail = EXECUTIVE_CHAT_SYSTEM_PROMPT.slice(idx, idx + RULE_25C_TAIL_BYTES);
+      const tail = EXECUTIVE_CHAT_SYSTEM_PROMPT.slice(
+        idx,
+        idx + RULE_25C_TAIL_BYTES,
+      );
       expect(tail).toContain('originType');
       expect(tail).toContain('creator-based');
       expect(tail).toContain('execution-stage');
@@ -463,7 +481,10 @@ describe('EXECUTIVE_CHAT_SYSTEM_PROMPT — decision-framing rules', () => {
 
     it('rule #25c — disambiguates from project.lao (origin / ต้นทาง of submission)', () => {
       const idx = EXECUTIVE_CHAT_SYSTEM_PROMPT.indexOf('25c.');
-      const tail = EXECUTIVE_CHAT_SYSTEM_PROMPT.slice(idx, idx + RULE_25C_TAIL_BYTES);
+      const tail = EXECUTIVE_CHAT_SYSTEM_PROMPT.slice(
+        idx,
+        idx + RULE_25C_TAIL_BYTES,
+      );
       expect(tail).toContain('project.lao');
       expect(tail).toContain('ต้นทาง');
       // The classic example: a project whose origin is เทศบาลโคกกรวด can
@@ -473,13 +494,19 @@ describe('EXECUTIVE_CHAT_SYSTEM_PROMPT — decision-framing rules', () => {
 
     it('rule #25c — references rule #25b chain for specific-LAO queries', () => {
       const idx = EXECUTIVE_CHAT_SYSTEM_PROMPT.indexOf('25c.');
-      const tail = EXECUTIVE_CHAT_SYSTEM_PROMPT.slice(idx, idx + RULE_25C_TAIL_BYTES);
+      const tail = EXECUTIVE_CHAT_SYSTEM_PROMPT.slice(
+        idx,
+        idx + RULE_25C_TAIL_BYTES,
+      );
       expect(tail).toContain('#25b');
     });
 
     it('rule #25c — verbatim user-facing prose for both buckets', () => {
       const idx = EXECUTIVE_CHAT_SYSTEM_PROMPT.indexOf('25c.');
-      const tail = EXECUTIVE_CHAT_SYSTEM_PROMPT.slice(idx, idx + RULE_25C_TAIL_BYTES);
+      const tail = EXECUTIVE_CHAT_SYSTEM_PROMPT.slice(
+        idx,
+        idx + RULE_25C_TAIL_BYTES,
+      );
       expect(tail).toContain(
         'โครงการของ อบจ.นครราชสีมา (มีหน่วยงานรับผิดชอบและนำเข้าเล่มแผนแล้ว)',
       );
@@ -490,7 +517,10 @@ describe('EXECUTIVE_CHAT_SYSTEM_PROMPT — decision-framing rules', () => {
 
     it('rule #25c — §17.2 advisory-only stamp present', () => {
       const idx = EXECUTIVE_CHAT_SYSTEM_PROMPT.indexOf('25c.');
-      const tail = EXECUTIVE_CHAT_SYSTEM_PROMPT.slice(idx, idx + RULE_25C_TAIL_BYTES);
+      const tail = EXECUTIVE_CHAT_SYSTEM_PROMPT.slice(
+        idx,
+        idx + RULE_25C_TAIL_BYTES,
+      );
       expect(tail).toContain('§17.2 advisory-only');
     });
   });
@@ -571,7 +601,16 @@ describe('EXECUTIVE_CHAT_SYSTEM_PROMPT — decision-framing rules', () => {
         idx + RULE_25D_TAIL_BYTES,
       );
       // Spot-check a handful of aliases — the table is verbatim user-confirmed.
-      const aliases = ['กองยุทธ', 'กองแผน', 'คลัง', 'ปลัด', 'กจ', 'ช่าง', 'สาธา', 'กองสาสุข'];
+      const aliases = [
+        'กองยุทธ',
+        'กองแผน',
+        'คลัง',
+        'ปลัด',
+        'กจ',
+        'ช่าง',
+        'สาธา',
+        'กองสาสุข',
+      ];
       for (const alias of aliases) {
         expect(tail).toContain(alias);
       }
@@ -734,9 +773,7 @@ describe('EXECUTIVE_CHAT_SYSTEM_PROMPT — decision-framing rules', () => {
     });
 
     it('rule #27d — cross-turn plan continuity', () => {
-      expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain(
-        'ความต่อเนื่องข้ามคำตอบ',
-      );
+      expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain('ความต่อเนื่องข้ามคำตอบ');
       expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain('ไม่มีโครงการในแผนนี้');
       expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain(
         'ห้ามตอบว่าแผนนั้น "ไม่มีอยู่"',
@@ -819,16 +856,16 @@ describe('EXECUTIVE_CHAT_SYSTEM_PROMPT — decision-framing rules', () => {
     });
 
     it('tool description discloses byBookCompleteness on listProjectsInPlan', () => {
-      expect(EXECUTIVE_CHAT_TOOL_INSTRUCTIONS).toContain("'byBookCompleteness'");
+      expect(EXECUTIVE_CHAT_TOOL_INSTRUCTIONS).toContain(
+        "'byBookCompleteness'",
+      );
     });
   });
 
   describe('W62-BE-PROMPT-01 — HEAD-only default + timeline/verbose disambiguation (rule #36)', () => {
     it('rule #36 — HEAD-only default keyword present', () => {
       expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain('HEAD-only default');
-      expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain(
-        'isHead === true',
-      );
+      expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain('isHead === true');
     });
 
     it('rule #36 — N-rounds hint phrase verbatim', () => {
@@ -929,7 +966,9 @@ describe('EXECUTIVE_CHAT_SYSTEM_PROMPT — decision-framing rules', () => {
     it('tool description for listProjectsInPlan discloses W62 envelope fields', () => {
       expect(EXECUTIVE_CHAT_TOOL_INSTRUCTIONS).toContain('goal');
       expect(EXECUTIVE_CHAT_TOOL_INSTRUCTIONS).toContain('expected');
-      expect(EXECUTIVE_CHAT_TOOL_INSTRUCTIONS).toContain('developmentIssueLabel');
+      expect(EXECUTIVE_CHAT_TOOL_INSTRUCTIONS).toContain(
+        'developmentIssueLabel',
+      );
       expect(EXECUTIVE_CHAT_TOOL_INSTRUCTIONS).toContain('indicator');
     });
   });

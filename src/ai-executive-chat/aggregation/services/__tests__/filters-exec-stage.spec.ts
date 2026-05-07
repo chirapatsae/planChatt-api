@@ -151,9 +151,7 @@ describe('W67-PAO-EXEC-STAGE / applyFilters({ hasResponsibleAgency, isBooked })'
         callApplyFilters(svc, qb, { isBooked: true }, kind);
 
         const alias = ALIAS_BY_KIND[kind];
-        const match = calls.find((c) =>
-          c.clause.includes(`${alias}.isBooked`),
-        );
+        const match = calls.find((c) => c.clause.includes(`${alias}.isBooked`));
         expect(match).toBeDefined();
         expect(match!.clause).toBe(`${alias}.isBooked = :isBookedFilter`);
         expect(match!.params).toEqual({ isBookedFilter: true });
@@ -168,9 +166,7 @@ describe('W67-PAO-EXEC-STAGE / applyFilters({ hasResponsibleAgency, isBooked })'
         callApplyFilters(svc, qb, { isBooked: false }, kind);
 
         const alias = ALIAS_BY_KIND[kind];
-        const match = calls.find((c) =>
-          c.clause.includes(`${alias}.isBooked`),
-        );
+        const match = calls.find((c) => c.clause.includes(`${alias}.isBooked`));
         expect(match).toBeDefined();
         expect(match!.clause).toBe(`${alias}.isBooked = :isBookedFilter`);
         expect(match!.params).toEqual({ isBookedFilter: false });

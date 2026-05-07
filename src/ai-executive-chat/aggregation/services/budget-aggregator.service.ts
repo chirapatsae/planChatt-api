@@ -60,9 +60,7 @@ type SumRow = { id: string | null; sum: string | number | null };
 
 @Injectable()
 export class BudgetAggregatorService implements IBudgetAggregator {
-  constructor(
-    @InjectDataSource() private readonly dataSource: DataSource,
-  ) {}
+  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
   async totalsForUnifiedProjects(
     projects: UnifiedProject[],
@@ -84,8 +82,7 @@ export class BudgetAggregatorService implements IBudgetAggregator {
       }
       if (p.projectKind === 'main') mainIds.push(p.projectId);
       else if (p.projectKind === 'revised') revisedIds.push(p.projectId);
-      else if (p.projectKind === 'supplement')
-        supplementIds.push(p.projectId);
+      else if (p.projectKind === 'supplement') supplementIds.push(p.projectId);
     }
 
     // Three independent fan-out passes, parallel.

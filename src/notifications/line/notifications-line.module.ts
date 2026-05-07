@@ -5,6 +5,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from 'src/users/entities/user.entity';
 import { LineUserBinding } from 'src/line/entities/line-user-binding.entity';
 import { LineModule } from 'src/line/line.module';
+import { RolesGuard } from 'src/auth/roles.guard';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 
 import { NotificationLineLog } from '../entities/notification-line-log.entity';
@@ -82,6 +83,7 @@ import { LineBindingAdminAction } from './entities/line-binding-admin-action.ent
     DigestFlexBuilderService,
     // Wave 97 — read-only aggregation service for admin quota endpoints.
     LineStatsService,
+    RolesGuard,
   ],
   exports: [
     NotificationsLineService,

@@ -95,7 +95,7 @@ function makeDataSource(
     getRepository: (target: unknown) => {
       const repoName =
         typeof target === 'function'
-          ? (target as { name?: string }).name ?? 'Unknown'
+          ? ((target as { name?: string }).name ?? 'Unknown')
           : 'Unknown';
       return {
         createQueryBuilder: (_alias: string) => qbFactory(repoName),
@@ -192,16 +192,16 @@ describe('W57-BE-AGG-06 / getLatestBookForPlan', () => {
       (c) => c.repositoryName === 'DevelopmentPlanRevision',
     );
     expect(dprCall).toBeDefined();
-    expect(
-      dprCall!.whereChain.some((w) => /deletedAt IS NULL/.test(w)),
-    ).toBe(true);
+    expect(dprCall!.whereChain.some((w) => /deletedAt IS NULL/.test(w))).toBe(
+      true,
+    );
     const dpsCall = calls.find(
       (c) => c.repositoryName === 'DevelopmentPlanSupplement',
     );
     expect(dpsCall).toBeDefined();
-    expect(
-      dpsCall!.whereChain.some((w) => /deletedAt IS NULL/.test(w)),
-    ).toBe(true);
+    expect(dpsCall!.whereChain.some((w) => /deletedAt IS NULL/.test(w))).toBe(
+      true,
+    );
   });
 });
 
@@ -223,9 +223,8 @@ describe('W57-BE-AGG-06 / getLatestProjectsByBookPartition', () => {
         { pid: 'B', title: 'B', rtname: 'change' },
       ],
     });
-    const out = await svc(dataSource).getLatestProjectsByBookPartition(
-      'plan-1',
-    );
+    const out =
+      await svc(dataSource).getLatestProjectsByBookPartition('plan-1');
     expect(out).not.toBeNull();
     expect(out!.planId).toBe('plan-1');
     expect(out!.mainBook).toEqual([{ projectId: 'C', name: 'C' }]);
@@ -242,12 +241,13 @@ describe('W57-BE-AGG-06 / getLatestProjectsByBookPartition', () => {
         { pid: 'rpg-th-change', title: 'TH-change', rtname: 'เปลี่ยนแปลง' },
       ],
     });
-    const out = await svc(dataSource).getLatestProjectsByBookPartition(
-      'plan-1',
-    );
+    const out =
+      await svc(dataSource).getLatestProjectsByBookPartition('plan-1');
     // 'แก้ไข' is not an English literal and not the change keyword, so
     // it lands in editBook.
-    expect(out!.editBook.find((r) => r.projectId === 'rpg-th-edit')).toBeDefined();
+    expect(
+      out!.editBook.find((r) => r.projectId === 'rpg-th-edit'),
+    ).toBeDefined();
     expect(
       out!.changeBook.find((r) => r.projectId === 'rpg-th-change'),
     ).toBeDefined();
@@ -295,9 +295,8 @@ describe('W57-BE-AGG-06 / parity contract with findLatestProjects', () => {
         { pid: 'B', title: 'B', rtname: 'change' },
       ],
     });
-    const out = await svc(dataSource).getLatestProjectsByBookPartition(
-      'plan-1',
-    );
+    const out =
+      await svc(dataSource).getLatestProjectsByBookPartition('plan-1');
     expect(out!.mainBook.length).toBe(1);
     expect(out!.editBook.length + out!.changeBook.length).toBe(2);
   });

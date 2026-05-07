@@ -132,11 +132,17 @@ function makeDeps(spec: StubSpec): ExecutiveToolHandlerDeps {
   const latestStatusFor = jest
     .fn()
     .mockResolvedValue(spec.status ?? new Map<string, LatestStatus>());
-  const geoAnnotate = jest.fn().mockResolvedValue(
-    spec.geo ?? { labels: new Map(), missingDimensions: [], advisories: [] },
-  );
+  const geoAnnotate = jest
+    .fn()
+    .mockResolvedValue(
+      spec.geo ?? { labels: new Map(), missingDimensions: [], advisories: [] },
+    );
   const agencyAnnotate = jest.fn().mockResolvedValue(
-    spec.agency ?? { labels: new Map(), missingDimensions: [], advisories: [] },
+    spec.agency ?? {
+      labels: new Map(),
+      missingDimensions: [],
+      advisories: [],
+    },
   );
 
   // Deterministic runDimensions:
@@ -227,10 +233,13 @@ function canonicalise(envelope: ExecutiveEnvelope<unknown>): unknown {
       );
     }
   }
-  const plans = data?.plans as Array<{ projectCount: number; planId: string }> | undefined;
+  const plans = data?.plans as
+    | Array<{ projectCount: number; planId: string }>
+    | undefined;
   if (plans) {
-    plans.sort((a, b) =>
-      b.projectCount - a.projectCount || (a.planId < b.planId ? -1 : 1),
+    plans.sort(
+      (a, b) =>
+        b.projectCount - a.projectCount || (a.planId < b.planId ? -1 : 1),
     );
   }
   const statusBreakdown = data?.statusBreakdown as
@@ -289,7 +298,10 @@ describe('W55-QA-01 / Tier C envelope golden fixtures', () => {
       ]);
       const geo = {
         labels: new Map([
-          ['p-approved-500k', { amphoeId: 3001, amphoeName: 'เมืองนครราชสีมา' }],
+          [
+            'p-approved-500k',
+            { amphoeId: 3001, amphoeName: 'เมืองนครราชสีมา' },
+          ],
           ['p-pending-1M', { amphoeId: 3002, amphoeName: 'ครบุรี' }],
         ]),
         missingDimensions: [],
@@ -403,16 +415,17 @@ describe('W55-QA-01 / Tier C envelope golden fixtures', () => {
         rejectedCount: 0,
       };
       const deps = makeDeps({ projects, budget, status, breakdown });
-      const envelope = (await EXECUTIVE_TOOL_HANDLERS.getExecutiveDashboardSnapshot(
-        {
-          scope: ['all'],
-          groupBy: ['status', 'originType'],
-          includeBudget: true,
-          includeStatus: true,
-        },
-        makeCtx(),
-        deps,
-      )) as unknown as ExecutiveEnvelope<unknown>;
+      const envelope =
+        (await EXECUTIVE_TOOL_HANDLERS.getExecutiveDashboardSnapshot(
+          {
+            scope: ['all'],
+            groupBy: ['status', 'originType'],
+            includeBudget: true,
+            includeStatus: true,
+          },
+          makeCtx(),
+          deps,
+        )) as unknown as ExecutiveEnvelope<unknown>;
 
       const observed = canonicalise(envelope);
       const golden = readGolden('dashboard-snapshot.envelope.golden.json');

@@ -1,4 +1,11 @@
-import { IsInt, IsNotEmpty, IsPositive, IsString, IsUUID, Matches } from 'class-validator';
+import {
+  IsInt,
+  IsNotEmpty,
+  IsPositive,
+  IsString,
+  IsUUID,
+  Matches,
+} from 'class-validator';
 
 /**
  * W93-VERIFY-API — body shape for POST /v1/notifications/action-link/verify.

@@ -99,12 +99,36 @@ describe('W67-FIX-01 — executive status rollup integration', () => {
     // 1 × Rejected → rejected
     // (no Verified / Pending_Approval → awaiting_approval = 0)
     const statusMap = makeStatusMap([
-      { key: 'main:p1' as ProjectKey, statusName: 'Pending', statusNameTh: 'รอตรวจสอบ' },
-      { key: 'main:p2' as ProjectKey, statusName: 'Pending', statusNameTh: 'รอตรวจสอบ' },
-      { key: 'revised:r1' as ProjectKey, statusName: 'Pending', statusNameTh: 'รอตรวจสอบ' },
-      { key: 'main:p3' as ProjectKey, statusName: 'Approved', statusNameTh: 'อนุมัติ' },
-      { key: 'revised:r2' as ProjectKey, statusName: 'Approved', statusNameTh: 'อนุมัติ' },
-      { key: 'main:p4' as ProjectKey, statusName: 'Rejected', statusNameTh: 'เกินศักยภาพ' },
+      {
+        key: 'main:p1' as ProjectKey,
+        statusName: 'Pending',
+        statusNameTh: 'รอตรวจสอบ',
+      },
+      {
+        key: 'main:p2' as ProjectKey,
+        statusName: 'Pending',
+        statusNameTh: 'รอตรวจสอบ',
+      },
+      {
+        key: 'revised:r1' as ProjectKey,
+        statusName: 'Pending',
+        statusNameTh: 'รอตรวจสอบ',
+      },
+      {
+        key: 'main:p3' as ProjectKey,
+        statusName: 'Approved',
+        statusNameTh: 'อนุมัติ',
+      },
+      {
+        key: 'revised:r2' as ProjectKey,
+        statusName: 'Approved',
+        statusNameTh: 'อนุมัติ',
+      },
+      {
+        key: 'main:p4' as ProjectKey,
+        statusName: 'Rejected',
+        statusNameTh: 'เกินศักยภาพ',
+      },
     ]);
 
     const out = rollupExecutiveBreakdown(statusMap);
@@ -167,9 +191,21 @@ describe('W67-FIX-01 — executive status rollup integration', () => {
 
   it('rolls up Verified + Pending_Approval into awaiting_approval', () => {
     const statusMap = makeStatusMap([
-      { key: 'main:p1' as ProjectKey, statusName: 'Verified', statusNameTh: 'ตรวจสอบผ่าน' },
-      { key: 'main:p2' as ProjectKey, statusName: 'Pending_Approval', statusNameTh: 'รออนุมัติ' },
-      { key: 'main:p3' as ProjectKey, statusName: 'Pending_Approval', statusNameTh: 'รออนุมัติ' },
+      {
+        key: 'main:p1' as ProjectKey,
+        statusName: 'Verified',
+        statusNameTh: 'ตรวจสอบผ่าน',
+      },
+      {
+        key: 'main:p2' as ProjectKey,
+        statusName: 'Pending_Approval',
+        statusNameTh: 'รออนุมัติ',
+      },
+      {
+        key: 'main:p3' as ProjectKey,
+        statusName: 'Pending_Approval',
+        statusNameTh: 'รออนุมัติ',
+      },
     ]);
 
     const out = rollupExecutiveBreakdown(statusMap);
@@ -184,10 +220,26 @@ describe('W67-FIX-01 — executive status rollup integration', () => {
 
   it('skips workflow-internal statuses (Ready / Pull_Back / Returned_For_Revision)', () => {
     const statusMap = makeStatusMap([
-      { key: 'main:p1' as ProjectKey, statusName: 'Ready', statusNameTh: 'รอนำส่ง' },
-      { key: 'main:p2' as ProjectKey, statusName: 'Pull_Back', statusNameTh: 'ดึงกลับ' },
-      { key: 'main:p3' as ProjectKey, statusName: 'Returned_For_Revision', statusNameTh: 'รอแก้ไข' },
-      { key: 'main:p4' as ProjectKey, statusName: 'Pending', statusNameTh: 'รอตรวจสอบ' },
+      {
+        key: 'main:p1' as ProjectKey,
+        statusName: 'Ready',
+        statusNameTh: 'รอนำส่ง',
+      },
+      {
+        key: 'main:p2' as ProjectKey,
+        statusName: 'Pull_Back',
+        statusNameTh: 'ดึงกลับ',
+      },
+      {
+        key: 'main:p3' as ProjectKey,
+        statusName: 'Returned_For_Revision',
+        statusNameTh: 'รอแก้ไข',
+      },
+      {
+        key: 'main:p4' as ProjectKey,
+        statusName: 'Pending',
+        statusNameTh: 'รอตรวจสอบ',
+      },
     ]);
 
     const out = rollupExecutiveBreakdown(statusMap);

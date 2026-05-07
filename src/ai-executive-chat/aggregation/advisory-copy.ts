@@ -18,11 +18,9 @@ import type { MissingDimension } from './types/missing-dimension';
 export const BUDGET_UNAVAILABLE =
   'ข้อมูลงบประมาณไม่สามารถดึงได้ขณะนี้' as const;
 
-export const STATUS_UNAVAILABLE =
-  'ข้อมูลสถานะไม่สามารถดึงได้ขณะนี้' as const;
+export const STATUS_UNAVAILABLE = 'ข้อมูลสถานะไม่สามารถดึงได้ขณะนี้' as const;
 
-export const GEO_UNAVAILABLE =
-  'ข้อมูลพื้นที่ไม่สามารถดึงได้ขณะนี้' as const;
+export const GEO_UNAVAILABLE = 'ข้อมูลพื้นที่ไม่สามารถดึงได้ขณะนี้' as const;
 
 export const GEO_SUPPLEMENT_EXCLUDED =
   'ข้อมูลพื้นที่ของเล่มเพิ่มเติมยังไม่พร้อมใช้งาน (ไม่มีคอลัมน์ amphoe_id)' as const;

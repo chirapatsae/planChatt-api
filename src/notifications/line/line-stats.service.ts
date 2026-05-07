@@ -111,7 +111,13 @@ export class LineStatsService {
 
     const eventMap = new Map<
       string,
-      { eventType: string; sent: number; failed: number; skipped: number; total: number }
+      {
+        eventType: string;
+        sent: number;
+        failed: number;
+        skipped: number;
+        total: number;
+      }
     >();
     for (const r of eventRows) {
       const n = Number(r.count) || 0;

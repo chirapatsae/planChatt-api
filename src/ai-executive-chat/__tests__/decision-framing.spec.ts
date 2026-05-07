@@ -51,7 +51,9 @@ describe('BE-W44-02 / decision-framing system prompt (§17.2)', () => {
     expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(/โครงการประสานแผน/);
     expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(/โครงการปกติ/);
     // Explicit province-wide aggregation framing (not scoped to caller's LAO).
-    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(/ทั่วทั้งจังหวัด|ในระดับจังหวัด/);
+    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(
+      /ทั่วทั้งจังหวัด|ในระดับจังหวัด/,
+    );
   });
 
   it('W55-BE-03 — includes rule 13 (must surface missingDimensions / advisories)', () => {
@@ -253,7 +255,9 @@ describe('BE-W44-02 / decision-framing system prompt (§17.2)', () => {
     // Forbidden: sending Thai literal as amphoeIds (the §17.9 / 0-row
     // bug class) — the rule MUST contain a "ห้าม" prohibition adjacent
     // to filters.amphoeIds.
-    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(/ห้าม[\s\S]*filters\.amphoeIds/);
+    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(
+      /ห้าม[\s\S]*filters\.amphoeIds/,
+    );
     // The rule MUST instruct using `amphoeId` (PK) from the resolver.
     expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain('amphoeId');
     // §17.2 advisory-only cross-reference.
@@ -305,7 +309,9 @@ describe('BE-W44-02 / decision-framing system prompt (§17.2)', () => {
     // ("เจ็ดล้านหนึ่งแสนบาท").
     expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(/comma/);
     // The bullet must mention the positive-render template.
-    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(/\{commas\} บาท|comma thousands-separator/);
+    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(
+      /\{commas\} บาท|comma thousands-separator/,
+    );
     // §17.2 advisory-only cross-reference is preserved (rule #39
     // already cites it; we verify the new W71 sub-clause did not
     // accidentally drop it).

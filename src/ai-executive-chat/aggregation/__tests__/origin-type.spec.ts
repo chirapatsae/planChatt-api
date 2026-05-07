@@ -97,7 +97,7 @@ function makeDataSource(rowsByRepo: Record<string, RawRow[]> = {}) {
     getRepository: (target: unknown) => {
       const repoName =
         typeof target === 'function'
-          ? (target as { name?: string }).name ?? 'Unknown'
+          ? ((target as { name?: string }).name ?? 'Unknown')
           : 'Unknown';
       return {
         createQueryBuilder: (_alias: string) => qbFactory(repoName),
@@ -242,10 +242,12 @@ describe('W55-BE-07 / originType dimension', () => {
             }),
           ],
         });
-      const first = await svc(makeFixtureDataSource().dataSource)
-        .listUnifiedProjects({ scope: ['main'] });
-      const second = await svc(makeFixtureDataSource().dataSource)
-        .listUnifiedProjects({ scope: ['main'] });
+      const first = await svc(
+        makeFixtureDataSource().dataSource,
+      ).listUnifiedProjects({ scope: ['main'] });
+      const second = await svc(
+        makeFixtureDataSource().dataSource,
+      ).listUnifiedProjects({ scope: ['main'] });
       expect(first.map((r) => [r.projectId, r.originType])).toEqual(
         second.map((r) => [r.projectId, r.originType]),
       );
@@ -311,9 +313,7 @@ describe('W55-BE-07 / originType dimension', () => {
       const mainCall = calls.find((c) => c.repositoryName === 'ProjectGroup');
       expect(mainCall).toBeDefined();
       expect(
-        mainCall!.whereChain.some((w) =>
-          /originAgencyAmphoeId/.test(w),
-        ),
+        mainCall!.whereChain.some((w) => /originAgencyAmphoeId/.test(w)),
       ).toBe(false);
     });
 

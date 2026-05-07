@@ -84,13 +84,11 @@ describe('SEC-W44-01 / pii-in-tool-result (SEC-W44-02 integration)', () => {
       { endpoint: 'executive-chat' },
     );
     const profile = (
-      (
-        (output.items[0] as Record<string, unknown>).nominatedBy as Record<
-          string,
-          unknown
-        >
-      ).profile as Record<string, unknown>
-    );
+      (output.items[0] as Record<string, unknown>).nominatedBy as Record<
+        string,
+        unknown
+      >
+    ).profile as Record<string, unknown>;
     expect(profile.citizenId).toBeUndefined();
     expect(profile.position).toBe('นายก');
   });

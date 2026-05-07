@@ -48,9 +48,9 @@ describe('BE-W53-04 / no raw SQL table literals under tools/', () => {
     // At minimum: tool-registry.ts, executive-tool-handlers.ts,
     // handler-types.ts, plus a handful of __tests__ files.
     expect(files.length).toBeGreaterThanOrEqual(5);
-    expect(
-      files.some((p) => p.endsWith('executive-tool-handlers.ts')),
-    ).toBe(true);
+    expect(files.some((p) => p.endsWith('executive-tool-handlers.ts'))).toBe(
+      true,
+    );
   });
 
   // Allowlist of files that are explicit regression traps (this spec
@@ -139,7 +139,9 @@ describe('BE-W53-04 / no raw SQL table literals under tools/', () => {
   // literals that happen to include an entity name (e.g. in a Thai
   // sentence) do not compile into SQL.
   const TEMPLATE_FROM_RE = new RegExp(
-    '`[^`]*\\b(?:FROM|from|JOIN|join)\\s+' + BARE_IDENTIFIER_SOURCE + '\\b[^`]*`',
+    '`[^`]*\\b(?:FROM|from|JOIN|join)\\s+' +
+      BARE_IDENTIFIER_SOURCE +
+      '\\b[^`]*`',
   );
 
   it.each(files)(

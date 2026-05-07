@@ -9,10 +9,7 @@ import {
 } from '@nestjs/common';
 
 import { VerifyActionLinkDto } from './dto/verify-action-link.dto';
-import {
-  verifyActionLinkToken,
-  VerifyResult,
-} from './action-link-token.util';
+import { verifyActionLinkToken, VerifyResult } from './action-link-token.util';
 import { ActionLinkVerifyMalformedFilter } from './action-link-verify-malformed.filter';
 
 /**

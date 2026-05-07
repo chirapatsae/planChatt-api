@@ -87,7 +87,9 @@ export class AuthEmailService {
     });
 
     if (!user) {
-      this.logger.log(`auth.email.verify-request.skipped userId=${userId} reason=user-missing`);
+      this.logger.log(
+        `auth.email.verify-request.skipped userId=${userId} reason=user-missing`,
+      );
       return;
     }
     if (!user.emailHash) {
@@ -255,7 +257,8 @@ export class AuthEmailService {
    */
   static resolveFrontendBase(): string {
     const fromNotify = process.env.NOTIFY_ACTION_LINK_BASE;
-    if (typeof fromNotify === 'string' && fromNotify.length > 0) return fromNotify;
+    if (typeof fromNotify === 'string' && fromNotify.length > 0)
+      return fromNotify;
     const fromExplicit = process.env.FRONTEND_URL;
     if (typeof fromExplicit === 'string' && fromExplicit.length > 0)
       return fromExplicit;

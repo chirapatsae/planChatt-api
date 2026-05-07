@@ -46,14 +46,10 @@ function walk(dir: string, acc: string[] = []): string[] {
 // `andWhere(` call AND mentions `wh_amp.id` or `wh_lao.id`, UNLESS the
 // line is part of the §1+§5 originType filter (identified by the
 // well-known param names below).
-const ORIGIN_PARAM_TOKENS = [
-  'originAgencyAmphoeId',
-  'originAgencyLaoId',
-];
+const ORIGIN_PARAM_TOKENS = ['originAgencyAmphoeId', 'originAgencyLaoId'];
 
 const TARGET_ALIAS_RE = /(?:wh_amp|wh_lao)\.id/;
-const QB_CLAUSE_RE =
-  /(?:\.groupBy|\.addGroupBy|\.where|\.andWhere)\s*\(/;
+const QB_CLAUSE_RE = /(?:\.groupBy|\.addGroupBy|\.where|\.andWhere)\s*\(/;
 
 function isOriginExempt(line: string): boolean {
   return ORIGIN_PARAM_TOKENS.some((t) => line.includes(t));
@@ -67,9 +63,9 @@ describe('W57-BE-AGG-03 / no-creator-amphoe-rollup gate', () => {
     expect(
       files.some((p) => p.endsWith('unified-project-aggregator.service.ts')),
     ).toBe(true);
-    expect(
-      files.some((p) => p.endsWith('executive-tool-handlers.ts')),
-    ).toBe(true);
+    expect(files.some((p) => p.endsWith('executive-tool-handlers.ts'))).toBe(
+      true,
+    );
   });
 
   it.each(files)(

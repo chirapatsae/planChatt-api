@@ -77,8 +77,9 @@ function mkReflectorWithMeta(meta: AiCooldownMetadata | undefined) {
   const r = new Reflector();
   // Patch getAllAndOverride to return our fixed metadata regardless of
   // the handler passed in (simplifies test wiring).
-  (r as unknown as { getAllAndOverride: jest.Mock }).getAllAndOverride =
-    jest.fn().mockReturnValue(meta);
+  (r as unknown as { getAllAndOverride: jest.Mock }).getAllAndOverride = jest
+    .fn()
+    .mockReturnValue(meta);
   return r;
 }
 
@@ -88,10 +89,7 @@ describe('SEC-W44-01 / cooldown-evasion (§17.8)', () => {
 
   beforeEach(() => {
     store = new InMemoryAiCooldownStore();
-    guard = new AiCooldownGuard(
-      mkReflectorWithMeta(META),
-      store,
-    );
+    guard = new AiCooldownGuard(mkReflectorWithMeta(META), store);
   });
 
   it('1st request passes; 2nd request same (actor, conversationId) within TTL → 429 with Retry-After', async () => {
@@ -113,7 +111,9 @@ describe('SEC-W44-01 / cooldown-evasion (§17.8)', () => {
     try {
       await guard.canActivate(ctx2);
     } catch (e) {
-      expect((e as HttpException).getStatus()).toBe(HttpStatus.TOO_MANY_REQUESTS);
+      expect((e as HttpException).getStatus()).toBe(
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
       expect((e as HttpException).getResponse()).toEqual(
         expect.objectContaining({ code: 'AI_COOLDOWN_ACTIVE' }),
       );

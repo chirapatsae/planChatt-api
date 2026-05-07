@@ -48,10 +48,12 @@ const SUBJECT_MAP: Record<
   ProjectNotificationEventType,
   (p: { projectName: string }) => string
 > = {
-  PROJECT_SUBMITTED: (p) => `[แจ้งเตือน] มีโครงการใหม่รอการตรวจสอบ: ${p.projectName}`,
+  PROJECT_SUBMITTED: (p) =>
+    `[แจ้งเตือน] มีโครงการใหม่รอการตรวจสอบ: ${p.projectName}`,
   PROJECT_RETURNED_FOR_REVISION: (p) =>
     `[แจ้งเตือน] โครงการของท่านถูกส่งกลับเพื่อแก้ไข: ${p.projectName}`,
-  PROJECT_APPROVED: (p) => `[แจ้งเตือน] โครงการของท่านได้รับการอนุมัติ: ${p.projectName}`,
+  PROJECT_APPROVED: (p) =>
+    `[แจ้งเตือน] โครงการของท่านได้รับการอนุมัติ: ${p.projectName}`,
   PROJECT_PULLED_BACK: (p) =>
     `[แจ้งเตือน] โครงการถูกถอนออกจากการตรวจสอบ: ${p.projectName}`,
   // Wave 94 — owner-side subject lines.
@@ -63,8 +65,7 @@ const SUBJECT_MAP: Record<
     `[แจ้งผล] โครงการของท่านไม่ผ่านการพิจารณา (เกินศักยภาพ): ${p.projectName}`,
   // Wave 95 — link-based email verification request (Q1). `projectName`
   // is unused for this event; the subject is static.
-  EMAIL_VERIFICATION_REQUEST: () =>
-    `[ยืนยันอีเมล] กรุณายืนยันอีเมลของท่าน`,
+  EMAIL_VERIFICATION_REQUEST: () => `[ยืนยันอีเมล] กรุณายืนยันอีเมลของท่าน`,
   // W105 BE-PR2 — digest subjects. The `projectName` arg is repurposed to
   // carry the totalCount-as-string from `dispatchDigest`. The dispatcher
   // sets `event.projectName = '${N} โครงการ'` so we extract the leading
@@ -87,24 +88,30 @@ function extractDigestCount(raw: string): string {
   return m ? m[1] : raw;
 }
 
-const REQUIRED_TEMPLATE_FIELDS: Record<ProjectNotificationEventType, string[]> = {
-  PROJECT_SUBMITTED: ['projectName', 'actionLink', 'toStatus'],
-  PROJECT_RETURNED_FOR_REVISION: ['projectName', 'actionLink', 'toStatus'],
-  PROJECT_APPROVED: ['projectName', 'actionLink', 'toStatus'],
-  PROJECT_PULLED_BACK: ['projectName', 'actionLink', 'fromStatus', 'toStatus'],
-  // Wave 94 — owner-side required fields.
-  PROJECT_SUBMITTED_OWNER: ['projectName', 'actionLink', 'toStatus'],
-  PROJECT_VERIFIED_OWNER: ['projectName', 'actionLink', 'toStatus'],
-  PROJECT_REJECTED_OWNER: ['projectName', 'actionLink', 'toStatus'],
-  // Wave 95 — verification email needs only the verify link; no project
-  // status fields apply since this is an account-scope event.
-  EMAIL_VERIFICATION_REQUEST: ['actionLink'],
-  // W105 BE-PR2 — digest templates iterate over `projects[]` and render
-  // a totalCount + actionLink. `projects` is an array; the renderer's
-  // truthy check (length > 0) covers the "required-and-non-empty" rule.
-  PROJECT_SUBMITTED_DIGEST: ['totalCount', 'projects', 'actionLink'],
-  PROJECT_SUBMITTED_OWNER_DIGEST: ['totalCount', 'projects', 'actionLink'],
-};
+const REQUIRED_TEMPLATE_FIELDS: Record<ProjectNotificationEventType, string[]> =
+  {
+    PROJECT_SUBMITTED: ['projectName', 'actionLink', 'toStatus'],
+    PROJECT_RETURNED_FOR_REVISION: ['projectName', 'actionLink', 'toStatus'],
+    PROJECT_APPROVED: ['projectName', 'actionLink', 'toStatus'],
+    PROJECT_PULLED_BACK: [
+      'projectName',
+      'actionLink',
+      'fromStatus',
+      'toStatus',
+    ],
+    // Wave 94 — owner-side required fields.
+    PROJECT_SUBMITTED_OWNER: ['projectName', 'actionLink', 'toStatus'],
+    PROJECT_VERIFIED_OWNER: ['projectName', 'actionLink', 'toStatus'],
+    PROJECT_REJECTED_OWNER: ['projectName', 'actionLink', 'toStatus'],
+    // Wave 95 — verification email needs only the verify link; no project
+    // status fields apply since this is an account-scope event.
+    EMAIL_VERIFICATION_REQUEST: ['actionLink'],
+    // W105 BE-PR2 — digest templates iterate over `projects[]` and render
+    // a totalCount + actionLink. `projects` is an array; the renderer's
+    // truthy check (length > 0) covers the "required-and-non-empty" rule.
+    PROJECT_SUBMITTED_DIGEST: ['totalCount', 'projects', 'actionLink'],
+    PROJECT_SUBMITTED_OWNER_DIGEST: ['totalCount', 'projects', 'actionLink'],
+  };
 
 /**
  * Bull job options — matches architecture §2.2.
@@ -542,9 +549,7 @@ export class NotificationsEmailService {
         );
       }
       const totalCount =
-        typeof rawTotalCount === 'number'
-          ? rawTotalCount
-          : projects.length;
+        typeof rawTotalCount === 'number' ? rawTotalCount : projects.length;
       // Resolve Thai labels per-project so the email's `{{fromStatusTh}}` /
       // `{{toStatusTh}}` columns render canonical Thai labels (W67). The
       // dispatcher already populates these on each descriptor; this fallback
@@ -587,7 +592,11 @@ export class NotificationsEmailService {
         }),
       };
     }
-    const bodyHtml = this.templateRenderer.render(templateName, templateCtx, required);
+    const bodyHtml = this.templateRenderer.render(
+      templateName,
+      templateCtx,
+      required,
+    );
     const subjectStr = String(templateCtx.subject ?? '');
     const sentAtStr = String(templateCtx.sentAt ?? '');
     const html = this.templateRenderer.render('_base', {
@@ -665,11 +674,15 @@ export class NotificationsEmailService {
       select: ['id', 'emailHash', 'allowEmailNotification'],
     });
     if (!user) {
-      this.logger.debug(`[Notify] skipped-at-queue: user-missing userId=${userId}`);
+      this.logger.debug(
+        `[Notify] skipped-at-queue: user-missing userId=${userId}`,
+      );
       return false;
     }
     if (!user.emailHash) {
-      this.logger.log(`[Notify] skipped-at-queue: no-email-address userId=${userId}`);
+      this.logger.log(
+        `[Notify] skipped-at-queue: no-email-address userId=${userId}`,
+      );
       return false;
     }
     if (user.allowEmailNotification === false) {
@@ -685,7 +698,9 @@ export class NotificationsEmailService {
         );
         return true;
       }
-      this.logger.log(`[Notify] skipped-at-queue: preference-off userId=${userId}`);
+      this.logger.log(
+        `[Notify] skipped-at-queue: preference-off userId=${userId}`,
+      );
       return false;
     }
     return true;
@@ -753,15 +768,17 @@ export class NotificationsEmailService {
     //
     // Production deployers MUST set NOTIFY_ACTION_LINK_BASE to the public
     // frontend origin (e.g. https://projectbank.kpao.go.th).
-    const base =
-      process.env.NOTIFY_ACTION_LINK_BASE ||
-      'http://localhost:5173';
+    const base = process.env.NOTIFY_ACTION_LINK_BASE || 'http://localhost:5173';
     const expiry = Math.floor(Date.now() / 1000) + expiresInDays * 24 * 60 * 60;
     // W93-VERIFY-CORE — HMAC computation now lives in the shared util so the
     // verifier endpoint (W93-VERIFY-API) can import the same code path. URL
     // output here is byte-for-byte unchanged for fixed inputs.
     const token = signActionLinkToken({ projectId: args.projectId, expiry });
-    const path = this.resolveActionPath(args.eventType, args.projectKind, args.projectId);
+    const path = this.resolveActionPath(
+      args.eventType,
+      args.projectKind,
+      args.projectId,
+    );
     return `${base.replace(/\/+$/, '')}${path}?t=${token}&e=${expiry}`;
   }
 
@@ -796,8 +813,13 @@ export class NotificationsEmailService {
     const id = encodeURIComponent(projectId);
     const isMainPlan = projectKind === 'project-group';
 
-    if (eventType === 'PROJECT_SUBMITTED' || eventType === 'PROJECT_PULLED_BACK') {
-      return isMainPlan ? '/agency/admin/pending' : `/revise/edit/admin/detail/${id}`;
+    if (
+      eventType === 'PROJECT_SUBMITTED' ||
+      eventType === 'PROJECT_PULLED_BACK'
+    ) {
+      return isMainPlan
+        ? '/agency/admin/pending'
+        : `/revise/edit/admin/detail/${id}`;
     }
     if (eventType === 'PROJECT_RETURNED_FOR_REVISION') {
       return isMainPlan ? `/project/edit/${id}` : '/revision/edit';
@@ -822,7 +844,9 @@ export class NotificationsEmailService {
     // W105 BE-PR2 — digest events route to the same list pages as their
     // single-project counterparts so the CTA lands on the queue/owner list.
     if (eventType === 'PROJECT_SUBMITTED_DIGEST') {
-      return isMainPlan ? '/agency/admin/pending' : `/revise/edit/admin/detail/${id}`;
+      return isMainPlan
+        ? '/agency/admin/pending'
+        : `/revise/edit/admin/detail/${id}`;
     }
     if (eventType === 'PROJECT_SUBMITTED_OWNER_DIGEST') {
       return isMainPlan ? '/project' : '/revision/tracking';

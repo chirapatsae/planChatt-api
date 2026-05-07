@@ -20,10 +20,7 @@
  * with mocked repositories, so all cases are runnable today.
  */
 
-import {
-  ForbiddenException,
-  NotFoundException,
-} from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { AiExecutiveChatPdpaService } from '../../ai-executive-chat-pdpa.service';
 
 type Repo = {
@@ -84,12 +81,17 @@ describe('SEC-W44-01 / cross-owner-read (§4 + §17.11)', () => {
 
     // WorkHistory lookup — route by userId.
     workHistoryRepo.findOne.mockImplementation(
-      async (opts: { where?: { user?: { id?: string } }; relations?: string[] }) => {
+      async (opts: {
+        where?: { user?: { id?: string } };
+        relations?: string[];
+      }) => {
         const uid = opts?.where?.user?.id;
         if (uid === USER_A) return mkApprovedWh(USER_A, WH_A, 'executive');
         if (uid === USER_B) return mkApprovedWh(USER_B, WH_B, 'executive');
-        if (uid === 'admin-user') return mkApprovedWh('admin-user', 'wh-admin', 'admin');
-        if (uid === 'user-user') return mkApprovedWh('user-user', 'wh-usr', 'user');
+        if (uid === 'admin-user')
+          return mkApprovedWh('admin-user', 'wh-admin', 'admin');
+        if (uid === 'user-user')
+          return mkApprovedWh('user-user', 'wh-usr', 'user');
         return null;
       },
     );
@@ -210,7 +212,7 @@ describe('SEC-W44-01 / cross-owner-read (§4 + §17.11)', () => {
   });
 
   describe.skip('E2E — pending BE-W44-02 chat surfaces', () => {
-    it('GET /conversations/:id/messages returns 404 when executive A reads B\'s id', () => {
+    it("GET /conversations/:id/messages returns 404 when executive A reads B's id", () => {
       /** BE-W44-02 replaces the empty-array stub; once implemented, this must
        *  return 404 on mismatched ownerWorkHistoryId. */
     });

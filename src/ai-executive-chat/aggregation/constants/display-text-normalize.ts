@@ -74,7 +74,8 @@ export function formatNumberedListMarkdown(
   // Detect ordered-list shape: every non-empty line must start with
   // `\d+.` followed by whitespace. Otherwise return the normalized
   // text unchanged — this helper is non-destructive on prose.
-  const allNumbered = parts.length >= 2 && parts.every((p) => /^\d+\.\s/.test(p));
+  const allNumbered =
+    parts.length >= 2 && parts.every((p) => /^\d+\.\s/.test(p));
   if (!allNumbered) {
     return normalized;
   }

@@ -179,10 +179,7 @@ export class ResilienceEnvelopeService implements IResilienceEnvelope {
    * `ERROR` for unexpected types. Log shape is structured JSON so the
    * log sink can filter on `node: 'BE-W54-07'`.
    */
-  private logDimensionFailure(
-    dimension: MissingDimension,
-    err: unknown,
-  ): void {
+  private logDimensionFailure(dimension: MissingDimension, err: unknown): void {
     const payload = {
       node: 'BE-W54-07',
       dimension,

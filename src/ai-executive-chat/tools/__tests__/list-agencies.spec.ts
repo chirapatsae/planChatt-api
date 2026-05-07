@@ -64,10 +64,7 @@ function makeDataSource(rows: AgencyRow[]) {
     if (!pat) {
       return live.map((r) => ({ id: r.id, name: r.name }));
     }
-    const stripped = (pat as string)
-      .replace(/^%/, '')
-      .replace(/%$/, '')
-      .toLowerCase();
+    const stripped = pat.replace(/^%/, '').replace(/%$/, '').toLowerCase();
     return live
       .filter((r) => r.name.toLowerCase().includes(stripped))
       .map((r) => ({ id: r.id, name: r.name }));
@@ -91,7 +88,9 @@ const CTX: ExecutiveCallerContext = {
   workStatusName: 'approved',
 };
 
-function buildDeps(ds: ReturnType<typeof makeDataSource>): ExecutiveToolHandlerDeps {
+function buildDeps(
+  ds: ReturnType<typeof makeDataSource>,
+): ExecutiveToolHandlerDeps {
   return {
     dataSource: ds as never,
     unifiedProject: {} as never,

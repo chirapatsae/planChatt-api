@@ -71,10 +71,7 @@ function ok<T>(dim: DimensionTask['dimension'], value: T): DimensionTask {
   return { dimension: dim, run: async () => value };
 }
 
-function rejects(
-  dim: DimensionTask['dimension'],
-  err: unknown,
-): DimensionTask {
+function rejects(dim: DimensionTask['dimension'], err: unknown): DimensionTask {
   return {
     dimension: dim,
     run: async () => {
@@ -97,14 +94,10 @@ function timesOut(dim: DimensionTask['dimension']): DimensionTask {
 describe('BE-W54-07 / ResilienceEnvelope', () => {
   describe('advisory-copy byte-identity (§7)', () => {
     test('BUDGET_UNAVAILABLE matches spec verbatim', () => {
-      expect(BUDGET_UNAVAILABLE).toBe(
-        'ข้อมูลงบประมาณไม่สามารถดึงได้ขณะนี้',
-      );
+      expect(BUDGET_UNAVAILABLE).toBe('ข้อมูลงบประมาณไม่สามารถดึงได้ขณะนี้');
     });
     test('STATUS_UNAVAILABLE matches spec verbatim', () => {
-      expect(STATUS_UNAVAILABLE).toBe(
-        'ข้อมูลสถานะไม่สามารถดึงได้ขณะนี้',
-      );
+      expect(STATUS_UNAVAILABLE).toBe('ข้อมูลสถานะไม่สามารถดึงได้ขณะนี้');
     });
     test('GEO_UNAVAILABLE matches spec verbatim', () => {
       expect(GEO_UNAVAILABLE).toBe('ข้อมูลพื้นที่ไม่สามารถดึงได้ขณะนี้');
@@ -138,10 +131,7 @@ describe('BE-W54-07 / ResilienceEnvelope', () => {
 
   test('case 1 — happy path: no missing dims, empty advisories', async () => {
     const env = await svc().runDimensions(
-      [
-        ok('budget', new Map([['main:p1', 100]])),
-        ok('status', new Map()),
-      ],
+      [ok('budget', new Map([['main:p1', 100]])), ok('status', new Map())],
       (results) => {
         expect(results.every((r) => r.ok)).toBe(true);
         return { total: 100 };
@@ -161,10 +151,7 @@ describe('BE-W54-07 / ResilienceEnvelope', () => {
   test('case 2 — single failure: advisory matches dim, no raw error leak', async () => {
     const secretMessage = 'ER_NO_SUCH_TABLE "project_groups"';
     const env = await svc().runDimensions(
-      [
-        ok('status', new Map()),
-        rejects('budget', new Error(secretMessage)),
-      ],
+      [ok('status', new Map()), rejects('budget', new Error(secretMessage))],
       (results) => ({ okCount: results.filter((r) => r.ok).length }),
       { shape: 'planOverview' },
     );
@@ -185,7 +172,11 @@ describe('BE-W54-07 / ResilienceEnvelope', () => {
         rejects('budget', new Error('db down')),
         rejects('status', new Error('timeout-ish')),
         rejects('geo', new Error('amphoe')),
-        ok('agency', { labels: new Map(), missingDimensions: [], advisories: [] }),
+        ok('agency', {
+          labels: new Map(),
+          missingDimensions: [],
+          advisories: [],
+        }),
       ],
       () => ({}),
       { shape: 'dashboardSnapshot' },
@@ -218,11 +209,10 @@ describe('BE-W54-07 / ResilienceEnvelope', () => {
   });
 
   test('case 4b — telemetry is emitted at WARN for DimensionTimeoutError', async () => {
-    await svc().runDimensions(
-      [timesOut('budget')],
-      () => ({}),
-      { shape: 'planOverview', perDimensionTimeoutMs: FAST_TIMEOUT_MS },
-    );
+    await svc().runDimensions([timesOut('budget')], () => ({}), {
+      shape: 'planOverview',
+      perDimensionTimeoutMs: FAST_TIMEOUT_MS,
+    });
 
     expect(warnSilencer).toHaveBeenCalled();
     const payload = warnSilencer.mock.calls[0]?.[0];

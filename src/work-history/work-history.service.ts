@@ -1,10 +1,11 @@
 import {
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository, IsNull, Not } from 'typeorm';
 import { CreateWorkHistoryDto } from './dto/create-work-history.dto';
 import { UpdateWorkHistoryDto } from './dto/update-work-history.dto';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
@@ -55,7 +56,25 @@ export class WorkHistoryService {
     private readonly webSocketService: WebsocketService,
     private readonly announcementsService: AnnouncementsService,
     private readonly usersService: UsersService,
+    private readonly dataSource: DataSource,
   ) { }
+
+  /**
+   * BE-01 P0 — translate Postgres unique-violation (23505) on the
+   * `uk_work_history_one_current_per_user` partial unique index (DB-01 P0
+   * migration) into the canonical `409 WORK_HISTORY_RACE` error. Two
+   * concurrent admin PATCHes against the same user lose at the DB level;
+   * the loser surfaces this 409 to the client which retries.
+   *
+   * Index name match is best-effort — if the index is renamed, callers
+   * still see a generic 23505 surfaced as 409. The error code (`23505`)
+   * is the load-bearing contract.
+   */
+  private isWorkHistoryRaceConflict(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false;
+    const code = (error as { code?: string }).code;
+    return code === '23505';
+  }
 
   /**
    * W100 PR1 — Mask `WorkHistory.user` PII for admin list / lookup
@@ -142,16 +161,31 @@ export class WorkHistoryService {
         workHistory.governmentAgencies = govAgency;
       }
 
-      // Disactive workHistory อื่นๆ ของ user เดียวกันก่อน
-      await this.workHistoryRepository.update(
-        { user: { id: userId }, isCurrent: true },
-        { isCurrent: false }
-      );
-
       // ตั้งค่า isCurrent = true สำหรับ workHistory ใหม่
       workHistory.isCurrent = true;
 
-      const savedWorkHistory = await this.workHistoryRepository.save(workHistory);
+      // BE-01 P0-2 — wrap the flip-prior + insert-new step in a single
+      // transaction so concurrent calls cannot leave the user with two
+      // `isCurrent=true` rows. Defense-in-depth on top of the DB-01 P0
+      // partial unique index. If two callers race past the flip and both
+      // attempt to insert, the partial unique index rejects the second
+      // with 23505 → translated to 409 WORK_HISTORY_RACE below.
+      let savedWorkHistory: WorkHistory;
+      try {
+        savedWorkHistory = await this.dataSource.transaction(async (manager) => {
+          await manager.update(
+            WorkHistory,
+            { user: { id: userId }, isCurrent: true },
+            { isCurrent: false },
+          );
+          return await manager.save(WorkHistory, workHistory);
+        });
+      } catch (error) {
+        if (this.isWorkHistoryRaceConflict(error)) {
+          throw new ConflictException('WORK_HISTORY_RACE');
+        }
+        throw error;
+      }
 
       // ถ้าสถานะเป็น pending ให้ส่งการแจ้งเตือนไปยัง staff และ admin
       if (workStatus.name === 'pending') {
@@ -358,6 +392,34 @@ export class WorkHistoryService {
     }
   }
 
+  /**
+   * BE-01 P0-1 — Append-only WorkHistory mutation.
+   *
+   * Replaces the legacy in-place mutation (which violated CLAUDE.md §4
+   * snapshot semantics). Every "edit" now:
+   *
+   *   1. Loads the row the admin clicked "edit" on (the head-of-lineage).
+   *   2. Validates it is `isCurrent=true` (cannot append from a historical
+   *      row); rejects 409 `WORK_HISTORY_NOT_CURRENT` otherwise.
+   *   3. Resolves all incoming FKs (amphoe / LAO / workStatus / role /
+   *      governmentAgencies) — fields not supplied carry over from the
+   *      prior row.
+   *   4. In a single transaction:
+   *      - flips the prior current row to `isCurrent = false`
+   *      - inserts a brand-new row with the merged fields,
+   *        `createdBy = prior row's createdBy` (preserve original creator),
+   *        `updatedBy = the admin performing the change`,
+   *        `isCurrent = true`
+   *   5. Returns the new row.
+   *
+   * No field on a `work_history` row is ever mutated post-insertion. All
+   * inbound FKs (`project_groups.created_by`, etc.) continue to point at
+   * the original snapshot row, exactly as §4 requires.
+   *
+   * Race-safety: the DB-01 P0 partial unique index
+   * (`uk_work_history_one_current_per_user`) catches concurrent appends
+   * with `23505` which we translate to `409 WORK_HISTORY_RACE`.
+   */
   async update(
     id: string,
     dto: UpdateWorkHistoryDto,
@@ -371,113 +433,190 @@ export class WorkHistoryService {
         roleId,
         governmentAgenciesId,
       } = dto;
-      console.log(dto);
+
       const updator = await this.userRepository.findOne({
         where: { id: updateId },
       });
       if (!updator) throw new NotFoundException('creator id not found');
 
-      const workHistory = await this.workHistoryRepository.findOne({
+      const priorRow = await this.workHistoryRepository.findOne({
         where: { id },
-        relations: ['workStatus', 'user', 'role'],
+        relations: [
+          'workStatus',
+          'user',
+          'role',
+          'amphoe',
+          'localAdministrativeOrganization',
+          'governmentAgencies',
+          'createdBy',
+        ],
       });
-      if (!workHistory) throw new NotFoundException('Work history not found');
+      if (!priorRow) throw new NotFoundException('Work history not found');
 
-      // Ensure user is loaded
-      if (!workHistory.user) {
+      if (!priorRow.user) {
         throw new NotFoundException('User not found in work history');
       }
 
-      // Store previous work status for comparison
-      const previousRole = workHistory.role?.name;
-      const previousWorkStatus = workHistory.workStatus?.name;
+      // Append from head-of-lineage only. Editing a historical row would
+      // create a fork in the lineage and break "exactly one current row
+      // per user" — reject explicitly.
+      if (!priorRow.isCurrent) {
+        throw new ConflictException('WORK_HISTORY_NOT_CURRENT');
+      }
 
-      const amphoe = await this.amphoeRepository.findOneBy({ id: amphoeId });
+      // Store previous role/workStatus for the WebSocket notify decision.
+      const previousRole = priorRow.role?.name;
+      const previousWorkStatus = priorRow.workStatus?.name;
+
+      // Resolve FKs. Fields not supplied carry over from prior row.
+      const amphoe = amphoeId
+        ? await this.amphoeRepository.findOneBy({ id: amphoeId })
+        : priorRow.amphoe;
       if (!amphoe) throw new NotFoundException('Amphoe not found');
 
-      const lao = await this.laoRepository.findOneBy({
-        id: localAdministrativeOrganizationId,
-      });
+      const lao = localAdministrativeOrganizationId
+        ? await this.laoRepository.findOneBy({
+            id: localAdministrativeOrganizationId,
+          })
+        : priorRow.localAdministrativeOrganization;
       if (!lao)
         throw new NotFoundException(
           'Local Administrative Organization not found',
         );
 
-      // Resolve work status and role by id if provided; otherwise keep current
-      let workStatus = workHistory.workStatus;
+      let workStatus = priorRow.workStatus;
       if (workStatusId) {
-        const found = await this.workStatusRepository.findOneBy({ id: workStatusId });
+        const found = await this.workStatusRepository.findOneBy({
+          id: workStatusId,
+        });
         if (!found) throw new NotFoundException('Work status not found');
         workStatus = found;
       }
-
-      // Ensure workStatus is not undefined
       if (!workStatus) {
         throw new NotFoundException('Work status is required but not found');
       }
 
-      let role = workHistory.role;
+      let role = priorRow.role;
       if (roleId) {
         const foundRole = await this.roleRepository.findOneBy({ id: roleId });
         if (!foundRole) throw new NotFoundException('Role not found');
         role = foundRole;
       }
-
-      // Ensure role is not undefined
       if (!role) {
         throw new NotFoundException('Role is required but not found');
       }
 
-      workHistory.amphoe = amphoe;
-      workHistory.localAdministrativeOrganization = lao;
-      workHistory.workStatus = workStatus;
-      workHistory.role = role;
-      workHistory.updatedBy = updator;
-      workHistory.isCurrent = true;
+      // Resolve governmentAgencies based on amphoe/LAO classification rule.
+      // - If classification resolves to NOT-agency, force null (consistent
+      //   with prior in-place behavior).
+      // - Otherwise, use incoming governmentAgenciesId if supplied, else
+      //   carry over from prior row.
+      const effectiveAmphoeId = amphoe.id;
+      const effectiveLaoId = lao.id;
+      const isAgencyContext =
+        effectiveAmphoeId === '3001' && effectiveLaoId === '3001027';
 
-      // Clear government agencies if amphoe is not 3001 AND lao is not 3001027
-      if (amphoe.id !== '3001' && localAdministrativeOrganizationId !== '3001027') {
-        workHistory.governmentAgencies = null;
-        // Force save to ensure the null value is persisted
-        await this.workHistoryRepository.save(workHistory);
+      let governmentAgencies = priorRow.governmentAgencies ?? null;
+      if (!isAgencyContext) {
+        governmentAgencies = null;
       } else if (governmentAgenciesId) {
         const govAgency = await this.governmentAgencyRepository.findOneBy({
           id: governmentAgenciesId,
         });
         if (!govAgency)
           throw new NotFoundException('Government agency not found');
-        workHistory.governmentAgencies = govAgency;
+        governmentAgencies = govAgency;
       }
 
-      const savedWorkHistory = await this.workHistoryRepository.save(workHistory);
-      if (previousWorkStatus !== workStatus?.name || previousRole !== role?.name) {
+      // Build the NEW row. Append-only semantics: never mutate priorRow.
+      const newRow = new WorkHistory();
+      newRow.user = priorRow.user;
+      newRow.amphoe = amphoe;
+      newRow.localAdministrativeOrganization = lao;
+      newRow.workStatus = workStatus;
+      newRow.role = role;
+      newRow.governmentAgencies = governmentAgencies;
+      // Preserve the original creator across appends (§4 snapshot intent).
+      newRow.createdBy = priorRow.createdBy;
+      // updatedBy = the admin performing this append.
+      newRow.updatedBy = updator;
+      newRow.isCurrent = true;
+
+      let savedNewRow: WorkHistory;
+      try {
+        savedNewRow = await this.dataSource.transaction(async (manager) => {
+          // Flip ALL current rows for this user (defensive: should be only
+          // one, but the partial unique index makes this idempotent).
+          await manager.update(
+            WorkHistory,
+            { user: { id: priorRow.user.id }, isCurrent: true },
+            { isCurrent: false },
+          );
+          return await manager.save(WorkHistory, newRow);
+        });
+      } catch (error) {
+        if (this.isWorkHistoryRaceConflict(error)) {
+          throw new ConflictException('WORK_HISTORY_RACE');
+        }
+        throw error;
+      }
+
+      // Reload with full relations so the response shape matches what FE
+      // expects (the existing handler hydrates `selectedUser` from the
+      // response body).
+      const reloaded = await this.workHistoryRepository.findOne({
+        where: { id: savedNewRow.id },
+        relations: [
+          'user',
+          'amphoe',
+          'localAdministrativeOrganization',
+          'workStatus',
+          'role',
+          'createdBy',
+          'updatedBy',
+          'governmentAgencies',
+          'workHistoryResponsibleAmphoe',
+          'workHistoryResponsibleAmphoe.amphoe',
+          'workHistoryResponsibleGovernmentAgency',
+          'workHistoryResponsibleGovernmentAgency.governmentAgency',
+        ],
+      });
+
+      const result = reloaded ?? savedNewRow;
+
+      if (
+        previousWorkStatus !== workStatus?.name ||
+        previousRole !== role?.name
+      ) {
         try {
-          this.logger.log(`Sending work status update notification to user ${workHistory.user.id}: ${workStatus?.name}`,
-            // ส่ง notification ทั่วไป (work-status-updated)
+          this.logger.log(
+            `Sending work status update notification to user ${priorRow.user.id}: ${workStatus?.name}`,
             await this.webSocketService.notifyWorkStatusUpdate({
-              userId: workHistory.user.id,
+              userId: priorRow.user.id,
               workStatus: workStatus?.name || 'unknown',
-              workHistoryId: workHistory.id,
+              workHistoryId: result.id,
               previousWorkStatus,
               previousRole,
               updatedBy: updator.id,
               role: role?.name || 'unknown',
               timestamp: new Date(),
-            }))
+            }),
+          );
 
-
-          // Log ตามสิ่งที่เปลี่ยน
-          if (previousWorkStatus !== workStatus?.name && previousRole !== role?.name) {
+          if (
+            previousWorkStatus !== workStatus?.name &&
+            previousRole !== role?.name
+          ) {
             this.logger.log(
-              `Work status and role updated for user ${workHistory.user.id}: status ${previousWorkStatus} → ${workStatus?.name}, role ${previousRole} → ${role?.name}`,
+              `Work status and role updated for user ${priorRow.user.id}: status ${previousWorkStatus} → ${workStatus?.name}, role ${previousRole} → ${role?.name}`,
             );
           } else if (previousWorkStatus !== workStatus?.name) {
             this.logger.log(
-              `Work status updated from ${previousWorkStatus} to ${workStatus?.name} for user ${workHistory.user.id}`,
+              `Work status updated from ${previousWorkStatus} to ${workStatus?.name} for user ${priorRow.user.id}`,
             );
           } else if (previousRole !== role?.name) {
             this.logger.log(
-              `Role updated from ${previousRole} to ${role?.name} for user ${workHistory.user.id}`,
+              `Role updated from ${previousRole} to ${role?.name} for user ${priorRow.user.id}`,
             );
           }
         } catch (notificationError) {
@@ -485,11 +624,11 @@ export class WorkHistoryService {
             `Failed to send work status update notification: ${notificationError.message}`,
             notificationError.stack,
           );
-          // Don't fail the main operation if notification fails
+          // Don't fail the main operation if notification fails.
         }
       }
 
-      return savedWorkHistory;
+      return result;
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -521,14 +660,83 @@ export class WorkHistoryService {
     }
   }
 
+  /**
+   * BE-01 P0-3 / SEC-01 S4b — Restore a soft-deleted WorkHistory row
+   * without producing two `isCurrent=true` rows for the same user.
+   *
+   * If another non-deleted row for the same user is already current, the
+   * restored row is silently demoted to `isCurrent=false` so the admin
+   * may explicitly re-promote it via a normal append. This avoids a
+   * 409 mid-restore (rejected per SEC-01 §3 S4b — bad UX) and avoids
+   * tripping the DB-01 P0 partial unique index.
+   *
+   * The restore + demote are wrapped in a single transaction so a crash
+   * mid-flow cannot leave the database with two live current rows.
+   */
   async restore(id: string): Promise<{ message: string }> {
     try {
-      const result = await this.workHistoryRepository.restore(id);
-      if (result.affected === 0) {
+      // Load the row WITH soft-deleted entries so we can inspect its user.
+      const target = await this.workHistoryRepository.findOne({
+        where: { id },
+        withDeleted: true,
+        relations: ['user'],
+      });
+      if (!target) {
         throw new NotFoundException(
           `Work history with ID ${id} not found or was not deleted.`,
         );
       }
+      if (!target.deletedAt) {
+        throw new NotFoundException(
+          `Work history with ID ${id} not found or was not deleted.`,
+        );
+      }
+      if (!target.user?.id) {
+        throw new NotFoundException(
+          `Work history with ID ${id} has no user — cannot safely restore.`,
+        );
+      }
+
+      try {
+        await this.dataSource.transaction(async (manager) => {
+          const restoreResult = await manager.restore(WorkHistory, id);
+          if (restoreResult.affected === 0) {
+            throw new NotFoundException(
+              `Work history with ID ${id} not found or was not deleted.`,
+            );
+          }
+
+          // Look for any OTHER live + current row for this user.
+          const conflictingCurrent = await manager.findOne(WorkHistory, {
+            where: {
+              user: { id: target.user.id },
+              isCurrent: true,
+              id: Not(id),
+              deletedAt: IsNull(),
+            },
+          });
+
+          if (conflictingCurrent) {
+            // Demote the restored row so we don't violate the
+            // one-current-per-user invariant. Admin may re-promote
+            // explicitly via a fresh append.
+            await manager.update(
+              WorkHistory,
+              { id },
+              { isCurrent: false },
+            );
+            this.logger.log(
+              `Restored work_history ${id} demoted to isCurrent=false — user ${target.user.id} already has current row ${conflictingCurrent.id}`,
+            );
+          }
+        });
+      } catch (error) {
+        if (this.isWorkHistoryRaceConflict(error)) {
+          throw new ConflictException('WORK_HISTORY_RACE');
+        }
+        throw error;
+      }
+
       return { message: `Work history with ID ${id} has been restored.` };
     } catch (error) {
       handleException(this.logger, error);

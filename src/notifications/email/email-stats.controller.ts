@@ -1,6 +1,5 @@
 import {
   Controller,
-  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
@@ -12,6 +11,9 @@ import {
 import { Request } from 'express';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
+import { Roles } from 'src/auth/roles.decorator';
+import { RolesGuard } from 'src/auth/roles.guard';
+import { SUPER_ADMIN_ONLY } from 'src/auth/role-groups';
 
 import { EmailStatsService } from './email-stats.service';
 import {
@@ -44,7 +46,6 @@ import {
  *   - §17.11 — no role can coerce a bypass; super-admin gate is explicit
  */
 
-const SUPER_ADMIN_ROLES = new Set(['super-admin']);
 const COOLDOWN_MS = 1_000;
 
 @Controller({
@@ -56,81 +57,73 @@ export class EmailStatsController {
 
   constructor(private readonly statsService: EmailStatsService) {}
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...SUPER_ADMIN_ONLY)
   @Get('overview')
   @HttpCode(HttpStatus.OK)
   async overview(
     @Req() req: Request & { user: JwtPayloadUser },
     @Query() query: EmailStatsOverviewQueryDto,
   ) {
-    this.assertSuperAdmin(req.user);
     this.assertCooldown(req.user.userId, 'overview');
     return this.statsService.getOverview(query.from, query.to);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...SUPER_ADMIN_ONLY)
   @Get('by-day')
   @HttpCode(HttpStatus.OK)
   async byDay(
     @Req() req: Request & { user: JwtPayloadUser },
     @Query() query: EmailStatsByDayQueryDto,
   ) {
-    this.assertSuperAdmin(req.user);
     this.assertCooldown(req.user.userId, 'by-day');
     const bucket = query.bucket ?? 'day';
     return this.statsService.getByDay(query.from, query.to, bucket);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...SUPER_ADMIN_ONLY)
   @Get('top-senders')
   @HttpCode(HttpStatus.OK)
   async topSenders(
     @Req() req: Request & { user: JwtPayloadUser },
     @Query() query: EmailStatsLimitRangeQueryDto,
   ) {
-    this.assertSuperAdmin(req.user);
     this.assertCooldown(req.user.userId, 'top-senders');
     const limit = typeof query.limit === 'number' ? query.limit : 20;
     return this.statsService.getTopSenders(limit, query.from, query.to);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...SUPER_ADMIN_ONLY)
   @Get('top-recipients')
   @HttpCode(HttpStatus.OK)
   async topRecipients(
     @Req() req: Request & { user: JwtPayloadUser },
     @Query() query: EmailStatsLimitRangeQueryDto,
   ) {
-    this.assertSuperAdmin(req.user);
     this.assertCooldown(req.user.userId, 'top-recipients');
     const limit = typeof query.limit === 'number' ? query.limit : 20;
     return this.statsService.getTopRecipients(limit, query.from, query.to);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...SUPER_ADMIN_ONLY)
   @Get('failures')
   @HttpCode(HttpStatus.OK)
   async failures(
     @Req() req: Request & { user: JwtPayloadUser },
     @Query() query: EmailStatsLimitRangeQueryDto,
   ) {
-    this.assertSuperAdmin(req.user);
     this.assertCooldown(req.user.userId, 'failures');
     const limit = typeof query.limit === 'number' ? query.limit : 50;
     return this.statsService.getFailures(limit, query.from, query.to);
   }
 
   // ---------------------------------------------------------------------------
-  // Guards
+  // Helpers
   // ---------------------------------------------------------------------------
-
-  private assertSuperAdmin(user: JwtPayloadUser): void {
-    if (!user || !SUPER_ADMIN_ROLES.has(user.role)) {
-      throw new ForbiddenException(
-        'เฉพาะ super-admin เท่านั้นที่สามารถเข้าถึงสถิติอีเมลได้',
-      );
-    }
-  }
 
   /**
    * Lightweight per-user per-endpoint cooldown. NOT a replacement for a

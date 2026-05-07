@@ -21,7 +21,7 @@ export class AuthService {
     // was not exercised on any code path.
     private readonly userService: UsersService,
     private jwtService: JwtService,
-  ) { }
+  ) {}
 
   async handleOAuthLogin(
     idToken: string,
@@ -60,8 +60,8 @@ export class AuthService {
       // ถ้า user ไม่พบ สร้างใหม่
       if (!user || !user.id) {
         const newUserDto: CreateUserDto = {
-          citizenId: decoded.pid,    // เก็บ plain หรือ encrypt ไว้ก็ได้ ถ้าอยากถอดคืน
-          citizenIdHash: hashedCid,  // เก็บ hash สำหรับ unique check
+          citizenId: decoded.pid, // เก็บ plain หรือ encrypt ไว้ก็ได้ ถ้าอยากถอดคืน
+          citizenIdHash: hashedCid, // เก็บ hash สำหรับ unique check
           prefix: decoded.title,
           firstname: decoded.given_name,
           lastname: decoded.family_name,
@@ -74,7 +74,9 @@ export class AuthService {
           if (error.code === '23505') {
             user = await this.userService.findByCitizenIdHash(hashedCid);
             if (!user) {
-              throw new InternalServerErrorException('Failed to create or find user after duplicate constraint violation');
+              throw new InternalServerErrorException(
+                'Failed to create or find user after duplicate constraint violation',
+              );
             }
           } else {
             throw error;
@@ -91,7 +93,10 @@ export class AuthService {
       // iv:ciphertext-shaped email or phone, log a structured warning. The
       // UUID is safe to log; the value itself is NEVER logged. This catches
       // any future code path that bypasses UsersService decryption.
-      if (this.looksLikeCiphertext(user.email) || this.looksLikeCiphertext(user.phone)) {
+      if (
+        this.looksLikeCiphertext(user.email) ||
+        this.looksLikeCiphertext(user.phone)
+      ) {
         this.logger.warn(
           `auth.thaid.upsert ciphertext-leak-suspected userId=${user.id}`,
         );

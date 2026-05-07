@@ -63,9 +63,10 @@ export interface TargetExtractionMeta {
  *   - `null` in every other case (non-registered tool, wrong item
  *     count, non-UUID value, zero-UUID value, malformed payload).
  */
-export type ExtractedTarget =
-  | { targetId: string; targetKind: AiResultTargetKind }
-  | null;
+export type ExtractedTarget = {
+  targetId: string;
+  targetKind: AiResultTargetKind;
+} | null;
 
 /**
  * Closed registry of tools whose results this extractor will capture.

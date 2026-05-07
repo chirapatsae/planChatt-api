@@ -43,7 +43,9 @@ export class EmailStatsByDayQueryDto extends EmailStatsRangeQueryDto {
 /** top-senders / top-recipients / failures accept `from` / `to` + `limit`. */
 export class EmailStatsLimitRangeQueryDto extends EmailStatsRangeQueryDto {
   @IsOptional()
-  @Transform(({ value }) => (value !== undefined && value !== null ? Number(value) : value))
+  @Transform(({ value }) =>
+    value !== undefined && value !== null ? Number(value) : value,
+  )
   @IsInt({ message: 'limit ต้องเป็นจำนวนเต็ม' })
   @Min(1, { message: 'limit ต้องมากกว่าหรือเท่ากับ 1' })
   @Max(200, { message: 'limit ต้องไม่เกิน 200' })
