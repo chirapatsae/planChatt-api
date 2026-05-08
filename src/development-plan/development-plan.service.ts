@@ -1065,6 +1065,29 @@ export class DevelopmentPlanService {
         }
       }
 
+      // W89-FOLLOWUP (plan-book-row-polish BE-HOTFIX-EMAIL-DECRYPT):
+      // The eager-loaded `createdBy.user` carries AES `iv:ciphertext`
+      // for `email` / `phone` (and `citizenId`) per W89. Without this
+      // pass the FE Avatars tooltip on the four plan-book pages
+      // (OpenPlanBook, AdditionalBook, RevisionEdit/RevisionBook,
+      // RevisionChange/RevisionBook) renders ciphertext to every
+      // authenticated viewer of the list — a P0 PII surface bug.
+      // `decryptUserPii` is idempotent (W89B): the internal
+      // `looksLikeCiphertext` heuristic short-circuits on already-
+      // decrypted plaintext, so re-calling on a User instance shared
+      // across rows is safe. `null`/missing `user` is handled by the
+      // helper itself. Performance: per-list O(N) AES decrypts; the
+      // list is tiny (≤ 20 rows) and this matches the existing pattern
+      // already used in `project-groups.service.ts` (§14) and
+      // `work-history-amphoe-responsibility.service.ts`.
+      // §17.11: applies to every role, no exemption.
+      for (const plan of plans) {
+        const user = plan.createdBy?.user;
+        if (user) {
+          await this.usersService.decryptUserPii(user);
+        }
+      }
+
       this.decorateBookLockFlags(plans);
       return plans;
     } catch (error) {
