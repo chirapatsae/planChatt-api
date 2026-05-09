@@ -1339,15 +1339,20 @@ describe('ProjectGroupsService', () => {
 
   // --- findOriginalWithoutRevisionAllStatus ---
   // CLAUDE.md Core Status Machine + Status Naming Constraint:
-  // `Ready` and `Returned_For_Revision` MUST be excluded from this helper.
-  // Regression anchor for FIX_FIND_ORIGINAL_WITHOUT_REVISION_STATUS_LITERAL:
-  //  - Defect A: the two `andWhere('status.name <> :statusName', ...)` calls
-  //    reused the same placeholder; the second binding silently overwrote the
-  //    first, effectively leaking `Ready` rows through the filter.
-  //  - Defect B: the second binding used the reserved stale literal 'Revision'
-  //    instead of the canonical 'Returned_For_Revision'.
+  // `Ready`, `Pull_Back`, and `Returned_For_Revision` MUST be excluded from
+  // this helper.
+  // Regression anchors:
+  //  - FIX_FIND_ORIGINAL_WITHOUT_REVISION_STATUS_LITERAL:
+  //    - Defect A: two `andWhere('status.name <> :statusName', ...)` calls
+  //      reused the same placeholder; the second binding silently overwrote
+  //      the first, effectively leaking `Ready` rows through the filter.
+  //    - Defect B: the second binding used the reserved stale literal
+  //      'Revision' instead of the canonical 'Returned_For_Revision'.
+  //  - WAVE24_PULLBACK_LEAKAGE_AUDIT (BE-24-01):
+  //    - Defect C: prior code excluded only Ready + Returned_For_Revision —
+  //      Pull_Back leaked into every executive read path.
   describe('findOriginalWithoutRevisionAllStatus', () => {
-    it('binds BOTH Ready and Returned_For_Revision as DISTINCT named placeholders', async () => {
+    it('uses a single NOT IN clause that excludes Ready, Pull_Back, and Returned_For_Revision (Wave 24)', async () => {
       const mockQueryBuilder = {
         leftJoin: jest.fn().mockReturnThis(),
         leftJoinAndSelect: jest.fn().mockReturnThis(),
@@ -1361,38 +1366,22 @@ describe('ProjectGroupsService', () => {
 
       await (service as any).findOriginalWithoutRevisionAllStatus('dp-1');
 
-      // (1) Ready exclusion MUST be bound under a distinct placeholder name.
-      const readyCall = mockQueryBuilder.andWhere.mock.calls.find(
+      // (1) A single NOT IN clause MUST be present, bound to the canonical
+      //     three-element exclusion tuple.
+      const notInCall = mockQueryBuilder.andWhere.mock.calls.find(
         (c) =>
-          c[1] &&
-          typeof c[1] === 'object' &&
-          Object.values(c[1] as Record<string, unknown>).includes('Ready'),
+          typeof c[0] === 'string' &&
+          c[0].includes('status.name NOT IN (:...excludedStatusNames)'),
       );
-      expect(readyCall).toBeDefined();
-      const readyParamKey = Object.keys(readyCall![1] as object)[0];
-      expect((readyCall![0] as string)).toContain(`:${readyParamKey}`);
-
-      // (2) Returned_For_Revision exclusion MUST be bound under a DIFFERENT
-      // placeholder name, with the CANONICAL literal (NOT 'Revision').
-      const returnedCall = mockQueryBuilder.andWhere.mock.calls.find(
-        (c) =>
-          c[1] &&
-          typeof c[1] === 'object' &&
-          Object.values(c[1] as Record<string, unknown>).includes(
-            'Returned_For_Revision',
-          ),
+      expect(notInCall).toBeDefined();
+      const params = notInCall![1] as { excludedStatusNames: string[] };
+      expect(Array.isArray(params.excludedStatusNames)).toBe(true);
+      expect(params.excludedStatusNames.sort()).toEqual(
+        ['Pull_Back', 'Ready', 'Returned_For_Revision'].sort(),
       );
-      expect(returnedCall).toBeDefined();
-      const returnedParamKey = Object.keys(returnedCall![1] as object)[0];
-      expect((returnedCall![0] as string)).toContain(`:${returnedParamKey}`);
-
-      // (3) CRITICAL: the two placeholder names MUST NOT collide (otherwise
-      // TypeORM silently overwrites the first binding — this is the root-cause
-      // of Defect A).
-      expect(readyParamKey).not.toEqual(returnedParamKey);
     });
 
-    it('MUST NOT reuse the :statusName placeholder and MUST NOT bind the reserved stale literal "Revision"', async () => {
+    it('MUST NOT reuse the legacy :excludeReadyName / :excludeReturnedName / :statusName single-name placeholders', async () => {
       const mockQueryBuilder = {
         leftJoin: jest.fn().mockReturnThis(),
         leftJoinAndSelect: jest.fn().mockReturnThis(),
@@ -1406,15 +1395,19 @@ describe('ProjectGroupsService', () => {
 
       await (service as any).findOriginalWithoutRevisionAllStatus('dp-1');
 
-      // No andWhere fragment in this helper may still reference the shared
-      // `:statusName` placeholder (guards against re-regression of Defect A).
-      const collidingCalls = mockQueryBuilder.andWhere.mock.calls.filter(
-        (c) => typeof c[0] === 'string' && c[0].includes(':statusName'),
+      // Guard against re-regression of Defect A (collision) and the BE-24-01
+      // refactor: no andWhere may still use the legacy single-name placeholders.
+      const legacyCalls = mockQueryBuilder.andWhere.mock.calls.filter(
+        (c) =>
+          typeof c[0] === 'string' &&
+          (c[0].includes(':excludeReadyName') ||
+            c[0].includes(':excludeReturnedName') ||
+            c[0].includes(':statusName')),
       );
-      expect(collidingCalls).toHaveLength(0);
+      expect(legacyCalls).toHaveLength(0);
 
-      // No binding may carry the reserved stale literal 'Revision'
-      // (guards against re-regression of Defect B).
+      // Guard against re-regression of Defect B: the reserved stale literal
+      // 'Revision' MUST NOT appear in any binding.
       const staleCalls = mockQueryBuilder.andWhere.mock.calls.filter(
         (c) =>
           c[1] &&
@@ -1422,6 +1415,96 @@ describe('ProjectGroupsService', () => {
           Object.values(c[1] as Record<string, unknown>).includes('Revision'),
       );
       expect(staleCalls).toHaveLength(0);
+    });
+  });
+
+  // --- Wave 24 BE-24-01: helper-query executive status exclusion ---
+  // CLAUDE.md §3 W67: Ready / Pull_Back / Returned_For_Revision are
+  // workflow-internal authoring states and MUST NOT appear in any executive
+  // read path. This block pins the SQL contract for the four helpers that
+  // feed every /executive/* endpoint plus /project-groups/latest /
+  // /project-groups/latest-all-status.
+  describe('Wave 24 — executive helper status exclusion', () => {
+    const expectExclusionApplied = (
+      mockQB: { andWhere: jest.Mock },
+    ) => {
+      const exclusionCall = mockQB.andWhere.mock.calls.find(
+        (c) =>
+          typeof c[0] === 'string' &&
+          c[0].includes('status.name NOT IN (:...excludedStatusNames)'),
+      );
+      expect(exclusionCall).toBeDefined();
+      const params = exclusionCall![1] as { excludedStatusNames: string[] };
+      expect(params.excludedStatusNames.sort()).toEqual(
+        ['Pull_Back', 'Ready', 'Returned_For_Revision'].sort(),
+      );
+    };
+
+    it('findOriginalLatestProjects excludes Ready / Pull_Back / Returned_For_Revision', async () => {
+      const mockQB: any = {
+        leftJoin: jest.fn().mockReturnThis(),
+        leftJoinAndSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([]),
+      };
+      projectGroupRepo.createQueryBuilder.mockReturnValue(mockQB);
+
+      await (service as any).findOriginalLatestProjects('dp-1');
+
+      expectExclusionApplied(mockQB);
+    });
+
+    it('findOriginalWithoutRevisionAllStatus excludes Ready / Pull_Back / Returned_For_Revision', async () => {
+      const mockQB: any = {
+        leftJoin: jest.fn().mockReturnThis(),
+        leftJoinAndSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([]),
+      };
+      projectGroupRepo.createQueryBuilder.mockReturnValue(mockQB);
+
+      await (service as any).findOriginalWithoutRevisionAllStatus('dp-1');
+
+      expectExclusionApplied(mockQB);
+    });
+
+    // Negative coverage: pre-fix, a Pull_Back row would survive every helper.
+    // This fixture-style assertion proves the post-fix contract: when the SQL
+    // is run against a row population including all 8 canonical statuses, the
+    // helper-bound parameter list excludes exactly the three workflow-internal
+    // states the audit identified.
+    it('exclusion list matches §3 W67 invariant exactly (no Rejected / Approved / Pending leakage)', async () => {
+      const mockQB: any = {
+        leftJoin: jest.fn().mockReturnThis(),
+        leftJoinAndSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([]),
+      };
+      projectGroupRepo.createQueryBuilder.mockReturnValue(mockQB);
+
+      await (service as any).findOriginalLatestProjects('dp-1');
+
+      const exclusionCall = mockQB.andWhere.mock.calls.find(
+        (c: any[]) =>
+          typeof c[0] === 'string' &&
+          c[0].includes('status.name NOT IN (:...excludedStatusNames)'),
+      );
+      const list: string[] = (exclusionCall![1] as any).excludedStatusNames;
+
+      // Statuses that MUST be present in the executive vocabulary — i.e.,
+      // MUST NOT appear in the exclusion list (would over-filter executive
+      // surfaces and hide legitimate executive data).
+      ['Pending', 'Verified', 'Pending_Approval', 'Approved', 'Rejected'].forEach(
+        (s) => expect(list).not.toContain(s),
+      );
+
+      // Statuses that MUST be excluded (workflow-internal authoring states).
+      ['Ready', 'Pull_Back', 'Returned_For_Revision'].forEach((s) =>
+        expect(list).toContain(s),
+      );
     });
   });
 });

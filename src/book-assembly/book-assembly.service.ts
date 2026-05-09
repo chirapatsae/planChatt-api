@@ -1966,6 +1966,17 @@ export class BookAssemblyService {
       verifiedCount: statusMap['Verified'] ?? 0,
       pendingApprovalCount: statusMap['Pending_Approval'] ?? 0,
       approvedCount: statusMap['Approved'] ?? 0,
+      // Wave 22-followup — surface the four "non-progressing" statuses
+      // so the FE can render a complete deficit breakdown tooltip.
+      // The aggregation query already returns every status name; we
+      // were just dropping these four. CLAUDE.md §3 lists all 8
+      // canonical statuses — `Ready` (pre-submit), `Pull_Back`
+      // (owner-triggered withdraw), `Returned_For_Revision`
+      // (staff-triggered return), and `Rejected` (W67).
+      readyCount: statusMap['Ready'] ?? 0,
+      returnedForRevisionCount: statusMap['Returned_For_Revision'] ?? 0,
+      pullBackCount: statusMap['Pull_Back'] ?? 0,
+      rejectedCount: statusMap['Rejected'] ?? 0,
       totalCount,
     };
 
@@ -2050,6 +2061,17 @@ export class BookAssemblyService {
       verifiedCount: statusMap['Verified'] ?? 0,
       pendingApprovalCount: statusMap['Pending_Approval'] ?? 0,
       approvedCount: statusMap['Approved'] ?? 0,
+      // Wave 22-followup — surface the four "non-progressing" statuses
+      // so the FE can render a complete deficit breakdown tooltip.
+      // The aggregation query already returns every status name; we
+      // were just dropping these four. CLAUDE.md §3 lists all 8
+      // canonical statuses — `Ready` (pre-submit), `Pull_Back`
+      // (owner-triggered withdraw), `Returned_For_Revision`
+      // (staff-triggered return), and `Rejected` (W67).
+      readyCount: statusMap['Ready'] ?? 0,
+      returnedForRevisionCount: statusMap['Returned_For_Revision'] ?? 0,
+      pullBackCount: statusMap['Pull_Back'] ?? 0,
+      rejectedCount: statusMap['Rejected'] ?? 0,
       totalCount,
     };
 

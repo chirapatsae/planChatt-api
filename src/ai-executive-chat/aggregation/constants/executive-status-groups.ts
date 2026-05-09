@@ -66,3 +66,22 @@ export function executiveStatusGroupLabelTh(
   if (!group) return null;
   return EXECUTIVE_STATUS_GROUP_LABEL_TH[group] ?? null;
 }
+
+/**
+ * Wave 24 — canonical workflow statuses that are workflow-internal authoring
+ * states and MUST NOT surface on any executive read path. Mirrors the
+ * `mapToExecutiveStatusGroup` `null` branch as a literal tuple so it can be
+ * spread into TypeORM `NOT IN` parameters.
+ *
+ * §3 W67: Ready / Pull_Back / Returned_For_Revision are intentionally
+ * excluded from executive views. `Rejected` IS in the executive vocabulary
+ * (group `rejected`) so it must NOT appear here.
+ */
+export const EXECUTIVE_EXCLUDED_STATUS_NAMES = [
+  'Ready',
+  'Pull_Back',
+  'Returned_For_Revision',
+] as const;
+
+export type ExecutiveExcludedStatusName =
+  (typeof EXECUTIVE_EXCLUDED_STATUS_NAMES)[number];

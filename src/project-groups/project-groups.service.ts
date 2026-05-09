@@ -47,6 +47,10 @@ import {
 } from 'src/common/project-classification/constants';
 import { UsersService } from 'src/users/users.service';
 import { maskEmail } from 'src/notifications/email/utils/mask-email.util';
+// Wave 24 — single source of truth for executive read-path status exclusion.
+// CLAUDE.md §3 W67: Ready / Pull_Back / Returned_For_Revision are workflow-
+// internal authoring states and MUST NOT appear in any executive view.
+import { EXECUTIVE_EXCLUDED_STATUS_NAMES } from 'src/ai-executive-chat/aggregation/constants/executive-status-groups';
 
 @Injectable()
 export class ProjectGroupsService {
@@ -1974,6 +1978,11 @@ export class ProjectGroupsService {
       )
       .andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+      // Wave 24 §3 W67 — exclude workflow-internal authoring states from
+      // every executive read path (Ready / Pull_Back / Returned_For_Revision).
+      .andWhere('status.name NOT IN (:...excludedStatusNames)', {
+        excludedStatusNames: [...EXECUTIVE_EXCLUDED_STATUS_NAMES],
+      })
       .andWhere('developmentPlan.id = :developmentPlanId', { developmentPlanId });
 
     if (status) {
@@ -2028,6 +2037,11 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('revisedProject.originAgencyId', 'originAgencyId')
       .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+      // Wave 24 §3 W67 — exclude workflow-internal authoring states from
+      // every executive read path (Ready / Pull_Back / Returned_For_Revision).
+      .andWhere('status.name NOT IN (:...excludedStatusNames)', {
+        excludedStatusNames: [...EXECUTIVE_EXCLUDED_STATUS_NAMES],
+      })
       .andWhere('developmentPlan.id = :developmentPlanId', { developmentPlanId });
 
     if (status) {
@@ -2615,7 +2629,12 @@ export class ProjectGroupsService {
       .setParameters(maxRevisionSubQuery.getParameters())
 
       .andWhere('revisedProject.development_plan_id = :developmentPlanId', { developmentPlanId })
-      .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true });
+      .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+      // Wave 24 §3 W67 — exclude workflow-internal authoring states from
+      // every executive read path (Ready / Pull_Back / Returned_For_Revision).
+      .andWhere('status.name NOT IN (:...excludedStatusNames)', {
+        excludedStatusNames: [...EXECUTIVE_EXCLUDED_STATUS_NAMES],
+      });
 
     if (status) {
       query.andWhere('status.name = :statusName', { statusName: status });
@@ -2724,11 +2743,14 @@ export class ProjectGroupsService {
       .andWhere('rev.id IS NULL')   // ไม่มี revision
       .andWhere('pg.isDraft = false')
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-      // CLAUDE.md Core Status Machine: exclude pre-submission `Ready` and the
-      // canonical rejected state `Returned_For_Revision`. Placeholders MUST be
-      // distinct — TypeORM silently overwrites reused named parameters.
-      .andWhere('status.name <> :excludeReadyName', { excludeReadyName: 'Ready' })
-      .andWhere('status.name <> :excludeReturnedName', { excludeReturnedName: 'Returned_For_Revision' })
+      // Wave 24 §3 W67 — exclude workflow-internal authoring states from
+      // every executive read path (Ready / Pull_Back / Returned_For_Revision).
+      // Replaces the prior Ready + Returned_For_Revision pair of single-name
+      // exclusions; this is logically equivalent for those two and additionally
+      // closes the Pull_Back leak surfaced in WAVE24_PULLBACK_LEAKAGE_AUDIT.
+      .andWhere('status.name NOT IN (:...excludedStatusNames)', {
+        excludedStatusNames: [...EXECUTIVE_EXCLUDED_STATUS_NAMES],
+      })
     // .andWhere('pg.isBooked = :isBooked', { isBooked: true });
 
     return await queryBuilder.getMany();

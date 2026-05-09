@@ -349,4 +349,163 @@ describe('ExecutiveService', () => {
       expect(result.byScope).toBeUndefined();
     });
   });
+
+  /**
+   * Wave 24 — Pull_Back / Returned_For_Revision leakage fix (BE-24-02).
+   *
+   * Two-prong invariant:
+   *   1. Per-staff Returned_For_Revision TILE remains populated (intentional
+   *      retention per FIX_EXECUTIVE_STATUS_COUNTS_RETURNED_FOR_REVISION).
+   *   2. The FE-shipped projectGroups array, the per-staff projectCount, and
+   *      the executive-wide global counters DROP Ready / Pull_Back /
+   *      Returned_For_Revision per §3 W67.
+   */
+  describe('getTeamDashboard — Wave 24 executive exclusion', () => {
+    /**
+     * Build a staff row whose amphoe + agency each carry a mixed bag of
+     * statuses: 1 Ready + 1 Pull_Back + 1 Returned_For_Revision + 1 Pending.
+     * Expected post-fix:
+     *   - tile RFR count = 1 (preserved)
+     *   - tile Pending count = 1
+     *   - shipped projectCount = 1 (only Pending survives the executive set)
+     *   - shipped projectGroups.length = 1
+     */
+    const buildMixedStaffRow = () => ({
+      id: STAFF_WH_ID,
+      user: {
+        id: STAFF_USER_ID,
+        prefix: 'นาย',
+        firstname: 'Test',
+        lastname: 'Staff',
+      },
+      role: { name: 'staff' },
+      workHistoryResponsibleAmphoe: [
+        {
+          amphoe: {
+            id: AMPHOE_ID,
+            projectGroups: [
+              buildProject('pg-a-ready', 'Ready proj', 'Ready'),
+              buildProject('pg-a-pb', 'PullBack proj', 'Pull_Back'),
+              buildProject(
+                'pg-a-rfr',
+                'RFR proj',
+                STATUS_NAMES.RETURNED_FOR_REVISION,
+              ),
+              buildProject('pg-a-pending', 'Pending proj', 'Pending'),
+            ],
+          },
+        },
+      ],
+      workHistoryResponsibleGovernmentAgency: [
+        {
+          governmentAgency: {
+            id: AGENCY_ID,
+            responsibleAgencyProjectGroup: [
+              buildProject('pg-g-ready', 'Ready proj', 'Ready'),
+              buildProject('pg-g-pb', 'PullBack proj', 'Pull_Back'),
+              buildProject(
+                'pg-g-rfr',
+                'RFR proj',
+                STATUS_NAMES.RETURNED_FOR_REVISION,
+              ),
+              buildProject('pg-g-pending', 'Pending proj', 'Pending'),
+            ],
+          },
+        },
+      ],
+    });
+
+    const wireMixed = () => {
+      const mainBuilder = makeQueryBuilder(buildMixedStaffRow());
+      const scopeBuilder = makeQueryBuilder(null);
+      workHistoryRepo.createQueryBuilder
+        .mockReturnValueOnce(mainBuilder as any)
+        .mockReturnValue(scopeBuilder as any);
+      const pgBuilder = makeQueryBuilder(null);
+      projectGroupRepo.createQueryBuilder.mockReturnValue(pgBuilder as any);
+    };
+
+    it('preserves Returned_For_Revision tile while excluding RFR + Pull_Back from amphoe projectCount', async () => {
+      wireMixed();
+      const result = await service.getTeamDashboard(STAFF_USER_ID, 'main');
+      const amphoe = result.staffWithTotalLao[0].workHistoryResponsibleAmphoe[0]
+        .amphoe as any;
+
+      // Tile preserved (predecessor task contract)
+      expect(amphoe.statusCounts.Returned_For_Revision).toBe(1);
+      expect(amphoe.statusCounts.Pending).toBe(1);
+
+      // Wave 24 — shipped array + count exclude Ready / Pull_Back / RFR
+      expect(amphoe.projectCount).toBe(1);
+      expect(amphoe.projectGroups).toHaveLength(1);
+      expect(amphoe.projectGroups[0].id).toBe('pg-a-pending');
+    });
+
+    it('preserves Returned_For_Revision tile while excluding RFR + Pull_Back from agency projectCount', async () => {
+      wireMixed();
+      const result = await service.getTeamDashboard(STAFF_USER_ID, 'main');
+      const agency = result.staffWithTotalLao[0]
+        .workHistoryResponsibleGovernmentAgency[0].governmentAgency as any;
+
+      expect(agency.statusCounts.Returned_For_Revision).toBe(1);
+      expect(agency.statusCounts.Pending).toBe(1);
+      expect(agency.projectCount).toBe(1);
+      expect(agency.responsibleAgencyProjectGroup).toHaveLength(1);
+      expect(agency.responsibleAgencyProjectGroup[0].id).toBe('pg-g-pending');
+    });
+
+    it('global projectGroupCount SQL excludes Ready / Pull_Back / Returned_For_Revision', async () => {
+      // Capture parameter values handed to the repo .andWhere() calls.
+      const mainBuilder = makeQueryBuilder(buildMixedStaffRow());
+      const scopeBuilder = makeQueryBuilder(null);
+      workHistoryRepo.createQueryBuilder
+        .mockReturnValueOnce(mainBuilder as any)
+        .mockReturnValue(scopeBuilder as any);
+
+      const pgBuilder: any = {
+        innerJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getCount: jest.fn().mockResolvedValue(0),
+      };
+      projectGroupRepo.createQueryBuilder.mockReturnValue(pgBuilder as any);
+
+      await service.getTeamDashboard(STAFF_USER_ID, 'main');
+
+      // The first count query (projectGroupCount) interpolates an
+      // `excludedStatusNames` parameter that MUST contain all three
+      // Wave-24 excluded statuses.
+      const calls = pgBuilder.andWhere.mock.calls;
+      const excludedCall = calls.find(
+        (c: any[]) =>
+          typeof c[1] === 'object' &&
+          c[1] &&
+          Array.isArray((c[1] as any).excludedStatusNames),
+      );
+      expect(excludedCall).toBeDefined();
+      const excluded = excludedCall![1].excludedStatusNames as string[];
+      expect(excluded).toEqual(
+        expect.arrayContaining(['Ready', 'Pull_Back', 'Returned_For_Revision']),
+      );
+
+      // The third count query (projectGroupInprogressCount) interpolates
+      // `excludeStatuses` which MUST contain Approved + the three Wave-24 set.
+      const inProgressCall = calls.find(
+        (c: any[]) =>
+          typeof c[1] === 'object' &&
+          c[1] &&
+          Array.isArray((c[1] as any).excludeStatuses),
+      );
+      expect(inProgressCall).toBeDefined();
+      const inProgressExcluded = inProgressCall![1].excludeStatuses as string[];
+      expect(inProgressExcluded).toEqual(
+        expect.arrayContaining([
+          'Approved',
+          'Ready',
+          'Pull_Back',
+          'Returned_For_Revision',
+        ]),
+      );
+    });
+  });
 });

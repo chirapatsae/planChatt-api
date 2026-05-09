@@ -9,6 +9,7 @@ import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
 import { STATUS_NAMES } from 'src/common/status-names';
+import { EXECUTIVE_EXCLUDED_STATUS_NAMES } from 'src/ai-executive-chat/aggregation/constants/executive-status-groups';
 
 /**
  * Wave 43 — Team Dashboard scope extension.
@@ -215,12 +216,32 @@ export class ExecutiveService {
             };
 
             const allProjects = item.amphoe.projectGroups || [];
-            const projects = allProjects.filter(p => {
+            // Wave 24 — dual-set split:
+            //   tileProjects        — drops Ready only; preserves
+            //                         Returned_For_Revision so the per-staff
+            //                         "รอแก้ไข" tile keeps populating per
+            //                         FIX_EXECUTIVE_STATUS_COUNTS_RETURNED_FOR_REVISION.
+            //   executiveProjects   — drops Ready + Pull_Back +
+            //                         Returned_For_Revision per §3 W67;
+            //                         drives the FE-shipped projectGroups
+            //                         array and the projectCount on the
+            //                         amphoe bucket.
+            const tileProjects = allProjects.filter(p => {
               const latest = p.trackingStatus?.find(t => t.isLatest);
               return latest && latest.statusId && latest.statusId.name !== 'Ready';
             });
+            const executiveProjects = allProjects.filter(p => {
+              const latest = p.trackingStatus?.find(t => t.isLatest);
+              return (
+                latest &&
+                latest.statusId &&
+                !(EXECUTIVE_EXCLUDED_STATUS_NAMES as readonly string[]).includes(
+                  latest.statusId.name,
+                )
+              );
+            });
 
-            projects.forEach(p => {
+            tileProjects.forEach(p => {
               const latest = p.trackingStatus?.find(t => t.isLatest);
               if (latest && latest.statusId) {
                 const statusName = latest.statusId.name;
@@ -245,9 +266,13 @@ export class ExecutiveService {
             });
 
             // Assign counts to amphoe (dynamically)
+            // statusCounts/statusAging are populated from tileProjects above
+            // so the Returned_For_Revision tile is preserved. The shipped
+            // projectGroups array and projectCount use executiveProjects to
+            // honor §3 W67.
             (item.amphoe as any).statusCounts = counts;
-            (item.amphoe as any).projectCount = projects.length; // Ensure this is set
-            (item.amphoe as any).projectGroups = projects;
+            (item.amphoe as any).projectCount = executiveProjects.length;
+            (item.amphoe as any).projectGroups = executiveProjects;
             (item.amphoe as any).statusAging = Object.keys(aging).reduce((acc, key) => {
               acc[key] = {
                 avgTime: aging[key].count > 0 ? (aging[key].total / aging[key].count).toFixed(2) : 0,
@@ -281,12 +306,23 @@ export class ExecutiveService {
             };
 
             const allProjects = item.governmentAgency.responsibleAgencyProjectGroup || [];
-            const projects = allProjects.filter(p => {
+            // Wave 24 — same dual-set split as the amphoe block above.
+            const tileProjects = allProjects.filter(p => {
               const latest = p.trackingStatus?.find(t => t.isLatest);
               return latest && latest.statusId && latest.statusId.name !== 'Ready';
             });
+            const executiveProjects = allProjects.filter(p => {
+              const latest = p.trackingStatus?.find(t => t.isLatest);
+              return (
+                latest &&
+                latest.statusId &&
+                !(EXECUTIVE_EXCLUDED_STATUS_NAMES as readonly string[]).includes(
+                  latest.statusId.name,
+                )
+              );
+            });
 
-            projects.forEach(p => {
+            tileProjects.forEach(p => {
               const latest = p.trackingStatus?.find(t => t.isLatest);
               if (latest && latest.statusId) {
                 const statusName = latest.statusId.name;
@@ -311,9 +347,12 @@ export class ExecutiveService {
             });
 
             // Assign counts to agency (dynamically)
+            // tileProjects drives statusCounts/statusAging (preserves
+            // Returned_For_Revision tile); executiveProjects drives the
+            // FE-shipped projectGroups + projectCount per §3 W67.
             (item.governmentAgency as any).statusCounts = counts;
-            (item.governmentAgency as any).projectCount = projects.length; // Ensure this is set
-            (item.governmentAgency as any).responsibleAgencyProjectGroup = projects;
+            (item.governmentAgency as any).projectCount = executiveProjects.length;
+            (item.governmentAgency as any).responsibleAgencyProjectGroup = executiveProjects;
             (item.governmentAgency as any).statusAging = Object.keys(aging).reduce((acc, key) => {
               acc[key] = {
                 avgTime: aging[key].count > 0 ? (aging[key].total / aging[key].count).toFixed(2) : 0,
@@ -347,8 +386,10 @@ export class ExecutiveService {
       .where('pg.developmentPlan = :id', {
         id: developmentPlan?.id
       })
-      .andWhere('status.name != :readyStatus', {
-        readyStatus: 'Ready'
+      // Wave 24 — §3 W67: exclude Ready / Pull_Back / Returned_For_Revision
+      // from the executive-wide totals.
+      .andWhere('status.name NOT IN (:...excludedStatusNames)', {
+        excludedStatusNames: [...EXECUTIVE_EXCLUDED_STATUS_NAMES],
       })
       .andWhere('ts.isLatest = :isLatest', { isLatest: true })
       .andWhere('pg.isDraft = :isDraft', { isDraft: false })
@@ -375,8 +416,9 @@ export class ExecutiveService {
       .where('pg.developmentPlan = :id', {
         id: developmentPlan?.id
       })
+      // Wave 24 — exclude Approved + executive-excluded states (§3 W67).
       .andWhere('status.name NOT IN (:...excludeStatuses)', {
-        excludeStatuses: ['Approved', 'Ready']
+        excludeStatuses: ['Approved', ...EXECUTIVE_EXCLUDED_STATUS_NAMES],
       })
       .andWhere('ts.isLatest = :isLatest', { isLatest: true })
       .andWhere('pg.isDraft = :isDraft', { isDraft: false })
@@ -516,10 +558,30 @@ export class ExecutiveService {
           ...supplementProjects,
         ];
 
-        const { counts, aging } = this.buildStatusBuckets(mergedProjects, staff);
+        // Wave 24 — same dual-split as the legacy aggregator (Patches C/D):
+        //   tile      → drops Ready only; preserves Returned_For_Revision
+        //                tile per FIX_EXECUTIVE_STATUS_COUNTS_RETURNED_FOR_REVISION.
+        //   executive → drops Ready / Pull_Back / Returned_For_Revision per
+        //                §3 W67; drives FE-shipped array + projectCount.
+        const tileProjects = mergedProjects.filter((p: any) => {
+          const latest = p.trackingStatus?.find((t: any) => t.isLatest);
+          return latest && latest.statusId && latest.statusId.name !== 'Ready';
+        });
+        const executiveProjects = mergedProjects.filter((p: any) => {
+          const latest = p.trackingStatus?.find((t: any) => t.isLatest);
+          return (
+            latest &&
+            latest.statusId &&
+            !(EXECUTIVE_EXCLUDED_STATUS_NAMES as readonly string[]).includes(
+              latest.statusId.name,
+            )
+          );
+        });
 
-        agency.responsibleAgencyProjectGroup = mergedProjects;
-        agency.projectCount = mergedProjects.length;
+        const { counts, aging } = this.buildStatusBuckets(tileProjects, staff);
+
+        agency.responsibleAgencyProjectGroup = executiveProjects;
+        agency.projectCount = executiveProjects.length;
         agency.statusCounts = counts;
         agency.statusAging = aging;
       }
