@@ -6,7 +6,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { CreateDevelopmentPlanSupplementDto } from './dto/create-development-plan-supplement.dto';
 import { UpdateDevelopmentPlanSupplementDto } from './dto/update-development-plan-supplement.dto';
 import { DevelopmentPlanSupplement } from './entities/development-plan-supplement.entity';
@@ -15,6 +15,7 @@ import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { handleException } from 'src/util/handleException';
 import { UsersService } from 'src/users/users.service';
 import { BookLockService } from 'src/common/book-lock/book-lock.service';
+import { OrphanCleanupService } from 'src/orphan-cleanup/orphan-cleanup.service';
 
 @Injectable()
 export class DevelopmentPlanSupplementService {
@@ -31,6 +32,8 @@ export class DevelopmentPlanSupplementService {
     private readonly workHistoryRepository: Repository<WorkHistory>,
     private readonly usersService: UsersService,
     private readonly bookLockService: BookLockService,
+    private readonly dataSource: DataSource,
+    private readonly orphanCleanupService: OrphanCleanupService,
   ) {}
 
   async create(
@@ -284,19 +287,57 @@ export class DevelopmentPlanSupplementService {
         );
       }
 
-      // CLAUDE.md §15 — Book Lineage Immutability (GLOBAL timeline).
-      // Guard runs BEFORE softDelete so the lock is enforced even
-      // when the supplement is already non-latest.
-      await this.bookLockService.assertDeletable(
-        id,
-        'development_plan_supplement',
-        this.supplementRepository.manager,
-      );
+      // Wave 110 W110-BE-01 — wrap softRemove + orphan-cleanup cascade
+      // in a single transaction so the cascade and the book mutation
+      // commit/rollback together (CLAUDE.md §18.2.1 SUPPLEMENT trigger
+      // surface; workflow doc Trigger Event 1).
+      await this.dataSource.transaction(async (manager) => {
+        // CLAUDE.md §15 — Book Lineage Immutability (GLOBAL timeline).
+        // Guard runs BEFORE softDelete so the lock is enforced even
+        // when the supplement is already non-latest.
+        await this.bookLockService.assertDeletable(
+          id,
+          'development_plan_supplement',
+          manager,
+        );
 
-      const result = await this.supplementRepository.softDelete(id);
-      if (result.affected === 0) {
-        throw new NotFoundException(
-          `DevelopmentPlanSupplement with ID ${id} not found`,
+        // Wave 110 W110-BE-01 — orphan-cleanup cascade. Runs BEFORE
+        // softDelete so the cascade can materialize the candidate set
+        // via the live FK.
+        await this.orphanCleanupService.cascadeOnBookCancel(
+          supplement,
+          'SUPPLEMENT',
+          manager,
+          userId,
+        );
+
+        const result = await manager
+          .getRepository(DevelopmentPlanSupplement)
+          .softDelete(id);
+        if (result.affected === 0) {
+          throw new NotFoundException(
+            `DevelopmentPlanSupplement with ID ${id} not found`,
+          );
+        }
+      });
+
+      this.logger.log(
+        `Development plan supplement ${id} soft-deleted by user ${userId}`,
+      );
+      // Drain post-commit notification buffer (currently log-only — RPG/
+      // SPG cleanup is silent per §18.7; PG owner notifications are
+      // produced only for PLAN cancel).
+      try {
+        const buffered =
+          this.orphanCleanupService.consumePendingPgNotifications(id);
+        if (buffered.length > 0) {
+          this.logger.log(
+            `[OrphanCleanup-Notify] Supplement ${id} buffered ${buffered.length} PG notifications (no-op for SUPPLEMENT cancel — SPG cleanup is silent per §18.7)`,
+          );
+        }
+      } catch (notifyErr) {
+        this.logger.warn(
+          `[OrphanCleanup-Notify] Supplement ${id} drain failed: ${(notifyErr as Error).message}`,
         );
       }
       return {

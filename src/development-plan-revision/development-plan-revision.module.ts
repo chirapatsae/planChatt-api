@@ -11,6 +11,7 @@ import { UsersModule } from 'src/users/users.module';
 import { PdfModule } from 'src/pdf/pdf.module';
 import { WebsocketModule } from 'src/websocket/websocket.module';
 import { BookLockModule } from 'src/common/book-lock/book-lock.module';
+import { OrphanCleanupModule } from 'src/orphan-cleanup/orphan-cleanup.module';
 
 @Module({
   imports: [
@@ -25,6 +26,10 @@ import { BookLockModule } from 'src/common/book-lock/book-lock.module';
     PdfModule,
     WebsocketModule,
     BookLockModule,
+    // Wave 110 W110-BE-01 — softRemove + 2 finalize sites wire
+    // OrphanCleanupService to run inside their transactions. CLAUDE.md
+    // §18.2.1 trigger surfaces (REVISION).
+    OrphanCleanupModule,
   ],
   controllers: [DevelopmentPlanRevisionController],
   providers: [DevelopmentPlanRevisionService],

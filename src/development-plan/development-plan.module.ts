@@ -14,6 +14,7 @@ import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/
 import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entities/development-plan-supplement.entity';
 import { UsersModule } from 'src/users/users.module';
 import { BookLockModule } from 'src/common/book-lock/book-lock.module';
+import { OrphanCleanupModule } from 'src/orphan-cleanup/orphan-cleanup.module';
 
 @Module({
   imports: [
@@ -31,6 +32,9 @@ import { BookLockModule } from 'src/common/book-lock/book-lock.module';
     WebsocketModule,
     UsersModule,
     BookLockModule,
+    // Wave 110 W110-BE-01 — DevelopmentPlan softRemove invokes the
+    // orphan-cleanup cascade (CLAUDE.md §18.2.1 PLAN trigger surface).
+    OrphanCleanupModule,
   ],
   controllers: [DevelopmentPlanController],
   providers: [DevelopmentPlanService],

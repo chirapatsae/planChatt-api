@@ -29,6 +29,7 @@ import { UpdateDevelopmentPlanLatestStatusDto } from './dto/update-development-p
 import { UsersService } from 'src/users/users.service';
 import { BookLockService } from 'src/common/book-lock/book-lock.service';
 import { ReportFormat } from './types/report-format.enum';
+import { OrphanCleanupService } from 'src/orphan-cleanup/orphan-cleanup.service';
 import {
   ERROR_CODES,
   ERROR_MESSAGES,
@@ -66,6 +67,7 @@ export class DevelopmentPlanService {
     private readonly websocketService: WebsocketService,
     private readonly usersService: UsersService,
     private readonly bookLockService: BookLockService,
+    private readonly orphanCleanupService: OrphanCleanupService,
   ) { }
 
   private async validatePreviousPlanCompletion(manager: EntityManager): Promise<void> {
@@ -1341,42 +1343,79 @@ export class DevelopmentPlanService {
         throw new NotFoundException(`DevelopmentPlan with ID ${id} not found`);
       }
 
-      // CLAUDE.md §15 — Book Lineage Immutability. Guard BEFORE any
-      // repository write. Runs before the `save(deletedBy)` step below
-      // so a locked plan never receives a partial mutation.
-      await this.bookLockService.assertDeletable(
-        id,
-        'development_plan',
-        this.developmentPlanRepository.manager,
-      );
+      // Wave 110 W110-BE-01 — wrap in transaction so the orphan-cleanup
+      // cascade runs in the SAME EntityManager as the softRemove flip
+      // (CLAUDE.md §18.2.1 PLAN trigger surface).
+      await this.dataSource.transaction(async (manager) => {
+        // CLAUDE.md §15 — Book Lineage Immutability. Guard BEFORE any
+        // repository write. Runs before the `save(deletedBy)` step below
+        // so a locked plan never receives a partial mutation.
+        await this.bookLockService.assertDeletable(
+          id,
+          'development_plan',
+          manager,
+        );
 
-      // Get workHistory for deletedBy
-      const workHistory = await this.workHistoryRepository.findOne({
-        where: { user: { id: userId }, workStatus: { name: 'approved' } },
-      });
-      if (workHistory) {
-        developmentPlan.deletedBy = workHistory;
-      }
+        // Wave 110 W110-BE-01 — orphan-cleanup cascade. Runs BEFORE the
+        // softRemove flips deletedAt so the cascade can materialize the
+        // candidate PG set via the live FK.
+        await this.orphanCleanupService.cascadeOnBookCancel(
+          developmentPlan,
+          'PLAN',
+          manager,
+          userId,
+        );
 
-      // ถ้าที่ลบเป็น isLatest ให้ตั้งอันก่อนหน้า (เรียงจาก createAt) เป็น isLatest และตั้งตัวที่ลบเป็น false
-      if (developmentPlan.isLatest) {
-        const previousPlan = await this.developmentPlanRepository.findOne({
-          where: { id: Not(id) },
-          order: { createAt: 'DESC' },
+        const planRepoTx = manager.getRepository(DevelopmentPlan);
+        const workHistoryRepoTx = manager.getRepository(WorkHistory);
+
+        // Get workHistory for deletedBy
+        const workHistory = await workHistoryRepoTx.findOne({
+          where: { user: { id: userId }, workStatus: { name: 'approved' } },
         });
-        if (previousPlan) {
-          await this.developmentPlanRepository.update(
-            { id: previousPlan.id },
-            { isLatest: true },
-          );
+        if (workHistory) {
+          developmentPlan.deletedBy = workHistory;
         }
-        developmentPlan.isLatest = false;
-      }
 
-      await this.developmentPlanRepository.save(developmentPlan);
-      await this.developmentPlanRepository.softRemove(developmentPlan);
+        // ถ้าที่ลบเป็น isLatest ให้ตั้งอันก่อนหน้า (เรียงจาก createAt) เป็น isLatest และตั้งตัวที่ลบเป็น false
+        if (developmentPlan.isLatest) {
+          const previousPlan = await planRepoTx.findOne({
+            where: { id: Not(id) },
+            order: { createAt: 'DESC' },
+          });
+          if (previousPlan) {
+            await planRepoTx.update(
+              { id: previousPlan.id },
+              { isLatest: true },
+            );
+          }
+          developmentPlan.isLatest = false;
+        }
+
+        await planRepoTx.save(developmentPlan);
+        await planRepoTx.softRemove(developmentPlan);
+      });
 
       this.logger.log(`Development plan ${id} soft-deleted by user ${userId}`);
+      // Drain post-commit notification buffer (PG owner reset notices).
+      try {
+        const buffered =
+          this.orphanCleanupService.consumePendingPgNotifications(id);
+        if (buffered.length > 0) {
+          this.logger.log(
+            `[OrphanCleanup-Notify] Plan ${id} buffered ${buffered.length} PG owner notifications. Dispatcher TBD — log-only for W110-BE-01 to avoid coupling to a specific notification kind (CLAUDE.md §18.7 + §17.2).`,
+          );
+          for (const item of buffered) {
+            this.logger.log(
+              `[OrphanCleanup-Notify] PG=${item.projectId} owner=${item.ownerWorkHistoryId ?? 'n/a'} title="${item.projectTitle}" reason="${item.staffRemark}"`,
+            );
+          }
+        }
+      } catch (notifyErr) {
+        this.logger.warn(
+          `[OrphanCleanup-Notify] Plan ${id} drain failed: ${(notifyErr as Error).message}`,
+        );
+      }
       return { message: `DevelopmentPlan with ID ${id} has been soft-removed.` };
     } catch (error) {
       handleException(this.logger, error);

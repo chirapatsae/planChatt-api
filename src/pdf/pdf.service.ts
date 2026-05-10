@@ -2,8 +2,8 @@
 // 📦 1. Imports
 // ===================================================================
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { DataSource, Repository, In } from 'typeorm';
 import PdfPrinter = require('pdfmake');
 import { PDFDocument } from 'pdf-lib';
 import type { TDocumentDefinitions } from 'pdfmake/interfaces';
@@ -42,6 +42,9 @@ import {
 
 // --- Format Resolver ---
 import { ReportFormat } from 'src/development-plan/types/report-format.enum';
+
+// --- Wave 110 W110-BE-01 — orphan-cleanup cascade ---
+import { OrphanCleanupService } from 'src/orphan-cleanup/orphan-cleanup.service';
 
 // --- Report Generators (STRATEGY_BASED) ---
 import { createSummaryPartDocDefinition } from './report-summary.part';
@@ -110,6 +113,11 @@ export class PdfService {
     private readonly pdfRevisionChangeApprovedRepo: Repository<PdfRevisionChangeApprovedDocument>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+    // Wave 110 W110-BE-01 — orphan-cleanup cascade for the 3 finalize
+    // sites (out-authority @ ~1428, approved-plan loop + bulk @ ~2370/
+    // 2376). CLAUDE.md §18.2.1 trigger surfaces.
+    @InjectDataSource() private readonly orphanDataSource: DataSource,
+    private readonly orphanCleanupService: OrphanCleanupService,
   ) {
     Wordcut.init();
   }
@@ -1423,11 +1431,28 @@ export class PdfService {
     const pdfBuffer = await this.generateProjectReport(projects, { developmentPlanId: options.developmentPlanId, reportType: 'outAuthority' });
     const projectIdsSnapshot = projects.map(p => p.id);
 
-    const updateProject = await this.projectGroupRepo.update(
-      { id: In(projectIdsSnapshot) },
-      { isBooked: true, bookedAt: new Date() }
-    );
-    if (updateProject.affected === 0) throw new Error('Failed to update project status');
+    // Wave 110 W110-BE-01 — out-authority is a finalize-like step that
+    // flips `isBooked = true` on the Rejected subset for the same plan.
+    // The cascade is a defensive no-op for non-Approved/Rejected/Ready
+    // PGs in scope (Rejected is terminal — see workflow doc Action
+    // Matrix), but we wrap the booking write in the cascade transaction
+    // so the audit trail stays consistent with the §18.2.1 spec which
+    // lists this site as a finalize trigger surface. CLAUDE.md §18.
+    await this.orphanDataSource.transaction(async (manager) => {
+      await this.orphanCleanupService.cascadeOnBookFinalize(
+        developmentPlan,
+        'PLAN',
+        manager,
+        options.createdById,
+      );
+      const updateProject = await manager.getRepository(ProjectGroup).update(
+        { id: In(projectIdsSnapshot) },
+        { isBooked: true, bookedAt: new Date() }
+      );
+      if (updateProject.affected === 0) {
+        throw new Error('Failed to update project status');
+      }
+    });
 
     return this.saveOutAuthorityPdfAndMeta({
       developmentPlanId: options.developmentPlanId,
@@ -2362,23 +2387,43 @@ export class PdfService {
       ? options.originalProjectIds
       : options.projectIdsSnapshot;
 
-    if (projectGroupIdsToUpdate && projectGroupIdsToUpdate.length > 0) {
-      if (options.pageMap) {
-        for (const [projectId, pageNumber] of options.pageMap.entries()) {
-          await this.projectGroupRepo.update(
-            { id: projectId },
-            { isBooked: true, bookedAt: new Date(), pageNumber }
+    // Wave 110 W110-BE-01 — wrap the finalize-time PG bookings + plan
+    // `isBooked = true` flip in a single transaction with the
+    // orphan-cleanup cascade. The cascade fires BEFORE the booking
+    // writes per §18.2 + workflow doc Trigger Event 2. Sites covered:
+    // approved-plan loop (per-page) and bulk fallback. CLAUDE.md
+    // §18.2.1 lists the original line numbers (1428 / 2370 / 2376) —
+    // post-W110 line numbers may drift slightly due to inserted
+    // comments, but the call topology is identical.
+    await this.orphanDataSource.transaction(async (manager) => {
+      await this.orphanCleanupService.cascadeOnBookFinalize(
+        developmentPlan,
+        'PLAN',
+        manager,
+        options.createdById,
+      );
+
+      if (projectGroupIdsToUpdate && projectGroupIdsToUpdate.length > 0) {
+        const pgRepoTx = manager.getRepository(ProjectGroup);
+        if (options.pageMap) {
+          for (const [projectId, pageNumber] of options.pageMap.entries()) {
+            await pgRepoTx.update(
+              { id: projectId },
+              { isBooked: true, bookedAt: new Date(), pageNumber }
+            );
+          }
+        } else {
+          await pgRepoTx.update(
+            { id: In(projectGroupIdsToUpdate) },
+            { isBooked: true, bookedAt: new Date() }
           );
         }
-      } else {
-        await this.projectGroupRepo.update(
-          { id: In(projectGroupIdsToUpdate) },
-          { isBooked: true, bookedAt: new Date() }
-        );
       }
-    }
 
-    await this.developmentPlanRepo.update({ id: developmentPlanId }, { isBooked: true });
+      await manager
+        .getRepository(DevelopmentPlan)
+        .update({ id: developmentPlanId }, { isBooked: true });
+    });
 
     const user = await this.userRepo.findOne({ where: { id: options.createdById }, select: ['id', 'firstname', 'lastname'] });
 

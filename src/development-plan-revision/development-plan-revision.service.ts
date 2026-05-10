@@ -7,7 +7,7 @@ import {
   HttpException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, Not } from 'typeorm';
+import { Repository, In, Not, DataSource } from 'typeorm';
 import { CreateDevelopmentPlanRevisionDto } from './dto/create-development-plan-revision.dto';
 import { UpdateDevelopmentPlanRevisionDto } from './dto/update-development-plan-revision.dto';
 import { DevelopmentPlanRevision } from './entities/development-plan-revision.entity';
@@ -21,6 +21,7 @@ import { PdfService } from 'src/pdf/pdf.service';
 import { WebsocketService } from 'src/websocket/websocket/websocket.service';
 import { UnifiedProjectMapper } from 'src/project-groups/dto/unified-project-display.dto';
 import { BookLockService } from 'src/common/book-lock/book-lock.service';
+import { OrphanCleanupService } from 'src/orphan-cleanup/orphan-cleanup.service';
 
 @Injectable()
 export class DevelopmentPlanRevisionService {
@@ -46,6 +47,8 @@ export class DevelopmentPlanRevisionService {
     private readonly pdfService: PdfService,
     private readonly websocketService: WebsocketService,
     private readonly bookLockService: BookLockService,
+    private readonly dataSource: DataSource,
+    private readonly orphanCleanupService: OrphanCleanupService,
   ) { }
 
   // ===================================================================
@@ -329,50 +332,88 @@ export class DevelopmentPlanRevisionService {
         );
       }
 
-      // CLAUDE.md §15 — Book Lineage Immutability (GLOBAL timeline).
-      // A revision is locked iff ANY strictly-newer non-soft-deleted
-      // sibling child of the same plan exists. Guard runs BEFORE any
-      // write — critical because the subsequent `isLatest` pivot
-      // mutates another revision row and must not occur on a locked
-      // lineage.
-      await this.bookLockService.assertDeletable(
-        id,
-        'development_plan_revision',
-        this.revisionRepository.manager,
-      );
+      // Wave 110 W110-BE-01 — wrap the softRemove in a transaction so
+      // the orphan-cleanup cascade runs in the SAME EntityManager.
+      // CLAUDE.md §18 + workflow doc Trigger Event 1 (Cancel Book).
+      // The cascade and the book mutation MUST commit or roll back
+      // together; the transaction boundary is the host's
+      // responsibility per §18.2 + §17.2 advisory rule.
+      await this.dataSource.transaction(async (manager) => {
+        // CLAUDE.md §15 — Book Lineage Immutability (GLOBAL timeline).
+        // A revision is locked iff ANY strictly-newer non-soft-deleted
+        // sibling child of the same plan exists. Guard runs BEFORE any
+        // write — critical because the subsequent `isLatest` pivot
+        // mutates another revision row and must not occur on a locked
+        // lineage.
+        await this.bookLockService.assertDeletable(
+          id,
+          'development_plan_revision',
+          manager,
+        );
 
-      // ถ้าที่ลบเป็น isLatest ให้ตั้งอันก่อนหน้า (จัดกลุ่ม revisionType เดียวกัน เรียงตามวันที่ เอาอันที่ล่าสุด) เป็น isLatest
-      // ถ้าไม่ใช่ isLatest ไม่ต้อง set อะไร
-      if (revision.isLatest) {
-        const previousRevision = await this.revisionRepository.findOne({
-          where: {
-            id: Not(id),
-            developmentPlan: { id: revision.developmentPlan.id },
-            revisionType: { id: revision.revisionType.id },
-          },
-          order: { createdAt: 'DESC' },
-        });
-        if (previousRevision) {
-          await this.revisionRepository.update(
-            { id: previousRevision.id },
-            { isLatest: true },
-          );
+        // Wave 110 W110-BE-01 — orphan-cleanup auto-cascade. Runs
+        // BEFORE the softRemove flips deletedAt so the cascade can
+        // freely materialize the candidate set via the live FK. If the
+        // cascade throws (e.g. ORPHAN_CASCADE_HAS_LIVE_DESCENDANT),
+        // the transaction rolls back and the book stays alive.
+        await this.orphanCleanupService.cascadeOnBookCancel(
+          revision,
+          'REVISION',
+          manager,
+          userId,
+        );
+
+        // ถ้าที่ลบเป็น isLatest ให้ตั้งอันก่อนหน้า (จัดกลุ่ม revisionType เดียวกัน เรียงตามวันที่ เอาอันที่ล่าสุด) เป็น isLatest
+        // ถ้าไม่ใช่ isLatest ไม่ต้อง set อะไร
+        const revisionRepoTx = manager.getRepository(DevelopmentPlanRevision);
+        const workHistoryRepoTx = manager.getRepository(WorkHistory);
+        if (revision.isLatest) {
+          const previousRevision = await revisionRepoTx.findOne({
+            where: {
+              id: Not(id),
+              developmentPlan: { id: revision.developmentPlan.id },
+              revisionType: { id: revision.revisionType.id },
+            },
+            order: { createdAt: 'DESC' },
+          });
+          if (previousRevision) {
+            await revisionRepoTx.update(
+              { id: previousRevision.id },
+              { isLatest: true },
+            );
+          }
+          revision.isLatest = false;
         }
-        revision.isLatest = false;
-      }
 
-      // Set deletedBy (ผู้ลบ)
-      const workHistory = await this.workHistoryRepository.findOne({
-        where: { user: { id: userId }, workStatus: { name: 'approved' } },
+        // Set deletedBy (ผู้ลบ)
+        const workHistory = await workHistoryRepoTx.findOne({
+          where: { user: { id: userId }, workStatus: { name: 'approved' } },
+        });
+        if (workHistory) {
+          revision.deletedBy = workHistory;
+        }
+
+        await revisionRepoTx.save(revision);
+        await revisionRepoTx.softRemove(revision);
       });
-      if (workHistory) {
-        revision.deletedBy = workHistory;
-      }
-
-      await this.revisionRepository.save(revision);
-      await this.revisionRepository.softRemove(revision);
 
       this.logger.log(`Development plan revision ${id} soft-deleted by user ${userId}`);
+      // Drain any buffered owner notifications post-commit. Failures
+      // are best-effort per §18.7 and §17.2 — they MUST NOT undo the
+      // cascade.
+      try {
+        const buffered =
+          this.orphanCleanupService.consumePendingPgNotifications(id);
+        if (buffered.length > 0) {
+          this.logger.log(
+            `[OrphanCleanup-Notify] DPR ${id} buffered ${buffered.length} PG notifications (no-op for REVISION cancel — RPG cleanup is silent per §18.7)`,
+          );
+        }
+      } catch (notifyErr) {
+        this.logger.warn(
+          `[OrphanCleanup-Notify] DPR ${id} drain failed: ${(notifyErr as Error).message}`,
+        );
+      }
       return {
         message: `DevelopmentPlanRevision with ID ${id} has been soft-removed.`,
       };
@@ -579,18 +620,35 @@ export class DevelopmentPlanRevisionService {
         pageMap,
       });
 
-      // Mark revised projects as booked
-      if (revisedProjectIds.length > 0) {
-        await this.revisedProjectGroupRepository.update(
-          { id: In(revisedProjectIds) },
-          { isBooked: true, bookedAt: new Date() }
+      // Wave 110 W110-BE-01 — finalize cascade. Wrap the booking
+      // mutations in a transaction so the cascade runs in the SAME
+      // EntityManager as the `isBooked=true` writes. Cascade fires
+      // BEFORE the `isBooked=true` flips per CLAUDE.md §18.2 + workflow
+      // doc Trigger Event 2.
+      await this.dataSource.transaction(async (manager) => {
+        await this.orphanCleanupService.cascadeOnBookFinalize(
+          revision,
+          'REVISION',
+          manager,
+          userId,
         );
-      }
 
-      // Ensure DevelopmentPlanRevision is marked as booked
-      if (!revision.isBooked) {
-        await this.revisionRepository.update({ id: developmentPlanRevisionId }, { isBooked: true });
-      }
+        // Mark revised projects as booked
+        if (revisedProjectIds.length > 0) {
+          await manager.getRepository(RevisedProjectGroup).update(
+            { id: In(revisedProjectIds) },
+            { isBooked: true, bookedAt: new Date() }
+          );
+        }
+
+        // Ensure DevelopmentPlanRevision is marked as booked
+        if (!revision.isBooked) {
+          await manager.getRepository(DevelopmentPlanRevision).update(
+            { id: developmentPlanRevisionId },
+            { isBooked: true },
+          );
+        }
+      });
 
       // Send progress: Completed (100%)
       await this.websocketService.notifyPdfGenerationProgress({
@@ -784,18 +842,32 @@ export class DevelopmentPlanRevisionService {
         pageMap,
       });
 
-      // Mark revised projects as booked
-      if (revisedProjectIds.length > 0) {
-        await this.revisedProjectGroupRepository.update(
-          { id: In(revisedProjectIds) },
-          { isBooked: true, bookedAt: new Date() }
+      // Wave 110 W110-BE-01 — finalize cascade for change-revision
+      // (mirror of the edit-revision finalize). CLAUDE.md §18.2.1.
+      await this.dataSource.transaction(async (manager) => {
+        await this.orphanCleanupService.cascadeOnBookFinalize(
+          revision,
+          'REVISION',
+          manager,
+          userId,
         );
-      }
 
-      // Ensure DevelopmentPlanRevision is marked as booked
-      if (!revision.isBooked) {
-        await this.revisionRepository.update({ id: developmentPlanRevisionId }, { isBooked: true });
-      }
+        // Mark revised projects as booked
+        if (revisedProjectIds.length > 0) {
+          await manager.getRepository(RevisedProjectGroup).update(
+            { id: In(revisedProjectIds) },
+            { isBooked: true, bookedAt: new Date() }
+          );
+        }
+
+        // Ensure DevelopmentPlanRevision is marked as booked
+        if (!revision.isBooked) {
+          await manager.getRepository(DevelopmentPlanRevision).update(
+            { id: developmentPlanRevisionId },
+            { isBooked: true },
+          );
+        }
+      });
 
       // Send progress: Completed (100%)
       await this.websocketService.notifyPdfGenerationProgress({

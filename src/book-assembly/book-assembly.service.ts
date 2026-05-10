@@ -54,6 +54,7 @@ import {
   BOOK_HAS_NEWER_REVISION,
 } from 'src/common/book-lock/book-lock.service';
 import { STATUS_NAMES } from '../common/status-names';
+import { OrphanCleanupService } from 'src/orphan-cleanup/orphan-cleanup.service';
 
 /** Roles permitted to perform assembly write actions (Spec Section 10.1) */
 const ADMIN_ROLES = ['admin', 'super-admin'];
@@ -117,6 +118,7 @@ export class BookAssemblyService {
     private readonly fileService: BookAssemblyFileService,
     private readonly dataSource: DataSource,
     private readonly bookLockService: BookLockService,
+    private readonly orphanCleanupService: OrphanCleanupService,
   ) {}
 
   // ===========================================================================
@@ -971,6 +973,37 @@ export class BookAssemblyService {
           throw new InternalServerErrorException(
             'ไม่พบข้อมูล pageMap สำหรับการรวมเล่ม กรุณาสร้างส่วนที่ 3 ใหม่',
           );
+        }
+
+        // Wave 110 W110-BE-01 — orphan-cleanup auto-cascade. Runs
+        // BEFORE the `isBooked = true` writes below so that any
+        // non-Approved/Ready/Rejected child gets reset to Ready (PG) or
+        // soft-deleted (RPG) within the same transaction. CLAUDE.md
+        // §18.2.1 trigger surface: book-assembly Part 3 finalize.
+        if (sourceType === BookAssemblySourceType.MAIN_PLAN) {
+          const plan = await manager
+            .getRepository(DevelopmentPlan)
+            .findOne({ where: { id: sourceId } });
+          if (plan) {
+            await this.orphanCleanupService.cascadeOnBookFinalize(
+              plan,
+              'PLAN',
+              manager,
+              userId,
+            );
+          }
+        } else {
+          const dpr = await manager
+            .getRepository(DevelopmentPlanRevision)
+            .findOne({ where: { id: sourceId } });
+          if (dpr) {
+            await this.orphanCleanupService.cascadeOnBookFinalize(
+              dpr,
+              'REVISION',
+              manager,
+              userId,
+            );
+          }
         }
 
         // 5. Update project booking state — Fix D1: assign pageNumber per project

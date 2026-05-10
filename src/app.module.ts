@@ -185,6 +185,10 @@ import { PresenceModule } from './presence/presence.module';
 import { SystemUsageModule } from './system-usage/system-usage.module';
 import { SystemUsageDailyRollup } from './system-usage/entities/system-usage-daily-rollup.entity';
 import { StatsAccessLog } from './system-usage/entities/stats-access-log.entity';
+// Wave 110 W110-BE-01 — orphan-cleanup auto-cascade module. Exports
+// `OrphanCleanupService` consumed by DPR / Plan / Supplement softRemove
+// + book-assembly + pdf finalize sites. CLAUDE.md §18 + workflow doc.
+import { OrphanCleanupModule } from './orphan-cleanup/orphan-cleanup.module';
 
 
 @Module({
@@ -361,6 +365,12 @@ import { StatsAccessLog } from './system-usage/entities/stats-access-log.entity'
     AttachmentRevisedProjectGroupsModule,
     AdminDocumentAnalysisModule,
     BookAssemblyModule,
+    // Wave 110 W110-BE-01 — must be imported BEFORE the modules that
+    // wire its service into their softRemove / finalize sites. Order
+    // here is otherwise irrelevant because the service has no
+    // module-level cyclical dependency (it only depends on
+    // LineageLockModule + TypeORM repos).
+    OrphanCleanupModule,
     DevelopmentIssueModule,
     AiExecutiveChatModule,
     // PRIV-W44-01 — global LLM client (must import before any AI

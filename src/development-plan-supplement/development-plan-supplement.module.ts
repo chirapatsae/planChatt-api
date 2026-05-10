@@ -7,6 +7,7 @@ import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { UsersModule } from 'src/users/users.module';
 import { BookLockModule } from 'src/common/book-lock/book-lock.module';
+import { OrphanCleanupModule } from 'src/orphan-cleanup/orphan-cleanup.module';
 
 @Module({
   imports: [
@@ -17,6 +18,9 @@ import { BookLockModule } from 'src/common/book-lock/book-lock.module';
     ]),
     UsersModule,
     BookLockModule,
+    // Wave 110 W110-BE-01 — supplement softRemove invokes the
+    // orphan-cleanup cascade (CLAUDE.md §18.2.1 SUPPLEMENT trigger).
+    OrphanCleanupModule,
   ],
   controllers: [DevelopmentPlanSupplementController],
   providers: [DevelopmentPlanSupplementService],

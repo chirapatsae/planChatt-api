@@ -15,9 +15,29 @@ import { PdfOutAuthorityDocument } from './entities/pdf-out-authority-document.e
 import { PdfRevisionEditApprovedDocument } from './entities/pdf-revision-edit-approved-document.entity';
 import { PdfRevisionChangeApprovedDocument } from './entities/pdf-revision-change-approved-document.entity';
 import { User } from 'src/users/entities/user.entity';
+import { OrphanCleanupModule } from 'src/orphan-cleanup/orphan-cleanup.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([DevelopmentPlan, DevelopmentPlanRevision, ProjectGroup, RevisedProjectGroup, PdfDevelopmentPlanDraftAgencyDocument, PdfRevisionEditDraftDocument, PdfRevisionChangeDraftDocument, PdfDevelopmentPlanApprovedDocument, PdfDevelopmentPlanDraftCoordinateDocument, PdfOutAuthorityDocument, PdfRevisionEditApprovedDocument, PdfRevisionChangeApprovedDocument, User])],
+  imports: [
+    TypeOrmModule.forFeature([
+      DevelopmentPlan,
+      DevelopmentPlanRevision,
+      ProjectGroup,
+      RevisedProjectGroup,
+      PdfDevelopmentPlanDraftAgencyDocument,
+      PdfRevisionEditDraftDocument,
+      PdfRevisionChangeDraftDocument,
+      PdfDevelopmentPlanApprovedDocument,
+      PdfDevelopmentPlanDraftCoordinateDocument,
+      PdfOutAuthorityDocument,
+      PdfRevisionEditApprovedDocument,
+      PdfRevisionChangeApprovedDocument,
+      User,
+    ]),
+    // Wave 110 W110-BE-01 — pdf finalize sites (out-authority + approved
+    // plan) invoke orphan-cleanup cascade. CLAUDE.md §18.2.1.
+    OrphanCleanupModule,
+  ],
   controllers: [PdfController],
   providers: [PdfService],
   exports: [PdfService],

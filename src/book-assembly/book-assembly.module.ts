@@ -21,6 +21,7 @@ import { PdfModule } from 'src/pdf/pdf.module';
 import { UsersModule } from 'src/users/users.module';
 import { WebsocketModule } from 'src/websocket/websocket.module';
 import { BookLockModule } from 'src/common/book-lock/book-lock.module';
+import { OrphanCleanupModule } from 'src/orphan-cleanup/orphan-cleanup.module';
 
 @Module({
   imports: [
@@ -40,6 +41,9 @@ import { BookLockModule } from 'src/common/book-lock/book-lock.module';
     UsersModule,
     WebsocketModule,
     BookLockModule,
+    // Wave 110 W110-BE-01 — Part 3 finalize invokes orphan-cleanup
+    // cascade (CLAUDE.md §18.2.1 PLAN finalize trigger surface).
+    OrphanCleanupModule,
   ],
   controllers: [BookAssemblyController],
   providers: [BookAssemblyService, BookAssemblyFileService],
