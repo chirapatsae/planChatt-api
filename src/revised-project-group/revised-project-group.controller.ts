@@ -285,6 +285,44 @@ export class RevisedProjectGroupController {
   }
 
   /**
+   * ดึงโครงการประเภท "แก้ไข" ที่มีสถานะ "Pull_Back"
+   * (W112 — owner-triggered Pull Back list, read-only)
+   * @param developmentPlanId - ID ของ DevelopmentPlan (optional)
+   * @param developmentPlanRevisionId - ID ของ DevelopmentPlanRevision (optional)
+   * @param countOnly - ถ้าเป็น true จะ return จำนวนโครงการแทน array (optional)
+   */
+  @Get('tracking/edit/pull-back')
+  async findEditPullBackProjects(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('developmentPlanId', ParseUUIDPipe) developmentPlanId?: string,
+    @Query('developmentPlanRevisionId', ParseUUIDPipe) developmentPlanRevisionId?: string,
+    @Query('countOnly') countOnly?: string,
+  ) {
+    const shouldCount = countOnly === 'true';
+    const userId = req.user?.userId;
+    this.logger.log(
+      `Fetching ${shouldCount ? 'count of ' : ''}edit Pull_Back projects - developmentPlanId: ${developmentPlanId}, developmentPlanRevisionId: ${developmentPlanRevisionId}, userId: ${userId}`,
+    );
+
+    const result = await this.revisedProjectGroupService.findPullBackProjects(
+      developmentPlanId,
+      developmentPlanRevisionId,
+      shouldCount,
+      userId,
+    );
+
+    if (shouldCount) {
+      return { count: result as number };
+    }
+
+    // CLAUDE.md §14 — propagate the batched `hasDescendant` decoration through
+    // the unified DTO so the FE pull-back page can render LockBadge.
+    return (result as any[]).map((r) =>
+      UnifiedProjectMapper.fromRevisedProjectGroup(r, r.hasDescendant === true),
+    );
+  }
+
+  /**
    * ดึงโครงการประเภท "แก้ไข" ที่มีสถานะ "Pending Approval"
    * @param developmentPlanId - ID ของ DevelopmentPlan (optional)
    * @param developmentPlanRevisionId - ID ของ DevelopmentPlanRevision (optional)
@@ -406,6 +444,44 @@ export class RevisedProjectGroupController {
     }
 
     return result;
+  }
+
+  /**
+   * ดึงโครงการประเภท "เปลี่ยนแปลง" ที่มีสถานะ "Pull_Back"
+   * (W112 — owner-triggered Pull Back list, read-only)
+   * @param developmentPlanId - ID ของ DevelopmentPlan (optional)
+   * @param developmentPlanRevisionId - ID ของ DevelopmentPlanRevision (optional)
+   * @param countOnly - ถ้าเป็น true จะ return จำนวนโครงการแทน array (optional)
+   */
+  @Get('tracking/change/pull-back')
+  async findChangePullBackProjects(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('developmentPlanId', ParseUUIDPipe) developmentPlanId?: string,
+    @Query('developmentPlanRevisionId', ParseUUIDPipe) developmentPlanRevisionId?: string,
+    @Query('countOnly') countOnly?: string,
+  ) {
+    const shouldCount = countOnly === 'true';
+    const userId = req.user?.userId;
+    this.logger.log(
+      `Fetching ${shouldCount ? 'count of ' : ''}change Pull_Back projects - developmentPlanId: ${developmentPlanId}, developmentPlanRevisionId: ${developmentPlanRevisionId}, userId: ${userId}`,
+    );
+
+    const result = await this.revisedProjectGroupService.findPullBackProjects(
+      developmentPlanId,
+      developmentPlanRevisionId,
+      shouldCount,
+      userId,
+    );
+
+    if (shouldCount) {
+      return { count: result as number };
+    }
+
+    // CLAUDE.md §14 — propagate the batched `hasDescendant` decoration through
+    // the unified DTO so the FE pull-back page can render LockBadge.
+    return (result as any[]).map((r) =>
+      UnifiedProjectMapper.fromRevisedProjectGroup(r, r.hasDescendant === true),
+    );
   }
 
   /**

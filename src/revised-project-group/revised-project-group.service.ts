@@ -1155,6 +1155,135 @@ export class RevisedProjectGroupService {
       handleException(this.logger, error);
     }
   }
+
+  /**
+   * ดึงโครงการ RevisedProjectGroup ที่มี latest TrackingStatus =
+   * 'Pull_Back'. ใช้สำหรับหน้า "ดึงกลับ" ในเมนู "แก้ไข เปลี่ยนแปลง".
+   *
+   * Mirror ของ findRevisionProjects:
+   *   - join เหมือนกัน (createdBy/user, amphoe, responsibleAgency, ...)
+   *   - กรองด้วย status.name = 'Pull_Back'
+   *   - กรองด้วย dpr.isLatest = true, dpr.isBooked = false
+   *   - role 'user' กรองเพิ่ม responsibleAgency.id = workHistory.governmentAgencies.id
+   *   - mask createdBy.user (W100 PR2)
+   *   - decorate hasDescendant (CLAUDE.md §14)
+   *
+   * เปิดให้ทั้ง edit-revision และ change-revision เพราะ caller จะ
+   * ส่ง developmentPlanRevisionId ที่ตรงกับ revision-type ที่ต้องการ
+   * (เหมือน tracking/edit/revision ที่ใช้ทั้งสองฝั่ง — ดู
+   * useSidebarCounts.tsx:160-164).
+   *
+   * NOTE (CLAUDE.md GLOBAL PULL BACK / §12 Audit): read-only — ไม่สร้าง
+   * TrackingStatus, ไม่แตะ responsibleAgency (§7.3), ไม่สร้าง version
+   * ใหม่ (§11). การ transition เข้าสู่สถานะ Pull_Back ทำที่
+   * tracking-status.service.ts → createByRevisedProjectGroup
+   * (lines 1602-1775) ซึ่ง validate ครบตามกฎแล้ว — endpoint นี้แค่อ่าน
+   * แถวที่ latest status เป็น Pull_Back มาแสดง.
+   */
+  async findPullBackProjects(
+    developmentPlanId?: string,
+    developmentPlanRevisionId?: string,
+    countOnly?: boolean,
+    userId?: string,
+  ): Promise<RevisedProjectGroup[] | number> {
+    try {
+      const workHistory = await this.workHistoryRepo.findOne({
+        where: { user: { id: userId }, isCurrent: true },
+        relations: [
+          'user',
+          'role',
+          'workStatus',
+          'localAdministrativeOrganization',
+          'governmentAgencies',
+        ],
+      });
+      if (!workHistory) throw new NotFoundException('ไม่พบข้อมูลผู้ใช้งาน');
+      const userRole = workHistory.role.name;
+      if (userRole !== 'user' && userRole !== 'staff' && userRole !== 'admin' && userRole !== 'super-admin' && userRole !== 'c-level') {
+        throw new UnauthorizedException('คุณไม่มีสิทธิในการเข้าถึงข้อมูล');
+      }
+      if (workHistory.localAdministrativeOrganization?.id !== '3001027') return []
+
+      const query = this.revisedProjectGroupRepo
+        .createQueryBuilder('rpg')
+        .leftJoinAndSelect('rpg.developmentPlanRevision', 'dpr')
+        .leftJoinAndSelect('dpr.revisionType', 'rt')
+        .leftJoinAndSelect('dpr.developmentPlan', 'dp')
+        .leftJoinAndSelect('rpg.projectGroup', 'pg')
+        .leftJoinAndSelect('rpg.strategy', 'strategy')
+        .leftJoinAndSelect('rpg.tactic', 'tactic')
+        .leftJoinAndSelect('rpg.plan', 'plan')
+        .leftJoinAndSelect('rpg.developmentPlan', 'developmentPlan')
+        .leftJoinAndSelect('rpg.createdBy', 'createdBy')
+        .leftJoinAndSelect('createdBy.user', 'createdByUser')
+        .leftJoinAndSelect('rpg.amphoe', 'amphoe')
+        .leftJoinAndSelect('rpg.localAdministrativeOrganization', 'localAdministrativeOrganization')
+        .leftJoinAndSelect('rpg.originAgencyId', 'originAgency')
+        .leftJoinAndSelect('rpg.responsibleAgency', 'responsibleAgency')
+        .leftJoinAndSelect('rpg.budgets', 'budgets')
+        .leftJoinAndSelect('rpg.trackingStatus', 'trackingStatus')
+        .leftJoinAndSelect('rpg.attachments', 'attachments')
+        .leftJoinAndSelect('trackingStatus.statusId', 'status')
+        .leftJoinAndSelect('trackingStatus.createdBy', 'trackingStatusCreatedBy')
+        .leftJoinAndSelect('trackingStatusCreatedBy.amphoe', 'trackingStatusCreatedByAmphoe')
+        .leftJoinAndSelect('trackingStatusCreatedBy.localAdministrativeOrganization', 'trackingStatusCreatedByLocalAdministrativeOrganization')
+        .leftJoinAndSelect('trackingStatusCreatedBy.user', 'trackingStatusCreatedByUser')
+        .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+        .andWhere('status.name = :statusName', { statusName: 'Pull_Back' })
+        .andWhere('dpr.isLatest = :isLatestRevision', { isLatestRevision: true })
+        .andWhere('dpr.isBooked = :isBooked', { isBooked: false });
+
+      // Filter by developmentPlanId if provided
+      if (developmentPlanId) {
+        query.andWhere('dp.id = :developmentPlanId', { developmentPlanId });
+      }
+
+      // Filter by developmentPlanRevisionId if provided
+      if (developmentPlanRevisionId) {
+        query.andWhere('dpr.id = :developmentPlanRevisionId', {
+          developmentPlanRevisionId,
+        });
+      }
+
+      // 2026-05-10 (W112 follow-up) — STRICT OWNER scope.
+      // Per CLAUDE.md GLOBAL PULL BACK RULE + §4 Ownership Model, only
+      // the project's owner (the work-history that created the row) can
+      // see + act on a Pull_Back row, because the Pull_Back transition
+      // is owner-triggered and the resubmit must come from the same
+      // owner. We therefore filter by `createdBy.id = workHistory.id`
+      // for ALL roles (overriding the agency-scoped filter inherited
+      // from the sibling `findRevisionProjects`).
+      query.andWhere('createdBy.id = :ownerWorkHistoryId', {
+        ownerWorkHistoryId: workHistory.id,
+      });
+
+      if (countOnly) {
+        const count = await query.getCount();
+        return count;
+      }
+
+      const results = await query.orderBy('rpg.created_at', 'DESC').getMany();
+
+      // W100 PR2 — Pattern 3 (mask). See §17.2 / §17.3.
+      await this.maskCreatedByUser(results);
+
+      // Batch descendant check (avoid N+1)
+      if (results.length > 0) {
+        const ids = results.map((r) => r.id);
+        const rows = await this.revisedProjectGroupRepo
+          .createQueryBuilder('rpg')
+          .select('rpg.prevProjectId', 'parentId')
+          .where('rpg.prevProjectId IN (:...ids)', { ids })
+          .getRawMany();
+        const descendantSet = new Set(rows.map((r) => r.parentId));
+        return results.map((r) => Object.assign(r, { hasDescendant: descendantSet.has(r.id) }));
+      }
+
+      return results;
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
   /**
    * ดึงโครงการประเภท "แก้ไข" ที่มีสถานะ "Pending Approval"
    * @param developmentPlanId - ID ของ DevelopmentPlan (optional)
