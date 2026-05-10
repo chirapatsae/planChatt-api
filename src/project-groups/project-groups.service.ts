@@ -2727,6 +2727,9 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('pg.strategy', 'strategy')
       .leftJoinAndSelect('pg.tactic', 'tactic')
       .leftJoinAndSelect('pg.plan', 'plan')
+      // CLAUDE.md §16.5 — eager-load ISSUE_BASED classification (sibling
+      // fix to `findOriginalWithoutRevision`).
+      .leftJoinAndSelect('pg.developmentIssue', 'developmentIssue')
       .leftJoinAndSelect('pg.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('pg.createdBy', 'createdBy')
       .leftJoinAndSelect('pg.originAgencyId', 'originAgencyId')
@@ -2767,6 +2770,11 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('pg.strategy', 'strategy')
       .leftJoinAndSelect('pg.tactic', 'tactic')
       .leftJoinAndSelect('pg.plan', 'plan')
+      // CLAUDE.md §16.5 — eager-load `developmentIssue` so the revision
+      // wizard (Step 1 + Step 3) can render the original ISSUE_BASED
+      // classification. Without this join, ISSUE_BASED projects show
+      // an empty "ข้อมูลเดิม" column for ประเด็นการพัฒนา.
+      .leftJoinAndSelect('pg.developmentIssue', 'developmentIssue')
       .leftJoinAndSelect('pg.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('pg.createdBy', 'createdBy')
       .leftJoinAndSelect('pg.originAgencyId', 'originAgencyId')
@@ -2798,6 +2806,8 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('pg.strategy', 'strategy')
       .leftJoinAndSelect('pg.tactic', 'tactic')
       .leftJoinAndSelect('pg.plan', 'plan')
+      // CLAUDE.md §16.5 — eager-load ISSUE_BASED classification.
+      .leftJoinAndSelect('pg.developmentIssue', 'developmentIssue')
       .leftJoinAndSelect('pg.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('pg.createdBy', 'createdBy')
       .leftJoinAndSelect('pg.originAgencyId', 'originAgencyId')
