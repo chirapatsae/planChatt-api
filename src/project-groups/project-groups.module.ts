@@ -21,6 +21,8 @@ import { LineageLockModule } from 'src/common/lineage-lock/lineage-lock.module';
 import { ProjectClassificationModule } from 'src/common/project-classification/project-classification.module';
 import { DevelopmentIssue } from 'src/development-issue/entities/development-issue.entity';
 import { UsersModule } from 'src/users/users.module';
+import { WorkHistoryModule } from 'src/work-history/work-history.module';
+import { BulkUploadModule } from './bulk-upload/bulk-upload.module';
 
 @Module({
   imports: [
@@ -44,9 +46,11 @@ import { UsersModule } from 'src/users/users.module';
     LineageLockModule,
     ProjectClassificationModule,
     UsersModule,
+    WorkHistoryModule,
+    BulkUploadModule,
   ],
   controllers: [ProjectGroupsController],
   providers: [ProjectGroupsService, GeoBoundaryService],
-  exports: [ProjectGroupsService],
+  exports: [ProjectGroupsService, BulkUploadModule],
 })
 export class ProjectGroupsModule {}

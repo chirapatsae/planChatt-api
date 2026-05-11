@@ -150,6 +150,14 @@ import { IssueCriteriaEvidenceCheckService } from './criteria/issue-criteria-evi
     IssueCriteriaGeoCheckService,
     IssueCriteriaEvidenceCheckService,
   ],
-  exports: [AiResultEnvelopeService, CriteriaModule],
+  exports: [
+    AiResultEnvelopeService,
+    CriteriaModule,
+    // W113-BE-BATCH — `PreSubmitSnapshotService` is consumed by
+    // `BulkUploadService` to fire the per-row §17.4 `no-ai-baseline`
+    // snapshot post-commit. Exporting keeps the snapshot write path
+    // single-sourced (no parallel `ai_pre_submit_snapshots` table writer).
+    PreSubmitSnapshotService,
+  ],
 })
 export class AiModule {}

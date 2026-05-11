@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { WorkHistoryService } from './work-history.service';
+import { WorkHistoryLookupService } from './work-history-lookup.service';
 import { WorkHistoryController } from './work-history.controller';
 import { WorkHistory } from './entities/work-history.entity';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -32,7 +33,7 @@ import { RolesGuard } from 'src/auth/roles.guard';
     UsersModule,
   ],
   controllers: [WorkHistoryController],
-  providers: [WorkHistoryService, RolesGuard],
-  exports: [WorkHistoryService],
+  providers: [WorkHistoryService, WorkHistoryLookupService, RolesGuard],
+  exports: [WorkHistoryService, WorkHistoryLookupService],
 })
 export class WorkHistoryModule {}

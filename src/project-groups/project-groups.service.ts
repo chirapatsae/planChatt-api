@@ -41,6 +41,9 @@ import { ProjectClassificationValidator } from 'src/common/project-classificatio
 import { BookFormatResolver } from 'src/common/project-classification/book-format.resolver';
 import { DevelopmentIssue } from 'src/development-issue/entities/development-issue.entity';
 import { ReportFormat } from 'src/development-plan/types/report-format.enum';
+import { WorkHistoryLookupService } from 'src/work-history/work-history-lookup.service';
+import { assertWizardCompleteness as sharedAssertWizardCompleteness } from './util/wizard-completeness.util';
+import { getAgencyData as sharedGetAgencyData } from './util/agency-data.util';
 import {
   ERROR_CODES,
   ERROR_MESSAGES,
@@ -105,6 +108,9 @@ export class ProjectGroupsService {
     private readonly classificationValidator: ProjectClassificationValidator,
     private readonly bookFormatResolver: BookFormatResolver,
     private readonly usersService: UsersService,
+    // W113-BE-VALIDATE — shared WorkHistory lookup so the same code path
+    // is exercised by both single-row create and bulk upload validation.
+    private readonly workHistoryLookup: WorkHistoryLookupService,
   ) { }
 
   /**
@@ -170,50 +176,11 @@ export class ProjectGroupsService {
    * Draft paths MUST NOT call this — drafts are allowed to be partial.
    */
   private assertWizardCompleteness(dto: CreateProjectGroupDto): void {
-    const missingFields: string[] = [];
-
-    // step2 — project details (wizard UI index 2)
-    if (!dto.objective || dto.objective.trim() === '') missingFields.push('step2.objective');
-    if (!dto.goal || dto.goal.trim() === '') missingFields.push('step2.goal');
-    if (!dto.title || dto.title.trim() === '') missingFields.push('step2.title');
-
-    // step1 — coordinates (wizard UI index 1)
-    if (dto.startLat === undefined || dto.startLat === null) missingFields.push('step1.startLat');
-    if (dto.startLng === undefined || dto.startLng === null) missingFields.push('step1.startLng');
-
-    // step0 — classification (wizard UI index 0). Exactly ONE shape must
-    // be populated; the shape invariant is fully enforced later by
-    // `ProjectClassificationValidator`. Here we only verify that the
-    // caller supplied SOMETHING for classification — reporting an empty
-    // step0 as a "missing step" is more user-friendly than a downstream
-    // shape-mismatch error.
-    const hasStrategyTriple = !!dto.strategyId && !!dto.tacticId && !!dto.planId;
-    const hasIssue = !!dto.developmentIssueId;
-    if (!hasStrategyTriple && !hasIssue) missingFields.push('step0.classification');
-
-    // step3 — budget (wizard UI index 3). Empty budget is already caught
-    // by `ArrayMinSize(1)` on the DTO, but defence-in-depth: re-assert.
-    if (!Array.isArray(dto.budget) || dto.budget.length === 0) {
-      missingFields.push('step3.budget');
-    } else {
-      const hasPositive = dto.budget.some(
-        (b) => b && typeof b.quantity === 'number' && b.quantity > 0,
-      );
-      if (!hasPositive) missingFields.push('step3.budget');
-    }
-
-    // step4 — expected (always required). `indicator` is NOT listed
-    // here because §16.5 makes it conditional on the plan's
-    // reportFormat; the shape validator reports that gap downstream.
-    if (!dto.expected || dto.expected.trim() === '') missingFields.push('step4.expected');
-
-    if (missingFields.length > 0) {
-      throw new BadRequestException({
-        code: 'VALIDATION_FAILED',
-        message: 'Project submission is incomplete',
-        missingFields,
-      });
-    }
+    // W113-BE-VALIDATE — delegate to the shared pure-function form so the
+    // bulk-upload validator can run the exact same gate without depending
+    // on this god-service. Behavior preserved verbatim — same error
+    // shape, same step keys, same throw type.
+    sharedAssertWizardCompleteness(dto);
   }
 
   /**
@@ -5507,21 +5474,17 @@ export class ProjectGroupsService {
   }
 
   // ───────────────────── Helpers ─────────────────────
+  // W113-BE-VALIDATE — `getWorkHistory` and `assertWorkStatusApproved`
+  // delegate to `WorkHistoryLookupService` so the bulk-upload validator
+  // (and any future caller) can resolve the same WorkHistory + workStatus
+  // gate without depending on this service. Visibility stays `private`
+  // for single-row callers — call-sites remain unchanged.
   private async getWorkHistory(manager: EntityManager, userId: string) {
-    const workHistory = await manager.findOne(WorkHistory, {
-      where: { user: { id: userId }, isCurrent: true },
-      relations: ['user', 'localAdministrativeOrganization', 'governmentAgencies', 'amphoe', 'workStatus', 'role'],
-    });
-    if (!workHistory) {
-      throw new NotFoundException('Work history ID not found');
-    }
-    return workHistory;
+    return this.workHistoryLookup.getCurrent(manager, userId);
   }
 
   private assertWorkStatusApproved(workHistory: WorkHistory): void {
-    if (workHistory.workStatus?.name !== 'approved') {
-      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)');
-    }
+    this.workHistoryLookup.assertWorkStatusApproved(workHistory);
   }
 
   /**
@@ -5529,8 +5492,12 @@ export class ProjectGroupsService {
    * Returns a Thai warning string when any supplied coordinate falls outside the
    * user's amphoe boundary, or null when no warning is needed.
    * This check is NEVER blocking — callers must treat the result as advisory only.
+   *
+   * Visibility: `protected` so the bulk-upload validator (which extends/uses
+   * this service via DI) can re-use the same logic for per-row geo warnings
+   * (CLAUDE.md §13.5 / §19 advisory rule).
    */
-  private checkGeoWarning(
+  protected checkGeoWarning(
     workHistory: WorkHistory,
     coords: { startLat?: number | null; startLng?: number | null; endLat?: number | null; endLng?: number | null },
   ): string | null {
@@ -5588,7 +5555,10 @@ export class ProjectGroupsService {
     }
   }
 
-  private async ensureNoDuplicateTitle(manager: EntityManager, title: string, workHistoryId: string, id?: string) {
+  // W113-BE-VALIDATE — visibility bumped to `protected` so the bulk-upload
+  // validator can call the same per-row duplicate-title check inside the
+  // bulk transaction. Signature preserved verbatim.
+  protected async ensureNoDuplicateTitle(manager: EntityManager, title: string, workHistoryId: string, id?: string) {
     const whereCondition: any = {
       title,
       createdBy: { id: workHistoryId },
@@ -5651,25 +5621,11 @@ export class ProjectGroupsService {
   }
 
   private getAgencyData(workHistory: WorkHistory): Partial<ProjectGroup> {
-    // Agency: amphoe.id = 3001 AND lao.id = 3001027 (CLAUDE.md §1)
-    if (
-      workHistory.amphoe?.id === '3001' &&
-      workHistory.governmentAgencies &&
-      workHistory.localAdministrativeOrganization?.id === '3001027'
-    ) {
-      return {
-        responsibleAgency: { id: workHistory.governmentAgencies.id } as any,
-      };
-    }
-
-    // LAO: all others with a valid localAdministrativeOrganization
-    if (workHistory.localAdministrativeOrganization && workHistory.localAdministrativeOrganization.id !== '3001027') {
-      return {
-        originAgencyId: { id: workHistory.localAdministrativeOrganization.id } as any,
-      };
-    }
-
-    throw new BadRequestException('ไม่พบข้อมูลหน่วยงานที่รับผิดชอบหรือหน่วยงานต้นสังกัด');
+    // W113-BE-VALIDATE — delegate to the shared pure-function form so the
+    // bulk-upload commit path can derive the same `responsibleAgency` /
+    // `originAgencyId` field for every row without depending on this
+    // service. Behavior preserved verbatim.
+    return sharedGetAgencyData(workHistory);
   }
 
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
