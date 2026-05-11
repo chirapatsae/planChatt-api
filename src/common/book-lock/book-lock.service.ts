@@ -100,6 +100,7 @@ export class BookLockService {
       ctx.selfId,
       target,
       manager,
+      ctx.ownRevisionTypeId ?? null,
     );
   }
 
@@ -180,6 +181,16 @@ export class BookLockService {
     developmentPlanId: string;
     createdAt: Date;
     selfId: string;
+    /**
+     * Only populated for `development_plan_revision` targets. Used by
+     * `hasStrictlyNewerSibling` to partition the revision-vs-revision
+     * scan by `revisionType.id` so that edit-vs-change rounds are
+     * treated as parallel siblings that do NOT lock each other
+     * (W116-BE-01 / CLAUDE.md §15.2 partitioned-sibling refinement).
+     * Null for supplement targets — supplements remain unified
+     * cross-type per §15.2 unchanged behavior.
+     */
+    ownRevisionTypeId?: string | null;
   } | null> {
     if (target === 'development_plan_revision') {
       // TypeORM auto-applies `deleted_at IS NULL` for @DeleteDateColumn
@@ -188,17 +199,25 @@ export class BookLockService {
       // the plan row itself is never inspected for soft-delete state
       // because the invariant is "does this revision have a newer
       // sibling in the plan", not "is the plan alive".
+      //
+      // We also pull `revisionType.id` so that downstream sibling
+      // detection can partition revision-vs-revision by type — edit
+      // rounds and change rounds are PARALLEL siblings per W116-BE-01,
+      // even though supplement-vs-revision remains cross-type.
       const row = await manager
         .getRepository(DevelopmentPlanRevision)
         .createQueryBuilder('r')
         .select(['r.id', 'r.createdAt'])
         .leftJoin('r.developmentPlan', 'plan')
         .addSelect('plan.id', 'planId')
+        .leftJoin('r.revisionType', 'rtype')
+        .addSelect('rtype.id', 'revisionTypeId')
         .where('r.id = :id', { id })
         .getRawOne<{
           r_id: string;
           r_created_at: Date;
           planId: string | null;
+          revisionTypeId: string | null;
         }>();
 
       if (!row || !row.planId) return null;
@@ -206,6 +225,7 @@ export class BookLockService {
         developmentPlanId: row.planId,
         createdAt: row.r_created_at,
         selfId: row.r_id,
+        ownRevisionTypeId: row.revisionTypeId ?? null,
       };
     }
 
@@ -252,39 +272,60 @@ export class BookLockService {
     selfId: string,
     target: Exclude<BookLockTarget, 'development_plan'>,
     manager: EntityManager,
+    ownRevisionTypeId: string | null,
   ): Promise<boolean> {
     // Scan development_plan_revision first — most plans have more
     // revisions than supplements in practice, so this short-circuits
     // the common case faster. TypeORM auto-applies the soft-delete
     // filter (deleted_at IS NULL) on the primary alias of a
     // @DeleteDateColumn entity, so we do not add it explicitly here.
-    const revisionQb = manager
-      .getRepository(DevelopmentPlanRevision)
-      .createQueryBuilder('r')
-      .select('r.id')
-      .leftJoin('r.developmentPlan', 'plan')
-      .where('plan.id = :planId', { planId })
-      .andWhere('r.createdAt > :ownCreatedAt', { ownCreatedAt });
-
+    //
+    // W116-BE-02 (forward-compat for supplement module) — all child
+    // categories under a plan are now PARALLEL SIBLINGS:
+    //   - Revision-vs-revision: partitioned by `revisionType.id`
+    //     (edit / change / future types are independent timelines)
+    //   - Supplement-vs-supplement: same-category timeline
+    //   - Revision-vs-supplement: NO cross-category lock either
+    //     direction
+    // Project-level deduplication is enforced by
+    // `assertProjectsNotInSiblingBook` at the book-assembly layer
+    // against COMPLETED sibling versions, NOT via book-lineage lock.
+    //
+    // Implementation: when target is a revision, scan only revisions
+    // of the same revisionType; when target is a supplement, scan
+    // only supplements. Cross-category scans are dropped entirely.
     if (target === 'development_plan_revision') {
-      revisionQb.andWhere('r.id <> :selfId', { selfId });
+      const revisionQb = manager
+        .getRepository(DevelopmentPlanRevision)
+        .createQueryBuilder('r')
+        .select('r.id')
+        .leftJoin('r.developmentPlan', 'plan')
+        .leftJoin('r.revisionType', 'rtype')
+        .where('plan.id = :planId', { planId })
+        .andWhere('r.createdAt > :ownCreatedAt', { ownCreatedAt })
+        .andWhere('r.id <> :selfId', { selfId });
+      // Type partitioning is generic — filter by whatever
+      // revisionType the target carries. A NULL FK (should never
+      // happen — column is non-nullable) falls through to the
+      // pre-partition cross-type scan so §15 still holds.
+      if (ownRevisionTypeId) {
+        revisionQb.andWhere('rtype.id = :ownRevisionTypeId', {
+          ownRevisionTypeId,
+        });
+      }
+      const newerRevision = await revisionQb.limit(1).getRawOne();
+      return !!newerRevision;
     }
 
-    const newerRevision = await revisionQb.limit(1).getRawOne();
-    if (newerRevision) return true;
-
+    // target === 'development_plan_supplement'
     const supplementQb = manager
       .getRepository(DevelopmentPlanSupplement)
       .createQueryBuilder('s')
       .select('s.id')
       .leftJoin('s.developmentPlan', 'plan')
       .where('plan.id = :planId', { planId })
-      .andWhere('s.createdAt > :ownCreatedAt', { ownCreatedAt });
-
-    if (target === 'development_plan_supplement') {
-      supplementQb.andWhere('s.id <> :selfId', { selfId });
-    }
-
+      .andWhere('s.createdAt > :ownCreatedAt', { ownCreatedAt })
+      .andWhere('s.id <> :selfId', { selfId });
     const newerSupplement = await supplementQb.limit(1).getRawOne();
     return !!newerSupplement;
   }

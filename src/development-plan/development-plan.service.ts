@@ -1140,12 +1140,11 @@ export class DevelopmentPlanService {
           (s) => !s.deletedAt,
         );
 
-      const childTimestamps: number[] = [
-        ...revisions.map((r) => new Date(r.createdAt).getTime()),
-        ...supplements.map((s) => new Date(s.createdAt).getTime()),
-      ];
-
-      const planHasAnyChild = childTimestamps.length > 0;
+      // W116-BE-01 — Plan-level lock is UNCHANGED: a plan is locked as
+      // soon as it has ANY non-soft-deleted child (revision OR
+      // supplement, ANY revisionType). §15.4 plan blocked-operation
+      // semantics are preserved.
+      const planHasAnyChild = revisions.length > 0 || supplements.length > 0;
       // `hasNewerRevision` is declared as a plain field on the entity
       // classes (see `DevelopmentPlan.hasNewerRevision` and siblings)
       // precisely so we can assign it without an `as any` cast and so
@@ -1155,15 +1154,50 @@ export class DevelopmentPlanService {
 
       if (!planHasAnyChild) continue;
 
-      const maxChildTs = Math.max(...childTimestamps);
+      // W116-BE-02 — All child categories under a plan are PARALLEL
+      // siblings. Revision-vs-revision lock = same revisionType only.
+      // Supplement-vs-supplement lock = same-category timeline only.
+      // Revision↔supplement = NO cross-category lock either direction.
+      // Mirrors `BookLockService.hasStrictlyNewerSibling` exactly so
+      // service-side guards and read-side flags agree.
 
-      for (const revision of revisions) {
-        const ts = new Date(revision.createdAt).getTime();
-        revision.hasNewerRevision = ts < maxChildTs;
+      // Bucket revisions by revisionType.id (parallel timelines per
+      // type). `__no_type__` defends a (theoretically impossible)
+      // missing FK by collapsing into a shared bucket.
+      const revisionsByType: Map<string, DevelopmentPlanRevision[]> = new Map();
+      for (const r of revisions) {
+        const key = r.revisionType?.id ?? '__no_type__';
+        const bucket = revisionsByType.get(key);
+        if (bucket) bucket.push(r);
+        else revisionsByType.set(key, [r]);
       }
+
+      for (const [, bucket] of revisionsByType) {
+        const maxSameTypeTs = Math.max(
+          ...bucket.map((r) => new Date(r.createdAt).getTime()),
+        );
+        for (const revision of bucket) {
+          const ts = new Date(revision.createdAt).getTime();
+          // Locked iff a strictly-newer SAME-TYPE revision exists in
+          // the same bucket. Supplements are now parallel siblings and
+          // never lock revisions.
+          revision.hasNewerRevision = ts < maxSameTypeTs;
+        }
+      }
+
+      // Supplement-vs-supplement timeline — newer supplement under the
+      // same plan locks older supplement. Revisions never lock
+      // supplements anymore (parallel siblings).
+      const supplementTimestamps: number[] = supplements.map((s) =>
+        new Date(s.createdAt).getTime(),
+      );
+      const maxSupplementTs =
+        supplementTimestamps.length > 0
+          ? Math.max(...supplementTimestamps)
+          : -Infinity;
       for (const supplement of supplements) {
         const ts = new Date(supplement.createdAt).getTime();
-        supplement.hasNewerRevision = ts < maxChildTs;
+        supplement.hasNewerRevision = ts < maxSupplementTs;
       }
     }
   }
