@@ -163,7 +163,10 @@ export class PdfService {
     throw new Error(`Font file not found for ${fileName}`);
   }
 
-  private getPdfFonts() {
+  // SUPP_PRINT_BE_01b — promoted from `private` to `public`. Font
+  // resolution is shared between main-plan, revision, and supplement
+  // PDF renderers.
+  public getPdfFonts() {
     return {
       THSarabun: {
         normal: this.resolveFontPath('THSarabun.ttf'),
@@ -180,7 +183,11 @@ export class PdfService {
     };
   }
 
-  private newWord(text: string) {
+  // SUPP_PRINT_BE_01b \u2014 promoted from `private` to `public` so
+  // `SupplementPdfService` can reuse the word-cutter without
+  // duplicating Wordcut wiring. This is a pure formatting helper with
+  // no state; safe to expose.
+  public newWord(text: string) {
     const parts = Wordcut.cut(text || '')
       .split('|')
       .map((data: any) => {
@@ -191,7 +198,10 @@ export class PdfService {
     return parts;
   }
 
-  private async createPdfBuffer(docDefinition: TDocumentDefinitions, fonts: any): Promise<Buffer> {
+  // SUPP_PRINT_BE_01b \u2014 promoted from `private` to `public`. Pure
+  // font-path resolver consumed by `SupplementPdfService.createPdfBuffer`
+  // (via `getPdfFonts`).
+  public async createPdfBuffer(docDefinition: TDocumentDefinitions, fonts: any): Promise<Buffer> {
     const printer = new PdfPrinter(fonts);
     const pdfDoc = printer.createPdfKitDocument(docDefinition);
     const chunks: Buffer[] = [];
@@ -203,7 +213,10 @@ export class PdfService {
     });
   }
 
-  private async mergePdfBuffers(buffers: Buffer[]): Promise<Buffer> {
+  // SUPP_PRINT_BE_01b — promoted from `private` to `public`. Pure
+  // pdf-lib merge helper consumed by `SupplementPdfService` to combine
+  // Cover + Summary + Detail buffers.
+  public async mergePdfBuffers(buffers: Buffer[]): Promise<Buffer> {
     if (buffers.length === 0) throw new Error('No PDF buffers provided for merging');
     if (buffers.length === 1) return buffers[0];
     const mergedPdf = await PDFDocument.create();
@@ -286,7 +299,11 @@ export class PdfService {
   // 📊 4. Report Logic & Aggregation (Private)
   // ===================================================================
 
-  private prepareReportAggregations(projects: any[], years: number[]): ReportAggregations {
+  // SUPP_PRINT_BE_01b — promoted from `private` to `public` so
+  // `SupplementPdfService` can reuse the strategy-tree aggregator for
+  // its summary page. Pure function over the supplied rows; no DB
+  // access, no mutation of inputs.
+  public prepareReportAggregations(projects: any[], years: number[]): ReportAggregations {
     const strategies = new Map<string, StrategySummary>();
     const groupedProjects = new Map<string, any[]>();
     const yearSet = new Set(years);
@@ -349,7 +366,9 @@ export class PdfService {
    * ISSUE_BASED aggregation — parallel to prepareReportAggregations.
    * Groups projects by developmentIssue instead of strategy/tactic/plan.
    */
-  private prepareIssueBasedReportAggregations(
+  // SUPP_PRINT_BE_01b — promoted from `private` to `public`. Pure
+  // ISSUE_BASED aggregator shared with `SupplementPdfService`.
+  public prepareIssueBasedReportAggregations(
     projects: any[],
     years: number[],
   ): IssueBasedReportAggregations {

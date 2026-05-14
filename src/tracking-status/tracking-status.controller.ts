@@ -47,6 +47,28 @@ export class TrackingStatusController {
     return this.trackingStatusService.createByRevisedProjectGroup(dto, req.user.userId);
   }
 
+  /**
+   * SUPP-1 / BE-02 — Tracking-status write endpoint for SupplementProjectGroup.
+   * Handles owner Pull_Back, owner resubmission, and staff workflow
+   * transitions (Pending → Verified, Verified → Pending_Approval,
+   * Pending_Approval → Approved, Pending|Verified → Returned_For_Revision).
+   * Mirrors `create-by-revised-project-group` shape; the SPG id may be
+   * supplied via either `supplementProjectGroupId` (preferred) or `projectId`.
+   */
+  @Post('create-by-supplement-project-group')
+  createBySupplementProjectGroup(
+    @Body() dto: CreateTrackingStatusDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    this.logger.log(
+      'Request to create tracking status by supplement project group',
+    );
+    return this.trackingStatusService.createBySupplementProjectGroup(
+      dto,
+      req.user.userId,
+    );
+  }
+
   @Post('bulk')
   createMany(
     @Body() dtos: CreateTrackingStatusDto[],
@@ -113,6 +135,28 @@ export class TrackingStatusController {
   ) {
     this.logger.log(`Request to pull back revised project group: ${revisionProjectGroupId}`);
     return this.trackingStatusService.rollbackRevisionProjectGroupStatus(revisionProjectGroupId, req.user.userId, body?.clearResponsibleAgency);
+  }
+
+  /**
+   * SUPP-1 / BE-02 — Staff-led rollback for SupplementProjectGroup.
+   * Mirrors the RPG rollback endpoint; agency-based responsibility (Q3)
+   * and §14.6 row hard-delete are enforced inside the service.
+   */
+  @Post('rollback/supplement-project-group/:supplementProjectGroupId')
+  rollbackStatusSupplementProjectGroup(
+    @Param('supplementProjectGroupId', ParseUUIDPipe)
+    supplementProjectGroupId: string,
+    @Body() body: { clearResponsibleAgency?: boolean },
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    this.logger.log(
+      `Request to pull back supplement project group: ${supplementProjectGroupId}`,
+    );
+    return this.trackingStatusService.rollbackSupplementProjectGroupStatus(
+      supplementProjectGroupId,
+      req.user.userId,
+      body?.clearResponsibleAgency,
+    );
   }
 
 

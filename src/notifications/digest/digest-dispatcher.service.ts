@@ -66,7 +66,7 @@ export class DigestDispatcherService {
    */
   async dispatchBulkSubmitNotifications(args: {
     emits: BulkSubmitEmit[];
-    projectKind: 'project-group' | 'revised-project-group';
+    projectKind: 'project-group' | 'revised-project-group' | 'supplement-project-group';
     actorUserId: string | null;
     actorWorkHistoryId: string | null;
   }): Promise<void> {
@@ -243,7 +243,7 @@ export class DigestDispatcherService {
     eventType: ProjectNotificationEventType;
     emit: BulkSubmitEmit;
     descriptor: DigestProjectDescriptor;
-    projectKind: 'project-group' | 'revised-project-group';
+    projectKind: 'project-group' | 'revised-project-group' | 'supplement-project-group';
     actorUserId: string | null;
     actorWorkHistoryId: string | null;
   }): Promise<void> {
@@ -295,7 +295,7 @@ export class DigestDispatcherService {
     recipient: ProjectNotificationRecipient;
     eventType: ProjectNotificationEventType;
     descriptors: DigestProjectDescriptor[];
-    projectKind: 'project-group' | 'revised-project-group';
+    projectKind: 'project-group' | 'revised-project-group' | 'supplement-project-group';
     actorUserId: string | null;
     actorWorkHistoryId: string | null;
   }): Promise<void> {

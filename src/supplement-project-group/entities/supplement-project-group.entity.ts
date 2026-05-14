@@ -19,6 +19,8 @@ import { LocalAdministrativeOrganization } from 'src/local-administrative-organi
 import { GovernmentAgency } from 'src/government-agencies/entities/government-agency.entity';
 import { DevelopmentIssue } from 'src/development-issue/entities/development-issue.entity';
 import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
+// SUPP-3 / BE-07 — SPG attachment relation (mirrors PG / RPG patterns).
+import { AttachmentSupplementProjectGroup } from 'src/attachment-supplement-project-groups/entities/attachment-supplement-project-group.entity';
 
 @Entity('supplement_project_groups')
 export class SupplementProjectGroup {
@@ -67,6 +69,7 @@ export class SupplementProjectGroup {
   @Column()
   projectYear: number;
 
+  /** Legacy column kept for schema stability — SPG has no draft state; always false. */
   @Column({ default: false })
   isDraft: boolean;
 
@@ -158,6 +161,32 @@ export class SupplementProjectGroup {
   @JoinColumn({ name: 'amphoe_id' })
   amphoe?: Amphoe | null;
 
+  /**
+   * Task `SUPP_SPG_LAO_COLUMN` (2026-05-12) — creator-LAO denormalized
+   * column for shape-symmetry with PG / RPG (see PG entity line 151-161,
+   * RPG entity line 162-171). Set at INSERT only from the creator's
+   * WorkHistory; immutable thereafter per CLAUDE.md §5. The update DTO
+   * does NOT accept this field.
+   *
+   * For the current Q1+Q2 supplement gate (agency-only) this is always
+   * `'3001027'`, but the assignment is shape-symmetric with PG / RPG and
+   * future-proofs for scope widening.
+   *
+   * No inverse declared (matches the PG / RPG sibling and the SPG
+   * `amphoe` relation pattern — no `@OneToMany` exists on the
+   * `LocalAdministrativeOrganization` side for SPG).
+   */
+  @ManyToOne(
+    () => LocalAdministrativeOrganization,
+    {
+      onUpdate: 'CASCADE',
+      onDelete: 'CASCADE',
+      nullable: true,
+    },
+  )
+  @JoinColumn({ name: 'local_administrative_organization_id' })
+  localAdministrativeOrganization?: LocalAdministrativeOrganization | null;
+
   @ManyToOne(
     () => GovernmentAgency,
     (governmentAgency) => governmentAgency.responsibleAgencyProjectGroup,
@@ -184,6 +213,23 @@ export class SupplementProjectGroup {
   // Free-form additional detail field for extra description
   @Column('text', { nullable: true })
   additionalDetail: string | null;
+
+  /**
+   * SUPP-3 / BE-07 — Attachments uploaded against this SPG. The FK on
+   * `attachment_supplement_project_groups` uses `ON DELETE RESTRICT`
+   * (NOT `CASCADE`) so the §12 audit trail survives SPG soft-delete.
+   * Adding rows here changes the §17.4 baseline `content_hash`, but
+   * the snapshot is `snapshot-only` so no auto-recompute fires.
+   */
+  @OneToMany(
+    () => AttachmentSupplementProjectGroup,
+    (attachment) => attachment.supplementProjectGroup,
+    {
+      onUpdate: 'CASCADE',
+      onDelete: 'RESTRICT',
+    },
+  )
+  attachments: AttachmentSupplementProjectGroup[];
 }
 
 

@@ -17,6 +17,21 @@ export class CreateTrackingStatusDto {
   @IsNotEmpty()
   projectId: string;
 
+  /**
+   * SUPP-1 / BE-02 — Optional explicit SupplementProjectGroup id.
+   *
+   * The SPG endpoint (`POST /tracking-status/create-by-supplement-project-group`)
+   * accepts the target SPG id via either `supplementProjectGroupId` (preferred,
+   * explicit) OR `projectId` (legacy mirror of the RPG endpoint, which reads
+   * the RPG id off `projectId`). The service prefers
+   * `supplementProjectGroupId` when present and falls back to `projectId`.
+   *
+   * Other endpoints (PG / RPG paths) MUST ignore this field.
+   */
+  @IsOptional()
+  @IsUUID()
+  supplementProjectGroupId?: string;
+
   @IsUUID()
   @IsNotEmpty()
   statusId: string;

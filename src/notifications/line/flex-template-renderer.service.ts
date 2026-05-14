@@ -32,6 +32,17 @@ export interface FlexRenderContext {
   toStatusTh: string;
   actionLink: string;
   reason?: string;
+  /**
+   * SUPP-3 BE-06 — optional projectKind discriminator. When set to
+   * `'supplement-project-group'` the altText (LINE chat-list preview)
+   * substitutes the head noun "โครงการ" → "โครงการเพิ่มเติม" per Q7
+   * reuse-with-substitution. Defaults to undefined (treated as PG/RPG)
+   * so PG/RPG behavior is unchanged.
+   */
+  projectKind?:
+    | 'project-group'
+    | 'revised-project-group'
+    | 'supplement-project-group';
 }
 
 /**
@@ -195,9 +206,17 @@ export class FlexTemplateRendererService {
     };
     const contents = this.substitute(template, substitutions) as object;
 
+    // SUPP-3 BE-06 — per-kind altText substitution. Mirrors the email
+    // SUBJECT_MAP substitution in `notifications-email.service.ts`.
+    const rawAltText = altTextBuilder(projectName);
+    const altText =
+      ctx.projectKind === 'supplement-project-group'
+        ? rawAltText.replace(/โครงการ(?!เพิ่มเติม)/, 'โครงการเพิ่มเติม')
+        : rawAltText;
+
     return {
       type: 'flex',
-      altText: altTextBuilder(projectName),
+      altText,
       contents,
     };
   }

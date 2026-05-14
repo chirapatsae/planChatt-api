@@ -257,8 +257,17 @@ export interface ProjectNotificationDigestEvent {
   projects: DigestProjectDescriptor[];
   /** Deep link to the queue / submitted page. */
   actionLink: string;
-  /** `'project-group'` for main plan; future-proofed for revision/change. */
-  projectKind: 'project-group' | 'revised-project-group';
+  /**
+   * `'project-group'` for main plan; `'revised-project-group'` for
+   * revision/change; `'supplement-project-group'` for supplement (SUPP-3 BE-06).
+   * Digest fanout for supplement is not yet wired (deferred per SUPP-3 scope),
+   * but the union is widened here so the upstream `buildEvent` / `signActionLink`
+   * type contract stays uniform across single + digest event shapes.
+   */
+  projectKind:
+    | 'project-group'
+    | 'revised-project-group'
+    | 'supplement-project-group';
   /** §4.1 advisory — workflow actor (display only on stats surfaces). */
   actorUserId?: string;
   actorWorkHistoryId?: string;

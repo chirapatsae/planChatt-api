@@ -88,6 +88,35 @@ function extractDigestCount(raw: string): string {
   return m ? m[1] : raw;
 }
 
+/**
+ * SUPP-3 BE-06 — per-kind subject substitution.
+ *
+ * Q7 (reuse-with-substitution) — SPG notifications reuse the existing
+ * PG/RPG subject lines but swap the head noun "โครงการ" for
+ * "โครงการเพิ่มเติม" so the recipient can distinguish supplement-round
+ * traffic at-a-glance in their inbox. The replacement is intentionally
+ * scoped to the leading occurrence inside the bracket tag (e.g.
+ * `[แจ้งเตือน] มีโครงการใหม่...`) — we do NOT touch the trailing
+ * `: {{projectName}}` suffix or the bracketed prefix itself.
+ *
+ * Non-SPG kinds round-trip the base subject verbatim. Future kinds can
+ * extend the switch without disturbing existing PG/RPG callers.
+ */
+function applyProjectKindSubjectSubstitution(
+  baseSubject: string,
+  targetKind: string,
+): string {
+  if (targetKind === 'supplement-project-group') {
+    // Replace the FIRST occurrence of the standalone noun "โครงการ" with
+    // "โครงการเพิ่มเติม". The pattern uses a Thai-script word boundary
+    // surrogate (lookahead for non-Thai-word char) so we only touch the
+    // standalone noun, not e.g. "โครงการของท่าน" (which has its own
+    // owner-side framing).
+    return baseSubject.replace(/โครงการ(?!เพิ่มเติม)/, 'โครงการเพิ่มเติม');
+  }
+  return baseSubject;
+}
+
 const REQUIRED_TEMPLATE_FIELDS: Record<ProjectNotificationEventType, string[]> =
   {
     PROJECT_SUBMITTED: ['projectName', 'actionLink', 'toStatus'],
@@ -578,6 +607,17 @@ export class NotificationsEmailService {
       // W67. Templates render `{{fromStatusTh}}` / `{{toStatusTh}}`; we fall
       // back to the canonical English name when the upstream caller has not
       // supplied a Thai label (legacy callers / boot-time defensive case).
+      //
+      // SUPP-3 BE-06 — per-kind subject substitution. For supplement
+      // (`'supplement-project-group'`) the subject line carries the
+      // supplement noun ("โครงการเพิ่มเติม") per Q7 reuse-with-substitution.
+      // The base subject string from `SUBJECT_MAP` is rewritten in place;
+      // bodies still say "โครงการ" — acceptable because the projectName row
+      // (and per-kind action link target) already disambiguates SPG.
+      const targetKind = this.extractTargetKind(payload.metadata);
+      const baseSubject = SUBJECT_MAP[payload.eventType]({
+        projectName: payload.projectName,
+      });
       templateCtx = {
         projectName: payload.projectName,
         fromStatus: payload.fromStatus,
@@ -587,9 +627,7 @@ export class NotificationsEmailService {
         reason: payload.reason,
         actionLink: payload.actionLink,
         sentAt: this.formatThaiTimestamp(new Date()),
-        subject: SUBJECT_MAP[payload.eventType]({
-          projectName: payload.projectName,
-        }),
+        subject: applyProjectKindSubjectSubstitution(baseSubject, targetKind),
       };
     }
     const bodyHtml = this.templateRenderer.render(
@@ -752,7 +790,15 @@ export class NotificationsEmailService {
   signActionLink(args: {
     projectId: string;
     eventType: ProjectNotificationEventType;
-    projectKind: 'project-group' | 'revised-project-group';
+    /**
+     * SUPP-3 BE-06 — `'supplement-project-group'` added so the FE deep-link
+     * router resolves the supplement detail/list route via the per-kind
+     * branch in `resolveActionPath` below.
+     */
+    projectKind:
+      | 'project-group'
+      | 'revised-project-group'
+      | 'supplement-project-group';
     expiresInDays?: number;
   }): string {
     const expiresInDays = args.expiresInDays ?? 30;
@@ -807,11 +853,26 @@ export class NotificationsEmailService {
    */
   private resolveActionPath(
     eventType: ProjectNotificationEventType,
-    projectKind: 'project-group' | 'revised-project-group',
+    projectKind:
+      | 'project-group'
+      | 'revised-project-group'
+      | 'supplement-project-group',
     projectId: string,
   ): string {
     const id = encodeURIComponent(projectId);
     const isMainPlan = projectKind === 'project-group';
+    // SUPP-3 BE-06 — per-kind branch for supplement deep links. Owner and
+    // staff land on the same supplement detail route; the action context
+    // (review vs view) is resolved by the FE detail page based on the
+    // caller's role + latest status.
+    const isSupplement = projectKind === 'supplement-project-group';
+
+    if (isSupplement) {
+      // Q7 reuse-with-substitution — same detail route is fine for owner
+      // and staff (FE-08 owns the queue list page; for SUPP-3 BE-06 the
+      // signed deep-link points at the SPG detail page directly).
+      return `/project/supplement/${id}`;
+    }
 
     if (
       eventType === 'PROJECT_SUBMITTED' ||
@@ -875,8 +936,14 @@ export class NotificationsEmailService {
      * channel is still populated for compatibility, but we accept the kind
      * as a first-class arg so the action link can be built without
      * inspecting `metadata`.
+     *
+     * SUPP-3 BE-06 — `'supplement-project-group'` added so SPG notifications
+     * route through the same envelope path as PG/RPG.
      */
-    projectKind: 'project-group' | 'revised-project-group';
+    projectKind:
+      | 'project-group'
+      | 'revised-project-group'
+      | 'supplement-project-group';
     recipients: ProjectNotificationRecipient[];
     metadata?: Record<string, string | number | null | undefined>;
     /** Wave 22 B1 — optional workflow-actor threading (see event type). */

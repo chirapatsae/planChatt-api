@@ -38,12 +38,24 @@
 /**
  * Canonical visible statuses for default executive views (Q8).
  * Excludes `Ready`.
+ *
+ * 2026-05-12 — `Rejected` added (W67 oversight follow-up). The W67
+ * 4-group rollup at `executive-status-groups.ts` defines the `rejected`
+ * bucket ("เกินศักยภาพ"), but `Rejected` was never added to this
+ * whitelist when W67 introduced the 8th canonical status. As a result
+ * the count path was silently discarding every Rejected row before
+ * `mapToExecutiveStatusGroup` could fold it. Adding it here restores
+ * the contract — `mapToExecutiveStatusGroup` returns `null` for
+ * `Pull_Back` / `Returned_For_Revision`, so those statuses remain
+ * excluded from the 4-group totals while still being visible to
+ * other executive surfaces that consult this whitelist directly.
  */
 export const EXEC_VISIBLE_STATUSES = [
   'Pending',
   'Verified',
   'Pending_Approval',
   'Approved',
+  'Rejected',
   'Pull_Back',
   'Returned_For_Revision',
 ] as const;

@@ -712,8 +712,9 @@ export class BookAssemblyService {
         );
       }
 
-      // Rule 2: Project exclusivity guard — only applies to revision rounds (not main plan)
-      // A project must not already be published in a sibling revision's COMPLETED version.
+      // Rule 2: Project exclusivity guard — applies to revision rounds (not
+      // main plan). A project must not already be published in a sibling
+      // revision book's COMPLETED version.
       if (
         sourceType === BookAssemblySourceType.EDIT_REVISION ||
         sourceType === BookAssemblySourceType.CHANGE_REVISION
@@ -1425,7 +1426,11 @@ export class BookAssemblyService {
    */
   async getAssemblyCounts(
     userId: string,
-  ): Promise<{ main: number; editRevision: number; changeRevision: number }> {
+  ): Promise<{
+    main: number;
+    editRevision: number;
+    changeRevision: number;
+  }> {
     try {
       await this.loadAndValidateWorkHistory(userId, READ_ROLES);
 
@@ -1488,7 +1493,7 @@ export class BookAssemblyService {
 
       const planIds = plans.map((p) => p.id);
 
-      // Round 2 (parallel): revisions (with plan FK) + main-plan versions
+      // Round 2 (parallel): revisions (with plan FK), and main-plan versions
       const [revisions, mainVersions] = await Promise.all([
         this.devPlanRevisionRepo.find({
           where: { developmentPlan: { id: In(planIds) } },
@@ -1502,15 +1507,21 @@ export class BookAssemblyService {
         }),
       ]);
 
-      // Round 3: revision versions (need revision IDs from round 2)
+      // Round 3: revision versions (need ids from round 2)
       const revisionIds = revisions.map((r) => r.id);
-      let revisionVersions: BookAssemblyVersion[] = [];
+
+      const versionWhereClauses: any[] = [];
       if (revisionIds.length > 0) {
-        revisionVersions = await this.versionRepo.find({
-          where: [
-            { sourceType: BookAssemblySourceType.EDIT_REVISION, sourceId: In(revisionIds) },
-            { sourceType: BookAssemblySourceType.CHANGE_REVISION, sourceId: In(revisionIds) },
-          ],
+        versionWhereClauses.push(
+          { sourceType: BookAssemblySourceType.EDIT_REVISION, sourceId: In(revisionIds) },
+          { sourceType: BookAssemblySourceType.CHANGE_REVISION, sourceId: In(revisionIds) },
+        );
+      }
+
+      let childVersions: BookAssemblyVersion[] = [];
+      if (versionWhereClauses.length > 0) {
+        childVersions = await this.versionRepo.find({
+          where: versionWhereClauses,
           order: { versionNumber: 'DESC' },
           relations: ['createdBy', 'createdBy.user'],
         });
@@ -1518,7 +1529,7 @@ export class BookAssemblyService {
 
       // In-memory assembly: group versions by (sourceType:sourceId)
       const versionMap = new Map<string, BookAssemblyVersion[]>();
-      for (const v of [...mainVersions, ...revisionVersions]) {
+      for (const v of [...mainVersions, ...childVersions]) {
         const key = `${v.sourceType}:${v.sourceId}`;
         if (!versionMap.has(key)) versionMap.set(key, []);
         versionMap.get(key)!.push(v);
@@ -2300,16 +2311,13 @@ export class BookAssemblyService {
   ): Promise<void> {
     if (projectIds.length === 0) return;
 
-    // Find the parent plan ID via the revision record
+    // EDIT_REVISION or CHANGE_REVISION — siblings = OTHER revisions of same plan
     const revision = await this.devPlanRevisionRepo.findOne({
       where: { id: sourceId },
       relations: ['developmentPlan'],
     });
     if (!revision?.developmentPlan?.id) return;
-
     const planId = revision.developmentPlan.id;
-
-    // Find all sibling revision IDs for the same plan (excluding this one)
     const siblingRevisions = await this.devPlanRevisionRepo.find({
       where: { developmentPlan: { id: planId } },
       select: ['id'],
@@ -2320,7 +2328,7 @@ export class BookAssemblyService {
 
     if (siblingIds.length === 0) return;
 
-    // Check both EDIT_REVISION and CHANGE_REVISION completed versions for sibling rounds
+    // Check sibling COMPLETED versions across both revision types.
     const conflictingVersion = await this.versionRepo
       .createQueryBuilder('v')
       .where('v.status = :status', { status: BookAssemblyVersionStatus.COMPLETED })
@@ -2383,17 +2391,22 @@ export class BookAssemblyService {
     });
     if (!revision?.developmentPlan?.id) return false;
     const planId = revision.developmentPlan.id;
-
     const siblingRevisions = await this.devPlanRevisionRepo.find({
       where: { developmentPlan: { id: planId } },
       select: ['id'],
     });
-    const siblingIds = siblingRevisions.map((r) => r.id).filter((id) => id !== sourceId);
+    const siblingIds = siblingRevisions
+      .map((r) => r.id)
+      .filter((id) => id !== sourceId);
     if (siblingIds.length === 0) return false;
 
     const activeSiblingDrafts = await this.draftRepo.find({
       where: {
         sourceId: In(siblingIds),
+        sourceType: In([
+          BookAssemblySourceType.EDIT_REVISION,
+          BookAssemblySourceType.CHANGE_REVISION,
+        ]),
         assemblyStatus: In([AssemblyDraftStatus.PREPARING, AssemblyDraftStatus.READY]),
       },
       select: ['id', 'sourceId', 'sourceType', 'part3ProjectSnapshot'],
@@ -2442,7 +2455,6 @@ export class BookAssemblyService {
     sourceId: string,
     manager: any,
   ): Promise<void> {
-    // Only applies to revision-type sources
     if (
       sourceType !== BookAssemblySourceType.EDIT_REVISION &&
       sourceType !== BookAssemblySourceType.CHANGE_REVISION
@@ -2458,26 +2470,30 @@ export class BookAssemblyService {
     const snapshotIds: string[] = currentVersion?.part3ProjectSnapshot ?? [];
     if (snapshotIds.length === 0) return;
 
-    // Step 2: Find the parent DevelopmentPlan for this source revision
+    // Step 2 + 3: Resolve sibling revision IDs (same plan, different sourceId)
     const revision = await manager.findOne(DevelopmentPlanRevision, {
       where: { id: sourceId },
       relations: ['developmentPlan'],
     });
     if (!revision?.developmentPlan?.id) return;
     const planId = revision.developmentPlan.id;
-
-    // Step 3: Find all sibling revision IDs for the same plan (different sourceId)
     const siblingRevisions = await manager.getRepository(DevelopmentPlanRevision).find({
       where: { developmentPlan: { id: planId } },
       select: ['id'],
     });
-    const siblingIds = siblingRevisions.map((r) => r.id).filter((id) => id !== sourceId);
+    const siblingIds = siblingRevisions
+      .map((r: { id: string }) => r.id)
+      .filter((id: string) => id !== sourceId);
     if (siblingIds.length === 0) return;
 
-    // Step 4: Find any active draft (PREPARING or READY) for sibling revisions
+    // Step 4: Find any active draft (PREPARING or READY) for sibling revisions.
     const activeSiblingDrafts = await manager.getRepository(BookAssemblyDraft).find({
       where: {
         sourceId: In(siblingIds),
+        sourceType: In([
+          BookAssemblySourceType.EDIT_REVISION,
+          BookAssemblySourceType.CHANGE_REVISION,
+        ]),
         assemblyStatus: In([AssemblyDraftStatus.PREPARING, AssemblyDraftStatus.READY]),
       },
       select: ['id', 'sourceId', 'sourceType', 'part3ProjectSnapshot'],

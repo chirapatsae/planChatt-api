@@ -104,6 +104,18 @@ import { PdfDevelopmentPlanDraftCoordinateDocument } from './pdf/entities/pdf-de
 import { PdfOutAuthorityDocument } from './pdf/entities/pdf-out-authority-document.entity';
 import { PdfRevisionChangeApprovedDocument } from './pdf/entities/pdf-revision-change-approved-document.entity';
 import { PdfRevisionEditApprovedDocument } from './pdf/entities/pdf-revision-edit-approved-document.entity';
+// SUPP_PRINT_DB_01 — supplement PDF document entities. Both must be
+// registered at the root DataSource (entities[]) AND via forFeature in
+// PdfModule — same registration footgun pattern documented for AI
+// entities above. Without root registration TypeORM throws
+// `EntityMetadataNotFoundError` at boot.
+import { PdfSupplementDraftDocument } from './pdf/entities/pdf-supplement-draft-document.entity';
+import { PdfSupplementApprovedDocument } from './pdf/entities/pdf-supplement-approved-document.entity';
+// SUPP_BOOK_DB_01 — supplement user-uploaded Part 1 / Part 2 PDFs.
+// Both must be registered at the root DataSource (entities[]) AND via
+// forFeature in PdfModule — same registration footgun pattern called
+// out for the supplement approved/draft docs above. Forgetting root
+// registration triggers `EntityMetadataNotFoundError` at boot.
 import { EmailModule } from './util/email/email.module';
 import { RevisionTypeModule } from './revision-type/revision-type.module';
 import { RevisionType } from './revision-type/entities/revision-type.entity';
@@ -122,11 +134,30 @@ import { AttachmentProjectGroupsModule } from './attachment-project-groups/attac
 import { AttachmentProjectGroup } from './attachment-project-groups/entities/attachment-project-group.entity';
 import { AttachmentRevisedProjectGroupsModule } from './attachment-revised-project-groups/attachment-revised-project-groups.module';
 import { AttachmentRevisedProjectGroup } from './attachment-revised-project-groups/entities/attachment-revised-project-group.entity';
+// SUPP-3 / BE-07 — SPG attachment module (new table mirrors PG / RPG split).
+import { AttachmentSupplementProjectGroupsModule } from './attachment-supplement-project-groups/attachment-supplement-project-groups.module';
+import { AttachmentSupplementProjectGroup } from './attachment-supplement-project-groups/entities/attachment-supplement-project-group.entity';
 import { BookAssemblyModule } from './book-assembly/book-assembly.module';
 import { BookAssemblyDraft } from './book-assembly/entities/book-assembly-draft.entity';
 import { BookAssemblyVersion } from './book-assembly/entities/book-assembly-version.entity';
 import { DeprecationAuditLog } from './book-assembly/entities/deprecation-audit-log.entity';
 import { BookProjectLineage } from './book-assembly/entities/book-project-lineage.entity';
+// SUPP_STANDALONE_DB_01 — standalone Supplement Assembly entities.
+// Q3=B duplicate of BookAssembly shape in dedicated tables; zero shared
+// mutable surface with BookAssembly. Root-DataSource registration is
+// required even before BE_04 wires `SupplementAssemblyModule` because
+// otherwise TypeORM throws `EntityMetadataNotFoundError` the first time
+// any repository for one of these entities is requested (Wave 41
+// post-mortem / TEMPLATE.md §8.1).
+import { SupplementAssemblyDraft } from './supplement-assembly/entities/supplement-assembly-draft.entity';
+import { SupplementAssemblyVersion } from './supplement-assembly/entities/supplement-assembly-version.entity';
+import { SupplementAssemblyVersionProject } from './supplement-assembly/entities/supplement-assembly-version-project.entity';
+// SUPP_STANDALONE_BE_04 — wires the standalone Supplement Assembly
+// subsystem (Wave 3 of 6). Imported AFTER `BookAssemblyModule` for
+// thematic locality; no cyclical dependency between the two (Q10=B
+// standalone). `SupplementAssemblyService` consumes `PdfModule`,
+// `BookLockModule`, and `OrphanCleanupModule` per §18.2.1.
+import { SupplementAssemblyModule } from './supplement-assembly/supplement-assembly.module';
 import { DevelopmentIssueModule } from './development-issue/development-issue.module';
 import { DevelopmentIssue } from './development-issue/entities/development-issue.entity';
 import { AdminDocumentAnalysisModule } from './admin-document-analysis/admin-document-analysis.module';
@@ -189,6 +220,11 @@ import { StatsAccessLog } from './system-usage/entities/stats-access-log.entity'
 // `OrphanCleanupService` consumed by DPR / Plan / Supplement softRemove
 // + book-assembly + pdf finalize sites. CLAUDE.md §18 + workflow doc.
 import { OrphanCleanupModule } from './orphan-cleanup/orphan-cleanup.module';
+// SUPP_AGG_BE_01 — Unified Projects (PG + RPG + SPG) read-only HTTP
+// surface. Imports `AggregationModule` to consume the Wave 54
+// `UnifiedProjectAggregator` via DI token. Dependency direction is
+// one-way; AggregationModule MUST NOT import UnifiedProjectsModule.
+import { UnifiedProjectsModule } from './unified-projects/unified-projects.module';
 
 
 @Module({
@@ -261,6 +297,10 @@ import { OrphanCleanupModule } from './orphan-cleanup/orphan-cleanup.module';
         PdfOutAuthorityDocument,
         PdfRevisionEditApprovedDocument,
         PdfRevisionChangeApprovedDocument,
+        // SUPP_PRINT_DB_01 — supplement draft + approved PDF
+        // document tables. Q4=B defers out-authority variant.
+        PdfSupplementDraftDocument,
+        PdfSupplementApprovedDocument,
         RevisionType,
         DevelopmentPlanRevision,
         RevisedProjectGroup,
@@ -269,10 +309,18 @@ import { OrphanCleanupModule } from './orphan-cleanup/orphan-cleanup.module';
         PlanPhase,
         AttachmentProjectGroup,
         AttachmentRevisedProjectGroup,
+        AttachmentSupplementProjectGroup,
         BookAssemblyDraft,
         BookAssemblyVersion,
         DeprecationAuditLog,
         BookProjectLineage,
+        // SUPP_STANDALONE_DB_01 — owned by `SupplementAssemblyModule`
+        // (created by BE_04); root registration here is required for
+        // metadata resolution. §15 / §18.2.1 — no FK into book_assembly_*
+        // tables.
+        SupplementAssemblyDraft,
+        SupplementAssemblyVersion,
+        SupplementAssemblyVersionProject,
         DevelopmentIssue,
         LineUserBinding,
         // Wave 91 — Wave 21/22 notification entities (see import note).
@@ -363,6 +411,7 @@ import { OrphanCleanupModule } from './orphan-cleanup/orphan-cleanup.module';
     PlanPhaseModule,
     AttachmentProjectGroupsModule,
     AttachmentRevisedProjectGroupsModule,
+    AttachmentSupplementProjectGroupsModule,
     AdminDocumentAnalysisModule,
     BookAssemblyModule,
     // Wave 110 W110-BE-01 — must be imported BEFORE the modules that
@@ -371,8 +420,20 @@ import { OrphanCleanupModule } from './orphan-cleanup/orphan-cleanup.module';
     // module-level cyclical dependency (it only depends on
     // LineageLockModule + TypeORM repos).
     OrphanCleanupModule,
+    // SUPP_STANDALONE_BE_04 — standalone Supplement Assembly subsystem.
+    // Imported AFTER `OrphanCleanupModule` because
+    // `SupplementAssemblyService.merge()` consumes `OrphanCleanupService`
+    // as the §18.2.1 SUPPLEMENT finalize trigger surface (cascade
+    // BEFORE `isBooked = true`). Imported AFTER `PdfModule` (declared
+    // earlier in this array) because the service injects
+    // `SupplementPdfService` to generate Part 3.
+    SupplementAssemblyModule,
     DevelopmentIssueModule,
     AiExecutiveChatModule,
+    // SUPP_AGG_BE_01 — Unified Projects HTTP surface. Imported AFTER
+    // `AiExecutiveChatModule` so the `AggregationModule` re-export
+    // chain (UNIFIED_PROJECT_AGGREGATOR token) is fully resolved.
+    UnifiedProjectsModule,
     // PRIV-W44-01 — global LLM client (must import before any AI
     // module that injects `LLM_CLIENT`).
     LlmClientModule,

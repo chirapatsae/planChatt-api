@@ -371,12 +371,27 @@ export class NotificationsLineService {
         // assembles a `type: "carousel"` Flex contents object.
         flexMessage = this.buildDigestFlex(payload);
       } else {
+        // SUPP-3 BE-06 — thread the target kind into the flex context so
+        // the altText substitution can route "โครงการเพิ่มเติม" for SPG.
+        // `targetKind` is sourced from `payload.metadata.kind` (see
+        // `extractTargetKind`) and matches the discriminator the upstream
+        // dispatch site sets in `tracking-status.service.ts`.
+        const projectKindForFlex =
+          targetKind === 'supplement-project-group' ||
+          targetKind === 'revised-project-group' ||
+          targetKind === 'project-group'
+            ? (targetKind as
+                | 'project-group'
+                | 'revised-project-group'
+                | 'supplement-project-group')
+            : undefined;
         const ctx: FlexRenderContext = {
           projectName: payload.projectName,
           fromStatusTh: payload.fromStatusTh ?? payload.fromStatus,
           toStatusTh: payload.toStatusTh ?? payload.toStatus,
           actionLink: payload.actionLink,
           reason: payload.reason,
+          projectKind: projectKindForFlex,
         };
         flexMessage = this.flexRenderer.renderFlexTemplate(
           payload.eventType,

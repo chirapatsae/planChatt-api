@@ -6,7 +6,6 @@ import {
   IsUUID,
   IsArray,
   ValidateNested,
-  IsBoolean,
 } from 'class-validator';
 import { CreateBudgetDto } from 'src/budget/dto/create-budget.dto';
 
@@ -84,10 +83,6 @@ export class UpdateSupplementProjectGroupDto {
   @ValidateNested({ each: true })
   @Type(() => CreateBudgetDto)
   budget?: CreateBudgetDto[];
-
-  @IsOptional()
-  @IsBoolean()
-  isDraft?: boolean;
 }
 
 

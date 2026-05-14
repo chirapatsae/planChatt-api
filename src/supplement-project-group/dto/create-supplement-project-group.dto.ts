@@ -7,7 +7,6 @@ import {
   IsUUID,
   IsArray,
   ValidateNested,
-  IsBoolean,
 } from 'class-validator';
 import { CreateBudgetDto } from 'src/budget/dto/create-budget.dto';
 
@@ -72,6 +71,18 @@ export class CreateSupplementProjectGroupDto {
   @IsUUID()
   originAgencyId?: string | null;
 
+  /**
+   * SUPP-1 BE-01 / CLAUDE.md §5.1, §7.1 — `responsibleAgency` is
+   * NEVER accepted from the client on SPG create. Every SPG is
+   * agency-origin (workflow §5, Q1+Q2 gate), so the service derives
+   * `responsibleAgency` from the creator's WorkHistory via
+   * `getAgencyData`. A non-undefined value here MUST be rejected with
+   * `400 SPG_RESPONSIBLE_AGENCY_NOT_ALLOWED` at the service layer.
+   *
+   * The property is preserved on the DTO surface (rather than removed)
+   * so an unwitting client receives a structured 400 instead of a
+   * silent strip by class-validator whitelisting.
+   */
   @IsOptional()
   responsibleAgency?: string;
 
@@ -83,10 +94,6 @@ export class CreateSupplementProjectGroupDto {
   @ValidateNested({ each: true })
   @Type(() => CreateBudgetDto)
   budget?: CreateBudgetDto[];
-
-  @IsOptional()
-  @IsBoolean()
-  isDraft?: boolean;
 }
 
 

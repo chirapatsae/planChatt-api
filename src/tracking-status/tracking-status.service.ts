@@ -19,6 +19,14 @@ import { TrackingStatus } from './entities/tracking-status.entity';
 import { Comment } from 'src/comments/entities/comment.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
+// SUPP-1 / BE-02 — SPG support.
+// Mirrors the PG / RPG paths above but uses agency-based responsibility (Q3,
+// `WorkHistoryGovernmentAgencyResponsibility`, the RPG pattern) for staff
+// transitions and rollback. Pull_Back rules are byte-for-byte identical to PG
+// (Q4 verbatim parity). Rollback hard-deletes the SPG row per §14.6, even
+// though SPG is a leaf in SUPP-1 — see TODO(SUPP-4) at the delete site.
+import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
+import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entities/development-plan-supplement.entity';
 import { handleException } from 'src/util/handleException';
 import { AnnouncementsService } from 'src/announcements/announcements.service';
 import { Role } from 'src/roles/entities/role.entity';
@@ -38,6 +46,16 @@ import {
 import { UsersService } from 'src/users/users.service';
 import { maskEmail } from 'src/notifications/email/utils/mask-email.util';
 import { User } from 'src/users/entities/user.entity';
+// SUPP-IA-03 (BE-β, 2026-05-12) — relocate §17.4 `no-ai-baseline`
+// snapshot from `SupplementProjectGroupService.create` to the owner-
+// driven Ready → Pending transition. The baseline write is post-commit
+// and advisory (§17.2) — failures MUST NOT roll back the workflow
+// transition. Wave 10 endpoint-rank idempotency dedupes any same-hash
+// repeat fire across resubmission cycles.
+import { PreSubmitSnapshotService } from 'src/ai/pre-submit-snapshot.service';
+import { Budget } from 'src/budget/entities/budget.entity';
+import { ReportFormat } from 'src/development-plan/types/report-format.enum';
+import { BookFormatResolver } from 'src/common/project-classification/book-format.resolver';
 
 /**
  * W105-BE-PR1 — sentinel thrown inside a per-project sub-transaction in
@@ -78,6 +96,12 @@ export class TrackingStatusService {
     private readonly projectGroupRepo: Repository<ProjectGroup>,
     @InjectRepository(RevisedProjectGroup)
     private readonly revisedProjectGroupRepo: Repository<RevisedProjectGroup>,
+    // SUPP-1 / BE-02. Injected to participate in the same transaction as the
+    // TrackingStatus write. The repo itself is rarely used directly — most
+    // SPG reads/writes go through `manager.findOne` / `manager.delete` inside
+    // the transactional callback.
+    @InjectRepository(SupplementProjectGroup)
+    private readonly supplementProjectGroupRepo: Repository<SupplementProjectGroup>,
     @InjectRepository(Status)
     private readonly statusRepo: Repository<Status>,
     @InjectRepository(WorkHistory)
@@ -124,6 +148,18 @@ export class TrackingStatusService {
     // `dispatchPhaseOneNotification` directly so the existing single-event
     // UX is unchanged. §17.2 advisory only.
     private readonly digestDispatcher: DigestDispatcherService,
+    // SUPP-IA-03 (BE-β, 2026-05-12) — relocates the SPG §17.4 baseline
+    // snapshot write from `SupplementProjectGroupService.create` to the
+    // owner Ready → Pending transition (the authoring-time submit per
+    // §17.4 Wave 11). Used ONLY by the SPG branch below; PG and RPG
+    // continue to fire their baselines elsewhere (FE-driven for PG,
+    // bulk-upload service for batch). Advisory per §17.2 — failures
+    // are logged and swallowed post-commit.
+    private readonly preSubmitSnapshotService: PreSubmitSnapshotService,
+    // SUPP-IA-03 (BE-β) — used to resolve the parent plan's report
+    // format for the baseline snapshot's `classification.reportFormat`
+    // field. Read-only.
+    private readonly bookFormatResolver: BookFormatResolver,
   ) { }
 
   /**
@@ -271,7 +307,18 @@ export class TrackingStatusService {
     fromStatus: string;
     toStatus: string;
     projectId: string;
-    projectKind: 'project-group' | 'revised-project-group';
+    /**
+     * SUPP-3 BE-06 — `'supplement-project-group'` added so SPG transitions
+     * dispatch as first-class supplement notifications instead of borrowing
+     * the RPG kind (the placeholder from SUPP-1 BE-02). Recipient
+     * resolution for SPG mirrors the RPG agency-based pattern (Q3 —
+     * `WorkHistoryGovernmentAgencyResponsibility`); the projectKind
+     * literal differentiates SPG only on the rendering / deep-link side.
+     */
+    projectKind:
+      | 'project-group'
+      | 'revised-project-group'
+      | 'supplement-project-group';
     projectTitle: string;
     projectAmphoeId?: string | null;
     projectResponsibleAgencyId?: string | null;
@@ -302,7 +349,15 @@ export class TrackingStatusService {
             args.projectAmphoeId,
           );
         } else if (
-          args.projectKind === 'revised-project-group' &&
+          // SUPP-3 BE-06 — SPG mirrors the RPG agency-responsibility
+          // routing (Q3). Both kinds resolve via
+          // `WorkHistoryGovernmentAgencyResponsibility` keyed on the
+          // project's `responsibleAgency.id`. Defensive guard: if the
+          // SPG has a null `responsibleAgency` we skip staff fanout
+          // entirely and log — there is no amphoe fallback for SPG
+          // (Q3 disallows amphoe-based responsibility for supplement).
+          (args.projectKind === 'revised-project-group' ||
+            args.projectKind === 'supplement-project-group') &&
           args.projectResponsibleAgencyId
         ) {
           recipients = await this.recipientResolver.resolveStaffLeadByAgency(
@@ -2130,6 +2185,817 @@ export class TrackingStatusService {
         await manager.delete(RevisedProjectGroup, { id: revisionProjectGroupId });
 
         return { message: `ย้อนสถานะสำเร็จ (กลับไปเป็น "${previousTracking.statusId.name}")`, status: 'success' };
+      });
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  // ===========================================================================
+  // SUPP-1 / BE-02 — SupplementProjectGroup (SPG) transition support.
+  //
+  // Mirrors the PG (`create`) and RPG (`createByRevisedProjectGroup`) shapes
+  // above, with TWO structural differences:
+  //   1. Scope binding (§6 of `workflow-add-project-supplement.md`):
+  //        - parent DevelopmentPlan: isLatest=true, isBooked=false
+  //        - DevelopmentPlanSupplement: isLatest=true, isOpen=true, isBooked=false
+  //      Replaces the main-plan PlanPhase-open gate.
+  //   2. Staff responsibility (Q3): AGENCY-BASED via
+  //      WorkHistoryGovernmentAgencyResponsibility, NOT amphoe-based. Mirrors
+  //      the RPG pattern.
+  //
+  // Pull_Back rules are Q4 verbatim parity with PG: allowed only from
+  // `Pending` / `Verified`, owner-only against `workHistory.id`, no
+  // responsibleAgency clearing (SPG is agency-origin → §7.1 + §9 of the
+  // supplement workflow doc).
+  //
+  // Notifications are best-effort. SUPP-3 BE-06 wired SPG as a first-class
+  // `projectKind = 'supplement-project-group'` discriminator; recipient
+  // resolution still uses the RPG agency-based axis (Q3 —
+  // `WorkHistoryGovernmentAgencyResponsibility`), and Thai copy reuses
+  // PG/RPG templates with the head-noun substitution
+  // ("โครงการ" → "โครงการเพิ่มเติม") per Q7. Failures NEVER block the
+  // transaction (§4.1, §17.2).
+  // ===========================================================================
+
+  async createBySupplementProjectGroup(
+    dto: CreateTrackingStatusDto,
+    userId: string,
+  ): Promise<TrackingStatus> {
+    try {
+      // Allow callers to supply the SPG id via the explicit
+      // `supplementProjectGroupId` field OR via the legacy `projectId` mirror
+      // (matches the RPG endpoint shape). Prefer explicit when both present.
+      const spgId = dto.supplementProjectGroupId ?? dto.projectId;
+      if (!spgId) {
+        throw new BadRequestException(
+          'ต้องระบุ supplementProjectGroupId หรือ projectId',
+        );
+      }
+
+      type TxResult = {
+        saved: TrackingStatus;
+        fromStatus: string;
+        toStatus: string;
+        project: {
+          id: string;
+          title: string;
+          responsibleAgencyId: string | null;
+          createdByWorkHistoryId: string | null;
+          planName: string | null;
+        };
+        actorUserId: string | null;
+        actorWorkHistoryId: string | null;
+      };
+
+      const txResult = await this.dataSource.transaction<TxResult>(async (manager) => {
+        // 1-3. WorkHistory + workStatus (CLAUDE.md validation order)
+        const workHistory = await manager.findOne(WorkHistory, {
+          where: { user: { id: userId }, isCurrent: true },
+          relations: [
+            'user',
+            'role',
+            'workStatus',
+            'amphoe',
+            'localAdministrativeOrganization',
+          ],
+        });
+        if (!workHistory) {
+          throw new NotFoundException(`WorkHistory for user ${userId} not found`);
+        }
+        if (workHistory.workStatus?.name !== 'approved') {
+          throw new UnauthorizedException(
+            'คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)',
+          );
+        }
+
+        // 4. Load target SPG with full scope chain.
+        const spg = await manager.findOne(SupplementProjectGroup, {
+          where: { id: spgId },
+          relations: [
+            'createdBy',
+            'developmentPlanSupplement',
+            'developmentPlanSupplement.developmentPlan',
+            'responsibleAgency',
+          ],
+        });
+        if (!spg) {
+          throw new NotFoundException(
+            `SupplementProjectGroup with ID ${spgId} not found`,
+          );
+        }
+
+        // Resolve target Status.
+        const status = await manager.findOne(Status, {
+          where: { id: dto.statusId },
+        });
+        if (!status) {
+          throw new NotFoundException(`Status with ID ${dto.statusId} not found`);
+        }
+
+        // --- RBAC & Ownership Check ---
+        const allowedRoles = ['staff', 'admin', 'super-admin'];
+        const userRole = workHistory.role?.name;
+
+        if (!allowedRoles.includes(userRole)) {
+          if (userRole === 'user') {
+            // Current latest status — needed for both Pull_Back and Pending paths.
+            const currentTracking = await manager.findOne(TrackingStatus, {
+              where: {
+                supplementProjectGroupId: { id: spg.id },
+                isLatest: true,
+              },
+              relations: ['statusId'],
+            });
+            const currentStatusName: string =
+              currentTracking?.statusId?.name ?? '';
+
+            if (status.name === 'Pull_Back') {
+              // Q4 — verbatim PG parity.
+              // 5. Ownership against workHistory.id (CLAUDE.md §4).
+              if (spg.createdBy?.id !== workHistory.id) {
+                throw new ForbiddenException(
+                  'คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะโครงการนี้',
+                );
+              }
+              // Pull_Back allowed only from Pending or Verified.
+              if (
+                currentStatusName !== 'Pending' &&
+                currentStatusName !== 'Verified'
+              ) {
+                throw new BadRequestException(
+                  `ไม่สามารถดึงกลับได้จากสถานะ "${currentStatusName}"`,
+                );
+              }
+              // Scope: parent DevelopmentPlan + DevelopmentPlanSupplement
+              // must be active and the supplement round must be OPEN.
+              const dps = spg.developmentPlanSupplement;
+              if (!dps) {
+                throw new BadRequestException(
+                  'ไม่พบรอบเพิ่มเติม (DevelopmentPlanSupplement) ของโครงการ',
+                );
+              }
+              const dp = dps.developmentPlan;
+              if (!dp?.isLatest) {
+                throw new BadRequestException(
+                  'แผนพัฒนาฯ ไม่ใช่แผนปัจจุบัน',
+                );
+              }
+              // 2026-05-12 — DevelopmentPlan.isBooked is NOT a gate for
+              // supplement actions; parent plan being booked is the
+              // EXPECTED state for the supplement workflow (mirrors the
+              // existing revision/change rationale).
+              if (!dps.isLatest) {
+                throw new BadRequestException(
+                  'รอบเพิ่มเติมนี้ไม่ใช่รอบปัจจุบัน',
+                );
+              }
+              if (dps.isBooked) {
+                throw new BadRequestException(
+                  'รอบเพิ่มเติมถูกรวมเล่มแล้ว',
+                );
+              }
+              if (!dps.isOpen) {
+                throw new BadRequestException(
+                  'รอบเพิ่มเติมปิดแล้ว ไม่สามารถดึงกลับได้',
+                );
+              }
+            } else if (status.name === 'Pending') {
+              // Owner submission / resubmission to Pending.
+              // Allowed source statuses match the PG path: Ready,
+              // Pull_Back, Returned_For_Revision.
+              const allowedSources = [
+                'Ready',
+                'Pull_Back',
+                'Returned_For_Revision',
+              ];
+              if (!allowedSources.includes(currentStatusName)) {
+                throw new BadRequestException(
+                  `ไม่สามารถส่งโครงการได้จากสถานะ "${currentStatusName}" ` +
+                    `(ต้องอยู่ในสถานะ Ready, Pull_Back หรือ Returned_For_Revision)`,
+                );
+              }
+
+              // Ownership: SPG creator must match acting WorkHistory. SPG is
+              // agency-origin only (§4.2 of supplement workflow), so the
+              // PG-style "same-org" relaxation is not strictly needed; we
+              // still enforce strict ownership for ALL resubmission sources
+              // here for safety.
+              if (spg.createdBy?.id !== workHistory.id) {
+                throw new ForbiddenException(
+                  'คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะโครงการนี้',
+                );
+              }
+
+              // Scope: parent plan + supplement round.
+              const dps = spg.developmentPlanSupplement;
+              if (!dps) {
+                throw new BadRequestException(
+                  'ไม่พบรอบเพิ่มเติม (DevelopmentPlanSupplement) ของโครงการ',
+                );
+              }
+              const dp = dps.developmentPlan;
+              if (!dp?.isLatest) {
+                throw new BadRequestException(
+                  'แผนพัฒนาฯ ไม่ใช่แผนปัจจุบัน',
+                );
+              }
+              // 2026-05-12 — DevelopmentPlan.isBooked is NOT a gate for
+              // supplement actions; parent plan being booked is the
+              // EXPECTED state for the supplement workflow.
+              if (!dps.isLatest) {
+                throw new BadRequestException(
+                  'รอบเพิ่มเติมนี้ไม่ใช่รอบปัจจุบัน',
+                );
+              }
+              if (dps.isBooked) {
+                throw new BadRequestException(
+                  'รอบเพิ่มเติมถูกรวมเล่มแล้ว',
+                );
+              }
+              if (!dps.isOpen) {
+                throw new BadRequestException(
+                  'รอบเพิ่มเติมปิดแล้ว ไม่สามารถส่งโครงการได้',
+                );
+              }
+            } else {
+              throw new ForbiddenException(
+                'คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะโครงการนี้ ' +
+                  '(อนุญาตเฉพาะ Pull_Back และ Pending เท่านั้น)',
+              );
+            }
+          } else {
+            throw new ForbiddenException(
+              'คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะโครงการ',
+            );
+          }
+        } else {
+          // ----- Staff / Admin / Super-Admin branch (Q3) ------------------
+          // Per CLAUDE.md §3 + §4.1 + supplement workflow §12: staff must
+          // validate current status and transition rules; ownership is NOT
+          // required.
+
+          // Scope binding: parent plan + supplement round.
+          const dps = spg.developmentPlanSupplement;
+          if (!dps) {
+            throw new ForbiddenException(
+              'ไม่พบรอบเพิ่มเติมของโครงการ ไม่สามารถดำเนินการได้',
+            );
+          }
+          const dp = dps.developmentPlan;
+          if (!dp?.isLatest) {
+            throw new ForbiddenException(
+              'แผนพัฒนาฯ ที่เชื่อมโยงกับโครงการนี้ไม่ใช่แผนปัจจุบัน ไม่สามารถดำเนินการได้',
+            );
+          }
+          // 2026-05-12 — DevelopmentPlan.isBooked is NOT a gate for
+          // supplement actions; parent plan being booked is the EXPECTED
+          // state for the supplement workflow (mirrors the existing
+          // revision/change rationale).
+          if (!dps.isLatest) {
+            throw new ForbiddenException(
+              'รอบเพิ่มเติมนี้ไม่ใช่รอบปัจจุบัน ไม่สามารถดำเนินการได้',
+            );
+          }
+          if (dps.isBooked) {
+            throw new ForbiddenException(
+              'รอบเพิ่มเติมถูกรวมเล่มแล้ว ไม่สามารถดำเนินการได้',
+            );
+          }
+
+          // Q3 — AGENCY-BASED responsibility check (mirrors RPG, NOT amphoe).
+          // Admin and super-admin bypass.
+          if (userRole === 'staff') {
+            const projectAgencyId = spg.responsibleAgency?.id;
+            if (!projectAgencyId) {
+              throw new BadRequestException(
+                'โครงการนี้ยังไม่มีการกำหนดหน่วยงานรับผิดชอบ ไม่สามารถตรวจสอบสิทธิ์ได้',
+              );
+            }
+            const hasResponsibility = await manager.findOne(
+              WorkHistoryGovernmentAgencyResponsibility,
+              {
+                where: {
+                  workHistory: { id: workHistory.id },
+                  governmentAgency: { id: projectAgencyId },
+                },
+              },
+            );
+            if (!hasResponsibility) {
+              throw new ForbiddenException(
+                'คุณไม่มีสิทธิ์ดำเนินการกับโครงการนี้ (ไม่ได้รับผิดชอบหน่วยงานของโครงการ)',
+              );
+            }
+          }
+
+          // Current latest TrackingStatus + strict transition map.
+          const staffCurrentTracking = await manager.findOne(TrackingStatus, {
+            where: {
+              supplementProjectGroupId: { id: spg.id },
+              isLatest: true,
+            },
+            relations: ['statusId'],
+          });
+          if (!staffCurrentTracking) {
+            throw new InternalServerErrorException(
+              'ไม่พบสถานะปัจจุบันของโครงการ ข้อมูลสถานะอาจไม่สมบูรณ์',
+            );
+          }
+          const staffCurrentStatusName = staffCurrentTracking.statusId?.name;
+          if (!staffCurrentStatusName) {
+            throw new InternalServerErrorException(
+              'ไม่สามารถอ่านชื่อสถานะปัจจุบันของโครงการได้ ข้อมูล statusId อาจไม่สมบูรณ์',
+            );
+          }
+
+          // Same strict map as PG / RPG. Returned_For_Revision only from
+          // Pending or Verified (CLAUDE.md §Returned_For_Revision Rule).
+          const staffAllowedTransitions: Record<string, string[]> = {
+            Pending: ['Verified', 'Returned_For_Revision'],
+            Verified: ['Pending_Approval', 'Returned_For_Revision'],
+            Pending_Approval: ['Approved'],
+          };
+          const allowedDestinations =
+            staffAllowedTransitions[staffCurrentStatusName];
+          if (
+            !allowedDestinations ||
+            !allowedDestinations.includes(status.name)
+          ) {
+            throw new ForbiddenException(
+              `ไม่อนุญาตให้เปลี่ยนสถานะจาก "${staffCurrentStatusName}" เป็น "${status.name}" ` +
+                `(เส้นทางที่อนุญาต: ${staffCurrentStatusName} → ${allowedDestinations?.join(', ') ?? 'ไม่มี'})`,
+            );
+          }
+        }
+
+        // Capture fromStatus BEFORE flipping isLatest for the post-commit
+        // notification emit.
+        const emitFromTracking = await manager.findOne(TrackingStatus, {
+          where: {
+            supplementProjectGroupId: { id: spg.id },
+            isLatest: true,
+          },
+          relations: ['statusId'],
+        });
+        const emitFromStatus = emitFromTracking?.statusId?.name ?? '';
+
+        // Transition + Audit (§12). Flip prior latest, insert new row.
+        await manager.update(
+          TrackingStatus,
+          { supplementProjectGroupId: { id: spg.id } },
+          { isLatest: false },
+        );
+
+        // Only staff-lead may set staffRemark. User submissions strip to null.
+        const staffLeadRoles = ['staff', 'admin', 'super-admin'];
+        const resolvedStaffRemark = staffLeadRoles.includes(
+          workHistory.role?.name,
+        )
+          ? (dto.staffRemark ?? null)
+          : null;
+
+        const tracking = manager.create(TrackingStatus, {
+          createdBy: workHistory,
+          supplementProjectGroupId: spg,
+          comment: dto.comment,
+          staffRemark: resolvedStaffRemark,
+          statusId: status,
+          isLatest: true,
+        });
+        const savedTracking = await manager.save(TrackingStatus, tracking);
+
+        if (dto.comments?.length) {
+          const commentEntities = dto.comments.map((c) =>
+            manager.create(Comment, {
+              step: c.step,
+              detail: c.detail,
+              trackingStatusId: savedTracking,
+            }),
+          );
+          await manager.save(Comment, commentEntities);
+        }
+
+        // Pull_Back announcement (reuse the existing announcement template;
+        // notification copy substitution per Q7 happens at presentation time).
+        if (status.name === 'Pull_Back') {
+          try {
+            const staffRole = await manager.findOne(Role, {
+              where: { name: 'staff' },
+            });
+            if (staffRole) {
+              await this.announcementsService.create(
+                {
+                  title: 'มีการขอดึงกลับโครงการเพิ่มเติม',
+                  description:
+                    `โครงการเพิ่มเติม "${spg.title}" ขอดึงกลับโดย ` +
+                    `${workHistory.user?.firstname} ${workHistory.user?.lastname}`,
+                  type: NotificationType.PROJECT,
+                  status: AnnouncementStatus.PUBLISHED,
+                  roleIds: [staffRole.id],
+                },
+                userId,
+              );
+            }
+          } catch (err) {
+            this.logger.error(
+              'Failed to send SPG pull back announcement',
+              err,
+            );
+          }
+        }
+
+        return {
+          saved: savedTracking,
+          fromStatus: emitFromStatus,
+          toStatus: status.name,
+          project: {
+            id: spg.id,
+            title: spg.title ?? '',
+            responsibleAgencyId: spg.responsibleAgency?.id ?? null,
+            createdByWorkHistoryId: spg.createdBy?.id ?? null,
+            planName:
+              spg.developmentPlanSupplement?.developmentPlan?.name ?? null,
+          },
+          actorUserId: workHistory.user?.id ?? null,
+          actorWorkHistoryId: workHistory.id ?? null,
+        };
+      });
+
+      // POST-COMMIT notification dispatch. Best-effort — wrapped in try/catch
+      // inside `dispatchPhaseOneNotification`; a failure here MUST NOT
+      // cascade into the workflow caller (§4.1, §17.2).
+      //
+      // SUPP-3 BE-06 — `projectKind: 'supplement-project-group'` replaces the
+      // SUPP-1 BE-02 placeholder (`'revised-project-group'`). Recipient
+      // resolution still routes through `resolveStaffLeadByAgency` (Q3 —
+      // SPG staff responsibility is agency-based, same axis as RPG); the
+      // kind discriminator drives the per-kind subject / altText
+      // substitution ("โครงการเพิ่มเติม") and the supplement deep-link
+      // (`/project/supplement/<id>`) per Q7 reuse-with-substitution. No new
+      // notification template is registered (per §14 of the supplement
+      // workflow doc).
+      const eventTypes = this.resolveNotificationEventTypes(
+        txResult.fromStatus,
+        txResult.toStatus,
+      );
+      for (const eventType of eventTypes) {
+        await this.dispatchPhaseOneNotification({
+          eventType,
+          fromStatus: txResult.fromStatus,
+          toStatus: txResult.toStatus,
+          projectId: txResult.project.id,
+          // SUPP-3 BE-06 — first-class supplement kind. Replaces the
+          // SUPP-1 BE-02 placeholder. See dispatch fn comment above.
+          projectKind: 'supplement-project-group',
+          projectTitle: txResult.project.title,
+          projectResponsibleAgencyId: txResult.project.responsibleAgencyId,
+          createdByWorkHistoryId: txResult.project.createdByWorkHistoryId,
+          reason: dto.comment ?? dto.staffRemark ?? null,
+          planName: txResult.project.planName,
+          actorUserId: txResult.actorUserId,
+          actorWorkHistoryId: txResult.actorWorkHistoryId,
+        });
+      }
+
+      // SUPP-IA-03 (BE-β, 2026-05-12) — §17.4 baseline snapshot on
+      // owner-driven submission. Any path that lands the SPG at
+      // `Pending` from the owner court (Ready, Pull_Back, or
+      // Returned_For_Revision) is an authoring-time submit per §17.4
+      // Wave 11. Same-hash idempotency (Wave 10) collapses repeat fires
+      // across resubmission cycles into a no-op. Best-effort + advisory
+      // (§17.2): a snapshot failure logs and is swallowed; it MUST NOT
+      // roll back the workflow transition (the tracking row has already
+      // been committed at this point).
+      if (txResult.toStatus === 'Pending') {
+        await this.fireSpgBaselineSnapshot(userId, txResult.project.id);
+      }
+
+      return txResult.saved;
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * SUPP-IA-03 (BE-β, 2026-05-12) — fire a §17.4 `no-ai-baseline`
+   * snapshot for the SPG transitioning to `Pending` from the owner
+   * court. Reads the saved SPG (with budgets + classification) from the
+   * default manager and forwards to `PreSubmitSnapshotService` with
+   * `result: null` (which forces the snapshot service to write the
+   * baseline row).
+   *
+   * Contract:
+   *   - `endpoint='no-ai-baseline'`, `staleness_policy='snapshot-only'`
+   *   - `target_kind='supplement-project-group'`, `target_id=spg.id`
+   *   - `workflow='add'`
+   *   - Idempotency by `(target_kind, target_id, content_hash)` per
+   *     Wave 10. A repeat fire with the same hash short-circuits in
+   *     `PreSubmitSnapshotService.createSnapshot`.
+   *
+   * §17.2 advisory-only — a failure here is logged and swallowed. The
+   * caller has already committed the tracking row; rolling back the
+   * workflow transition because of an AI-table write failure would
+   * violate §17.2.
+   *
+   * §17.3 audit separation — the snapshot row has no FK to SPG.
+   */
+  private async fireSpgBaselineSnapshot(
+    userId: string,
+    spgId: string,
+  ): Promise<void> {
+    try {
+      const spg = await this.supplementProjectGroupRepo.findOne({
+        where: { id: spgId },
+        relations: [
+          'developmentPlanSupplement',
+          'developmentPlanSupplement.developmentPlan',
+          'strategy',
+          'tactic',
+          'plan',
+          'developmentIssue',
+          'createdBy',
+          'createdBy.amphoe',
+          'createdBy.localAdministrativeOrganization',
+        ],
+      });
+      if (!spg) {
+        this.logger.warn(
+          `[SUPP-IA-03 baseline] SPG ${spgId} not found post-commit; skipping snapshot.`,
+        );
+        return;
+      }
+
+      const budgets = await this.dataSource.getRepository(Budget).find({
+        where: { supplementProjectGroupId: { id: spgId } as any },
+      });
+
+      // §16 — resolve the parent plan's format. Read-only.
+      let reportFormat: ReportFormat;
+      try {
+        reportFormat =
+          await this.bookFormatResolver.resolveBySupplementProjectGroup(
+            spgId,
+            this.dataSource.manager,
+          );
+      } catch (e) {
+        // Defensive fallback — if format resolution fails, infer from
+        // the row shape (§16.5). The snapshot is advisory either way.
+        reportFormat = spg.developmentIssue
+          ? ReportFormat.ISSUE_BASED
+          : ReportFormat.STRATEGY_BASED;
+        this.logger.warn(
+          `[SUPP-IA-03 baseline] format resolve failed spgId=${spgId} ` +
+            `fallback=${reportFormat} err=${(e as Error)?.message ?? 'unknown'}`,
+        );
+      }
+
+      await this.preSubmitSnapshotService.createSnapshot(userId, {
+        targetKind: 'supplement-project-group',
+        targetId: spgId,
+        workflow: 'add',
+        // Null `result` → snapshot service writes the audit-baseline
+        // row (no live AI invocation, no quota deduction).
+        result: null,
+        project: {
+          title: spg.title ?? null,
+          objective: spg.objective ?? null,
+          goal: spg.goal ?? null,
+          expected: spg.expected ?? null,
+          indicator: spg.indicator ?? null,
+          startLat: spg.startLat ?? null,
+          startLng: spg.startLng ?? null,
+          endLat: spg.endLat ?? null,
+          endLng: spg.endLng ?? null,
+          amphoeId: spg.createdBy?.amphoe?.id ?? null,
+          localOrganizationId:
+            spg.createdBy?.localAdministrativeOrganization?.id ?? null,
+          budgets: budgets.map((b) => ({
+            year: b.year,
+            quantity: b.quantity ?? 0,
+          })),
+        },
+        classification: {
+          reportFormat:
+            reportFormat === ReportFormat.ISSUE_BASED
+              ? 'ISSUE_BASED'
+              : 'STRATEGY_BASED',
+          strategyName: spg.strategy?.name ?? null,
+          tacticName: spg.tactic?.name ?? null,
+          planName: spg.plan?.name ?? null,
+          developmentIssueName: spg.developmentIssue?.name ?? null,
+        },
+        attachments: [],
+      });
+    } catch (err) {
+      // §17.2 advisory — log and continue.
+      this.logger.error(
+        `[SUPP-IA-03 baseline] snapshot write failed spgId=${spgId} ` +
+          `err=${(err as Error)?.message ?? 'unknown'}`,
+      );
+    }
+  }
+
+  /**
+   * SUPP-1 / BE-02 — Staff-led rollback for SupplementProjectGroup.
+   *
+   * Mirrors `rollbackRevisionProjectGroupStatus` with two differences:
+   *   1. Scope is the SPG's supplement chain (parent DevelopmentPlan +
+   *      DevelopmentPlanSupplement), not a DevelopmentPlanRevision.
+   *   2. Responsibility check is AGENCY-BASED (Q3, mirror of RPG).
+   *
+   * Per §14.6 the rolled-back SPG row is hard-deleted as the FINAL step of
+   * the transaction. In SUPP-1 SPG is a leaf (no descendants possible
+   * because `revised_project_groups.prev_project_type` enum lacks
+   * `'supplement'`), so this is functionally a no-op for upstream unlock —
+   * but the invariant is implemented now so SUPP-4 inherits a correct
+   * foundation. See the TODO(SUPP-4) marker at the delete site.
+   *
+   * The `clearResponsibleAgency` flag is inapplicable to SPG because every
+   * SPG is agency-origin (§9 of the supplement workflow). We silently
+   * ignore it here (chosen branch — see workflow doc §12). A future
+   * tightening could throw on `clearResponsibleAgency=true`; the silent
+   * ignore preserves backward compatibility with shared client code.
+   */
+  async rollbackSupplementProjectGroupStatus(
+    supplementProjectGroupId: string,
+    userId: string,
+    _clearResponsibleAgency?: boolean,
+  ): Promise<{ message: string; status: string }> {
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        // 1-2. WorkHistory + workStatus.
+        const workHistory = await manager.findOne(WorkHistory, {
+          where: { user: { id: userId }, isCurrent: true },
+          relations: ['role', 'workStatus'],
+        });
+        if (!workHistory) {
+          throw new NotFoundException(
+            `WorkHistory for user ${userId} not found`,
+          );
+        }
+        if (workHistory.workStatus?.name !== 'approved') {
+          throw new UnauthorizedException(
+            'คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)',
+          );
+        }
+
+        // 3. RBAC — staff-lead only.
+        const allowedRoles = ['staff', 'admin', 'super-admin'];
+        const userRole = workHistory.role?.name;
+        if (!allowedRoles.includes(userRole)) {
+          throw new ForbiddenException(
+            'เฉพาะเจ้าหน้าที่ (staff/admin/super-admin) เท่านั้นที่สามารถดึงกลับโครงการได้',
+          );
+        }
+
+        // 4. Load SPG with scope chain.
+        const spg = await manager.findOne(SupplementProjectGroup, {
+          where: { id: supplementProjectGroupId },
+          relations: [
+            'createdBy',
+            'developmentPlanSupplement',
+            'developmentPlanSupplement.developmentPlan',
+            'responsibleAgency',
+          ],
+        });
+        if (!spg) {
+          throw new NotFoundException(
+            `SupplementProjectGroup with ID ${supplementProjectGroupId} not found`,
+          );
+        }
+
+        // 5. Q3 — AGENCY-BASED staff responsibility check. Admin/super-admin
+        //    bypass.
+        if (userRole === 'staff') {
+          const projectAgencyId = spg.responsibleAgency?.id;
+          if (!projectAgencyId) {
+            throw new BadRequestException(
+              'โครงการนี้ยังไม่มีการกำหนดหน่วยงานรับผิดชอบ ไม่สามารถตรวจสอบสิทธิ์ได้',
+            );
+          }
+          const hasResponsibility = await manager.findOne(
+            WorkHistoryGovernmentAgencyResponsibility,
+            {
+              where: {
+                workHistory: { id: workHistory.id },
+                governmentAgency: { id: projectAgencyId },
+              },
+            },
+          );
+          if (!hasResponsibility) {
+            throw new ForbiddenException(
+              'คุณไม่มีสิทธิ์ดึงกลับโครงการนี้ (ไม่ได้รับผิดชอบหน่วยงานของโครงการ)',
+            );
+          }
+        }
+
+        // 6. Scope binding — parent plan + supplement round must be active.
+        //    Mirrors the RPG rollback gate (staff-led rollback does NOT gate
+        //    on `isOpen`; supplement closure does not block staff data
+        //    correction).
+        const dps = spg.developmentPlanSupplement;
+        if (!dps) {
+          throw new BadRequestException(
+            'ไม่พบรอบเพิ่มเติมของโครงการ ไม่สามารถดึงกลับได้',
+          );
+        }
+        if (!dps.isLatest) {
+          throw new BadRequestException(
+            'รอบเพิ่มเติมนี้ไม่ใช่รอบปัจจุบัน ไม่สามารถดึงกลับได้',
+          );
+        }
+        if (dps.isBooked) {
+          throw new BadRequestException(
+            'รอบเพิ่มเติมถูกรวมเล่มแล้ว ไม่สามารถดึงกลับได้',
+          );
+        }
+
+        // 6.5 CLAUDE.md §14 — Version Lineage Immutability.
+        // SUPP-1 leaf-case: SPG cannot have descendants today because
+        // `revised_project_groups.prev_project_type` does not yet include
+        // `'supplement'` (deferred to SUPP-4). LineageLockService therefore
+        // has no `'supplement'` LineageProjectType — calling it would be a
+        // type error. The guard is intentionally OMITTED here for SUPP-1
+        // and MUST be added back in SUPP-4 once the enum is extended.
+        // The rollback hard-delete below proceeds because no descendants
+        // can exist.
+
+        // 7. Status constraint — cannot rollback from Pull_Back or Ready.
+        const currentTracking = await manager.findOne(TrackingStatus, {
+          where: {
+            supplementProjectGroupId: { id: supplementProjectGroupId },
+            isLatest: true,
+          },
+          relations: ['statusId'],
+        });
+        if (!currentTracking) {
+          throw new NotFoundException('ไม่พบสถานะปัจจุบันของโครงการ');
+        }
+        const currentStatusName = currentTracking.statusId?.name;
+        const disallowedStatuses = ['Pull_Back', 'Ready'];
+        if (disallowedStatuses.includes(currentStatusName)) {
+          throw new BadRequestException(
+            `ไม่สามารถดึงกลับได้จากสถานะ "${currentStatusName}"`,
+          );
+        }
+
+        // 8. clearResponsibleAgency is inapplicable to SPG — every SPG is
+        //    agency-origin (§9 of supplement workflow). The flag is silently
+        //    ignored. Per §7.1 we MUST NOT clear the field on agency
+        //    projects, so even if a future caller set the flag we will not
+        //    act on it.
+        void _clearResponsibleAgency;
+
+        // 9. Find previous status (most recent non-latest).
+        const previousTracking = await manager.findOne(TrackingStatus, {
+          where: {
+            supplementProjectGroupId: { id: supplementProjectGroupId },
+            isLatest: false,
+          },
+          relations: ['statusId'],
+          order: { createAt: 'DESC' },
+        });
+        if (!previousTracking?.statusId) {
+          throw new BadRequestException(
+            'ไม่พบสถานะก่อนหน้า ไม่สามารถย้อนกลับได้',
+          );
+        }
+
+        // 10. True rollback — hard-delete current latest TrackingStatus,
+        //     restore previous to isLatest=true. §12 audit exception.
+        await manager.delete(TrackingStatus, { id: currentTracking.id });
+        await manager.update(
+          TrackingStatus,
+          { id: previousTracking.id },
+          { isLatest: true },
+        );
+
+        // 11. CLAUDE.md §14.6 — Rollback Ghost-Descendant Fix.
+        // Hard-delete the rolled-back SPG row itself as the final step of
+        // the transaction.
+        //
+        // TODO(SUPP-4): once SUPP-4 lands and
+        // `revised_project_groups.prev_project_type='supplement'` becomes a
+        // valid enum value, this hard-delete will also unlock upstream
+        // supplement-rooted RPGs via the existing §14 lineage lock
+        // semantics. In SUPP-1 through SUPP-3 SPG is a leaf (no
+        // descendants possible), so the upstream-unlock effect is a
+        // functional no-op — but the invariant is implemented now so the
+        // SUPP-4 activation is a zero-code-change event. DO NOT remove
+        // this delete as dead code.
+        //
+        // The cascade FK on tracking_status.supplement_project_group_id
+        // removes any remaining older tracking rows as part of the same
+        // transaction — the intentional rollback audit exception
+        // documented in §12 and the STAFF-LED ROLLBACK RULE.
+        await manager.delete(SupplementProjectGroup, {
+          id: supplementProjectGroupId,
+        });
+
+        return {
+          message: `ย้อนสถานะสำเร็จ (กลับไปเป็น "${previousTracking.statusId.name}")`,
+          status: 'success',
+        };
       });
     } catch (error) {
       handleException(this.logger, error);

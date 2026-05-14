@@ -3,9 +3,18 @@ import {
   NotFoundException,
   Logger,
   BadRequestException,
+  ForbiddenException,
+  ConflictException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import {
+  DataSource,
+  EntityManager,
+  Repository,
+  Not,
+  SelectQueryBuilder,
+} from 'typeorm';
 import { CreateSupplementProjectGroupDto } from './dto/create-supplement-project-group.dto';
 import { UpdateSupplementProjectGroupDto } from './dto/update-supplement-project-group.dto';
 import { SupplementProjectGroup } from './entities/supplement-project-group.entity';
@@ -18,6 +27,7 @@ import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { Budget } from 'src/budget/entities/budget.entity';
 import { handleException } from 'src/util/handleException';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
+import { Status } from 'src/status/entities/status.entity';
 import { ProjectClassificationValidator } from 'src/common/project-classification/project-classification.validator';
 import { BookFormatResolver } from 'src/common/project-classification/book-format.resolver';
 import { DevelopmentIssue } from 'src/development-issue/entities/development-issue.entity';
@@ -28,7 +38,42 @@ import {
 } from 'src/common/project-classification/constants';
 import { UsersService } from 'src/users/users.service';
 import { maskCreatedByUserOnProjects } from 'src/utils/mask-project-creator.util';
+import { WorkHistoryLookupService } from 'src/work-history/work-history-lookup.service';
+import { BookLockService } from 'src/common/book-lock/book-lock.service';
+import { LineageLockService } from 'src/common/lineage-lock/lineage-lock.service';
+import { getAgencyData as sharedGetAgencyData } from 'src/project-groups/util/agency-data.util';
+import { assertWizardCompleteness as sharedAssertWizardCompleteness } from 'src/project-groups/util/wizard-completeness.util';
+import { SupplementScopeService } from 'src/common/supplement-scope/supplement-scope.service';
 
+/**
+ * SUPP-1 BE-01 — SupplementProjectGroupService refactor.
+ *
+ * NOTE (SUPP-IA-03, 2026-05-12, rev2): SPG re-introduces `Ready` as the
+ * entry state, mirroring main-plan PG. `[create POST] → Ready`; the
+ * owner explicitly advances `Ready → Pending` via the shared
+ * `tracking-status` endpoint. The SUPP-1 cleanup of the `isDraft = true`
+ * true-draft path is PRESERVED — `Ready` is a workflow-grade
+ * pre-submission state, NOT a draft, and `isDraft` on the entity is a
+ * legacy column permanently `false` for every SPG row. The §17.4
+ * `no-ai-baseline` write moves with the authoring-time submit and now
+ * fires on `Ready → Pending` inside `TrackingStatusService`, not here.
+ *
+ * Brings SPG to parity with `ProjectGroupsService` (workflow-grade
+ * guarantees, minus the draft semantics):
+ *   - Resolves Status by canonical name (no hard-coded UUIDs, CLAUDE.md §12 / W67).
+ *   - Q1 + Q2 agency-only gate at every write entry point
+ *     (LAO callers → 403 `LAO_NOT_ALLOWED_ON_SUPPLEMENT`).
+ *   - Scope binding for parent `DevelopmentPlan` + `DevelopmentPlanSupplement`
+ *     (`isLatest`, `isOpen`, `isBooked`, `deletedAt`) per workflow §6.
+ *   - `responsibleAgency` is NEVER accepted from the client (§5.1, §7.1).
+ *   - §15 BookLockService + §14 LineageLockService guards on mutation paths
+ *     (§14 is a NO-OP in SUPP-1 — descendants land in SUPP-4).
+ *   - Editable / soft-delete allowlist: {Ready, Pull_Back, Returned_For_Revision}
+ *     per workflow §10 rev2 (`assertEditableStatus`).
+ *   - §17.4 `no-ai-baseline` snapshot moved to `Ready → Pending`
+ *     authoring-time submit (in `TrackingStatusService`).
+ *   - Every transition writes a `TrackingStatus` audit row (§12).
+ */
 @Injectable()
 export class SupplementProjectGroupService {
   private readonly logger = new Logger(SupplementProjectGroupService.name);
@@ -62,26 +107,79 @@ export class SupplementProjectGroupService {
     private readonly classificationValidator: ProjectClassificationValidator,
     private readonly bookFormatResolver: BookFormatResolver,
     private readonly usersService: UsersService,
+    private readonly workHistoryLookup: WorkHistoryLookupService,
+    private readonly bookLockService: BookLockService,
+    private readonly lineageLockService: LineageLockService,
+    // SUPP-IA-03 (BE-α, 2026-05-12): `PreSubmitSnapshotService` injection
+    // removed — baseline snapshot is now fired by
+    // `TrackingStatusService.createBySupplementProjectGroup` at Ready →
+    // Pending, not at create-time.
+    private readonly supplementScopeService: SupplementScopeService,
   ) {}
 
   /**
    * W100 PR2 — thin wrapper around the shared
    * `maskCreatedByUserOnProjects` utility (Pattern 3 — decrypt-then-mask).
-   * See `src/utils/mask-project-creator.util.ts`.
    */
   private async maskCreatedByUser(items: any): Promise<void> {
     await maskCreatedByUserOnProjects(this.usersService, items);
   }
 
+  // ============================================================
+  // PUBLIC — workflow-grade write paths
+  // ============================================================
+
+  /**
+   * Create-path. Writes a `Ready` TrackingStatus row and returns the
+   * saved SPG. Owner explicitly advances Ready → Pending afterwards via
+   * the shared tracking-status endpoint (mirrors main-plan PG).
+   *
+   * SUPP-IA-03 (BE-α, 2026-05-12): the §17.4 baseline snapshot is NO
+   * LONGER fired here — it is fired by
+   * `TrackingStatusService.createBySupplementProjectGroup` on the
+   * authoring-time submit (Ready → Pending). See workflow doc §10/§15.
+   */
   async create(
     dto: CreateSupplementProjectGroupDto,
     userId: string,
   ): Promise<SupplementProjectGroup> {
     try {
-      return await this.dataSource.transaction(async (manager) => {
-        // CLAUDE.md §16.5 — resolve format from the supplement chain
-        // BEFORE validating foreign keys so we know which classification
-        // slots to require.
+      // Reject client-supplied responsibleAgency BEFORE the transaction.
+      // §5.1 / §7.1: SPG is agency-origin → responsibleAgency is derived
+      // from the creator's WorkHistory, never from the request body.
+      this.assertNoClientResponsibleAgency(dto);
+
+      const savedId = await this.dataSource.transaction(async (manager) => {
+        // 1-3. WorkHistory + workStatus
+        const workHistory = await this.getWorkHistory(manager, userId);
+        this.assertWorkStatusApproved(workHistory);
+
+        // 4. Q1+Q2 agency-classification gate (workflow §4.2).
+        this.supplementScopeService.assertSupplementOwnerScope(workHistory);
+
+        // 5. Wizard completeness (publish floor).
+        sharedAssertWizardCompleteness({
+          title: dto.title,
+          objective: dto.objective ?? null,
+          goal: dto.goal ?? null,
+          startLat: dto.startLat ?? null,
+          startLng: dto.startLng ?? null,
+          expected: dto.expected ?? null,
+          strategyId: dto.strategyId ?? null,
+          tacticId: dto.tacticId ?? null,
+          planId: dto.planId ?? null,
+          developmentIssueId: dto.developmentIssueId ?? null,
+          budget: dto.budget,
+        });
+
+        await this.ensureNoDuplicateTitle(
+          manager,
+          dto.title,
+          workHistory.id,
+          undefined,
+        );
+
+        // 6. §16.5 classification shape (resolved from the supplement chain).
         const format = await this.bookFormatResolver.resolveBySupplement(
           dto.developmentPlanSupplementId,
           manager,
@@ -94,51 +192,29 @@ export class SupplementProjectGroupService {
           indicator: dto.indicator,
         });
 
-        // Validate foreign keys
-        const [
-          developmentPlanSupplement,
-          strategy,
-          tactic,
-          plan,
-          workHistory,
-        ] = await this.validateForeignKeys(manager, dto, userId);
+        // 7. Validate FK + scope (parent plan + supplement open/latest/booked).
+        const { supplement, developmentPlan, strategy, tactic, plan } =
+          await this.validateForeignKeysAndScope(
+            manager,
+            dto.developmentPlanSupplementId,
+            {
+              strategyId: dto.strategyId,
+              tacticId: dto.tacticId,
+              planId: dto.planId,
+            },
+            format,
+          );
 
-        if (!developmentPlanSupplement) {
-          throw new NotFoundException(
-            `DevelopmentPlanSupplement with ID ${dto.developmentPlanSupplementId} is required`,
+        // §16.6 ISSUE_BASED — resolve the issue and verify plan binding.
+        let developmentIssue: DevelopmentIssue | null = null;
+        if (format === ReportFormat.ISSUE_BASED) {
+          developmentIssue = await this.resolveAndAssertIssue(
+            manager,
+            dto.developmentIssueId!,
+            developmentPlan.id,
           );
         }
 
-        const developmentPlan = developmentPlanSupplement.developmentPlan;
-
-        // §16.6 — ISSUE_BASED: resolve + validate the issue belongs to
-        // the parent plan.
-        let developmentIssue: DevelopmentIssue | null = null;
-        if (format === ReportFormat.ISSUE_BASED) {
-          if (!dto.developmentIssueId) {
-            // ProjectClassificationValidator already rejected this, but
-            // keep a belt-and-braces guard for readers of this function.
-            throw new BadRequestException(
-              `${ERROR_CODES.PROJECT_CLASSIFICATION_SHAPE_MISMATCH}: ${ERROR_MESSAGES.ISSUE_BASED_REQUIRES_ISSUE}`,
-            );
-          }
-          developmentIssue = await manager.findOne(DevelopmentIssue, {
-            where: { id: dto.developmentIssueId },
-            relations: ['developmentPlan'],
-          });
-          if (!developmentIssue) {
-            throw new NotFoundException(
-              `${ERROR_CODES.DEVELOPMENT_ISSUE_NOT_FOUND}: ${ERROR_MESSAGES.DEVELOPMENT_ISSUE_NOT_FOUND}`,
-            );
-          }
-          if (developmentIssue.developmentPlan?.id !== developmentPlan.id) {
-            throw new BadRequestException(
-              `${ERROR_CODES.DEVELOPMENT_ISSUE_PLAN_MISMATCH}: ${ERROR_MESSAGES.DEVELOPMENT_ISSUE_PLAN_MISMATCH}`,
-            );
-          }
-        }
-
-        // §16.5 — mutually exclusive classification columns.
         const classificationColumns =
           format === ReportFormat.ISSUE_BASED
             ? {
@@ -149,15 +225,19 @@ export class SupplementProjectGroupService {
                 developmentIssue,
               }
             : {
-                strategy: strategy as any,
-                tactic: tactic as any,
-                plan: plan as any,
+                strategy: strategy as Strategy,
+                tactic: tactic as Tactic,
+                plan: plan as Plan,
                 indicator: dto.indicator,
                 developmentIssue: null,
               };
 
+        // §5.1 — derive responsibleAgency from WorkHistory. Agency-only
+        // gate means this always lands on the agency branch.
+        const agencyData = sharedGetAgencyData(workHistory);
+
         const supplementProjectGroup = manager.create(SupplementProjectGroup, {
-          developmentPlanSupplement: developmentPlanSupplement as any,
+          developmentPlanSupplement: supplement as any,
           title: dto.title,
           objective: dto.objective,
           goal: dto.goal,
@@ -167,56 +247,93 @@ export class SupplementProjectGroupService {
           endLng: dto.endLng,
           expected: dto.expected,
           projectYear: dto.projectYear,
-          isDraft: dto.isDraft ?? false,
+          isDraft: false,
           ...classificationColumns,
           createdBy: workHistory,
-          originAgencyId: dto.originAgencyId ? { id: dto.originAgencyId } as any : null,
-          responsibleAgency: dto.responsibleAgency ? { id: dto.responsibleAgency } as any : null,
+          // 2026-05-12 (bug fix): SPG.amphoe was never being persisted
+          // on create — the `amphoe_id` column on the row was always
+          // NULL. Mirrors the canonical PG create at
+          // `project-groups.service.ts:302` which writes the creator's
+          // amphoe FK. For agency callers (Q1+Q2 supplement gate) this
+          // is always อบจ.นม amphoe (`'3001'`), but the assignment is
+          // shape-symmetric with PG/RPG and enables the §13 geo
+          // aggregation / executive amphoe rollup paths that consume
+          // SPG.amphoe directly (W55-BE-04 +
+          // unified-projects executive list).
+          amphoe: workHistory.amphoe
+            ? ({ id: workHistory.amphoe.id } as any)
+            : null,
+          // Task `SUPP_SPG_LAO_COLUMN` (2026-05-12) — denormalized
+          // creator-LAO column for shape-symmetry with PG / RPG. For
+          // the current Q1+Q2 supplement gate (agency-only) this is
+          // always `'3001027'` (อบจ.นม), but we populate it
+          // unconditionally so aggregator / filter queries can match
+          // on the column directly instead of JOINing through
+          // `createdBy.workHistory`. Future scope-widening (e.g.
+          // coordinated LAOs admitted into the supplement gate) will
+          // get correct values without a follow-up schema change.
+          // §5 immutable — set at INSERT only, never mutated on update.
+          localAdministrativeOrganization: workHistory.localAdministrativeOrganization
+            ? ({ id: workHistory.localAdministrativeOrganization.id } as any)
+            : null,
+          // originAgencyId — agency-origin: null unless the workHistory
+          // unexpectedly carries a non-อบจ lao (guarded above).
+          originAgencyId:
+            workHistory.localAdministrativeOrganization?.id === '3001027'
+              ? null
+              : ({ id: workHistory.localAdministrativeOrganization?.id } as any),
           additionalDetail: dto.additionalDetail,
-          isLatest: true, // Set as latest version
-        });
+          isLatest: true,
+          ...(agencyData as any),
+        } as any);
 
         const savedProject = await manager.save(supplementProjectGroup);
 
-        // Create initial tracking status
+        // §12 audit — write the initial `Ready` TrackingStatus row.
+        // SUPP-IA-03 (BE-α, 2026-05-12): SPG now enters the workflow at
+        // `Ready` mirroring main-plan PG. Owner explicitly advances
+        // Ready → Pending via the shared tracking-status endpoint
+        // (handled in `TrackingStatusService.createBySupplementProjectGroup`
+        // per BE-β below).
+        const readyStatusId = await this.resolveStatusId(manager, 'Ready');
         const trackingStatus = manager.create(TrackingStatus, {
           supplementProjectGroupId: savedProject,
-          statusId: { id: '96be5646-cd55-4542-ae92-b82b2935167e' } as any, // Assuming this is a default status ID
+          statusId: { id: readyStatusId } as any,
           createdBy: workHistory,
+          isLatest: true,
         });
         await manager.save(trackingStatus);
 
-        // Create budgets if provided
-        if (dto.budget && dto.budget.length > 0) {
-          // Validate budget year is within development plan range
-          for (const budgetItem of dto.budget) {
-            if (
-              budgetItem.year < developmentPlan.startYear ||
-              budgetItem.year > developmentPlan.endYear
-            ) {
-              throw new BadRequestException(
-                `ปีงบประมาณต้องอยู่ในช่วง พ.ศ. ${developmentPlan.startYear} - ${developmentPlan.endYear} (ปีที่ส่งมา: ${budgetItem.year})`,
-              );
-            }
-          }
+        // Budgets (publish path requires non-empty + positive — enforced
+        // by `assertWizardCompleteness` above).
+        await this.persistBudgets(
+          manager,
+          savedProject.id,
+          dto.budget,
+          developmentPlan,
+        );
 
-          const budgets = dto.budget.map((budgetDto) => {
-            const { projectGroupId, revisedProjectGroupId, ...budgetData } = budgetDto;
-            return manager.create(Budget, {
-              ...budgetData,
-              supplementProjectGroupId: savedProject,
-            });
-          });
-
-          await manager.save(budgets);
-        }
-
-        return savedProject;
+        return savedProject.id;
       });
+
+      // §17.4 — baseline snapshot is NOT fired at create. SUPP-IA-03 (BE-α,
+      // 2026-05-12): the trigger is relocated to the owner Ready → Pending
+      // transition in `TrackingStatusService.createBySupplementProjectGroup`
+      // (BE-β), mirroring main-plan PG and the §17.4 Wave 11 authoring-vs-
+      // workflow-only rule. `[create POST] → Ready` is a pre-submission
+      // state and does NOT count as the authoring-time submit.
+
+      // Refetch with relations so the API contract matches existing
+      // controller consumers.
+      return await this.findOne(savedId);
     } catch (error) {
       handleException(this.logger, error);
     }
   }
+
+  // ============================================================
+  // PUBLIC — read paths (unchanged from prior implementation)
+  // ============================================================
 
   async findAll(): Promise<SupplementProjectGroup[]> {
     try {
@@ -232,7 +349,6 @@ export class SupplementProjectGroupService {
         ],
         order: { createdAt: 'DESC' },
       });
-      // W100 PR2 — Pattern 3 (mask). See §17.2 / §17.3.
       await this.maskCreatedByUser(rows);
       return rows;
     } catch (error) {
@@ -240,7 +356,9 @@ export class SupplementProjectGroupService {
     }
   }
 
-  async findBySupplement(supplementId: string): Promise<SupplementProjectGroup[]> {
+  async findBySupplement(
+    supplementId: string,
+  ): Promise<SupplementProjectGroup[]> {
     try {
       const rows = await this.supplementProjectGroupRepo.find({
         where: { developmentPlanSupplement: { id: supplementId } },
@@ -255,7 +373,6 @@ export class SupplementProjectGroupService {
         ],
         order: { createdAt: 'DESC' },
       });
-      // W100 PR2 — Pattern 3 (mask). See §17.2 / §17.3.
       await this.maskCreatedByUser(rows);
       return rows;
     } catch (error) {
@@ -263,152 +380,342 @@ export class SupplementProjectGroupService {
     }
   }
 
-  async findOne(id: string): Promise<SupplementProjectGroup> {
+  /**
+   * Detail endpoint. SUPP-1 BE-03 — gated by role + ownership.
+   *
+   * - `staff` / `admin` / `super-admin` / `c-level` — any non-soft-deleted SPG.
+   * - `user` role — only their own SPG (ownership via WorkHistory id, §4).
+   *   LAO-classified users have no SPGs by construction (Q2) and are
+   *   rejected via `SupplementScopeService.assertSupplementOwnerScope`.
+   *
+   * `userId` is optional only for legacy call sites that already perform
+   * their own authorization (e.g. `create` re-fetching after commit).
+   * Controller routes MUST pass the authenticated `userId`.
+   */
+  async findOne(
+    id: string,
+    userId?: string,
+  ): Promise<SupplementProjectGroup> {
     try {
-      const supplementProject = await this.supplementProjectGroupRepo.findOne({
+      const row = await this.supplementProjectGroupRepo.findOne({
         where: { id },
         relations: [
           'developmentPlanSupplement',
+          'developmentPlanSupplement.developmentPlan',
           'strategy',
           'tactic',
           'plan',
+          'developmentIssue',
           'createdBy',
           'createdBy.user',
+          'responsibleAgency',
+          'originAgencyId',
           'budgets',
           'trackingStatus',
+          'trackingStatus.statusId',
           'trackingStatus.createdBy',
           'trackingStatus.createdBy.user',
         ],
       });
-
-      if (!supplementProject) {
+      if (!row) {
         throw new NotFoundException(
           `SupplementProjectGroup with ID ${id} not found`,
         );
       }
 
-      // W100 PR2 — Pattern 3 (mask). See §17.2 / §17.3.
-      await this.maskCreatedByUser(supplementProject);
-      return supplementProject;
+      // Authorization. Skip only when no userId provided (internal callers).
+      if (userId) {
+        await this.assertReadAuthorized(row, userId);
+      }
+
+      await this.maskCreatedByUser(row);
+      return row;
     } catch (error) {
       handleException(this.logger, error);
     }
   }
 
+  /**
+   * SUPP-1 BE-03 — Owner "my SPGs" endpoint.
+   *
+   * Returns SPGs owned by the calling user's current WorkHistory
+   * (`createdBy.id = currentWorkHistory.id`). LAO callers are rejected
+   * by `SupplementScopeService.assertSupplementOwnerScope` (Q2) —
+   * which is correct: LAO has no SPGs to list.
+   *
+   * Optional filters:
+   *   - `statusId`   — UUID of a `Status` row.
+   *   - `statusName` — canonical name (e.g. `Pending`, `Approved`).
+   * Both filter on the latest `TrackingStatus` row.
+   *
+   * Soft-deleted rows excluded (TypeORM default for `@DeleteDateColumn`).
+   */
+  async findMine(
+    userId: string,
+    opts: { statusId?: string; statusName?: string } = {},
+  ): Promise<SupplementProjectGroup[]> {
+    try {
+      const workHistory = await this.workHistoryLookup.getCurrent(
+        this.dataSource.manager,
+        userId,
+      );
+      // §1 + §2 owner-scope gate. Throws 403 for LAO / non-agency callers.
+      this.supplementScopeService.assertSupplementOwnerScope(workHistory);
+
+      const qb = this.buildBaseSpgListQuery().where(
+        'createdBy.id = :workHistoryId',
+        { workHistoryId: workHistory.id },
+      );
+
+      this.applyLatestStatusFilter(qb, opts);
+
+      const results = await qb.orderBy('spg.created_at', 'DESC').getMany();
+      await this.maskCreatedByUser(results);
+      return results;
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * SUPP-1 BE-03 — Staff review queue endpoint.
+   *
+   * Returns SPGs whose latest `TrackingStatus.status.name` is in
+   * { `Pending`, `Verified`, `Pending_Approval` }, filtered by
+   * `WorkHistoryGovernmentAgencyResponsibility` (Q3 — AGENCY-BASED,
+   * RPG-style, NOT amphoe-based).
+   *
+   * Role gating (mirrors RPG `findPendingRevisionProjects`):
+   *   - `admin` / `super-admin` / `c-level` — see ALL in-flight SPGs.
+   *   - `staff` — only SPGs whose `responsibleAgency.id` ∈ caller's
+   *     `workHistoryResponsibleGovernmentAgency` set. A staff with NO
+   *     agency responsibility entries gets an empty list.
+   *   - any other role (incl. `user`) — 403.
+   *
+   * Workflow doc §13 / task spec §7: SPGs whose `responsibleAgency`
+   * is null MUST NOT appear (defensive — SPG.responsibleAgency is
+   * auto-assigned at create per Q1+Q2). Enforced by an inner-join
+   * style `IS NOT NULL` clause.
+   */
+  async findPendingReview(
+    userId: string,
+  ): Promise<SupplementProjectGroup[]> {
+    try {
+      const workHistory = await this.workHistoryRepo.findOne({
+        where: { user: { id: userId }, isCurrent: true },
+        relations: [
+          'user',
+          'role',
+          'workStatus',
+          'workHistoryResponsibleGovernmentAgency',
+          'workHistoryResponsibleGovernmentAgency.governmentAgency',
+        ],
+      });
+      if (!workHistory) {
+        throw new NotFoundException('Work history not found');
+      }
+      // §2 — workStatus gate. Reuse the shared helper (throws 401).
+      this.workHistoryLookup.assertWorkStatusApproved(workHistory);
+
+      const role = workHistory.role?.name;
+      if (
+        role !== 'staff' &&
+        role !== 'admin' &&
+        role !== 'super-admin' &&
+        role !== 'c-level'
+      ) {
+        throw new ForbiddenException(
+          'คุณไม่มีสิทธิ์เข้าถึงคิวตรวจสอบโครงการเพิ่มเติม',
+        );
+      }
+
+      const qb = this.buildBaseSpgListQuery();
+
+      // Workflow §13 — in-flight statuses for the review queue.
+      qb.andWhere('latestStatus.name IN (:...queueStatuses)', {
+        queueStatuses: ['Pending', 'Verified', 'Pending_Approval'],
+      });
+
+      // Defensive: SPG.responsibleAgency is auto-assigned at create per
+      // Q1+Q2; a null value indicates a data bug and MUST be excluded.
+      qb.andWhere('responsibleAgency.id IS NOT NULL');
+
+      if (role === 'staff') {
+        const responsibleAgencyIds = (
+          workHistory.workHistoryResponsibleGovernmentAgency ?? []
+        )
+          .map((r) => r.governmentAgency?.id)
+          .filter((id): id is string => !!id);
+        if (responsibleAgencyIds.length === 0) {
+          // No agency responsibility → empty queue (correct behavior).
+          return [];
+        }
+        qb.andWhere(
+          'responsibleAgency.id IN (:...responsibleAgencyIds)',
+          { responsibleAgencyIds },
+        );
+      }
+      // admin / super-admin / c-level — bypass the agency filter.
+
+      const results = await qb.orderBy('spg.created_at', 'DESC').getMany();
+      await this.maskCreatedByUser(results);
+      return results;
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * Direct update path (non-draft). Used by `AdditionalBook` admin UI
+   * and existing book-management surfaces. Owner ownership check, §15
+   * BookLockService guard, §14 lineage stub.
+   *
+   * The status transition path lives in `TrackingStatusService` (BE-02).
+   */
   async update(
     id: string,
     dto: UpdateSupplementProjectGroupDto,
     userId: string,
   ): Promise<SupplementProjectGroup> {
     try {
+      // §5.1 / §7.1 — clients cannot reassign responsibleAgency through
+      // a generic update either; reuse the same defensive 400.
+      this.assertNoClientResponsibleAgency(dto);
+
       return await this.dataSource.transaction(async (manager) => {
-        const existingProject = await manager.findOne(SupplementProjectGroup, {
+        const workHistory = await this.getWorkHistory(manager, userId);
+        this.assertWorkStatusApproved(workHistory);
+        this.supplementScopeService.assertSupplementOwnerScope(workHistory);
+
+        const existing = await manager.findOne(SupplementProjectGroup, {
           where: { id },
           relations: [
             'developmentPlanSupplement',
+            'developmentPlanSupplement.developmentPlan',
             'strategy',
             'tactic',
             'plan',
             'developmentIssue',
+            'createdBy',
           ],
         });
 
-        if (!existingProject) {
+        if (!existing) {
           throw new NotFoundException(
             `SupplementProjectGroup with ID ${id} not found`,
           );
         }
 
-        // CLAUDE.md §16.5 — validate classification shape against the
-        // parent plan resolved through the supplement chain.
+        // Ownership — edit is owner-scoped per CLAUDE.md §4 / workflow §8.
+        if (existing.createdBy?.id !== workHistory.id) {
+          throw new ForbiddenException(
+            'คุณไม่มีสิทธิ์ดำเนินการกับโครงการนี้',
+          );
+        }
+
+        // SUPP-IA-03 (BE-γ, 2026-05-12) — editable-state allowlist.
+        // Per workflow §10 (rev2): SPG may be edited by the owner only
+        // when the latest tracking status is one of
+        // {Ready, Pull_Back, Returned_For_Revision}.
+        await this.assertEditableStatus(manager, id);
+
+        // §15 + §14 guards BEFORE any mutation.
+        await this.bookLockService.assertEditable(
+          id,
+          'development_plan_supplement',
+          manager,
+        );
+        // TODO(SUPP-4): functional once SPG can be the parent of an RPG.
+        await this.assertNoSupplementDescendant(id, manager);
+
+        // §16.5 classification shape against the parent plan resolved
+        // through the supplement chain.
         const format =
           await this.bookFormatResolver.resolveBySupplementProjectGroup(
             id,
             manager,
           );
         this.classificationValidator.validate(format, {
-          strategyId: dto.strategyId ?? existingProject.strategy?.id ?? null,
-          tacticId: dto.tacticId ?? existingProject.tactic?.id ?? null,
-          planId: dto.planId ?? existingProject.plan?.id ?? null,
+          strategyId: dto.strategyId ?? existing.strategy?.id ?? null,
+          tacticId: dto.tacticId ?? existing.tactic?.id ?? null,
+          planId: dto.planId ?? existing.plan?.id ?? null,
           developmentIssueId:
             dto.developmentIssueId ??
-            existingProject.developmentIssue?.id ??
+            existing.developmentIssue?.id ??
             null,
-          indicator: dto.indicator ?? existingProject.indicator,
+          indicator: dto.indicator ?? existing.indicator,
         });
 
-        // Validate foreign keys if provided
-        const [
-          developmentPlanSupplement,
-          strategy,
-          tactic,
-          plan,
-          workHistory,
-        ] = await this.validateForeignKeys(manager, dto, userId, existingProject);
+        // Scope re-check — the supplement+plan window must still be
+        // open. If the DTO supplies a different supplement, validate
+        // that one too; otherwise validate the existing one.
+        const supplementId =
+          dto.developmentPlanSupplementId ??
+          existing.developmentPlanSupplement?.id;
+        const { supplement, developmentPlan, strategy, tactic, plan } =
+          await this.validateForeignKeysAndScope(
+            manager,
+            supplementId!,
+            {
+              strategyId: dto.strategyId ?? undefined,
+              tacticId: dto.tacticId ?? undefined,
+              planId: dto.planId ?? undefined,
+            },
+            format,
+          );
 
-        // Resolve developmentIssue FK if present on the update DTO.
-        let updatedDevelopmentIssue: DevelopmentIssue | null | undefined;
+        let resolvedIssue: DevelopmentIssue | null | undefined;
         if (dto.developmentIssueId !== undefined) {
           if (dto.developmentIssueId === null) {
-            updatedDevelopmentIssue = null;
+            resolvedIssue = null;
           } else {
-            updatedDevelopmentIssue = await manager.findOne(DevelopmentIssue, {
-              where: { id: dto.developmentIssueId },
-            });
-            if (!updatedDevelopmentIssue) {
-              throw new NotFoundException(
-                `${ERROR_CODES.DEVELOPMENT_ISSUE_NOT_FOUND}: ${ERROR_MESSAGES.DEVELOPMENT_ISSUE_NOT_FOUND}`,
-              );
-            }
+            resolvedIssue = await this.resolveAndAssertIssue(
+              manager,
+              dto.developmentIssueId,
+              developmentPlan.id,
+            );
           }
         }
 
-        // Update fields
-        if (developmentPlanSupplement) {
-          existingProject.developmentPlanSupplement = developmentPlanSupplement;
+        // Apply mutations.
+        if (supplement) existing.developmentPlanSupplement = supplement;
+        if (dto.title !== undefined) existing.title = dto.title;
+        if (dto.objective !== undefined) existing.objective = dto.objective;
+        if (dto.goal !== undefined) existing.goal = dto.goal;
+        if (dto.startLat !== undefined) existing.startLat = dto.startLat;
+        if (dto.startLng !== undefined) existing.startLng = dto.startLng;
+        if (dto.endLat !== undefined) existing.endLat = dto.endLat;
+        if (dto.endLng !== undefined) existing.endLng = dto.endLng;
+        if (dto.expected !== undefined) existing.expected = dto.expected;
+        if (dto.projectYear !== undefined) existing.projectYear = dto.projectYear;
+        // SUPP-1 followup (2026-05-12): SPG has no draft state.
+        // `isDraft` is a legacy column permanently `false`; callers
+        // MUST NOT be able to flip it via update.
+        if (dto.additionalDetail !== undefined) {
+          existing.additionalDetail = dto.additionalDetail;
         }
-        if (dto.title !== undefined) existingProject.title = dto.title;
-        if (dto.objective !== undefined) existingProject.objective = dto.objective;
-        if (dto.goal !== undefined) existingProject.goal = dto.goal;
-        if (dto.startLat !== undefined) existingProject.startLat = dto.startLat;
-        if (dto.startLng !== undefined) existingProject.startLng = dto.startLng;
-        if (dto.endLat !== undefined) existingProject.endLat = dto.endLat;
-        if (dto.endLng !== undefined) existingProject.endLng = dto.endLng;
-        if (dto.indicator !== undefined) existingProject.indicator = dto.indicator;
-        if (dto.expected !== undefined) existingProject.expected = dto.expected;
-        if (dto.projectYear !== undefined) existingProject.projectYear = dto.projectYear;
-        if (dto.isDraft !== undefined) existingProject.isDraft = dto.isDraft;
 
         if (format === ReportFormat.ISSUE_BASED) {
-          // §16.5 — clear the classic tuple + indicator, keep the issue FK
-          existingProject.strategy = null;
-          existingProject.tactic = null;
-          existingProject.plan = null;
-          existingProject.indicator = null;
-          if (updatedDevelopmentIssue !== undefined) {
-            existingProject.developmentIssue = updatedDevelopmentIssue;
+          existing.strategy = null;
+          existing.tactic = null;
+          existing.plan = null;
+          existing.indicator = null;
+          if (resolvedIssue !== undefined) {
+            existing.developmentIssue = resolvedIssue;
           }
         } else {
-          if (strategy) existingProject.strategy = strategy;
-          if (tactic) existingProject.tactic = tactic;
-          if (plan) existingProject.plan = plan;
-          existingProject.developmentIssue = null;
-        }
-        if (dto.originAgencyId !== undefined) {
-          existingProject.originAgencyId = dto.originAgencyId ? { id: dto.originAgencyId } as any : null;
-        }
-        if (dto.responsibleAgency !== undefined) {
-          existingProject.responsibleAgency = dto.responsibleAgency ? { id: dto.responsibleAgency } as any : null;
-        }
-        if (dto.additionalDetail !== undefined) {
-          existingProject.additionalDetail = dto.additionalDetail;
+          if (strategy) existing.strategy = strategy;
+          if (tactic) existing.tactic = tactic;
+          if (plan) existing.plan = plan;
+          if (dto.indicator !== undefined) existing.indicator = dto.indicator;
+          existing.developmentIssue = null;
         }
 
-        const developmentPlan = existingProject.developmentPlanSupplement.developmentPlan;
+        // §5.1 / §7.1 — originAgencyId is part of project identity and
+        // is NOT mutable via this generic update. Ignored even if
+        // present on the DTO.
 
-        // Update budgets if provided
         if (dto.budget && dto.budget.length > 0) {
-          // Validate budget year is within development plan range
           for (const budgetItem of dto.budget) {
             if (
               budgetItem.year < developmentPlan.startYear ||
@@ -420,115 +727,571 @@ export class SupplementProjectGroupService {
             }
           }
 
-          // Delete existing budgets
           await manager.delete(Budget, {
-            supplementProjectGroupId: { id: existingProject.id } as any,
+            supplementProjectGroupId: { id: existing.id } as any,
           });
 
-          // Create new budgets
-          const budgets = dto.budget.map((budgetDto) => {
-            const { projectGroupId, revisedProjectGroupId, ...budgetData } = budgetDto;
-            return manager.create(Budget, {
-              ...budgetData,
-              supplementProjectGroupId: existingProject,
-            });
-          });
-
+          const budgets = dto.budget.map((b) =>
+            manager.create(Budget, {
+              supplementProjectGroupId: { id: existing.id } as any,
+              year: b.year,
+              quantity: b.quantity,
+            }),
+          );
           await manager.save(budgets);
         }
 
-        return await manager.save(existingProject);
+        return await manager.save(existing);
       });
     } catch (error) {
       handleException(this.logger, error);
     }
   }
 
-  async remove(id: string): Promise<{ message: string }> {
+  /**
+   * Soft-remove an SPG. Owner-scoped. §15 + §14 guards apply.
+   *
+   * Replaces the prior hard-delete `remove`. The §12 audit trail (and
+   * any SUPP-2 status-change history) is preserved on a `deletedAt`
+   * flip — hard-delete would destroy the audit chain.
+   */
+  async softRemove(id: string, userId: string): Promise<{ message: string }> {
     try {
-      const result = await this.supplementProjectGroupRepo.delete(id);
-      if (result.affected === 0) {
-        throw new NotFoundException(
-          `SupplementProjectGroup with ID ${id} not found`,
+      return await this.dataSource.transaction(async (manager) => {
+        const workHistory = await this.getWorkHistory(manager, userId);
+        this.assertWorkStatusApproved(workHistory);
+        this.supplementScopeService.assertSupplementOwnerScope(workHistory);
+
+        const existing = await manager.findOne(SupplementProjectGroup, {
+          where: { id },
+          relations: ['createdBy'],
+        });
+        if (!existing) {
+          throw new NotFoundException(
+            `SupplementProjectGroup with ID ${id} not found`,
+          );
+        }
+        if (existing.createdBy?.id !== workHistory.id) {
+          throw new ForbiddenException(
+            'คุณไม่มีสิทธิ์ดำเนินการกับโครงการนี้',
+          );
+        }
+
+        // SUPP-IA-03 (BE-δ, 2026-05-12) — soft-delete allowlist.
+        // Per workflow §10 (rev2): SPG may be soft-deleted by the owner
+        // only when the latest tracking status is one of
+        // {Ready, Pull_Back, Returned_For_Revision}.
+        await this.assertEditableStatus(manager, id);
+
+        await this.bookLockService.assertDeletable(
+          id,
+          'development_plan_supplement',
+          manager,
         );
-      }
-      return {
-        message: `SupplementProjectGroup with ID ${id} has been permanently removed.`,
-      };
+        // TODO(SUPP-4): becomes functional when SPG can be the parent
+        // of an RPG (`prev_project_type = 'supplement'`). Until then,
+        // SPG is a leaf and this stub returns without throwing.
+        await this.assertNoSupplementDescendant(id, manager);
+
+        const result = await manager.softDelete(SupplementProjectGroup, id);
+        if (result.affected === 0) {
+          throw new NotFoundException(
+            `SupplementProjectGroup with ID ${id} not found`,
+          );
+        }
+        return {
+          message: `SupplementProjectGroup with ID ${id} has been soft-removed.`,
+        };
+      });
     } catch (error) {
       handleException(this.logger, error);
     }
   }
 
-  private async validateForeignKeys(
-    manager,
-    dto: CreateSupplementProjectGroupDto | UpdateSupplementProjectGroupDto,
+  /**
+   * Backward-compatible alias. Existing controller route still hits
+   * `remove`; we route it through `softRemove` so the audit-preserving
+   * behavior applies uniformly. Hard-delete is intentionally NOT
+   * exposed to controllers any more (§12 / §18 — audit history must
+   * be preserved; orphan cleanup is the only path that ever flips
+   * `deletedAt`).
+   */
+  async remove(id: string, userId: string): Promise<{ message: string }> {
+    return this.softRemove(id, userId);
+  }
+
+  // ============================================================
+  // PRIVATE — helpers
+  // ============================================================
+
+  /**
+   * SUPP-1 BE-03 — Shared query shape for owner-list and staff-queue
+   * endpoints.
+   *
+   * Centralises the JOIN topology so `findMine` and `findPendingReview`
+   * produce identical response shapes for downstream consumers
+   * (Wave SUPP-2 FE list pages). Includes the latest-tracking-status
+   * inner-join so consumers can dispatch on `status.name` without a
+   * second round-trip and so the staff queue can filter by status name.
+   *
+   * TypeORM's `@DeleteDateColumn` already filters soft-deleted rows
+   * from `find` queries; for `createQueryBuilder` we add an explicit
+   * `deleted_at IS NULL` clause to be defensive across TypeORM versions.
+   */
+  private buildBaseSpgListQuery(): SelectQueryBuilder<SupplementProjectGroup> {
+    return this.supplementProjectGroupRepo
+      .createQueryBuilder('spg')
+      .leftJoinAndSelect('spg.developmentPlanSupplement', 'supplement')
+      .leftJoinAndSelect('supplement.developmentPlan', 'developmentPlan')
+      .leftJoinAndSelect('spg.strategy', 'strategy')
+      .leftJoinAndSelect('spg.tactic', 'tactic')
+      .leftJoinAndSelect('spg.plan', 'plan')
+      .leftJoinAndSelect('spg.developmentIssue', 'developmentIssue')
+      .leftJoinAndSelect('spg.createdBy', 'createdBy')
+      .leftJoinAndSelect('createdBy.user', 'createdByUser')
+      .leftJoinAndSelect('createdBy.amphoe', 'createdByAmphoe')
+      .leftJoinAndSelect(
+        'createdBy.localAdministrativeOrganization',
+        'createdByLao',
+      )
+      .leftJoinAndSelect('createdBy.governmentAgencies', 'createdByAgency')
+      .leftJoinAndSelect('spg.responsibleAgency', 'responsibleAgency')
+      .leftJoinAndSelect('spg.originAgencyId', 'originAgency')
+      .leftJoinAndSelect('spg.budgets', 'budgets')
+      // Inner-join the latest tracking row + its status so downstream
+      // consumers always receive the canonical status name. The full
+      // tracking history is exposed via a separate left-join so the
+      // detail-style relations on the response shape remain intact.
+      .innerJoin(
+        'spg.trackingStatus',
+        'latestTracking',
+        'latestTracking.isLatest = :isLatest',
+        { isLatest: true },
+      )
+      .innerJoinAndSelect('latestTracking.statusId', 'latestStatus')
+      .leftJoinAndSelect('spg.trackingStatus', 'trackingStatus')
+      .leftJoinAndSelect('trackingStatus.statusId', 'status')
+      .leftJoinAndSelect('trackingStatus.createdBy', 'trackingStatusCreatedBy')
+      .leftJoinAndSelect(
+        'trackingStatusCreatedBy.user',
+        'trackingStatusCreatedByUser',
+      )
+      .where('spg.deleted_at IS NULL');
+  }
+
+  /**
+   * Apply optional latest-status filter (by id or by canonical name).
+   * Used by the owner-list endpoint. Mutates the QB in place.
+   */
+  private applyLatestStatusFilter(
+    qb: SelectQueryBuilder<SupplementProjectGroup>,
+    opts: { statusId?: string; statusName?: string },
+  ): void {
+    if (opts.statusId) {
+      qb.andWhere('latestStatus.id = :statusId', { statusId: opts.statusId });
+    }
+    if (opts.statusName) {
+      qb.andWhere('latestStatus.name = :statusName', {
+        statusName: opts.statusName,
+      });
+    }
+  }
+
+  /**
+   * Detail-endpoint authorization (SUPP-1 BE-03).
+   *
+   * Resolves the caller's current WorkHistory and applies:
+   *   - workStatus = approved (§2)
+   *   - role-based gate:
+   *       staff / admin / super-admin / c-level → any SPG
+   *       user → must own the SPG (createdBy.id === workHistory.id)
+   *       any other role → 401
+   *   - LAO classification fail-fast — SPGs are agency-origin by Q1+Q2,
+   *     so a LAO caller has no legitimate read path. Reuse the canonical
+   *     SupplementScopeService error envelope (403
+   *     LAO_NOT_ALLOWED_ON_SUPPLEMENT).
+   */
+  private async assertReadAuthorized(
+    row: SupplementProjectGroup,
     userId: string,
-    existingProject?: SupplementProjectGroup,
-  ): Promise<
-    [
-      DevelopmentPlanSupplement | null,
-      Strategy | null,
-      Tactic | null,
-      Plan | null,
-      WorkHistory,
-    ]
-  > {
-    const isCreate = 'developmentPlanSupplementId' in dto && dto.developmentPlanSupplementId !== undefined;
-    const supplementId = isCreate
-      ? dto.developmentPlanSupplementId
-      : existingProject?.developmentPlanSupplement?.id;
+  ): Promise<void> {
+    const workHistory = await this.workHistoryRepo.findOne({
+      where: { user: { id: userId }, isCurrent: true },
+      relations: [
+        'user',
+        'role',
+        'workStatus',
+        'amphoe',
+        'localAdministrativeOrganization',
+      ],
+    });
+    if (!workHistory) {
+      throw new NotFoundException('Work history not found');
+    }
+    this.workHistoryLookup.assertWorkStatusApproved(workHistory);
 
-    const [
-      developmentPlanSupplement,
-      strategy,
-      tactic,
-      plan,
-      workHistory,
-    ] = await Promise.all([
-      supplementId
-        ? manager.findOne(DevelopmentPlanSupplement, {
-            where: { id: supplementId },
-            relations: ['developmentPlan'],
-          })
-        : null,
-      dto.strategyId
-        ? manager.findOne(Strategy, { where: { id: dto.strategyId } })
-        : null,
-      dto.tacticId
-        ? manager.findOne(Tactic, { where: { id: dto.tacticId } })
-        : null,
-      dto.planId
-        ? manager.findOne(Plan, { where: { id: dto.planId } })
-        : null,
-      this.workHistoryRepo.findOne({
-        where: { user: { id: userId } },
-      }),
-    ]);
+    const role = workHistory.role?.name;
+    if (
+      role === 'staff' ||
+      role === 'admin' ||
+      role === 'super-admin' ||
+      role === 'c-level'
+    ) {
+      // Staff-tier roles read any SPG. Workflow doc §13 narrows the
+      // staff QUEUE by agency responsibility; detail reads are open
+      // for staff so they can audit cross-agency context.
+      return;
+    }
 
-    if (isCreate && !developmentPlanSupplement) {
+    if (role === 'user') {
+      // LAO callers are rejected before ownership — Q2.
+      this.supplementScopeService.assertSupplementOwnerScope(workHistory);
+      if (row.createdBy?.id !== workHistory.id) {
+        throw new ForbiddenException(
+          'คุณไม่มีสิทธิ์ในการเข้าถึงข้อมูลโครงการนี้',
+        );
+      }
+      return;
+    }
+
+    throw new UnauthorizedException(
+      'คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล',
+    );
+  }
+
+  /**
+   * §5.1 / §7.1 — `responsibleAgency` MUST be derived from the
+   * creator's WorkHistory. Any client-supplied value is rejected.
+   */
+  private assertNoClientResponsibleAgency(
+    dto:
+      | CreateSupplementProjectGroupDto
+      | UpdateSupplementProjectGroupDto,
+  ): void {
+    if (
+      (dto as any).responsibleAgency !== undefined &&
+      (dto as any).responsibleAgency !== null
+    ) {
+      throw new BadRequestException(
+        'SPG_RESPONSIBLE_AGENCY_NOT_ALLOWED: ห้ามระบุ responsibleAgency ' +
+          'จากฝั่ง client (ระบบกำหนดอัตโนมัติจาก WorkHistory)',
+      );
+    }
+  }
+
+  /**
+   * §14 leaf-case stub. In SUPP-1 through SUPP-3, SPG cannot be the
+   * `prev_project` of any RPG (the `prev_project_type` enum has no
+   * `'supplement'` variant), so this method intentionally returns
+   * without consulting `LineageLockService`.
+   *
+   * TODO(SUPP-4): replace the body with a call to
+   *   `this.lineageLockService.assertEditable(id, 'supplement', manager)`
+   * — once `LineageLockService` learns the `'supplement'` parent kind.
+   * The call site here is preserved so SUPP-4 does NOT need to revisit
+   * any SPG service code (§14 enforcement only changes location).
+   */
+  private async assertNoSupplementDescendant(
+    _id: string,
+    _manager: EntityManager,
+  ): Promise<void> {
+    // SUPP-1 leaf: no possible descendant exists. Intentional no-op.
+    // Reference the service so it remains a real dependency (and so
+    // SUPP-4 only needs to swap the body, not add an import).
+    void this.lineageLockService;
+    return;
+  }
+
+  /**
+   * SUPP-IA-03 (BE-γ / BE-δ, 2026-05-12) — owner edit / soft-delete
+   * status gate. Per workflow §10 (rev2), the SPG row is mutable by
+   * its owner only when the current latest TrackingStatus is one of
+   * `{Ready, Pull_Back, Returned_For_Revision}`. This is the SPG
+   * analogue of the PG "editable states" gate.
+   *
+   * Reads the latest TrackingStatus row via `manager` so the check
+   * runs inside the caller's transaction. Throws `ForbiddenException`
+   * with a clear Thai message when the status is not in the allowlist.
+   *
+   * NOTE: this gate is INDEPENDENT of the §15 BookLockService and §14
+   * LineageLockService guards. Each addresses a different invariant —
+   * editable status (this gate), book lineage immutability (§15), and
+   * project lineage immutability (§14, vacuous in SUPP-1/2/3).
+   */
+  private async assertEditableStatus(
+    manager: EntityManager,
+    spgId: string,
+  ): Promise<void> {
+    const latest = await manager.findOne(TrackingStatus, {
+      where: {
+        supplementProjectGroupId: { id: spgId } as any,
+        isLatest: true,
+      },
+      relations: ['statusId'],
+    });
+    const currentName = latest?.statusId?.name ?? '';
+    const allowed = new Set(['Ready', 'Pull_Back', 'Returned_For_Revision']);
+    if (!allowed.has(currentName)) {
+      throw new ForbiddenException(
+        `ไม่สามารถดำเนินการกับโครงการในสถานะ "${currentName}" ได้ ` +
+          '(อนุญาตเฉพาะ Ready, Pull_Back หรือ Returned_For_Revision)',
+      );
+    }
+  }
+
+  /**
+   * §12 / W67 — resolve a Status row by canonical name. The legacy
+   * hard-coded UUID (`96be5646-...`) is gone. Every SPG transition site
+   * (create, future BE-02 status moves) MUST resolve
+   * status ids via this helper.
+   */
+  private async resolveStatusId(
+    manager: EntityManager,
+    name: string,
+  ): Promise<string> {
+    const status = await manager.findOne(Status, { where: { name } });
+    if (!status) {
+      throw new NotFoundException(
+        `Status "${name}" not found in system status table`,
+      );
+    }
+    return status.id;
+  }
+
+  private async getWorkHistory(
+    manager: EntityManager,
+    userId: string,
+  ): Promise<WorkHistory> {
+    return this.workHistoryLookup.getCurrent(manager, userId);
+  }
+
+  private assertWorkStatusApproved(workHistory: WorkHistory): void {
+    this.workHistoryLookup.assertWorkStatusApproved(workHistory);
+  }
+
+  /**
+   * Duplicate-title guard (per-creator, per-workflow). Mirrors PG
+   * `ensureNoDuplicateTitle` so behavior is consistent across project
+   * kinds.
+   */
+  private async ensureNoDuplicateTitle(
+    manager: EntityManager,
+    title: string,
+    workHistoryId: string,
+    excludeId?: string,
+  ): Promise<void> {
+    const where: any = {
+      title,
+      createdBy: { id: workHistoryId },
+      isDraft: false,
+    };
+    if (excludeId) {
+      where.id = Not(excludeId);
+    }
+    const existing = await manager.findOne(SupplementProjectGroup, { where });
+    if (existing) {
+      throw new ConflictException('ชื่อโครงการดังกล่าวมีผู้ใช้แล้ว');
+    }
+  }
+
+  /**
+   * Validate the supplement chain + classification FKs and enforce
+   * the scope binding from workflow §6:
+   *   - parent `DevelopmentPlan.isLatest = true`
+   *   - parent `DevelopmentPlan.deletedAt IS NULL`
+   *   - `DevelopmentPlanSupplement.isLatest = true`
+   *   - `DevelopmentPlanSupplement.isOpen = true`
+   *   - `DevelopmentPlanSupplement.isBooked = false`
+   *   - `DevelopmentPlanSupplement.deletedAt IS NULL`
+   *
+   * 2026-05-12 — `parent DevelopmentPlan.isBooked = false` REMOVED.
+   * Supplement rounds are authored on top of a FINALIZED main plan
+   * (the whole purpose of "เพิ่มเติมแผน"). The frontend round-creation
+   * form (`AdditionalForm`) already requires `isPlanMerged === true`
+   * before opening a round, so by the time SPG create lands here the
+   * parent plan is — and must be — `isBooked = true`. The previous
+   * guard contradicted the actual product flow and surfaced as
+   * "แผนพัฒนาฯ ต้นทางถูกรวมเล่มแล้ว" on every create. The CLAUDE.md §8
+   * `isBooked = false` rule applies to MAIN-PLAN project actions only;
+   * supplement is its own workflow lane.
+   *
+   * Returns the loaded foreign keys for the caller to use.
+   */
+  private async validateForeignKeysAndScope(
+    manager: EntityManager,
+    supplementId: string | undefined,
+    classification: {
+      strategyId?: string;
+      tacticId?: string;
+      planId?: string;
+    },
+    format: ReportFormat,
+  ): Promise<{
+    supplement: DevelopmentPlanSupplement;
+    developmentPlan: DevelopmentPlan;
+    strategy: Strategy | null;
+    tactic: Tactic | null;
+    plan: Plan | null;
+  }> {
+    if (!supplementId) {
+      throw new BadRequestException(
+        'developmentPlanSupplementId is required',
+      );
+    }
+
+    const supplement = await manager.findOne(DevelopmentPlanSupplement, {
+      where: { id: supplementId },
+      relations: ['developmentPlan'],
+    });
+
+    if (!supplement) {
       throw new NotFoundException(
         `DevelopmentPlanSupplement with ID ${supplementId} not found`,
       );
     }
 
-    if (dto.strategyId && !strategy) {
-      throw new NotFoundException(`Strategy with ID ${dto.strategyId} not found`);
+    if (!supplement.isLatest) {
+      throw new BadRequestException(
+        'เล่มเพิ่มเติมที่ระบุไม่ใช่เล่มล่าสุดของรอบนี้',
+      );
+    }
+    if (!supplement.isOpen) {
+      throw new BadRequestException(
+        'เล่มเพิ่มเติมที่ระบุยังไม่เปิดให้บันทึก หรือปิดรอบแล้ว',
+      );
+    }
+    if (supplement.isBooked) {
+      throw new BadRequestException(
+        'เล่มเพิ่มเติมที่ระบุถูกรวมเล่มแล้ว ไม่สามารถดำเนินการได้',
+      );
     }
 
-    if (dto.tacticId && !tactic) {
-      throw new NotFoundException(`Tactic with ID ${dto.tacticId} not found`);
+    const developmentPlan = supplement.developmentPlan;
+    if (!developmentPlan) {
+      throw new BadRequestException(
+        'เล่มเพิ่มเติมที่ระบุไม่มีแผนพัฒนาฯ ต้นทาง',
+      );
+    }
+    if (!developmentPlan.isLatest) {
+      throw new BadRequestException('แผนพัฒนาฯ ต้นทางไม่ใช่แผนปัจจุบัน');
+    }
+    // 2026-05-12 — parent `isBooked = true` is the EXPECTED state for
+    // the supplement workflow (supplements are added to a finalized
+    // plan). The guard was removed; see method JSDoc above.
+
+    // §16.5 — only STRATEGY_BASED requires the classification triple.
+    if (format === ReportFormat.ISSUE_BASED) {
+      return {
+        supplement,
+        developmentPlan,
+        strategy: null,
+        tactic: null,
+        plan: null,
+      };
     }
 
-    if (dto.planId && !plan) {
-      throw new NotFoundException(`Plan with ID ${dto.planId} not found`);
+    const [strategy, tactic, plan] = await Promise.all([
+      classification.strategyId
+        ? manager.findOne(Strategy, { where: { id: classification.strategyId } })
+        : null,
+      classification.tacticId
+        ? manager.findOne(Tactic, { where: { id: classification.tacticId } })
+        : null,
+      classification.planId
+        ? manager.findOne(Plan, { where: { id: classification.planId } })
+        : null,
+    ]);
+
+    if (classification.strategyId && !strategy) {
+      throw new NotFoundException(
+        `Strategy with ID ${classification.strategyId} not found`,
+      );
+    }
+    if (classification.tacticId && !tactic) {
+      throw new NotFoundException(
+        `Tactic with ID ${classification.tacticId} not found`,
+      );
+    }
+    if (classification.planId && !plan) {
+      throw new NotFoundException(
+        `Plan with ID ${classification.planId} not found`,
+      );
     }
 
-    if (!workHistory) {
-      throw new NotFoundException('Work history not found for this user');
-    }
-
-    return [developmentPlanSupplement, strategy, tactic, plan, workHistory];
+    return { supplement, developmentPlan, strategy, tactic, plan };
   }
-}
 
+  /**
+   * §16.6 — DevelopmentIssue must exist AND belong to the same parent
+   * plan as the supplement. Plan-mismatch is rejected with the
+   * canonical `DEVELOPMENT_ISSUE_PLAN_MISMATCH` error.
+   */
+  private async resolveAndAssertIssue(
+    manager: EntityManager,
+    issueId: string,
+    expectedPlanId: string,
+  ): Promise<DevelopmentIssue> {
+    if (!issueId) {
+      throw new BadRequestException(
+        `${ERROR_CODES.PROJECT_CLASSIFICATION_SHAPE_MISMATCH}: ${ERROR_MESSAGES.ISSUE_BASED_REQUIRES_ISSUE}`,
+      );
+    }
+    const issue = await manager.findOne(DevelopmentIssue, {
+      where: { id: issueId },
+      relations: ['developmentPlan'],
+    });
+    if (!issue) {
+      throw new NotFoundException(
+        `${ERROR_CODES.DEVELOPMENT_ISSUE_NOT_FOUND}: ${ERROR_MESSAGES.DEVELOPMENT_ISSUE_NOT_FOUND}`,
+      );
+    }
+    if (issue.developmentPlan?.id !== expectedPlanId) {
+      throw new BadRequestException(
+        `${ERROR_CODES.DEVELOPMENT_ISSUE_PLAN_MISMATCH}: ${ERROR_MESSAGES.DEVELOPMENT_ISSUE_PLAN_MISMATCH}`,
+      );
+    }
+    return issue;
+  }
+
+  /**
+   * Persist budgets for an SPG. Used by `create`.
+   * Enforces the parent plan's `startYear`/`endYear` window matching
+   * the existing behavior.
+   */
+  private async persistBudgets(
+    manager: EntityManager,
+    spgId: string,
+    budgets: CreateSupplementProjectGroupDto['budget'],
+    developmentPlan: DevelopmentPlan,
+  ): Promise<void> {
+    if (!Array.isArray(budgets) || budgets.length === 0) return;
+
+    for (const budgetItem of budgets) {
+      if (
+        budgetItem.year < developmentPlan.startYear ||
+        budgetItem.year > developmentPlan.endYear
+      ) {
+        throw new BadRequestException(
+          `ปีงบประมาณต้องอยู่ในช่วง พ.ศ. ${developmentPlan.startYear} - ${developmentPlan.endYear} (ปีที่ส่งมา: ${budgetItem.year})`,
+        );
+      }
+    }
+
+    const rows = budgets.map((b) =>
+      manager.create(Budget, {
+        supplementProjectGroupId: { id: spgId } as any,
+        year: b.year,
+        quantity: b.quantity,
+      }),
+    );
+    await manager.save(rows);
+  }
+
+  // SUPP-IA-03 (BE-α, 2026-05-12): the `fireBaselineSnapshot` helper
+  // previously fired at create-time has been REMOVED. The §17.4
+  // `no-ai-baseline` write is now performed by
+  // `TrackingStatusService.createBySupplementProjectGroup` at the
+  // owner-driven `Ready → Pending` transition (the authoring-time
+  // submit per §17.4 Wave 11). See the SPG branch of that service for
+  // the relocated call.
+}
