@@ -6,12 +6,10 @@
  *   - No previous-version comparison (supplement is additive).
  *   - Groups by `DevelopmentIssue` (§16.5 ISSUE_BASED shape).
  *   - KPI column OMITTED per §16 ISSUE_BASED contract.
- *   - Attachment filename list rendered as a muted-gray single-line
- *     beneath each project (Q7=B).
  *
- * Cover-page rendering for the supplement title is owned by
- * `report-supplement-cover.part.ts`. This file only renders the per-issue
- * group cover sheets + the per-project detail tables.
+ * This file only renders the per-issue group cover sheets + the per-project
+ * detail tables. There is no supplement-wide cover page — the summary page
+ * leads the document, mirroring revision-edit.
  */
 
 import type { TDocumentDefinitions } from 'pdfmake/interfaces';
@@ -105,31 +103,9 @@ const projectHasOriginAgency = (project: any): boolean => {
   return !!(hasIdRef || hasObjRef);
 };
 
-const buildAttachmentLine = (project: any, newWord: (t: string) => any) => {
-  const attachments: Array<{ originalName?: string | null; filename?: string | null }> =
-    Array.isArray(project.attachments) ? project.attachments : [];
-  if (attachments.length === 0) return null;
-
-  const names = attachments
-    .map(a => a?.originalName || a?.filename || '')
-    .filter(n => !!n);
-  if (names.length === 0) return null;
-
-  const joined = names.join(', ');
-  return {
-    text: newWord(`เอกสารแนบ (${names.length} รายการ): ${joined}`),
-    font: 'THSarabun',
-    fontSize: 9,
-    color: '#666',
-    italics: true,
-    margin: [4, 2, 4, 6],
-  };
-};
-
 /**
  * Per-issue cover page (issue header). Lightweight intra-document cover
- * that prefixes each development-issue block. Distinct from the
- * supplement-wide cover page in `report-supplement-cover.part.ts`.
+ * that prefixes each development-issue block.
  */
 export const createIssueBasedSupplementGroupCoverPageDocDefinition = (
   issueName: string,
@@ -467,23 +443,6 @@ export const createIssueBasedSupplementGroupDetailDocDefinition = (
     },
   });
 
-  // Attachment-filename line per project (Q7=B).
-  groupProjects.forEach(project => {
-    const attachmentLine = buildAttachmentLine(project, newWord);
-    if (attachmentLine) {
-      content.push({
-        text: [
-          { text: `[${project.title || '-'}] `, fontSize: 9, color: '#888', italics: true },
-          ...(Array.isArray(attachmentLine.text) ? attachmentLine.text : [attachmentLine.text]),
-        ],
-        margin: attachmentLine.margin,
-        fontSize: attachmentLine.fontSize,
-        color: attachmentLine.color,
-        italics: attachmentLine.italics,
-      });
-    }
-  });
-
   return {
     header: function () {
       return { text: 'แบบ ผ.02', alignment: 'right', fontSize: 11, margin: [0, 40, 20, 0] };
@@ -527,71 +486,3 @@ export const createIssueBasedSupplementGroupDetailDocDefinition = (
   };
 };
 
-/**
- * One-shot whole-supplement detail page builder. Groups internally by
- * DevelopmentIssue (sorted by `sortOrder` then `name`).
- */
-export const createIssueBasedSupplementDetailDocDefinition = (
-  params: IssueBasedSupplementDetailDocParams,
-): TDocumentDefinitions | null => {
-  const { projects, pageOffset = 0 } = params;
-  if (!projects || projects.length === 0) return null;
-
-  // Group by DevelopmentIssue, preserving caller-supplied row order
-  // within each group.
-  const groupedProjects = new Map<string, any[]>();
-  const issueSortOrder = new Map<string, number>();
-  for (const project of projects) {
-    const issueName = project.developmentIssue?.name || '-';
-    const sortOrder = project.developmentIssue?.sortOrder ?? 999;
-    if (!groupedProjects.has(issueName)) {
-      groupedProjects.set(issueName, []);
-      issueSortOrder.set(issueName, sortOrder);
-    }
-    groupedProjects.get(issueName)!.push(project);
-  }
-
-  // Order issue groups by sortOrder then name for determinism.
-  const sortedIssueEntries = [...groupedProjects.entries()].sort((a, b) => {
-    const soA = issueSortOrder.get(a[0]) ?? 999;
-    const soB = issueSortOrder.get(b[0]) ?? 999;
-    if (soA !== soB) return soA - soB;
-    return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
-  });
-
-  const docDefs: TDocumentDefinitions[] = [];
-  for (const [issueName, groupProjects] of sortedIssueEntries) {
-    const groupDoc = createIssueBasedSupplementGroupDetailDocDefinition({
-      ...params,
-      groupProjects,
-      issueName,
-      pageOffset,
-    });
-    if (groupDoc) docDefs.push(groupDoc);
-  }
-
-  if (docDefs.length === 0) return null;
-
-  const mergedContent: any[] = [];
-  docDefs.forEach((doc, idx) => {
-    const docContent = Array.isArray(doc.content) ? doc.content : [doc.content];
-    if (idx > 0 && docContent.length > 0) {
-      const first = { ...(docContent[0] as any), pageBreak: 'before' };
-      mergedContent.push(first, ...docContent.slice(1));
-    } else {
-      mergedContent.push(...docContent);
-    }
-  });
-
-  const first = docDefs[0];
-  return {
-    header: first.header,
-    footer: first.footer,
-    content: mergedContent,
-    pageSize: first.pageSize,
-    pageOrientation: first.pageOrientation,
-    pageMargins: first.pageMargins,
-    defaultStyle: first.defaultStyle,
-    styles: first.styles,
-  };
-};

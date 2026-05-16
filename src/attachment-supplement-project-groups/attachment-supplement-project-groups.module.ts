@@ -6,21 +6,29 @@ import { AttachmentSupplementProjectGroup } from './entities/attachment-suppleme
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
 import { SupplementScopeModule } from 'src/common/supplement-scope/supplement-scope.module';
 import { WorkHistoryModule } from 'src/work-history/work-history.module';
+// SUPP_AI_BE_02 — AI analysis read + staff-lead retry endpoints now
+// live on this controller, mirroring the PG / RPG controllers
+// byte-for-byte. `DocumentAnalysisModule` exports the shared
+// `DocumentAnalysisService` (kind union widened by SUPP_AI_BE_01 to
+// include `'supplement-project-group'`); `AiUsageQuotasModule` exports
+// the `AiQuotaGuard` used to gate the retry endpoint.
+import { DocumentAnalysisModule } from 'src/document-analysis/document-analysis.module';
+import { AiUsageQuotasModule } from 'src/ai-usage-quotas/ai-usage-quotas.module';
 
 /**
  * SUPP-3 / BE-07 — Attachment module for `SupplementProjectGroup`.
  *
  * Mirrors `AttachmentProjectGroupsModule` /
- * `AttachmentRevisedProjectGroupsModule`. Two divergences vs PG / RPG:
+ * `AttachmentRevisedProjectGroupsModule`. One divergence vs PG / RPG:
  *
- *   1. Imports `SupplementScopeModule` + `WorkHistoryModule` so the
- *      service can enforce the §1+§2 supplement owner-scope gate
- *      (BE-04 contract) on upload + delete.
- *   2. Does NOT import `DocumentAnalysisModule` /
- *      `AiUsageQuotasModule` — `DocumentAnalysisService` does not yet
- *      expose an SPG `kind`, so the AI analysis read + retry endpoints
- *      are intentionally deferred. See `TODO(SUPP-3-later)` markers in
- *      the service.
+ *   - Imports `SupplementScopeModule` + `WorkHistoryModule` so the
+ *     service can enforce the §1+§2 supplement owner-scope gate
+ *     (BE-04 contract) on upload + delete.
+ *
+ * AI wiring (SUPP_AI_BE_02): imports `DocumentAnalysisModule` and
+ * `AiUsageQuotasModule` to enable the `GET :id/analysis` read and
+ * `POST :id/analysis/retry` staff-lead retry endpoints on the
+ * controller.
  */
 @Module({
   imports: [
@@ -30,6 +38,8 @@ import { WorkHistoryModule } from 'src/work-history/work-history.module';
     ]),
     SupplementScopeModule,
     WorkHistoryModule,
+    DocumentAnalysisModule,
+    AiUsageQuotasModule,
   ],
   controllers: [AttachmentSupplementProjectGroupsController],
   providers: [AttachmentSupplementProjectGroupsService],

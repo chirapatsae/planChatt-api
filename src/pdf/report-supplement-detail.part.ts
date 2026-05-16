@@ -16,9 +16,9 @@
  * and grouping uses '-' as the group key. We do not throw here so that the
  * page-number assignment (BE_01) and renderer dispatch remain decoupled.
  *
- * Cover-page rendering for the supplement title is owned by
- * `report-supplement-cover.part.ts`. This file only renders the per-strategy
- * group cover sheets + the per-project detail tables.
+ * This file only renders the per-strategy group cover sheets + the per-project
+ * detail tables. There is no supplement-wide cover page — the summary page
+ * leads the document, mirroring revision-edit.
  */
 
 import type { TDocumentDefinitions } from 'pdfmake/interfaces';
@@ -113,31 +113,9 @@ const projectHasOriginAgency = (project: any): boolean => {
   return !!(hasIdRef || hasObjRef);
 };
 
-const buildAttachmentLine = (project: any, newWord: (t: string) => any) => {
-  const attachments: Array<{ originalName?: string | null; filename?: string | null }> =
-    Array.isArray(project.attachments) ? project.attachments : [];
-  if (attachments.length === 0) return null;
-
-  const names = attachments
-    .map(a => a?.originalName || a?.filename || '')
-    .filter(n => !!n);
-  if (names.length === 0) return null;
-
-  const joined = names.join(', ');
-  return {
-    text: newWord(`เอกสารแนบ (${names.length} รายการ): ${joined}`),
-    font: 'THSarabun',
-    fontSize: 9,
-    color: '#666',
-    italics: true,
-    margin: [4, 2, 4, 6],
-  };
-};
-
 /**
  * Per-group cover page (strategy header). Lightweight intra-document cover
- * that prefixes each strategy block. Distinct from the supplement-wide
- * cover page in `report-supplement-cover.part.ts`.
+ * that prefixes each strategy block.
  */
 export const createSupplementGroupCoverPageDocDefinition = (
   strategyName: string,
@@ -494,26 +472,6 @@ export const createSupplementGroupDetailDocDefinition = (
     },
   });
 
-  // Attachment-filename line per project (Q7=B). Rendered beneath the table.
-  groupProjects.forEach(project => {
-    const attachmentLine = buildAttachmentLine(project, newWord);
-    if (attachmentLine) {
-      content.push({
-        // Compose a single inline-text array. `attachmentLine.text` is the
-        // word-cut output of `newWord` (an array of inline runs); spreading
-        // keeps the inline structure flat for pdfmake.
-        text: [
-          { text: `[${project.title || '-'}] `, fontSize: 9, color: '#888', italics: true },
-          ...(Array.isArray(attachmentLine.text) ? attachmentLine.text : [attachmentLine.text]),
-        ],
-        margin: attachmentLine.margin,
-        fontSize: attachmentLine.fontSize,
-        color: attachmentLine.color,
-        italics: attachmentLine.italics,
-      });
-    }
-  });
-
   return {
     header: function () {
       return { text: 'แบบ ผ.02', alignment: 'right', fontSize: 11, margin: [0, 40, 20, 0] };
@@ -557,71 +515,3 @@ export const createSupplementGroupDetailDocDefinition = (
   };
 };
 
-/**
- * One-shot whole-supplement detail page builder. Groups internally by
- * Strategy → Tactic → Plan and renders consecutive grouped tables in one
- * document definition. Mirrors `createRevisionEditDetailDocDefinition`'s
- * single-builder ergonomics for callers that don't drive per-group
- * iteration externally.
- */
-export const createSupplementDetailDocDefinition = (
-  params: SupplementDetailDocParams,
-): TDocumentDefinitions | null => {
-  const { projects, pageOffset = 0 } = params;
-  if (!projects || projects.length === 0) return null;
-
-  // Group by Strategy → Tactic → Plan, preserving caller-supplied order.
-  const groupedProjects = new Map<string, any[]>();
-  for (const project of projects) {
-    const strategyName = project.strategy?.name || '-';
-    const tacticName = project.tactic?.name || '-';
-    const planName = project.plan?.name || '-';
-    const groupKey = `${strategyName}||${tacticName}||${planName}`;
-    if (!groupedProjects.has(groupKey)) groupedProjects.set(groupKey, []);
-    groupedProjects.get(groupKey)!.push(project);
-  }
-
-  // Build a synthetic per-group doc for the first group; subsequent groups
-  // append their content into the same definition via pageBreak: 'before'.
-  // For simplicity we generate a multi-group doc by concatenating content
-  // arrays from per-group builders.
-  const docDefs: TDocumentDefinitions[] = [];
-  for (const [groupKey, groupProjects] of groupedProjects.entries()) {
-    const [strategyName, tacticName, planName] = groupKey.split('||');
-    const groupDoc = createSupplementGroupDetailDocDefinition({
-      ...params,
-      groupProjects,
-      strategyName,
-      tacticName,
-      planName,
-      pageOffset,
-    });
-    if (groupDoc) docDefs.push(groupDoc);
-  }
-
-  if (docDefs.length === 0) return null;
-
-  // Concatenate. Each subsequent group's first block gets a page break.
-  const mergedContent: any[] = [];
-  docDefs.forEach((doc, idx) => {
-    const docContent = Array.isArray(doc.content) ? doc.content : [doc.content];
-    if (idx > 0 && docContent.length > 0) {
-      const first = { ...(docContent[0] as any), pageBreak: 'before' };
-      mergedContent.push(first, ...docContent.slice(1));
-    } else {
-      mergedContent.push(...docContent);
-    }
-  });
-
-  const first = docDefs[0];
-  return {
-    header: first.header,
-    footer: first.footer,
-    content: mergedContent,
-    pageSize: first.pageSize,
-    pageOrientation: first.pageOrientation,
-    pageMargins: first.pageMargins,
-    defaultStyle: first.defaultStyle,
-    styles: first.styles,
-  };
-};

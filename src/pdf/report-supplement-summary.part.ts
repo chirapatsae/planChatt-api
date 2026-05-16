@@ -11,11 +11,8 @@
  *   - ISSUE_BASED    → Flat list of DevelopmentIssue rows
  *                      (mirrors `report-summary-issue-based.part.ts`)
  *
- * The summary page does NOT carry the supplement-wide cover label
- * (`เล่มเพิ่มเติมรอบที่ N พ.ศ. ...`) — that responsibility lives in
- * `report-supplement-cover.part.ts`. The summary leads with an intra-doc
- * "บัญชีสรุปโครงการพัฒนา" heading consistent with the existing main-plan
- * and revision summary pages.
+ * The summary leads with an intra-doc "บัญชีสรุปโครงการพัฒนา" heading
+ * consistent with the existing main-plan and revision summary pages.
  */
 
 import type { TDocumentDefinitions } from 'pdfmake/interfaces';
@@ -47,7 +44,16 @@ const renderStrategyBasedSummary = (params: SupplementSummaryDocParams): TDocume
 
   const content: any[] = [];
 
-  // Intra-doc heading.
+  // Splash title page (mirrors revision-edit summary).
+  content.push({
+    text: 'รายละเอียดโครงการ',
+    fontSize: 48,
+    bold: true,
+    alignment: 'center',
+    margin: [0, 200, 0, 0],
+  });
+
+  // Intra-doc heading on the next page.
   content.push({
     stack: [
       'บัญชีสรุปโครงการพัฒนา \n',
@@ -58,16 +64,7 @@ const renderStrategyBasedSummary = (params: SupplementSummaryDocParams): TDocume
     bold: true,
     margin: [0, 10, 0, 0],
     fontSize: 12,
-  });
-
-  // Top-level total summary line (per user spec).
-  const overallTotalSum = years.reduce((sum, y) => sum + (overallSum[y] || 0), 0);
-  content.push({
-    text: `จำนวนโครงการอนุมัติทั้งสิ้น ${totalProjectCount} โครงการ  |  งบประมาณรวม ${overallTotalSum.toLocaleString('th-TH')} บาท`,
-    alignment: 'center',
-    fontSize: 13,
-    bold: true,
-    margin: [0, 6, 0, 14],
+    pageBreak: 'before',
   });
 
   // Per-year + summary table.
@@ -272,6 +269,15 @@ const renderIssueBasedSummary = (params: SupplementSummaryDocParams): TDocumentD
 
   const content: any[] = [];
 
+  // Splash title page (mirrors revision-edit summary).
+  content.push({
+    text: 'รายละเอียดโครงการ',
+    fontSize: 48,
+    bold: true,
+    alignment: 'center',
+    margin: [0, 200, 0, 0],
+  });
+
   content.push({
     stack: [
       'บัญชีสรุปโครงการพัฒนา \n',
@@ -282,15 +288,7 @@ const renderIssueBasedSummary = (params: SupplementSummaryDocParams): TDocumentD
     bold: true,
     margin: [0, 10, 0, 0],
     fontSize: 12,
-  });
-
-  const overallTotalSum = years.reduce((sum, y) => sum + (overallSum[y] || 0), 0);
-  content.push({
-    text: `จำนวนโครงการอนุมัติทั้งสิ้น ${totalProjectCount} โครงการ  |  งบประมาณรวม ${overallTotalSum.toLocaleString('th-TH')} บาท`,
-    alignment: 'center',
-    fontSize: 13,
-    bold: true,
-    margin: [0, 6, 0, 14],
+    pageBreak: 'before',
   });
 
   const summaryTableBody: any[] = [];

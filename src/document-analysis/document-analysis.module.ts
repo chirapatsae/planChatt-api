@@ -4,6 +4,11 @@ import { AiUsageQuotasModule } from 'src/ai-usage-quotas/ai-usage-quotas.module'
 import { AiUsageLogsModule } from 'src/ai-usage-logs/ai-usage-logs.module';
 import { AttachmentProjectGroup } from 'src/attachment-project-groups/entities/attachment-project-group.entity';
 import { AttachmentRevisedProjectGroup } from 'src/attachment-revised-project-groups/entities/attachment-revised-project-group.entity';
+// SUPP_AI_BE_01 — SPG attachment repository must be available via
+// `forFeature` so `DocumentAnalysisService` can inject it for the new
+// `'supplement-project-group'` kind. Entity itself is already
+// registered at the root DataSource (see `app.module.ts` SUPP-3/BE-07).
+import { AttachmentSupplementProjectGroup } from 'src/attachment-supplement-project-groups/entities/attachment-supplement-project-group.entity';
 import { DocumentAnalysisService } from './document-analysis.service';
 // SEC-W44-02 — shared PII redactor.  The OCR → LLM path in
 // `document-analysis.service.ts` is the PRIMARY PII-leak surface
@@ -30,6 +35,8 @@ const KNOWN_OCR_ERROR_PATTERNS =
     TypeOrmModule.forFeature([
       AttachmentProjectGroup,
       AttachmentRevisedProjectGroup,
+      // SUPP_AI_BE_01 — SPG attachment repo for the new kind.
+      AttachmentSupplementProjectGroup,
     ]),
     AiUsageQuotasModule,
     // Wave 37 N2 — rich-detail log writes for DOCUMENT_SUMMARY. Direct

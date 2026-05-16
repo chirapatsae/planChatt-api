@@ -109,6 +109,38 @@ export class TrackingStatusController {
     return this.trackingStatusService.createManyRevisedProjectGroup(dtos, req.user.userId);
   }
 
+  /**
+   * SUPP_STAFF_BE_02 — Atomic bulk transition endpoint for
+   * SupplementProjectGroup. Sibling of `POST /bulk/revised-project-group`.
+   *
+   * Stage 2 / Stage 3 of the staff supplement workflow uses this endpoint to
+   * promote many SPGs in a single round-trip (typical case:
+   * Verified → Pending_Approval before draft-PDF generation).
+   *
+   * Atomic semantics — any per-row guard failure rolls back ALL rows in the
+   * batch (single `dataSource.transaction`). Per-row guards reuse the same
+   * scope / responsibility / transition map enforced by
+   * `createBySupplementProjectGroup`. Cap = 200 rows (§19.6 / task §7).
+   *
+   * §17.4 baseline snapshot is NOT fired — staff bulk transitions are NOT
+   * authoring surfaces (Wave 11 clarification). §18 cascade is NOT
+   * triggered — cascade only fires on book cancel / finalize, never on
+   * individual project transitions.
+   */
+  @Post('bulk/supplement-project-group')
+  createManySupplementProjectGroup(
+    @Body() dtos: CreateTrackingStatusDto[],
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    this.logger.log(
+      `Request to bulk-transition ${dtos?.length ?? 0} supplement project group(s)`,
+    );
+    return this.trackingStatusService.createManySupplementProjectGroup(
+      dtos,
+      req.user.userId,
+    );
+  }
+
 
   @Get()
   findAll() {

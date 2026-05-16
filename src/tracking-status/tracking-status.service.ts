@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import { PlanPhase, PhaseType } from 'src/plan-phase/entities/plan-phase.entity';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { CreateTrackingStatusDto } from './dto/create-tracking-status.dto';
 import { UpdateTrackingStatusDto } from './dto/update-tracking-status.dto';
 import { Status } from 'src/status/entities/status.entity';
@@ -1483,6 +1483,324 @@ export class TrackingStatusService {
     }
   }
 
+  /**
+   * SUPP_STAFF_BE_02 — Atomic bulk staff transition for SupplementProjectGroup.
+   *
+   * Sibling of `createManyRevisedProjectGroup`. Mirrors that method
+   * byte-for-byte and substitutes the SPG-specific scope (parent plan +
+   * DevelopmentPlanSupplement) and the agency-based staff responsibility
+   * gate (Q3 — `WorkHistoryGovernmentAgencyResponsibility`) borrowed from
+   * the single-row `createBySupplementProjectGroup`.
+   *
+   * Per-row guards reuse the staff branch of `createBySupplementProjectGroup`:
+   *   - SPG exists and is not soft-deleted (load with relations)
+   *   - Parent DevelopmentPlan.isLatest (DevelopmentPlan.isBooked is NOT a
+   *     gate per supplement workflow §6 — parent plan being booked is the
+   *     EXPECTED state for the supplement workflow)
+   *   - DevelopmentPlanSupplement.isLatest, !isBooked (§15 book-lock
+   *     equivalent — a non-latest or booked supplement is the §15 LOCKED
+   *     case)
+   *   - For staff role: agency responsibility via
+   *     `WorkHistoryGovernmentAgencyResponsibility` — admin / super-admin
+   *     bypass
+   *   - Strict staff transition map (CLAUDE.md §3):
+   *       Pending → Verified
+   *       Verified → Pending_Approval
+   *       Pending_Approval → Approved
+   *     (Returned_For_Revision is INTENTIONALLY excluded from the bulk
+   *     path — mirrors the RPG bulk sibling; staff-led
+   *     Returned_For_Revision remains single-row via
+   *     `create-by-supplement-project-group`.)
+   *
+   * Atomic transaction — any per-row failure throws and rolls back the
+   * entire batch (no per-row "skip on failure" mode). Cap = 200 rows
+   * (§19.6 mirror).
+   *
+   * §17.4 baseline snapshot is NOT fired — staff bulk transitions are NOT
+   * authoring surfaces (Wave 11 clarification). The owner-driven SPG
+   * Ready → Pending baseline path lives in `createBySupplementProjectGroup`
+   * and is unaffected by this method.
+   *
+   * §18 cascade is NOT triggered — cascade only fires on book cancel /
+   * finalize (per §18.2 trigger surfaces), never on individual project
+   * transitions. The book mutations remain owned by their existing
+   * services.
+   *
+   * Post-commit notifications mirror the RPG bulk sibling: per-item
+   * dispatch via `dispatchPhaseOneNotification` with
+   * `projectKind: 'supplement-project-group'`. A notification failure
+   * logs but does NOT roll back (§4.1, §17.2).
+   */
+  async createManySupplementProjectGroup(
+    dtos: CreateTrackingStatusDto[],
+    userId: string,
+  ) {
+    try {
+      // Non-empty + cap enforcement (§19.6 mirror; task §7).
+      if (!Array.isArray(dtos) || dtos.length === 0) {
+        throw new BadRequestException(
+          'EMPTY_BULK: ต้องระบุรายการอย่างน้อย 1 รายการ',
+        );
+      }
+      if (dtos.length > 200) {
+        throw new BadRequestException(
+          `BULK_TOO_LARGE: ไม่สามารถส่งเกิน 200 รายการต่อครั้ง (ส่งมา: ${dtos.length})`,
+        );
+      }
+
+      const workHistory = await this.workHistoryRepo.findOne({
+        where: { user: { id: userId }, isCurrent: true },
+        // Wave 22 B1 — eager-load `user` so actorUserId can be threaded onto
+        // the post-commit notification emit audit rows.
+        relations: ['role', 'workStatus', 'user'],
+      });
+
+      if (!workHistory) {
+        throw new NotFoundException(`WorkHistory for user ${userId} not found`);
+      }
+      if (workHistory.workStatus?.name !== 'approved') {
+        throw new UnauthorizedException(
+          'คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)',
+        );
+      }
+
+      // Staff-led only — mirrors the RPG bulk sibling. The single-row SPG
+      // method ALSO restricts the bulk-applicable transition map to
+      // `['staff', 'admin', 'super-admin']`; the user / owner branch of the
+      // single-row method handles Pull_Back / resubmission which are
+      // intentionally NOT part of the bulk contract.
+      const allowedRoles = ['staff', 'admin', 'super-admin'];
+      const userRole = workHistory.role?.name;
+      if (!allowedRoles.includes(userRole)) {
+        throw new ForbiddenException(
+          'เฉพาะเจ้าหน้าที่ (staff/admin/super-admin) เท่านั้นที่สามารถใช้งาน endpoint นี้ได้',
+        );
+      }
+
+      // Strict transition map — only forward staff transitions. Mirrors
+      // `createManyRevisedProjectGroup` (RPG bulk sibling). Staff-led
+      // Returned_For_Revision remains single-row.
+      const staffAllowedTransitions: Record<string, string> = {
+        Pending: 'Verified',
+        Verified: 'Pending_Approval',
+        Pending_Approval: 'Approved',
+      };
+
+      // Post-commit emit descriptors — collect inside the tx; dispatch after
+      // the transaction callback resolves so a notification failure CANNOT
+      // roll back the SQL transition (§4.1, §17.2).
+      type BulkSpgEmitCtx = {
+        fromStatus: string;
+        toStatus: string;
+        projectId: string;
+        projectTitle: string;
+        responsibleAgencyId: string | null;
+        createdByWorkHistoryId: string | null;
+        planName: string | null;
+        reason: string | null;
+        actorUserId: string | null;
+        actorWorkHistoryId: string | null;
+      };
+      const bulkSpgEmits: BulkSpgEmitCtx[] = [];
+
+      const results = await this.dataSource.transaction(async (manager) => {
+        const inner: TrackingStatus[] = [];
+
+        for (const dto of dtos) {
+          // Accept SPG id via either explicit `supplementProjectGroupId` or
+          // the legacy `projectId` mirror (same convention as the single-row
+          // SPG endpoint). Prefer explicit when both present.
+          const spgId = dto.supplementProjectGroupId ?? dto.projectId;
+          if (!spgId) {
+            throw new BadRequestException(
+              'ต้องระบุ supplementProjectGroupId หรือ projectId',
+            );
+          }
+          const { statusId } = dto;
+
+          // Load SPG with full scope chain (parent plan + supplement round +
+          // responsibleAgency + createdBy). Mirrors the single-row method's
+          // staff branch.
+          const spg = await manager.findOne(SupplementProjectGroup, {
+            where: { id: spgId },
+            relations: [
+              'createdBy',
+              'developmentPlanSupplement',
+              'developmentPlanSupplement.developmentPlan',
+              'responsibleAgency',
+            ],
+          });
+          if (!spg) {
+            throw new NotFoundException(
+              `SPG_NOT_FOUND: SupplementProjectGroup with ID ${spgId} not found (offendingId=${spgId})`,
+            );
+          }
+
+          const targetStatus = await manager.findOne(Status, {
+            where: { id: statusId },
+          });
+          if (!targetStatus) {
+            throw new NotFoundException(
+              `Status with ID ${statusId} not found (offendingId=${spgId})`,
+            );
+          }
+
+          // Scope binding — parent plan + supplement round.
+          // (Mirrors the staff branch of `createBySupplementProjectGroup`.)
+          const dps = spg.developmentPlanSupplement;
+          if (!dps) {
+            throw new ForbiddenException(
+              `ไม่พบรอบเพิ่มเติมของโครงการ ไม่สามารถดำเนินการได้ (offendingId=${spgId})`,
+            );
+          }
+          const dp = dps.developmentPlan;
+          if (!dp?.isLatest) {
+            throw new ForbiddenException(
+              `แผนพัฒนาฯ ที่เชื่อมโยงกับโครงการนี้ไม่ใช่แผนปัจจุบัน (offendingId=${spgId})`,
+            );
+          }
+          // DevelopmentPlan.isBooked is NOT a gate for supplement actions;
+          // parent plan being booked is the EXPECTED state for the
+          // supplement workflow (2026-05-12 single-row note).
+          if (!dps.isLatest) {
+            throw new ForbiddenException(
+              `BOOK_HAS_NEWER_REVISION: รอบเพิ่มเติมนี้ไม่ใช่รอบปัจจุบัน (offendingId=${spgId})`,
+            );
+          }
+          if (dps.isBooked) {
+            throw new ForbiddenException(
+              `BOOK_HAS_NEWER_REVISION: รอบเพิ่มเติมถูกรวมเล่มแล้ว (offendingId=${spgId})`,
+            );
+          }
+
+          // Q3 — AGENCY-BASED staff responsibility (mirrors single-row).
+          // Admin / super-admin bypass.
+          if (userRole === 'staff') {
+            const projectAgencyId = spg.responsibleAgency?.id;
+            if (!projectAgencyId) {
+              throw new BadRequestException(
+                `โครงการนี้ยังไม่มีการกำหนดหน่วยงานรับผิดชอบ (offendingId=${spgId})`,
+              );
+            }
+            const hasResponsibility = await manager.findOne(
+              WorkHistoryGovernmentAgencyResponsibility,
+              {
+                where: {
+                  workHistory: { id: workHistory.id },
+                  governmentAgency: { id: projectAgencyId },
+                },
+              },
+            );
+            if (!hasResponsibility) {
+              throw new ForbiddenException(
+                `คุณไม่มีสิทธิ์ดำเนินการกับโครงการนี้ (ไม่ได้รับผิดชอบหน่วยงานของโครงการ) (offendingId=${spgId})`,
+              );
+            }
+          }
+
+          // Load current latest TrackingStatus + enforce transition map.
+          const currentTracking = await manager.findOne(TrackingStatus, {
+            where: {
+              supplementProjectGroupId: { id: spgId },
+              isLatest: true,
+            },
+            relations: ['statusId'],
+          });
+          if (!currentTracking) {
+            throw new BadRequestException(
+              `ไม่พบสถานะปัจจุบันของโครงการ (offendingId=${spgId})`,
+            );
+          }
+          const currentStatusName = currentTracking.statusId?.name;
+          if (!currentStatusName) {
+            throw new BadRequestException(
+              `ไม่สามารถอ่านสถานะปัจจุบันของโครงการ (offendingId=${spgId})`,
+            );
+          }
+
+          const allowedDestination = staffAllowedTransitions[currentStatusName];
+          if (!allowedDestination || allowedDestination !== targetStatus.name) {
+            throw new ForbiddenException(
+              `INVALID_TRANSITION: ไม่อนุญาตให้เปลี่ยนสถานะจาก "${currentStatusName}" เป็น "${targetStatus.name}" ` +
+                `(offendingId=${spgId}, เส้นทางที่อนุญาต: ${currentStatusName} → ${allowedDestination ?? 'ไม่มี'})`,
+            );
+          }
+
+          // Audit (§12) — flip prior latest to false, insert new latest.
+          await manager.update(
+            TrackingStatus,
+            { supplementProjectGroupId: { id: spgId } },
+            { isLatest: false },
+          );
+
+          // createManySupplementProjectGroup is staff-only (enforced above);
+          // staffRemark is always eligible.
+          const tracking = manager.create(TrackingStatus, {
+            createdBy: workHistory,
+            supplementProjectGroupId: { id: spgId },
+            statusId: { id: statusId },
+            staffRemark: dto.staffRemark ?? null,
+            comment: dto.comment,
+            isLatest: true,
+          });
+
+          const savedTracking = await manager.save(TrackingStatus, tracking);
+          inner.push(savedTracking);
+
+          bulkSpgEmits.push({
+            fromStatus: currentStatusName,
+            toStatus: targetStatus.name,
+            projectId: spg.id,
+            projectTitle: spg.title ?? '',
+            responsibleAgencyId: spg.responsibleAgency?.id ?? null,
+            createdByWorkHistoryId: spg.createdBy?.id ?? null,
+            planName: dps?.developmentPlan?.name ?? null,
+            reason: dto.staffRemark ?? null,
+            actorUserId: workHistory.user?.id ?? null,
+            actorWorkHistoryId: workHistory.id ?? null,
+          });
+        }
+
+        return inner;
+      });
+
+      // POST-COMMIT notification dispatch — per-item, mirrors the RPG bulk
+      // sibling. SUPP-3 BE-06 wired SPG as a first-class supplement kind on
+      // `dispatchPhaseOneNotification`. Recipient resolution still uses the
+      // agency-based axis (Q3). Wrapped in try/catch internally; a
+      // notification failure logs but does NOT roll back (§4.1, §17.2). NO
+      // §17.4 baseline snapshot is fired here — staff bulk transitions are
+      // NOT authoring surfaces per Wave 11 clarification. NO §18 cascade is
+      // triggered — cascade only fires on book cancel / finalize.
+      for (const ctx of bulkSpgEmits) {
+        const eventTypes = this.resolveNotificationEventTypes(
+          ctx.fromStatus,
+          ctx.toStatus,
+        );
+        for (const eventType of eventTypes) {
+          await this.dispatchPhaseOneNotification({
+            eventType,
+            fromStatus: ctx.fromStatus,
+            toStatus: ctx.toStatus,
+            projectId: ctx.projectId,
+            projectKind: 'supplement-project-group',
+            projectTitle: ctx.projectTitle,
+            projectResponsibleAgencyId: ctx.responsibleAgencyId,
+            createdByWorkHistoryId: ctx.createdByWorkHistoryId,
+            reason: ctx.reason,
+            planName: ctx.planName,
+            actorUserId: ctx.actorUserId,
+            actorWorkHistoryId: ctx.actorWorkHistoryId,
+          });
+        }
+      }
+
+      return results;
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
 
   async findAll(): Promise<TrackingStatus[]> {
     try {
@@ -2604,6 +2922,47 @@ export class TrackingStatusService {
           }
         }
 
+        // SUPP_AI_BE_05 (2026-05-15) — §17.4 baseline snapshot fires
+        // INSIDE the workflow transaction so that a snapshot-write
+        // failure rolls back the SPG status flip atomically per the
+        // task §7 trigger-policy contract and `workflow-add-project-
+        // supplement.md` §15 ("If the baseline write fails inside the
+        // transaction, the `Ready → Pending` submit MUST roll back").
+        //
+        // Authoring-only (§17.4 Wave 11): we only fire when the
+        // transition lands on `Pending`, which under this method is
+        // exclusively reachable from the owner branch (Ready,
+        // Pull_Back, Returned_For_Revision → Pending) per the SPG
+        // state machine in workflow §10. Staff transitions never
+        // land on `Pending`, so the `toStatus === 'Pending'` guard
+        // is a sufficient and uniform authoring-surface check.
+        //
+        // Workflow-only surfaces NOT covered by this trigger
+        // (Wave 11 forbid):
+        //   - staff Pending → Verified / Returned_For_Revision
+        //   - staff Verified → Pending_Approval / Returned_For_Revision
+        //   - staff Pending_Approval → Approved
+        //   - owner Pending → Pull_Back / Verified → Pull_Back
+        //   - staff rollback (`rollbackSupplementProjectGroupStatus`)
+        //   - bulk staff transitions (`createManySupplementProjectGroup`)
+        //
+        // Endpoint discriminator (§17.4 Wave 9 + Wave 18C):
+        //   - Submit without AI → `endpoint = 'no-ai-baseline'`
+        //   - Submit with AI    → `endpoint = 'pre-submit-review'` is
+        //     a separate path owned by `PreSubmitSnapshotService` via
+        //     the owner-read upgrade-from-baseline branch; this
+        //     trigger always writes the baseline marker.
+        //
+        // Idempotency (§17.4 Wave 10):
+        //   - (target_kind, target_id, content_hash) — same-hash
+        //     short-circuits in `PreSubmitSnapshotService`
+        //   - downgrade-forbidden — if an existing `pre-submit-review`
+        //     row already covers this SPG, the snapshot service
+        //     returns the existing row unchanged (no overwrite)
+        if (status.name === 'Pending') {
+          await this.fireSpgBaselineSnapshot(userId, spg.id, manager);
+        }
+
         return {
           saved: savedTracking,
           fromStatus: emitFromStatus,
@@ -2657,19 +3016,6 @@ export class TrackingStatusService {
         });
       }
 
-      // SUPP-IA-03 (BE-β, 2026-05-12) — §17.4 baseline snapshot on
-      // owner-driven submission. Any path that lands the SPG at
-      // `Pending` from the owner court (Ready, Pull_Back, or
-      // Returned_For_Revision) is an authoring-time submit per §17.4
-      // Wave 11. Same-hash idempotency (Wave 10) collapses repeat fires
-      // across resubmission cycles into a no-op. Best-effort + advisory
-      // (§17.2): a snapshot failure logs and is swallowed; it MUST NOT
-      // roll back the workflow transition (the tracking row has already
-      // been committed at this point).
-      if (txResult.toStatus === 'Pending') {
-        await this.fireSpgBaselineSnapshot(userId, txResult.project.id);
-      }
-
       return txResult.saved;
     } catch (error) {
       handleException(this.logger, error);
@@ -2677,122 +3023,157 @@ export class TrackingStatusService {
   }
 
   /**
-   * SUPP-IA-03 (BE-β, 2026-05-12) — fire a §17.4 `no-ai-baseline`
-   * snapshot for the SPG transitioning to `Pending` from the owner
-   * court. Reads the saved SPG (with budgets + classification) from the
-   * default manager and forwards to `PreSubmitSnapshotService` with
-   * `result: null` (which forces the snapshot service to write the
-   * baseline row).
+   * SUPP_AI_BE_05 (2026-05-15) — fire a §17.4 `no-ai-baseline` snapshot
+   * for the SPG transitioning to `Pending` from the owner court.
+   *
+   * Originally implemented in SUPP-IA-03 (BE-β, 2026-05-12) as a
+   * post-commit advisory call. Per the SUPP_AI_BE_05 task spec §7 and
+   * `workflow-add-project-supplement.md` §15 trigger-policy contract,
+   * this call is now invoked from INSIDE the workflow transaction (as
+   * the final step before the transaction returns). Any failure thrown
+   * from this method propagates to the outer transaction and rolls
+   * back the SPG status flip atomically.
+   *
+   * Why an `EntityManager` parameter:
+   *   - SPG + budgets MUST be read through the caller's manager so the
+   *     read sees in-flight tx state (the SPG row is committed in a
+   *     prior transaction at `[create POST]`, but we still prefer the
+   *     manager-bound repo for consistency with the caller's tx).
+   *   - `BookFormatResolver.resolveBySupplementProjectGroup` already
+   *     accepts an EntityManager; we forward the caller's manager.
+   *   - `PreSubmitSnapshotService.createSnapshot` opens its OWN
+   *     transaction internally (per BE_03 contract — we MUST NOT
+   *     modify it). When called from inside an outer tx with a
+   *     separate connection, its write commits independently; a
+   *     throw still propagates to the outer tx and triggers rollback
+   *     of the workflow-side state changes, which is the atomicity
+   *     guarantee the task spec asks for. Idempotency by
+   *     `(target_kind, target_id, content_hash)` per Wave 10 makes
+   *     any leaked-row scenario harmless on retry.
    *
    * Contract:
    *   - `endpoint='no-ai-baseline'`, `staleness_policy='snapshot-only'`
    *   - `target_kind='supplement-project-group'`, `target_id=spg.id`
    *   - `workflow='add'`
-   *   - Idempotency by `(target_kind, target_id, content_hash)` per
-   *     Wave 10. A repeat fire with the same hash short-circuits in
-   *     `PreSubmitSnapshotService.createSnapshot`.
+   *   - `submittedByWorkHistoryId` resolved server-side by
+   *     `PreSubmitSnapshotService` against the caller's WorkHistory
+   *   - `content_hash` computed by `PreSubmitSnapshotService` via the
+   *     SHARED `computeSmartApproveContentHash` helper using the
+   *     exact `{ project, classification, attachments, justification }`
+   *     shape that BE_03 consumes. Hash determinism across surfaces
+   *     is preserved per Wave 10.
    *
-   * §17.2 advisory-only — a failure here is logged and swallowed. The
-   * caller has already committed the tracking row; rolling back the
-   * workflow transition because of an AI-table write failure would
-   * violate §17.2.
+   * §17.2 advisory-only semantics — the baseline row never gates a
+   * workflow decision (the snapshot service does not block the
+   * transition; what blocks the transition is a thrown exception from
+   * the snapshot WRITE itself, which is a separate concern from "is
+   * the score advisory"). §17.4 forces `isStale: false` on the read
+   * side for `snapshot-only` rows.
    *
    * §17.3 audit separation — the snapshot row has no FK to SPG.
    */
   private async fireSpgBaselineSnapshot(
     userId: string,
     spgId: string,
+    manager: EntityManager,
   ): Promise<void> {
-    try {
-      const spg = await this.supplementProjectGroupRepo.findOne({
-        where: { id: spgId },
-        relations: [
-          'developmentPlanSupplement',
-          'developmentPlanSupplement.developmentPlan',
-          'strategy',
-          'tactic',
-          'plan',
-          'developmentIssue',
-          'createdBy',
-          'createdBy.amphoe',
-          'createdBy.localAdministrativeOrganization',
-        ],
-      });
-      if (!spg) {
-        this.logger.warn(
-          `[SUPP-IA-03 baseline] SPG ${spgId} not found post-commit; skipping snapshot.`,
-        );
-        return;
-      }
-
-      const budgets = await this.dataSource.getRepository(Budget).find({
-        where: { supplementProjectGroupId: { id: spgId } as any },
-      });
-
-      // §16 — resolve the parent plan's format. Read-only.
-      let reportFormat: ReportFormat;
-      try {
-        reportFormat =
-          await this.bookFormatResolver.resolveBySupplementProjectGroup(
-            spgId,
-            this.dataSource.manager,
-          );
-      } catch (e) {
-        // Defensive fallback — if format resolution fails, infer from
-        // the row shape (§16.5). The snapshot is advisory either way.
-        reportFormat = spg.developmentIssue
-          ? ReportFormat.ISSUE_BASED
-          : ReportFormat.STRATEGY_BASED;
-        this.logger.warn(
-          `[SUPP-IA-03 baseline] format resolve failed spgId=${spgId} ` +
-            `fallback=${reportFormat} err=${(e as Error)?.message ?? 'unknown'}`,
-        );
-      }
-
-      await this.preSubmitSnapshotService.createSnapshot(userId, {
-        targetKind: 'supplement-project-group',
-        targetId: spgId,
-        workflow: 'add',
-        // Null `result` → snapshot service writes the audit-baseline
-        // row (no live AI invocation, no quota deduction).
-        result: null,
-        project: {
-          title: spg.title ?? null,
-          objective: spg.objective ?? null,
-          goal: spg.goal ?? null,
-          expected: spg.expected ?? null,
-          indicator: spg.indicator ?? null,
-          startLat: spg.startLat ?? null,
-          startLng: spg.startLng ?? null,
-          endLat: spg.endLat ?? null,
-          endLng: spg.endLng ?? null,
-          amphoeId: spg.createdBy?.amphoe?.id ?? null,
-          localOrganizationId:
-            spg.createdBy?.localAdministrativeOrganization?.id ?? null,
-          budgets: budgets.map((b) => ({
-            year: b.year,
-            quantity: b.quantity ?? 0,
-          })),
-        },
-        classification: {
-          reportFormat:
-            reportFormat === ReportFormat.ISSUE_BASED
-              ? 'ISSUE_BASED'
-              : 'STRATEGY_BASED',
-          strategyName: spg.strategy?.name ?? null,
-          tacticName: spg.tactic?.name ?? null,
-          planName: spg.plan?.name ?? null,
-          developmentIssueName: spg.developmentIssue?.name ?? null,
-        },
-        attachments: [],
-      });
-    } catch (err) {
-      // §17.2 advisory — log and continue.
-      this.logger.error(
-        `[SUPP-IA-03 baseline] snapshot write failed spgId=${spgId} ` +
-          `err=${(err as Error)?.message ?? 'unknown'}`,
+    const spg = await manager.findOne(SupplementProjectGroup, {
+      where: { id: spgId },
+      relations: [
+        'developmentPlanSupplement',
+        'developmentPlanSupplement.developmentPlan',
+        'strategy',
+        'tactic',
+        'plan',
+        'developmentIssue',
+        'createdBy',
+        'createdBy.amphoe',
+        'createdBy.localAdministrativeOrganization',
+      ],
+    });
+    if (!spg) {
+      // The SPG row was loaded at the top of the workflow tx; if it
+      // disappeared between then and now the entire workflow is
+      // inconsistent. Surface a hard error so the outer tx rolls back.
+      throw new NotFoundException(
+        `SPG ${spgId} not found while preparing AI baseline snapshot`,
       );
     }
+
+    const budgets = await manager.find(Budget, {
+      where: { supplementProjectGroupId: { id: spgId } as any },
+    });
+
+    // §16 — resolve the parent plan's format using the caller's
+    // manager so the read is enrolled in the workflow transaction.
+    let reportFormat: ReportFormat;
+    try {
+      reportFormat =
+        await this.bookFormatResolver.resolveBySupplementProjectGroup(
+          spgId,
+          manager,
+        );
+    } catch (e) {
+      // Defensive fallback — infer from row shape (§16.5). The SPG's
+      // classification shape invariant guarantees exactly one of
+      // (strategy/tactic/plan/indicator) OR (developmentIssue) is
+      // populated, so the inference is safe.
+      reportFormat = spg.developmentIssue
+        ? ReportFormat.ISSUE_BASED
+        : ReportFormat.STRATEGY_BASED;
+      this.logger.warn(
+        `[SUPP_AI_BE_05 baseline] format resolve failed spgId=${spgId} ` +
+          `fallback=${reportFormat} err=${(e as Error)?.message ?? 'unknown'}`,
+      );
+    }
+
+    // The payload shape below MUST match BE_03's
+    // `CreatePreSubmitSnapshotDto` byte-for-byte so the server-side
+    // `computeSmartApproveContentHash` call inside
+    // `PreSubmitSnapshotService` produces a hash that is deterministic
+    // across the AI-click and the submit-time baseline surfaces (Wave
+    // 10 idempotency + Wave 18C upgrade-from-baseline). The shared
+    // hash helper at `backend/src/ai/utils/content-hash.ts` is the
+    // single source of truth for canonicalization (NFC normalize,
+    // sort budgets, conditional `indicator`, etc.).
+    await this.preSubmitSnapshotService.createSnapshot(userId, {
+      targetKind: 'supplement-project-group',
+      targetId: spgId,
+      workflow: 'add',
+      // Null `result` → snapshot service writes the audit-baseline
+      // row (`endpoint='no-ai-baseline'`). No live AI invocation, no
+      // quota deduction, no `ai_usage_logs` row.
+      result: null,
+      project: {
+        title: spg.title ?? null,
+        objective: spg.objective ?? null,
+        goal: spg.goal ?? null,
+        expected: spg.expected ?? null,
+        indicator: spg.indicator ?? null,
+        startLat: spg.startLat ?? null,
+        startLng: spg.startLng ?? null,
+        endLat: spg.endLat ?? null,
+        endLng: spg.endLng ?? null,
+        amphoeId: spg.createdBy?.amphoe?.id ?? null,
+        localOrganizationId:
+          spg.createdBy?.localAdministrativeOrganization?.id ?? null,
+        budgets: budgets.map((b) => ({
+          year: b.year,
+          quantity: b.quantity ?? 0,
+        })),
+      },
+      classification: {
+        reportFormat:
+          reportFormat === ReportFormat.ISSUE_BASED
+            ? 'ISSUE_BASED'
+            : 'STRATEGY_BASED',
+        strategyName: spg.strategy?.name ?? null,
+        tacticName: spg.tactic?.name ?? null,
+        planName: spg.plan?.name ?? null,
+        developmentIssueName: spg.developmentIssue?.name ?? null,
+      },
+      attachments: [],
+    });
   }
 
   /**
@@ -2970,27 +3351,35 @@ export class TrackingStatusService {
           { isLatest: true },
         );
 
-        // 11. CLAUDE.md §14.6 — Rollback Ghost-Descendant Fix.
-        // Hard-delete the rolled-back SPG row itself as the final step of
-        // the transaction.
+        // 2026-05-16 — REMOVED the §14.6 hard-delete of the SPG row.
         //
-        // TODO(SUPP-4): once SUPP-4 lands and
-        // `revised_project_groups.prev_project_type='supplement'` becomes a
-        // valid enum value, this hard-delete will also unlock upstream
-        // supplement-rooted RPGs via the existing §14 lineage lock
-        // semantics. In SUPP-1 through SUPP-3 SPG is a leaf (no
-        // descendants possible), so the upstream-unlock effect is a
-        // functional no-op — but the invariant is implemented now so the
-        // SUPP-4 activation is a zero-code-change event. DO NOT remove
-        // this delete as dead code.
+        // The previous implementation hard-deleted the SPG row "for
+        // future SUPP-4 readiness" — the rationale being that once SPG
+        // can be the parent of an RPG, the hard-delete is necessary to
+        // unlock the upstream parent per §14.6 ghost-descendant fix.
         //
-        // The cascade FK on tracking_status.supplement_project_group_id
-        // removes any remaining older tracking rows as part of the same
-        // transaction — the intentional rollback audit exception
-        // documented in §12 and the STAFF-LED ROLLBACK RULE.
-        await manager.delete(SupplementProjectGroup, {
-          id: supplementProjectGroupId,
-        });
+        // BUT in SUPP-1 through SUPP-3 (current wave) SPG is a LEAF —
+        // nothing references it upstream — so the hard-delete was a
+        // functional no-op for parent-unlocking purposes AND a
+        // destructive operation from the user's perspective: clicking
+        // "rollback" silently deleted the project + its attachments,
+        // which is NOT what staff-led rollback is supposed to mean.
+        //
+        // Rollback semantics restored to the natural / user-expected
+        // behavior:
+        //   - hard-delete the latest TrackingStatus (step 10 above)
+        //   - restore the previous TrackingStatus to `isLatest = true`
+        //   - SPG row itself stays intact, status reverts to whatever
+        //     it was before the rolled-back transition
+        //
+        // When SUPP-4 lands (and `RevisedProjectGroup.prev_project_type`
+        // gains `'supplement'`), the §14.6 hard-delete MUST be re-added
+        // — but ONLY when the SPG has live descendants, and with the
+        // attachment + tracking-status cleanup applied in the same tx
+        // to satisfy the `ON DELETE RESTRICT` FK on
+        // `attachment_supplement_project_groups`. See
+        // docs/reports/SUPPLEMENT_REPORT_FORMAT_CHAIN.md for the
+        // cross-cutting SPG audit notes.
 
         return {
           message: `ย้อนสถานะสำเร็จ (กลับไปเป็น "${previousTracking.statusId.name}")`,

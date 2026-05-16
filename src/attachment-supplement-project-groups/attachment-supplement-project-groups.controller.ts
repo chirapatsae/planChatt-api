@@ -14,6 +14,9 @@ import {
   Query,
   UnauthorizedException,
   NotFoundException,
+  ForbiddenException,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
@@ -22,6 +25,19 @@ import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 import { AttachmentSupplementProjectGroupsService } from './attachment-supplement-project-groups.service';
 import { multerConfig } from 'src/attachment-event/multer.config';
 import { UrlSigningUtil } from 'src/util/url-signing.util';
+// SUPP_AI_BE_02 — SPG attachment AI analyze endpoint. Mirrors the PG /
+// RPG controllers byte-for-byte; delegates to the shared
+// `DocumentAnalysisService` using the `'supplement-project-group'` kind
+// (added by SUPP_AI_BE_01).
+import { DocumentAnalysisService } from 'src/document-analysis/document-analysis.service';
+// Pre-call quota enforcement for the staff-lead retry endpoint. Mirrors
+// the PG / RPG retry guard — analysis triggered here calls OpenAI
+// (summary) so the retry MUST be gated by the user-quota + org-cap
+// pre-call guard.
+import { AiQuotaGuard } from 'src/ai-usage-quotas/guards/ai-quota.guard';
+import { AiQuotaWeight } from 'src/ai-usage-quotas/decorators/ai-quota-weight.decorator';
+
+const STAFF_LEAD_ROLES = new Set(['staff', 'admin', 'super-admin']);
 
 /**
  * SUPP-3 / BE-07 — Attachment endpoints for `SupplementProjectGroup`.
@@ -37,11 +53,11 @@ import { UrlSigningUtil } from 'src/util/url-signing.util';
  * supplement workflow doc §13 keeps staff routing in the SPG service
  * itself; attachment reads are not gated further.
  *
- * NOTE: AI analysis read + retry endpoints are intentionally OMITTED in
- * this wave because `DocumentAnalysisService` does not yet accept a
- * `'supplement-project-group'` kind. See
- * `TODO(SUPP-3-later)` in the service. Adding the routes is a follow-up
- * once the kind union widens.
+ * AI analysis (SUPP_AI_BE_02): `GET :id/analysis` (read) and
+ * `POST :id/analysis/retry` (staff-lead retry) follow the PG / RPG
+ * pattern verbatim. They delegate to `DocumentAnalysisService` with
+ * kind `'supplement-project-group'` (added by SUPP_AI_BE_01). The retry
+ * route is advisory per §17.2 — it never alters workflow state.
  */
 @Controller({
   path: 'attachment-supplement-project-groups',
@@ -54,6 +70,7 @@ export class AttachmentSupplementProjectGroupsController {
 
   constructor(
     private readonly attachmentService: AttachmentSupplementProjectGroupsService,
+    private readonly documentAnalysisService: DocumentAnalysisService,
   ) {}
 
   // Public file viewing endpoint with URL signing.
@@ -140,6 +157,48 @@ export class AttachmentSupplementProjectGroupsController {
     return this.attachmentService.findBySupplementProjectGroupId(
       supplementProjectGroupId,
     );
+  }
+
+  // AI analysis — read current status + summary. Mirrors the PG / RPG
+  // `GET :id/analysis` route byte-for-byte. Advisory only per §17.2.
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/analysis')
+  async getAnalysis(@Param('id', ParseUUIDPipe) id: string) {
+    const result = await this.documentAnalysisService.getAnalysis(
+      'supplement-project-group',
+      id,
+    );
+    if (!result) {
+      throw new NotFoundException(`Attachment with ID ${id} not found`);
+    }
+    return result;
+  }
+
+  // AI analysis — staff-lead retry for failed rows. Mirrors the PG /
+  // RPG `POST :id/analysis/retry` route byte-for-byte. The §17.8
+  // cooldown key `(actor × target × endpoint_key)` is target-kind
+  // agnostic — the cooldown bucket is keyed by `target_id` (the
+  // attachment UUID), which is unique across PG / RPG / SPG, so SPG
+  // joins the bucket without any cooldown-key extension.
+  @UseGuards(JwtAuthGuard, AiQuotaGuard)
+  @AiQuotaWeight('document-summary')
+  @Post(':id/analysis/retry')
+  @HttpCode(HttpStatus.ACCEPTED)
+  async retryAnalysis(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    if (!STAFF_LEAD_ROLES.has(req.user.role)) {
+      throw new ForbiddenException(
+        'เฉพาะเจ้าหน้าที่ (staff / admin / super-admin) เท่านั้นที่สามารถสั่งวิเคราะห์ใหม่ได้',
+      );
+    }
+    await this.documentAnalysisService.retry(
+      'supplement-project-group',
+      id,
+      req.user.userId,
+    );
+    return { status: 'processing', attachmentId: id };
   }
 
   @UseGuards(JwtAuthGuard)

@@ -9,13 +9,30 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 
 export class CreateTrackingStatusDto {
+  /**
+   * 2026-05-16 BUGFIX — `projectId` is now CONDITIONALLY required.
+   *
+   * Was hardcoded `@IsNotEmpty()` even though the SPG endpoint
+   * (`POST /tracking-status/create-by-supplement-project-group`) is
+   * documented to accept the target id via `supplementProjectGroupId`
+   * INSTEAD of `projectId`. The service layer already does the right
+   * thing (`const spgId = dto.supplementProjectGroupId ?? dto.projectId`
+   * at tracking-status.service.ts:2547) but the DTO validator rejected
+   * SPG payloads with "projectId should not be empty".
+   *
+   * After fix: `projectId` is required ONLY when `supplementProjectGroupId`
+   * is absent. PG / RPG endpoints (which never send
+   * `supplementProjectGroupId`) keep their existing validation contract.
+   */
+  @ValidateIf((o) => !o.supplementProjectGroupId)
   @IsUUID()
   @IsNotEmpty()
-  projectId: string;
+  projectId?: string;
 
   /**
    * SUPP-1 / BE-02 — Optional explicit SupplementProjectGroup id.

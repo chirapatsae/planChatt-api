@@ -10,6 +10,7 @@ import {
   Req,
   Logger,
   Query,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { SupplementProjectGroupService } from './supplement-project-group.service';
 import { CreateSupplementProjectGroupDto } from './dto/create-supplement-project-group.dto';
@@ -104,6 +105,140 @@ export class SupplementProjectGroupController {
       `Fetching supplement project groups pending review user=${userId}`,
     );
     return this.supplementProjectGroupService.findPendingReview(userId);
+  }
+
+  /**
+   * SUPP_STAFF_BE_01 — Status-segmented staff queue endpoints.
+   *
+   * Mirrors the main-plan agency queue endpoints
+   * (`/project-groups/by-status-{pending,verified,pending-approval,approved}-agency`)
+   * for the supplement-book 4-stage admin panel.
+   *
+   * Each endpoint returns SPGs whose latest TrackingStatus matches the
+   * named canonical status, filtered by the staff caller's
+   * `WorkHistoryGovernmentAgencyResponsibility` (Q3, AGENCY-BASED).
+   * `admin` / `super-admin` / `c-level` bypass the responsibility filter.
+   * Plain `user` → 403.
+   *
+   * MUST be declared above `GET /:id` to win route resolution.
+   *
+   * Query params (all four endpoints):
+   *   - `countOnly` (boolean) — return `{ count: N }` instead of rows
+   *   - `developmentPlanId` (UUID, optional) — narrow to one parent plan
+   *   - `developmentPlanSupplementId` (UUID, optional) — narrow to one
+   *     supplement round
+   */
+
+  // Stage 1: รอการตรวจสอบ (Pending)
+  @Get('by-status-pending-supplement')
+  async findByStatusPendingSupplement(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('countOnly') countOnly?: string,
+    @Query('developmentPlanId', new ParseUUIDPipe({ optional: true }))
+    developmentPlanId?: string,
+    @Query(
+      'developmentPlanSupplementId',
+      new ParseUUIDPipe({ optional: true }),
+    )
+    developmentPlanSupplementId?: string,
+  ) {
+    const userId = req.user?.userId;
+    this.logger.log(
+      `Fetching SPGs by latest status=Pending user=${userId} plan=${developmentPlanId ?? '-'} supplement=${developmentPlanSupplementId ?? '-'}`,
+    );
+    return this.supplementProjectGroupService.findByStatusForStaff(
+      'Pending',
+      {
+        userId,
+        countOnly: countOnly === 'true' || countOnly === '1',
+        developmentPlanId,
+        developmentPlanSupplementId,
+      },
+    );
+  }
+
+  // Stage 2 (left pane): เข้าเล่มร่าง — Verified
+  @Get('by-status-verified-supplement')
+  async findByStatusVerifiedSupplement(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('countOnly') countOnly?: string,
+    @Query('developmentPlanId', new ParseUUIDPipe({ optional: true }))
+    developmentPlanId?: string,
+    @Query(
+      'developmentPlanSupplementId',
+      new ParseUUIDPipe({ optional: true }),
+    )
+    developmentPlanSupplementId?: string,
+  ) {
+    const userId = req.user?.userId;
+    this.logger.log(
+      `Fetching SPGs by latest status=Verified user=${userId} plan=${developmentPlanId ?? '-'} supplement=${developmentPlanSupplementId ?? '-'}`,
+    );
+    return this.supplementProjectGroupService.findByStatusForStaff(
+      'Verified',
+      {
+        userId,
+        countOnly: countOnly === 'true' || countOnly === '1',
+        developmentPlanId,
+        developmentPlanSupplementId,
+      },
+    );
+  }
+
+  // Stage 2 (right pane) / Stage 3: อนุมัติโครงการ — Pending_Approval
+  @Get('by-status-pending-approval-supplement')
+  async findByStatusPendingApprovalSupplement(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('countOnly') countOnly?: string,
+    @Query('developmentPlanId', new ParseUUIDPipe({ optional: true }))
+    developmentPlanId?: string,
+    @Query(
+      'developmentPlanSupplementId',
+      new ParseUUIDPipe({ optional: true }),
+    )
+    developmentPlanSupplementId?: string,
+  ) {
+    const userId = req.user?.userId;
+    this.logger.log(
+      `Fetching SPGs by latest status=Pending_Approval user=${userId} plan=${developmentPlanId ?? '-'} supplement=${developmentPlanSupplementId ?? '-'}`,
+    );
+    return this.supplementProjectGroupService.findByStatusForStaff(
+      'Pending_Approval',
+      {
+        userId,
+        countOnly: countOnly === 'true' || countOnly === '1',
+        developmentPlanId,
+        developmentPlanSupplementId,
+      },
+    );
+  }
+
+  // Stage 4: โครงการที่ผ่านการอนุมัติ — Approved
+  @Get('by-status-approved-supplement')
+  async findByStatusApprovedSupplement(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('countOnly') countOnly?: string,
+    @Query('developmentPlanId', new ParseUUIDPipe({ optional: true }))
+    developmentPlanId?: string,
+    @Query(
+      'developmentPlanSupplementId',
+      new ParseUUIDPipe({ optional: true }),
+    )
+    developmentPlanSupplementId?: string,
+  ) {
+    const userId = req.user?.userId;
+    this.logger.log(
+      `Fetching SPGs by latest status=Approved user=${userId} plan=${developmentPlanId ?? '-'} supplement=${developmentPlanSupplementId ?? '-'}`,
+    );
+    return this.supplementProjectGroupService.findByStatusForStaff(
+      'Approved',
+      {
+        userId,
+        countOnly: countOnly === 'true' || countOnly === '1',
+        developmentPlanId,
+        developmentPlanSupplementId,
+      },
+    );
   }
 
   @Get(':id')

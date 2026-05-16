@@ -415,6 +415,25 @@ export class SupplementProjectGroupService {
           'trackingStatus.statusId',
           'trackingStatus.createdBy',
           'trackingStatus.createdBy.user',
+          // BUGFIX 2026-05-16 — `trackingStatus.comments` was missing
+          // from `findOne` relations (same root-cause pattern as the
+          // `attachments` 2026-05-15 fix). The SupplementEdit page reuses
+          // `ProjectForm` which renders the staff "Returned_For_Revision"
+          // comment bubble at lines 643-694 of ProjectForm.tsx, iterating
+          // `status?.comments`. Without this relation the bubble fell
+          // back to free-text `status.comment` only, and the per-step
+          // clickable links (which read `c.step`) never rendered.
+          'trackingStatus.comments',
+          // BUGFIX 2026-05-15 — `attachments` was missing from this relations
+          // list, so `SupplementDetailWithComment` modal (staff review surface)
+          // never received the file list even though DB had rows. SPG entity
+          // declares the OneToMany at line 224-232. FE expects `project.attachments`
+          // for both the inline file row block AND the SplitView "โหมดตรวจสอบเอกสาร"
+          // trigger button (visible only when ≥1 non-deleted attachment exists).
+          // §17.3 audit safety: AttachmentSupplementProjectGroup has its own
+          // soft-delete column; the deletedAt filter happens at the FE rendering
+          // layer (`.filter(f => !f.deletedAt)`).
+          'attachments',
         ],
       });
       if (!row) {
@@ -556,6 +575,120 @@ export class SupplementProjectGroupService {
         );
       }
       // admin / super-admin / c-level — bypass the agency filter.
+
+      const results = await qb.orderBy('spg.created_at', 'DESC').getMany();
+      await this.maskCreatedByUser(results);
+      return results;
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * SUPP_STAFF_BE_01 — Status-segmented staff queue.
+   *
+   * Returns SPGs whose latest TrackingStatus matches a single canonical
+   * status name, filtered for the calling staff member's agency
+   * responsibility set (Q3 — AGENCY-BASED, RPG-style; same rule as
+   * `findPendingReview`). `admin` / `super-admin` / `c-level` bypass the
+   * responsibility filter; `user` → 403.
+   *
+   * Shared helper invoked by the four thin controller wrappers
+   * (`by-status-{pending,verified,pending-approval,approved}-supplement`).
+   * Centralises the JOIN topology, role gate, agency-responsibility join,
+   * status filter, optional plan/supplement filters, PII masking, and
+   * `countOnly` shaping in ONE place to avoid the 4× copy-paste.
+   *
+   * Defensive constraints (mirroring `findPendingReview`):
+   *   - SPG.responsibleAgency IS NOT NULL (auto-assigned at create per
+   *     Q1+Q2; null indicates a data bug).
+   *   - Soft-deleted SPGs excluded by `buildBaseSpgListQuery`.
+   *   - Empty staff agency-responsibility set → `[]` (or `{ count: 0 }`).
+   *
+   * Returns:
+   *   - `countOnly = true`  → `{ count: number }`
+   *   - `countOnly = false` → `SupplementProjectGroup[]` (PII masked)
+   */
+  async findByStatusForStaff(
+    statusName: 'Pending' | 'Verified' | 'Pending_Approval' | 'Approved',
+    opts: {
+      userId: string;
+      countOnly?: boolean;
+      developmentPlanId?: string;
+      developmentPlanSupplementId?: string;
+    },
+  ): Promise<SupplementProjectGroup[] | { count: number }> {
+    try {
+      const workHistory = await this.workHistoryRepo.findOne({
+        where: { user: { id: opts.userId }, isCurrent: true },
+        relations: [
+          'user',
+          'role',
+          'workStatus',
+          'workHistoryResponsibleGovernmentAgency',
+          'workHistoryResponsibleGovernmentAgency.governmentAgency',
+        ],
+      });
+      if (!workHistory) {
+        throw new NotFoundException('Work history not found');
+      }
+      // §2 — workStatus gate.
+      this.workHistoryLookup.assertWorkStatusApproved(workHistory);
+
+      // Role gate — same allowlist as `findPendingReview`.
+      const role = workHistory.role?.name;
+      if (
+        role !== 'staff' &&
+        role !== 'admin' &&
+        role !== 'super-admin' &&
+        role !== 'c-level'
+      ) {
+        throw new ForbiddenException(
+          'คุณไม่มีสิทธิ์เข้าถึงคิวโครงการเพิ่มเติม',
+        );
+      }
+
+      const qb = this.buildBaseSpgListQuery();
+
+      // Latest-status filter — single canonical name.
+      qb.andWhere('latestStatus.name = :statusName', { statusName });
+
+      // Defensive — exclude rows with no responsibleAgency.
+      qb.andWhere('responsibleAgency.id IS NOT NULL');
+
+      // Optional scope filters.
+      if (opts.developmentPlanId) {
+        qb.andWhere('developmentPlan.id = :developmentPlanId', {
+          developmentPlanId: opts.developmentPlanId,
+        });
+      }
+      if (opts.developmentPlanSupplementId) {
+        qb.andWhere('supplement.id = :developmentPlanSupplementId', {
+          developmentPlanSupplementId: opts.developmentPlanSupplementId,
+        });
+      }
+
+      // Staff agency-responsibility filter — admin/super-admin/c-level bypass.
+      if (role === 'staff') {
+        const responsibleAgencyIds = (
+          workHistory.workHistoryResponsibleGovernmentAgency ?? []
+        )
+          .map((r) => r.governmentAgency?.id)
+          .filter((id): id is string => !!id);
+        if (responsibleAgencyIds.length === 0) {
+          // No agency responsibility → empty queue.
+          return opts.countOnly ? { count: 0 } : [];
+        }
+        qb.andWhere(
+          'responsibleAgency.id IN (:...responsibleAgencyIds)',
+          { responsibleAgencyIds },
+        );
+      }
+
+      if (opts.countOnly) {
+        const count = await qb.getCount();
+        return { count };
+      }
 
       const results = await qb.orderBy('spg.created_at', 'DESC').getMany();
       await this.maskCreatedByUser(results);
@@ -876,6 +1009,13 @@ export class SupplementProjectGroupService {
         'trackingStatusCreatedBy.user',
         'trackingStatusCreatedByUser',
       )
+      // 2026-05-16 — join the structured `comments` array on each tracking
+      // row so the FE owner-list page (`SupplementEditList`) can render
+      // staff "ส่งกลับแก้ไข" comments as clickable per-step NavLinks.
+      // Mirrors the main-plan list relations. Without this, the FE comment
+      // column collapses to either `latest.comment` (free-text fallback)
+      // or "—" (no comments at all).
+      .leftJoinAndSelect('trackingStatus.comments', 'trackingStatusComments')
       .where('spg.deleted_at IS NULL');
   }
 

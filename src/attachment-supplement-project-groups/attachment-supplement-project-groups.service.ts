@@ -11,6 +11,13 @@ import { SupplementProjectGroup } from 'src/supplement-project-group/entities/su
 import { CreateAttachmentSupplementProjectGroupDto } from './dto/create-attachment-supplement-project-group.dto';
 import { SupplementScopeService } from 'src/common/supplement-scope/supplement-scope.service';
 import { WorkHistoryLookupService } from 'src/work-history/work-history-lookup.service';
+// SUPP_AI_BE_06 hotfix (2026-05-15) — AI auto-analyze fire-and-forget
+// hook for SPG attachments. `DocumentAnalysisService` was widened to
+// accept `'supplement-project-group'` kind by SUPP_AI_BE_01, so the
+// `TODO(SUPP-3-later)` deferred wiring can now land. Without this,
+// `ai_status` stays at `'pending'` forever and the FE polls the
+// `AttachmentAiAnalysisBlock` spinner indefinitely.
+import { DocumentAnalysisService } from 'src/document-analysis/document-analysis.service';
 
 /**
  * SUPP-3 / BE-07 — Attachment service for `SupplementProjectGroup`.
@@ -41,6 +48,8 @@ export class AttachmentSupplementProjectGroupsService {
     private readonly dataSource: DataSource,
     private readonly supplementScopeService: SupplementScopeService,
     private readonly workHistoryLookup: WorkHistoryLookupService,
+    // SUPP_AI_BE_06 hotfix — fire-and-forget AI analysis after upload.
+    private readonly documentAnalysisService: DocumentAnalysisService,
   ) {}
 
   async create(
@@ -100,11 +109,19 @@ export class AttachmentSupplementProjectGroupsService {
       `File uploaded for supplementProjectGroup ${supplementProjectGroupId}: ${filename}`,
     );
 
-    // TODO(SUPP-3-later): wire DocumentAnalysisService once the
-    // `AttachmentKind` union accepts `'supplement-project-group'`. The
-    // PG / RPG services trigger a fire-and-forget
-    // `processAttachment(kind, saved.id, uploaderUserId)` here. SPG row
-    // already carries the `ai_*` columns to receive the eventual write.
+    // SUPP_AI_BE_06 hotfix (2026-05-15) — fire-and-forget AI analysis,
+    // identical pattern to PG / RPG attachment services. Failures land
+    // in `ai_status` ('failed' | 'unsupported') without rolling back
+    // the upload (the file is already on disk + row inserted). §17.2
+    // advisory only — no workflow side effects.
+    void this.documentAnalysisService
+      .processAttachment('supplement-project-group', saved.id, uploaderUserId ?? null)
+      .catch((e) =>
+        this.logger.error(
+          `Document analysis failed for ${saved.id}: ${(e as Error).message}`,
+          (e as Error).stack,
+        ),
+      );
 
     return saved;
   }

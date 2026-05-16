@@ -12,6 +12,10 @@ import { sanitizeRequestPayload } from 'src/ai-usage-logs/sanitize-request-paylo
 import { calculateAiCost } from 'src/ai/utils/cost-calculator';
 import { AttachmentProjectGroup } from 'src/attachment-project-groups/entities/attachment-project-group.entity';
 import { AttachmentRevisedProjectGroup } from 'src/attachment-revised-project-groups/entities/attachment-revised-project-group.entity';
+// SUPP_AI_BE_01 — SPG attachment repository for the new
+// `'supplement-project-group'` kind. Entity already registered at the
+// root DataSource via `app.module.ts` (SUPP-3 / BE-07).
+import { AttachmentSupplementProjectGroup } from 'src/attachment-supplement-project-groups/entities/attachment-supplement-project-group.entity';
 import { redactPii } from './utils/pii-redactor';
 // SEC-W44-02 — shared INPUT-side PII redactor.  This is the complement
 // of `redactPii` above (which guards the response boundary for display).
@@ -60,7 +64,14 @@ import { smartTruncate, TOKEN_GUARD_CONSTANTS } from './utils/token-guard';
  *     meta columns only
  */
 
-export type AttachmentKind = 'project-group' | 'revised-project-group';
+// SUPP_AI_BE_01 — widened to include the SPG kind so the same
+// document-analysis pipeline (PDF / image OCR → topic / summary /
+// docType / quality score) serves SPG attachments byte-for-byte
+// alongside PG / RPG. Behavior of the existing kinds is unchanged.
+export type AttachmentKind =
+  | 'project-group'
+  | 'revised-project-group'
+  | 'supplement-project-group';
 
 const SUPPORTED_PDF_MIME = new Set([
   'application/pdf',
@@ -123,6 +134,12 @@ export class DocumentAnalysisService implements OnModuleInit {
     private readonly apgRepo: Repository<AttachmentProjectGroup>,
     @InjectRepository(AttachmentRevisedProjectGroup)
     private readonly arpgRepo: Repository<AttachmentRevisedProjectGroup>,
+    // SUPP_AI_BE_01 — SPG attachment repo. Mirrors `arpgRepo` exactly;
+    // the resolver branches on `kind` and dispatches to this repo for
+    // SPG attachments (load / patch / target-id lookup for the rich
+    // usage log).
+    @InjectRepository(AttachmentSupplementProjectGroup)
+    private readonly aspgRepo: Repository<AttachmentSupplementProjectGroup>,
     private readonly aiUsageQuotasService: AiUsageQuotasService,
     // Wave 37 N2 — rich-detail usage log. Mirrors the classifier's
     // pattern (LandUseClassifierService) but uses a direct import
@@ -387,10 +404,13 @@ export class DocumentAnalysisService implements OnModuleInit {
               ocrTextLength: typeof text === 'string' ? text.length : 0,
             }),
             responsePayload: { parseStatus: 'failed' },
+            // SUPP_AI_BE_01 — extended mapping (mirrors success path).
             targetKind:
               kind === 'project-group'
                 ? 'project_group'
-                : 'revised_project_group',
+                : kind === 'supplement-project-group'
+                  ? 'supplement_project_group'
+                  : 'revised_project_group',
             durationMs,
             error: String((e as Error).message ?? e).slice(0, 500),
           });
@@ -493,6 +513,15 @@ export class DocumentAnalysisService implements OnModuleInit {
                 relations: { projectGroup: true },
               });
               targetId = r?.projectGroup?.id ?? undefined;
+            } else if (kind === 'supplement-project-group') {
+              // SUPP_AI_BE_01 — resolve owning SPG id for the rich
+              // usage-log drawer. §17.3 audit separation preserved —
+              // bare UUID only, no FK back into supplement_project_groups.
+              const r = await this.aspgRepo.findOne({
+                where: { id: attachmentId },
+                relations: { supplementProjectGroup: true },
+              });
+              targetId = r?.supplementProjectGroup?.id ?? undefined;
             } else {
               const r = await this.arpgRepo.findOne({
                 where: { id: attachmentId },
@@ -532,10 +561,15 @@ export class DocumentAnalysisService implements OnModuleInit {
               parseStatus: 'success',
             },
             targetId,
+            // SUPP_AI_BE_01 — extended mapping. Snake-case mirrors the
+            // existing PG / RPG convention so downstream consumers of
+            // the usage-log drawer get a stable kind discriminator.
             targetKind:
               kind === 'project-group'
                 ? 'project_group'
-                : 'revised_project_group',
+                : kind === 'supplement-project-group'
+                  ? 'supplement_project_group'
+                  : 'revised_project_group',
             durationMs,
           });
         } catch (logErr) {
@@ -994,6 +1028,10 @@ export class DocumentAnalysisService implements OnModuleInit {
     if (kind === 'project-group') {
       return this.apgRepo.findOne({ where: { id } });
     }
+    // SUPP_AI_BE_01 — SPG attachment lookup. Mirrors PG / RPG byte-for-byte.
+    if (kind === 'supplement-project-group') {
+      return this.aspgRepo.findOne({ where: { id } });
+    }
     return this.arpgRepo.findOne({ where: { id } });
   }
 
@@ -1004,6 +1042,15 @@ export class DocumentAnalysisService implements OnModuleInit {
   ) {
     if (kind === 'project-group') {
       await this.apgRepo.update({ id }, patch as Partial<AttachmentProjectGroup>);
+    } else if (kind === 'supplement-project-group') {
+      // SUPP_AI_BE_01 — SPG attachment patch. Same column surface as
+      // PG / RPG (ai_topic / ai_summary / ai_doc_type / ai_status /
+      // ai_processed_at / ai_model / ai_extraction_quality_score) so
+      // the patch shape is identical.
+      await this.aspgRepo.update(
+        { id },
+        patch as Partial<AttachmentSupplementProjectGroup>,
+      );
     } else {
       await this.arpgRepo.update(
         { id },

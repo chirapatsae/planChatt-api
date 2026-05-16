@@ -79,11 +79,17 @@ import { ReportFormat } from 'src/development-plan/types/report-format.enum';
 // matching the pattern used by `PdfService.generateProjectsReport*`
 // (`pdf.service.ts:~950–1066`). All renderer parts are stateless and
 // were delivered by SUPP_PRINT_BE_02.
+import { PDFDocument } from 'pdf-lib';
 import { PdfService } from './pdf.service';
-import { createSupplementCoverPageDocDefinition } from './report-supplement-cover.part';
 import { createSupplementSummaryDocDefinition } from './report-supplement-summary.part';
-import { createSupplementDetailDocDefinition } from './report-supplement-detail.part';
-import { createIssueBasedSupplementDetailDocDefinition } from './report-supplement-detail-issue-based.part';
+import {
+  createSupplementGroupCoverPageDocDefinition,
+  createSupplementGroupDetailDocDefinition,
+} from './report-supplement-detail.part';
+import {
+  createIssueBasedSupplementGroupCoverPageDocDefinition,
+  createIssueBasedSupplementGroupDetailDocDefinition,
+} from './report-supplement-detail-issue-based.part';
 import { orderApprovedSupplementsForPdf } from './helpers/supplement-pdf-ordering';
 
 /** Public return shape mirrors `generateRevisionEditDraftFromStatus`. */
@@ -361,18 +367,18 @@ export class SupplementPdfService {
   // ===================================================================
 
   /**
-   * SUPP_PRINT_BE_01b — wires the SUPP_PRINT_BE_02 renderer parts
-   * (`report-supplement-cover.part.ts`,
-   * `report-supplement-summary.part.ts`,
+   * Wires the supplement renderer parts
+   * (`report-supplement-summary.part.ts`,
    * `report-supplement-detail.part.ts`,
    * `report-supplement-detail-issue-based.part.ts`) into the BE_01
    * finalize pipeline.
    *
-   * Document order: Cover → Summary → Detail. The three doc-definitions
-   * are rendered to separate buffers via
-   * `PdfService.createPdfBuffer` and concatenated with
-   * `PdfService.mergePdfBuffers` (pdf-lib copyPages), matching the
-   * pattern used by main-plan generators in `pdf.service.ts`.
+   * Document order: Summary → loop[per-group cover + per-group detail],
+   * mirroring revision-edit byte-for-byte. The per-group doc-definitions
+   * are rendered to separate buffers via `PdfService.createPdfBuffer`
+   * and concatenated with `PdfService.mergePdfBuffers` (pdf-lib copyPages),
+   * matching the pattern used by `generateRevisionEditDraftReportWithColumns`
+   * in `pdf.service.ts`.
    *
    * Page-number consistency (Q6=B): the renderer consumes the same
    * `orderApprovedSupplementsForPdf(projects, reportFormat)` ordering
@@ -434,10 +440,14 @@ export class SupplementPdfService {
       (_, i) => args.plan.startYear + i,
     );
 
-    // Supplement has no `name` column; footer + summary headings reuse
-    // the Q3 cover-label string so the rendered document is internally
-    // consistent.
-    const supplementDisplayName = `เล่มเพิ่มเติมรอบที่ ${args.supplement.supplementNumber} พ.ศ. ${args.plan.startYear}-${args.plan.endYear}`;
+    // Display name — prefer the user-supplied `description` set when the
+    // round was opened (mirrors revision-edit which uses
+    // `developmentPlanRevision.description`). Fall back to the generic
+    // "เล่มเพิ่มเติมรอบที่ N พ.ศ. ..." label when description is empty.
+    const supplementDescription = (args.supplement.description ?? '').trim();
+    const supplementDisplayName = supplementDescription.length > 0
+      ? supplementDescription
+      : `เล่มเพิ่มเติมรอบที่ ${args.supplement.supplementNumber} พ.ศ. ${args.plan.startYear}-${args.plan.endYear}`;
 
     // 3. Column map shared with main-plan / revision generators.
     const columnMap: Record<string, { text: string; key: string }> = {
@@ -465,82 +475,8 @@ export class SupplementPdfService {
         : baseFiltered;
 
     const pdfBuffers: Buffer[] = [];
+    let pageOffset = 0;
 
-    // 4. Cover page (Q3 LOCKED label — owned by the renderer part).
-    //    Skipped when `detailsOnly` (user-side paper-submission print).
-    const generatedAt = args.generatedAt ?? new Date();
-    const generatedByName = args.generatedByName ?? '-';
-    if (!args.detailsOnly) {
-      const coverDoc = createSupplementCoverPageDocDefinition({
-        supplementNumber: args.supplement.supplementNumber,
-        startYearBE: args.plan.startYear,
-        endYearBE: args.plan.endYear,
-        parentPlanName: args.plan.name ?? '',
-        supplementDescription: args.supplement.description ?? null,
-        generatedAt,
-        generatedByName,
-        reportFormat:
-          reportFormat === ReportFormat.ISSUE_BASED
-            ? 'ISSUE_BASED'
-            : 'STRATEGY_BASED',
-        pageMargins,
-        pageOrientation,
-        newWord,
-      });
-      pdfBuffers.push(await this.pdfService.createPdfBuffer(coverDoc, fonts));
-    }
-
-    // 5. Summary page — format-aware aggregation reused from PdfService.
-    //    Skipped when `detailsOnly` (matches revision details-only output).
-    if (!args.detailsOnly && reportFormat === ReportFormat.ISSUE_BASED) {
-      const { issues, overallSum, overallCount } =
-        this.pdfService.prepareIssueBasedReportAggregations(
-          orderedProjects as any,
-          years,
-        );
-      const summaryDoc = createSupplementSummaryDocDefinition({
-        developmentPlanSupplementName: supplementDisplayName,
-        years,
-        reportFormat: 'ISSUE_BASED',
-        issues,
-        overallSum,
-        overallCount,
-        totalProjectCount: orderedProjects.length,
-        pageMargins,
-        pageOrientation,
-        newWord,
-      });
-      pdfBuffers.push(
-        await this.pdfService.createPdfBuffer(summaryDoc, fonts),
-      );
-    } else if (!args.detailsOnly) {
-      const { strategies, overallSum, overallCount } =
-        this.pdfService.prepareReportAggregations(
-          orderedProjects as any,
-          years,
-        );
-      const summaryDoc = createSupplementSummaryDocDefinition({
-        developmentPlanSupplementName: supplementDisplayName,
-        years,
-        reportFormat: 'STRATEGY_BASED',
-        strategies,
-        overallSum,
-        overallCount,
-        totalProjectCount: orderedProjects.length,
-        pageMargins,
-        pageOrientation,
-        newWord,
-      });
-      pdfBuffers.push(
-        await this.pdfService.createPdfBuffer(summaryDoc, fonts),
-      );
-    }
-
-    // 6. Detail pages — format-branched. The one-shot builders accept
-    //    the entire ordered project list and internally group by
-    //    Strategy/Tactic/Plan or DevelopmentIssue. The renderer
-    //    preserves caller-supplied row order within each group.
-    //
     // reportType resolution:
     //   - caller-supplied override wins (e.g. user-side paper print
     //     passes 'inAuthority' so the auto-assigned responsibleAgency
@@ -549,38 +485,180 @@ export class SupplementPdfService {
     //     draft → default)
     const resolvedReportType =
       args.reportType ?? (args.variant === 'approved' ? 'inAuthority' : 'default');
-    const detailDoc =
-      reportFormat === ReportFormat.ISSUE_BASED
-        ? createIssueBasedSupplementDetailDocDefinition({
-            developmentPlanSupplementName: supplementDisplayName,
-            years,
-            projects: orderedProjects,
-            availableColumns,
-            columnMap,
-            pageMargins,
-            pageOrientation,
-            newWord,
-            reportType: resolvedReportType,
-          })
-        : createSupplementDetailDocDefinition({
-            developmentPlanSupplementName: supplementDisplayName,
-            years,
-            projects: orderedProjects,
-            availableColumns,
-            columnMap,
-            pageMargins,
-            pageOrientation,
-            newWord,
-            reportType: resolvedReportType,
-          });
 
-    if (detailDoc) {
-      pdfBuffers.push(
-        await this.pdfService.createPdfBuffer(detailDoc, fonts),
-      );
+    // 4. Summary page (format-aware). Skipped on `detailsOnly` to mirror
+    //    `generateRevisionEditDetailsOnly`. There is no top-level cover
+    //    page — revision-edit has none, and we match exactly.
+    if (!args.detailsOnly) {
+      if (reportFormat === ReportFormat.ISSUE_BASED) {
+        const { issues, overallSum, overallCount } =
+          this.pdfService.prepareIssueBasedReportAggregations(
+            orderedProjects as any,
+            years,
+          );
+        const summaryDoc = createSupplementSummaryDocDefinition({
+          developmentPlanSupplementName: supplementDisplayName,
+          years,
+          reportFormat: 'ISSUE_BASED',
+          issues,
+          overallSum,
+          overallCount,
+          totalProjectCount: orderedProjects.length,
+          pageMargins,
+          pageOrientation,
+          newWord,
+        });
+        const summaryBuffer = await this.pdfService.createPdfBuffer(
+          summaryDoc,
+          fonts,
+        );
+        pdfBuffers.push(summaryBuffer);
+        const summaryPdf = await PDFDocument.load(summaryBuffer);
+        pageOffset += summaryPdf.getPageCount();
+      } else {
+        const { strategies, overallSum, overallCount } =
+          this.pdfService.prepareReportAggregations(
+            orderedProjects as any,
+            years,
+          );
+        const summaryDoc = createSupplementSummaryDocDefinition({
+          developmentPlanSupplementName: supplementDisplayName,
+          years,
+          reportFormat: 'STRATEGY_BASED',
+          strategies,
+          overallSum,
+          overallCount,
+          totalProjectCount: orderedProjects.length,
+          pageMargins,
+          pageOrientation,
+          newWord,
+        });
+        const summaryBuffer = await this.pdfService.createPdfBuffer(
+          summaryDoc,
+          fonts,
+        );
+        pdfBuffers.push(summaryBuffer);
+        const summaryPdf = await PDFDocument.load(summaryBuffer);
+        pageOffset += summaryPdf.getPageCount();
+      }
     }
 
-    // 7. Merge Cover + Summary + Detail into a single Buffer.
+    // 5. Detail pages — per-group cover + per-group detail loop, mirroring
+    //    `generateRevisionEditDraftReportWithColumns`.
+    if (reportFormat === ReportFormat.ISSUE_BASED) {
+      // Group by DevelopmentIssue preserving the ordering produced by
+      // `orderApprovedSupplementsForPdf`.
+      const groupedByIssue = new Map<string, SupplementProjectGroup[]>();
+      const issueSortOrder = new Map<string, number>();
+      for (const project of orderedProjects) {
+        const issueName = project.developmentIssue?.name || '-';
+        const sortOrder = project.developmentIssue?.sortOrder ?? 999;
+        if (!groupedByIssue.has(issueName)) {
+          groupedByIssue.set(issueName, []);
+          issueSortOrder.set(issueName, sortOrder);
+        }
+        groupedByIssue.get(issueName)!.push(project);
+      }
+
+      const sortedIssueEntries = [...groupedByIssue.entries()].sort((a, b) => {
+        const soA = issueSortOrder.get(a[0]) ?? 999;
+        const soB = issueSortOrder.get(b[0]) ?? 999;
+        if (soA !== soB) return soA - soB;
+        return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
+      });
+
+      for (const [issueName, groupProjects] of sortedIssueEntries) {
+        const coverDoc = createIssueBasedSupplementGroupCoverPageDocDefinition(
+          issueName,
+          supplementDisplayName,
+          pageMargins,
+          pageOrientation,
+          newWord,
+          pageOffset,
+        );
+        const coverBuffer = await this.pdfService.createPdfBuffer(coverDoc, fonts);
+        pdfBuffers.push(coverBuffer);
+        const coverPdf = await PDFDocument.load(coverBuffer);
+        pageOffset += coverPdf.getPageCount();
+
+        const detailDoc = createIssueBasedSupplementGroupDetailDocDefinition({
+          developmentPlanSupplementName: supplementDisplayName,
+          years,
+          groupProjects,
+          availableColumns,
+          columnMap,
+          pageMargins,
+          pageOrientation,
+          newWord,
+          reportType: resolvedReportType,
+          issueName,
+          pageOffset,
+        });
+        if (detailDoc) {
+          const detailBuffer = await this.pdfService.createPdfBuffer(
+            detailDoc,
+            fonts,
+          );
+          pdfBuffers.push(detailBuffer);
+          const detailPdf = await PDFDocument.load(detailBuffer);
+          pageOffset += detailPdf.getPageCount();
+        }
+      }
+    } else {
+      // STRATEGY_BASED — group by Strategy/Tactic/Plan preserving order.
+      const groupedProjects = new Map<string, SupplementProjectGroup[]>();
+      for (const project of orderedProjects) {
+        const strategyName = project.strategy?.name || '-';
+        const tacticName = project.tactic?.name || '-';
+        const planName = project.plan?.name || '-';
+        const groupKey = `${strategyName}||${tacticName}||${planName}`;
+        if (!groupedProjects.has(groupKey)) groupedProjects.set(groupKey, []);
+        groupedProjects.get(groupKey)!.push(project);
+      }
+
+      for (const [groupKey, groupProjects] of groupedProjects.entries()) {
+        const [strategyName, tacticName, planName] = groupKey.split('||');
+        const coverDoc = createSupplementGroupCoverPageDocDefinition(
+          strategyName,
+          supplementDisplayName,
+          pageMargins,
+          pageOrientation,
+          newWord,
+          pageOffset,
+        );
+        const coverBuffer = await this.pdfService.createPdfBuffer(coverDoc, fonts);
+        pdfBuffers.push(coverBuffer);
+        const coverPdf = await PDFDocument.load(coverBuffer);
+        pageOffset += coverPdf.getPageCount();
+
+        const detailDoc = createSupplementGroupDetailDocDefinition({
+          developmentPlanSupplementName: supplementDisplayName,
+          years,
+          groupProjects,
+          availableColumns,
+          columnMap,
+          pageMargins,
+          pageOrientation,
+          newWord,
+          reportType: resolvedReportType,
+          strategyName,
+          tacticName,
+          planName,
+          pageOffset,
+        });
+        if (detailDoc) {
+          const detailBuffer = await this.pdfService.createPdfBuffer(
+            detailDoc,
+            fonts,
+          );
+          pdfBuffers.push(detailBuffer);
+          const detailPdf = await PDFDocument.load(detailBuffer);
+          pageOffset += detailPdf.getPageCount();
+        }
+      }
+    }
+
+    // 6. Merge Summary + per-group(Cover + Detail) into a single Buffer.
     return this.pdfService.mergePdfBuffers(pdfBuffers);
   }
 
@@ -848,7 +926,14 @@ export class SupplementPdfService {
   async getLatestSupplementDraftMeta(
     developmentPlanId: string,
     developmentPlanSupplementId: string,
-  ): Promise<SupplementPdfVersionListEntry | null> {
+  ): Promise<
+    | (SupplementPdfVersionListEntry & {
+        exists: true;
+        filePath: string;
+        projectIdsSnapshot: Array<string | number>;
+      })
+    | null
+  > {
     const resolved = await this.resolveSupplementForPlan(
       developmentPlanId,
       developmentPlanSupplementId,
@@ -862,11 +947,24 @@ export class SupplementPdfService {
     });
     if (!latest) return null;
 
+    // 2026-05-16 BUGFIX — FE `SupplementPdfMeta` interface expects
+    // `exists: true` + `filePath` + `projectIdsSnapshot` to trigger the
+    // post-print UI flip ("พิมพ์เล่มร่าง" → file viewer / download
+    // buttons). The previous shape omitted those three fields, so the
+    // FE's `!draftPdfMeta?.exists` check at SupplementPrintPresent.tsx
+    // lines 528/737/747/786 always evaluated to "no draft yet" → the
+    // print button never switched. Mirrors the main-plan analogs at
+    // pdf.service.ts:1280 (`getLatestAgencyDraftMeta`) +
+    // pdf.service.ts:1399 (`getLatestCoordinateDraftMeta`) which all
+    // return `exists: true` alongside the canonical metadata.
     return {
+      exists: true,
       version: latest.version,
       fileUrl: `/v1/pdf/supplement-draft/${developmentPlanId}/${developmentPlanSupplementId}/${latest.version}/stream`,
       projectCount: latest.projectCount,
       createdAt: latest.createdAt.toISOString(),
+      projectIdsSnapshot: latest.projectIdsSnapshot,
+      filePath: latest.filePath,
       createdBy: latest.createdBy
         ? {
             id: latest.createdBy.id,
