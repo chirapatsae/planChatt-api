@@ -8,10 +8,13 @@ import {
 import helmet from 'helmet';
 import { join } from 'path';
 import { NestExpressApplication } from '@nestjs/platform-express';
-import * as dotenv from 'dotenv';
 
-// Load environment variables at the very beginning
-dotenv.config();
+// Env var loading is owned exclusively by `ConfigModule.forRoot(...)` in
+// `app.module.ts` — it loads `.env.${NODE_ENV}` (e.g. `.env.development`
+// or `.env.production`). The legacy `dotenv.config()` + `.env` fallback
+// was removed (2026-05-17) after diff confirmed `.env` had zero unique
+// vars vs the env-specific files; keeping the fallback hid which file
+// was actually authoritative at runtime.
 
 async function bootstrap() {
   // `rawBody: true` enables `req.rawBody` (Buffer) on every request.

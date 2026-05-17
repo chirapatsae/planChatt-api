@@ -239,10 +239,12 @@ import { StorageModule } from './storage/storage.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: [
-        `.env.${process.env.NODE_ENV}`,
-        '.env',
-      ],
+      // Single source of truth — `.env.${NODE_ENV}` only. The legacy
+      // `.env` fallback was removed (2026-05-17) after verifying
+      // zero unique vars existed in `.env` that weren't already in
+      // `.env.development` + `.env.production`. NODE_ENV MUST be set
+      // by the start script (see package.json `start:dev` / `start:prod`).
+      envFilePath: [`.env.${process.env.NODE_ENV}`],
     }),
     ScheduleModule.forRoot(),
     EventEmitterModule.forRoot(),

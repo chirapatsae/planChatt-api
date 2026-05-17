@@ -100,7 +100,7 @@ export class UnifiedProjectEnricherService {
     @InjectDataSource()
     private readonly dataSource: DataSource,
     private readonly lineageLock: LineageLockService,
-  ) {}
+  ) { }
 
   /**
    * Enrich a lean `UnifiedProject[]` into `EnrichedUnifiedProject[]`.
@@ -149,51 +149,51 @@ export class UnifiedProjectEnricherService {
     const [pgRows, rpgRows, spgRows] = await Promise.all([
       mainIds.length > 0
         ? manager.find(ProjectGroup, {
-            where: { id: In(mainIds) },
-            relations: {
-              developmentPlan: true,
-              budgets: true,
-              trackingStatus: { statusId: true },
-              createdBy: {
-                user: true,
-                amphoe: true,
-                localAdministrativeOrganization: true,
-              },
+          where: { id: In(mainIds) },
+          relations: {
+            developmentPlan: true,
+            budgets: true,
+            trackingStatus: { statusId: true },
+            createdBy: {
+              user: true,
+              amphoe: true,
+              localAdministrativeOrganization: true,
             },
-          })
+          },
+        })
         : Promise.resolve([] as ProjectGroup[]),
       revisedIds.length > 0
         ? manager.find(RevisedProjectGroup, {
-            where: { id: In(revisedIds) },
-            relations: {
-              developmentPlanRevision: {
-                developmentPlan: true,
-                revisionType: true,
-              },
-              budgets: true,
-              trackingStatus: { statusId: true },
-              createdBy: {
-                user: true,
-                amphoe: true,
-                localAdministrativeOrganization: true,
-              },
+          where: { id: In(revisedIds) },
+          relations: {
+            developmentPlanRevision: {
+              developmentPlan: true,
+              revisionType: true,
             },
-          })
+            budgets: true,
+            trackingStatus: { statusId: true },
+            createdBy: {
+              user: true,
+              amphoe: true,
+              localAdministrativeOrganization: true,
+            },
+          },
+        })
         : Promise.resolve([] as RevisedProjectGroup[]),
       supplementIds.length > 0
         ? manager.find(SupplementProjectGroup, {
-            where: { id: In(supplementIds) },
-            relations: {
-              developmentPlanSupplement: { developmentPlan: true },
-              budgets: true,
-              trackingStatus: { statusId: true },
-              createdBy: {
-                user: true,
-                amphoe: true,
-                localAdministrativeOrganization: true,
-              },
+          where: { id: In(supplementIds) },
+          relations: {
+            developmentPlanSupplement: { developmentPlan: true },
+            budgets: true,
+            trackingStatus: { statusId: true },
+            createdBy: {
+              user: true,
+              amphoe: true,
+              localAdministrativeOrganization: true,
             },
-          })
+          },
+        })
         : Promise.resolve([] as SupplementProjectGroup[]),
     ]);
 
@@ -367,7 +367,6 @@ export class UnifiedProjectEnricherService {
   }
 }
 
-
 /**
  * Defensive ISO-string conversion. TypeORM returns `Date` for
  * `@CreateDateColumn`; older raw paths may already return ISO strings.
@@ -432,9 +431,9 @@ function mapCreator(wh: {
     amphoe: wh.amphoe ? { id: wh.amphoe.id, name: wh.amphoe.name } : null,
     localAdministrativeOrganization: wh.localAdministrativeOrganization
       ? {
-          id: wh.localAdministrativeOrganization.id,
-          name: wh.localAdministrativeOrganization.name,
-        }
+        id: wh.localAdministrativeOrganization.id,
+        name: wh.localAdministrativeOrganization.name,
+      }
       : null,
   };
 }
@@ -464,10 +463,10 @@ function mapBudgets(
 function pickLatestStatus(
   trackingStatus:
     | ReadonlyArray<{
-        isLatest: boolean;
-        createAt: Date;
-        statusId: { name: string; th_name: string } | null;
-      }>
+      isLatest: boolean;
+      createAt: Date;
+      statusId: { name: string; th_name: string } | null;
+    }>
     | undefined,
 ): EnrichedStatus | null {
   if (!trackingStatus || trackingStatus.length === 0) return null;

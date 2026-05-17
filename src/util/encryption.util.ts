@@ -10,15 +10,21 @@ import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
 
-// Load environment variables based on NODE_ENV (.env.production, .env.development, fallback to .env)
+// Load environment variables strictly from `.env.${NODE_ENV}`. The
+// legacy `.env` fallback was removed (2026-05-17) — see app.module.ts
+// `ConfigModule.forRoot` for the project-wide convention. NODE_ENV
+// MUST be set by the start script (see package.json `start:*`).
+//
+// This file is imported at module-load time (top-level constants like
+// `secretKey` need env vars before any DI is available), so it loads
+// env vars directly via `dotenv.config()` rather than going through
+// `ConfigService`. The NODE_ENV-specific file is the single source of
+// truth — no fallback path masks a missing var.
 const nodeEnv = process.env.NODE_ENV || 'development';
-const candidateEnvFile = `.env.${nodeEnv}`;
-const resolvedCandidatePath = path.resolve(process.cwd(), candidateEnvFile);
-const envFileToLoad = fs.existsSync(resolvedCandidatePath)
-  ? resolvedCandidatePath
-  : path.resolve(process.cwd(), '.env');
-
-dotenv.config({ path: envFileToLoad });
+const envFileToLoad = path.resolve(process.cwd(), `.env.${nodeEnv}`);
+if (fs.existsSync(envFileToLoad)) {
+  dotenv.config({ path: envFileToLoad });
+}
 
 const algorithm = process.env.ALGORITHM || '';
 const secretKey = process.env.SECRET_KEY || '';
