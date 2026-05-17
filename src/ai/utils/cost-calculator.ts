@@ -1,8 +1,41 @@
+/**
+ * OpenAI usage envelope.
+ *
+ * - `prompt_tokens` includes the FULL count of input tokens (cached +
+ *   non-cached). OpenAI's Oct-2024 prompt-caching feature exposes the
+ *   cached subset via `prompt_tokens_details.cached_tokens` — those
+ *   tokens are billed at HALF the normal input rate (50% discount).
+ *
+ * Cost formula:
+ *     non_cached_input = prompt_tokens - cached_tokens
+ *     input_cost  = non_cached_input × input_price
+ *                 + cached_tokens    × input_price × 0.5
+ *     output_cost = completion_tokens × output_price
+ *     total       = input_cost + output_cost
+ *
+ * If a response lacks `prompt_tokens_details` (legacy model / pre-cache
+ * fallback), `cached_tokens` defaults to 0 → calculation matches the
+ * pre-2024-10 behavior.
+ */
 export interface TokenUsage {
     prompt_tokens: number;
     completion_tokens: number;
+    prompt_tokens_details?: {
+        cached_tokens?: number;
+    };
 }
 
+/**
+ * Per-model OpenAI USD pricing per 1M tokens (input / output).
+ *
+ * IMPORTANT: This table is hand-maintained against
+ * https://openai.com/api/pricing. OpenAI lowers prices periodically;
+ * stale entries cause the platform to OVER-CHARGE the user vs. the
+ * actual OpenAI invoice. P2 ships a verify script that diffs this
+ * table against the live OpenAI pricing page.
+ *
+ * Last reviewed: 2026-05-17.
+ */
 export const PRICING = {
     // gpt-4o family (kept for backward compatibility — auto-title still
     // uses gpt-4o-mini per Wave 51 design; historical ai_usage_logs rows
@@ -36,6 +69,14 @@ export const PRICING = {
     },
 };
 
+/**
+ * Cached-input discount factor (Oct 2024 prompt caching).
+ * Cached input tokens are billed at 50% of the normal input rate.
+ * Exposed as a constant so the P2 verify script can diff against
+ * OpenAI's published discount factor.
+ */
+export const CACHED_INPUT_DISCOUNT = 0.5;
+
 export function calculateAiCost(model: string, usage: TokenUsage): number {
     const modelPricing = PRICING[model as keyof typeof PRICING];
     if (!modelPricing) {
@@ -43,7 +84,17 @@ export function calculateAiCost(model: string, usage: TokenUsage): number {
         return 0;
     }
 
-    const inputCost = (usage.prompt_tokens / 1_000_000) * modelPricing.input;
+    const cachedTokens = Math.max(
+        0,
+        usage.prompt_tokens_details?.cached_tokens ?? 0,
+    );
+    // Defensive — OpenAI guarantees cached ≤ prompt, but clamp to be safe.
+    const clampedCached = Math.min(cachedTokens, usage.prompt_tokens);
+    const nonCachedInput = usage.prompt_tokens - clampedCached;
+
+    const inputCost =
+        (nonCachedInput / 1_000_000) * modelPricing.input +
+        (clampedCached / 1_000_000) * modelPricing.input * CACHED_INPUT_DISCOUNT;
     const outputCost = (usage.completion_tokens / 1_000_000) * modelPricing.output;
 
     return inputCost + outputCost;

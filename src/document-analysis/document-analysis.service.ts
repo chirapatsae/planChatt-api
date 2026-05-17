@@ -10,6 +10,7 @@ import { AiUsageLogsService } from 'src/ai-usage-logs/ai-usage-logs.service';
 import { composeSummaryTh } from 'src/ai-usage-logs/summary-th.util';
 import { sanitizeRequestPayload } from 'src/ai-usage-logs/sanitize-request-payload.util';
 import { calculateAiCost } from 'src/ai/utils/cost-calculator';
+import { getUsdToThbFx } from 'src/ai-usage-quotas/fx-config';
 import { AttachmentProjectGroup } from 'src/attachment-project-groups/entities/attachment-project-group.entity';
 import { AttachmentRevisedProjectGroup } from 'src/attachment-revised-project-groups/entities/attachment-revised-project-group.entity';
 // SUPP_AI_BE_01 — SPG attachment repository for the new
@@ -540,7 +541,7 @@ export class DocumentAnalysisService implements OnModuleInit {
             outputTokens: completion.usage.completion_tokens,
             inputTextLength: ocrTextLength,
             outputTextLength: summaryLength,
-            costBaht: costUsd * 34,
+            costBaht: costUsd * getUsdToThbFx(),
             aiUsageQuotaId: quotaId ?? undefined,
             endpoint: 'document-summary',
             summaryTh: composeSummaryTh({

@@ -46,6 +46,7 @@ import { AiUsageLogsService } from 'src/ai-usage-logs/ai-usage-logs.service';
 import { composeSummaryTh } from 'src/ai-usage-logs/summary-th.util';
 import { sanitizeRequestPayload } from 'src/ai-usage-logs/sanitize-request-payload.util';
 import { calculateAiCost } from './utils/cost-calculator';
+import { getUsdToThbFx } from 'src/ai-usage-quotas/fx-config';
 // SEC-W44-02 — INPUT-side PII redactor (§17.9).  The classifier input
 // is structural (admin-boundary names, enum subTypeCode, numeric
 // lat/lng) and contains no user prose by design, so redaction is
@@ -292,7 +293,7 @@ export class LandUseClassifierService {
           outputTokens: completion.usage?.completion_tokens ?? 0,
           inputTextLength: SYSTEM_PROMPT.length + userPrompt.length,
           outputTextLength: typeof raw === 'string' ? raw.length : 0,
-          costBaht: costUsd * 34,
+          costBaht: costUsd * getUsdToThbFx(),
           aiUsageQuotaId: input.aiUsageQuotaId,
           endpoint: 'land-use-classify',
           summaryTh: composeSummaryTh({

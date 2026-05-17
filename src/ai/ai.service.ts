@@ -30,6 +30,7 @@ import {
 } from './smart-approve-precheck.service';
 import { AiContextService, AiEnrichedContext } from './ai-context.service';
 import { calculateAiCost } from './utils/cost-calculator';
+import { getUsdToThbFx } from 'src/ai-usage-quotas/fx-config';
 import { translateInferredAreaType } from './utils/mismatch-advisor';
 // §17.9 — delimiter envelope + embedded-token sanitization. Shared
 // with StaffReviewPromptService so the policy cannot drift. Owner
@@ -579,7 +580,7 @@ export class AiService {
       let costThb = 0;
       if (completion.usage) {
         const costUsd = calculateAiCost('gpt-4o', completion.usage);
-        costThb = costUsd * 34;
+        costThb = costUsd * getUsdToThbFx();
         await this.aiUsageQuotasService.checkAndLogUsage(userId, costUsd);
       }
 
@@ -1469,7 +1470,7 @@ ${formatRubricForGenerator({ isIssueBased: true })}
       let costThb = 0;
       if (completion.usage) {
         const costUsd = calculateAiCost('gpt-4o', completion.usage);
-        costThb = costUsd * 34;
+        costThb = costUsd * getUsdToThbFx();
         await this.aiUsageQuotasService.checkAndLogUsage(userId, costUsd);
       }
 
@@ -1840,7 +1841,7 @@ ${instructions}`.trim();
       let costThb = 0;
       if (completion.usage) {
         const costUsd = calculateAiCost('gpt-4o', completion.usage);
-        costThb = costUsd * 34;
+        costThb = costUsd * getUsdToThbFx();
         await this.aiUsageQuotasService.checkAndLogUsage(userId, costUsd);
       }
 
@@ -2284,7 +2285,7 @@ ${instructions}`.trim();
         outputTokens: usage?.completion_tokens ?? 0,
         inputTextLength: (systemPrompt?.length ?? 0) + (userMessage?.length ?? 0),
         outputTextLength: raw.length,
-        costBaht: cost * 34,
+        costBaht: cost * getUsdToThbFx(),
         endpoint: 'generate-project-detail',
         summaryTh: composeSummaryTh({
           endpoint: 'generate-project-detail',
@@ -2706,7 +2707,7 @@ ${formatRubricForReviewer({ isIssueBased })}
       let costThb = 0;
       if (completion.usage) {
         const costUsd = calculateAiCost('gpt-4o', completion.usage);
-        costThb = costUsd * 34;
+        costThb = costUsd * getUsdToThbFx();
         await this.aiUsageQuotasService.checkAndLogUsage(userId, costUsd);
       }
 

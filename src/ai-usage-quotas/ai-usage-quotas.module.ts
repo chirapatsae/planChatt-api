@@ -12,6 +12,7 @@ import { User } from 'src/users/entities/user.entity';
 // enforcement surface.
 import { AiQuotaGuard } from './guards/ai-quota.guard';
 import { QuotaOrgCapService } from './quota-org-cap.service';
+import { FxRefreshService } from './fx-refresh.service';
 
 @Module({
   imports: [
@@ -23,7 +24,7 @@ import { QuotaOrgCapService } from './quota-org-cap.service';
     AiUsageLogsModule,
   ],
   controllers: [AiUsageQuotasController],
-  providers: [AiUsageQuotasService, QuotaOrgCapService, AiQuotaGuard],
+  providers: [AiUsageQuotasService, QuotaOrgCapService, AiQuotaGuard, FxRefreshService],
   exports: [AiUsageQuotasService, QuotaOrgCapService, AiQuotaGuard],
 })
 export class AiUsageQuotasModule { }

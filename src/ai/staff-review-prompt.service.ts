@@ -33,6 +33,7 @@ import {
 } from './criteria/issue-criteria.types';
 import { formatRubricForReviewer } from './utils/quality-rubric';
 import { calculateAiCost } from './utils/cost-calculator';
+import { getUsdToThbFx } from 'src/ai-usage-quotas/fx-config';
 import {
   computeSmartApproveContentHash,
   ContentHashInput,
@@ -570,7 +571,7 @@ ${formatRubricForReviewer({ isIssueBased })}
       let costThb = 0;
       if (completion.usage) {
         const costUsd = calculateAiCost('gpt-4o', completion.usage);
-        costThb = costUsd * 34;
+        costThb = costUsd * getUsdToThbFx();
         await this.aiUsageQuotasService.checkAndLogUsage(
           reviewerUserId,
           costUsd,
