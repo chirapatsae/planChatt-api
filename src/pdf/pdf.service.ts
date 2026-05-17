@@ -46,6 +46,12 @@ import { ReportFormat } from 'src/development-plan/types/report-format.enum';
 // --- Wave 110 W110-BE-01 — orphan-cleanup cascade ---
 import { OrphanCleanupService } from 'src/orphan-cleanup/orphan-cleanup.service';
 
+// --- Wave 3 BE-WRITERS — Storage Layout Restructure ---
+// `StoragePathService` is the single source of truth for plan-rooted
+// storage keys (umbrella §7.1). All writers below persist relative
+// keys (NOT absolute paths) to the `file_path` columns.
+import { StoragePathService } from 'src/storage/storage-path.service';
+
 // --- Report Generators (STRATEGY_BASED) ---
 import { createSummaryPartDocDefinition } from './report-summary.part';
 import {
@@ -118,8 +124,28 @@ export class PdfService {
     // 2376). CLAUDE.md §18.2.1 trigger surfaces.
     @InjectDataSource() private readonly orphanDataSource: DataSource,
     private readonly orphanCleanupService: OrphanCleanupService,
+    // Wave 3 BE-WRITERS — every PDF writer below routes through this
+    // service to compute the plan-rooted relative key (umbrella §7.1).
+    private readonly storagePathService: StoragePathService,
   ) {
     Wordcut.init();
+  }
+
+  // -------------------------------------------------------------------
+  // Wave 3 BE-WRITERS — filename helper
+  // -------------------------------------------------------------------
+  /**
+   * Compose the leaf filename for a versioned PDF artifact. Pre-Wave 3
+   * writers used `${yyyy-mm-dd-hh-mm}-v${N}.pdf` directly; we centralize
+   * the format here so all relative keys produced by writers below share
+   * a single human-discoverable naming convention.
+   */
+  private buildVersionedPdfFileName(version: number): string {
+    const now = new Date();
+    const [datePart, timePart] = now.toISOString().split('T');
+    const [year, month, day] = datePart.split('-');
+    const [hours, minutes] = timePart.split(':');
+    return `${year}-${month}-${day}-${hours}-${minutes}-v${version}.pdf`;
   }
 
   // ===================================================================
@@ -138,13 +164,14 @@ export class PdfService {
     return dp;
   }
 
-  private getDraftBaseDir(): string {
-    return path.resolve(__dirname, '../../uploads/pdf');
-  }
-
-  private getDevelopmentPlanDir(developmentPlanId: string | number): string {
-    return path.join(this.getDraftBaseDir(), String(developmentPlanId));
-  }
+  // Wave 3 BE-WRITERS — `getDraftBaseDir` / `getDevelopmentPlanDir`
+  // helpers (the `path.resolve(__dirname, '../../uploads/pdf')` /
+  // `path.join(..., developmentPlanName)` literals — BE-SCAN finding
+  // C2 + "Scattered literals") are intentionally removed. Every writer
+  // in this file now composes its key via `StoragePathService`
+  // (umbrella §7.1 + §7.2). Readers that previously dereferenced these
+  // helpers go through `StoragePathService.resolveStored(...)` after
+  // BE-READERS lands.
 
   // --- Font & PDF Helpers ---
 
@@ -1228,25 +1255,26 @@ export class PdfService {
   }): Promise<{ version: number; filePath: string; fileUrl: string; projectCount: number; createdAt: string; createdBy: { id: string; firstname: string; lastname: string }; }> {
     const developmentPlan = await this.developmentPlanRepo.findOne({ where: { id: options.developmentPlanId } });
     if (!developmentPlan) throw new Error(`DevelopmentPlan with ID ${options.developmentPlanId} not found`);
-    const developmentPlanName = `Development-Plan-${developmentPlan.startYear}-${developmentPlan.endYear}`;
-    const baseDir = this.getDevelopmentPlanDir(developmentPlanName);
-    const draftAgencyDir = path.join(baseDir, 'draft-agency');
-    await this.ensureDirectory(draftAgencyDir);
 
     const version = await this.getNextVersion(developmentPlan.id);
-    const now = new Date();
-    const [datePart, timePart] = now.toISOString().split('T');
-    const [year, month, day] = datePart.split('-');
-    const [hours, minutes] = timePart.split(':');
-    const fileName = `${year}-${month}-${day}-${hours}-${minutes}-v${version}.pdf`;
-    const absFilePath = path.join(draftAgencyDir, fileName);
-
-    await fsp.writeFile(absFilePath, options.pdfBuffer);
+    // Wave 3 BE-WRITERS — plan-rooted relative key under
+    // `main-plan-{planId}/v{N}/draft-agency-{stamp}-v{N}.pdf`. The leaf
+    // filename retains the legacy `{stamp}-v{N}` shape for human
+    // discoverability and prefixes the artifact-kind to disambiguate
+    // sibling drafts inside the same vN directory. DB persists the key
+    // (umbrella §7.2); the absolute path lives only at fs boundary.
+    const fileName = `draft-agency-${this.buildVersionedPdfFileName(version)}`;
+    const fileKey = this.storagePathService.mainPlanVersionKey(
+      developmentPlan.id,
+      version,
+      fileName,
+    );
+    await this.storagePathService.writeFile(fileKey, options.pdfBuffer);
 
     const pdfDraft = this.pdfDraftAgencyRepo.create({
       developmentPlanId: String(developmentPlan.id),
       version,
-      filePath: absFilePath,
+      filePath: fileKey,
       projectIdsSnapshot: options.projectIdsSnapshot,
       projectCount: options.projectIdsSnapshot.length,
       createdById: options.createdById,
@@ -1286,7 +1314,11 @@ export class PdfService {
   async readLatestDraftAgencyFileForPlan(developmentPlanId: string): Promise<{ filePath: string; stream: fs.ReadStream } | null> {
     const meta = await this.getLatestDraftAgencyMetaForPlan(developmentPlanId);
     if (!meta || !meta.exists) return null;
-    const stream = fs.createReadStream(meta.filePath);
+    // Wave 3 BE-READERS — resolve through StoragePathService so legacy
+    // absolute paths AND new relative keys both stream correctly during
+    // the migration window (umbrella §7.3).
+    const absPath = this.storagePathService.resolveStored(meta.filePath);
+    const stream = fs.createReadStream(absPath);
     return { filePath: meta.filePath, stream };
   }
 
@@ -1312,7 +1344,9 @@ export class PdfService {
       relations: ['createdBy']
     });
     if (!draft) return null;
-    return { filePath: draft.filePath, stream: fs.createReadStream(draft.filePath) };
+    // Wave 3 BE-READERS — see resolveStored note above.
+    const absPath = this.storagePathService.resolveStored(draft.filePath);
+    return { filePath: draft.filePath, stream: fs.createReadStream(absPath) };
   }
 
   // ===================================================================
@@ -1348,25 +1382,21 @@ export class PdfService {
   }): Promise<{ version: number; filePath: string; fileUrl: string; projectCount: number; createdAt: string; createdBy: { id: string; firstname: string; lastname: string }; }> {
     const developmentPlan = await this.developmentPlanRepo.findOne({ where: { id: options.developmentPlanId } });
     if (!developmentPlan) throw new Error(`DevelopmentPlan with ID ${options.developmentPlanId} not found`);
-    const developmentPlanName = `Development-Plan-${developmentPlan.startYear}-${developmentPlan.endYear}`;
-    const baseDir = this.getDevelopmentPlanDir(developmentPlanName);
-    const draftCoordinateDir = path.join(baseDir, 'draft-coordinate');
-    await this.ensureDirectory(draftCoordinateDir);
 
     const version = await this.getNextInAuthorityVersion(developmentPlan.id);
-    const now = new Date();
-    const [datePart, timePart] = now.toISOString().split('T');
-    const [year, month, day] = datePart.split('-');
-    const [hours, minutes] = timePart.split(':');
-    const fileName = `${year}-${month}-${day}-${hours}-${minutes}-v${version}.pdf`;
-    const absFilePath = path.join(draftCoordinateDir, fileName);
-
-    await fsp.writeFile(absFilePath, options.pdfBuffer);
+    // Wave 3 BE-WRITERS — plan-rooted key, draft-coordinate variant.
+    const fileName = `draft-coordinate-${this.buildVersionedPdfFileName(version)}`;
+    const fileKey = this.storagePathService.mainPlanVersionKey(
+      developmentPlan.id,
+      version,
+      fileName,
+    );
+    await this.storagePathService.writeFile(fileKey, options.pdfBuffer);
 
     const pdfInAuthority = this.pdfDevelopmentPlanDraftCoordinateDocumentRepo.create({
       developmentPlanId: String(developmentPlan.id),
       version,
-      filePath: absFilePath,
+      filePath: fileKey,
       projectIdsSnapshot: options.projectIdsSnapshot,
       projectCount: options.projectIdsSnapshot.length,
       createdById: options.createdById,
@@ -1424,13 +1454,17 @@ export class PdfService {
       relations: ['createdBy']
     });
     if (!inAuthority) return null;
-    return { filePath: inAuthority.filePath, stream: fs.createReadStream(inAuthority.filePath) };
+    // Wave 3 BE-READERS — resolveStored handles legacy abs + new relative.
+    const absPath = this.storagePathService.resolveStored(inAuthority.filePath);
+    return { filePath: inAuthority.filePath, stream: fs.createReadStream(absPath) };
   }
 
   async readLatestInAuthorityFileForPlan(developmentPlanId: string): Promise<{ filePath: string; stream: fs.ReadStream } | null> {
     const meta = await this.getLatestInAuthorityMetaForPlan(developmentPlanId);
     if (!meta || !meta.exists) return null;
-    return { filePath: meta.filePath, stream: fs.createReadStream(meta.filePath) };
+    // Wave 3 BE-READERS — resolveStored handles legacy abs + new relative.
+    const absPath = this.storagePathService.resolveStored(meta.filePath);
+    return { filePath: meta.filePath, stream: fs.createReadStream(absPath) };
   }
 
   // ===================================================================
@@ -1489,25 +1523,21 @@ export class PdfService {
   }): Promise<{ version: number; filePath: string; fileUrl: string; projectCount: number; createdAt: string; createdBy: { id: string; firstname: string; lastname: string }; }> {
     const developmentPlan = await this.developmentPlanRepo.findOne({ where: { id: options.developmentPlanId } });
     if (!developmentPlan) throw new Error(`DevelopmentPlan with ID ${options.developmentPlanId} not found`);
-    const developmentPlanName = `Development-Plan-${developmentPlan.startYear}-${developmentPlan.endYear}`;
-    const baseDir = this.getDevelopmentPlanDir(developmentPlanName);
-    const outAuthorityDir = path.join(baseDir, 'out-authority');
-    await this.ensureDirectory(outAuthorityDir);
 
     const version = await this.getNextOutAuthorityVersion(developmentPlan.id);
-    const now = new Date();
-    const [datePart, timePart] = now.toISOString().split('T');
-    const [year, month, day] = datePart.split('-');
-    const [hours, minutes] = timePart.split(':');
-    const fileName = `${year}-${month}-${day}-${hours}-${minutes}-v${version}.pdf`;
-    const absFilePath = path.join(outAuthorityDir, fileName);
-
-    await fsp.writeFile(absFilePath, options.pdfBuffer);
+    // Wave 3 BE-WRITERS — plan-rooted key, out-authority variant.
+    const fileName = `out-authority-${this.buildVersionedPdfFileName(version)}`;
+    const fileKey = this.storagePathService.mainPlanVersionKey(
+      developmentPlan.id,
+      version,
+      fileName,
+    );
+    await this.storagePathService.writeFile(fileKey, options.pdfBuffer);
 
     const pdfOutAuthority = this.pdfOutAuthorityRepo.create({
       developmentPlanId: String(developmentPlan.id),
       version,
-      filePath: absFilePath,
+      filePath: fileKey,
       projectIdsSnapshot: options.projectIdsSnapshot,
       projectCount: options.projectIdsSnapshot.length,
       createdById: options.createdById,
@@ -1565,13 +1595,17 @@ export class PdfService {
       relations: ['createdBy']
     });
     if (!outAuthority) return null;
-    return { filePath: outAuthority.filePath, stream: fs.createReadStream(outAuthority.filePath) };
+    // Wave 3 BE-READERS — resolveStored handles legacy abs + new relative.
+    const absPath = this.storagePathService.resolveStored(outAuthority.filePath);
+    return { filePath: outAuthority.filePath, stream: fs.createReadStream(absPath) };
   }
 
   async readLatestOutAuthorityFileForPlan(developmentPlanId: string): Promise<{ filePath: string; stream: fs.ReadStream } | null> {
     const meta = await this.getLatestOutAuthorityMetaForPlan(developmentPlanId);
     if (!meta || !meta.exists) return null;
-    return { filePath: meta.filePath, stream: fs.createReadStream(meta.filePath) };
+    // Wave 3 BE-READERS — resolveStored handles legacy abs + new relative.
+    const absPath = this.storagePathService.resolveStored(meta.filePath);
+    return { filePath: meta.filePath, stream: fs.createReadStream(absPath) };
   }
 
   // ===================================================================
@@ -1957,25 +1991,27 @@ export class PdfService {
   }): Promise<{ version: number; filePath: string; fileUrl: string; projectCount: number; createdAt: string; createdBy: { id: string; firstname: string; lastname: string }; }> {
     const developmentPlan = await this.developmentPlanRepo.findOne({ where: { id: options.developmentPlanId } });
     if (!developmentPlan) throw new Error(`DevelopmentPlan with ID ${options.developmentPlanId} not found`);
-    const developmentPlanName = `Development-Plan-${developmentPlan.startYear}-${developmentPlan.endYear}`;
-
-    const baseDir = path.join(this.getDraftBaseDir(), developmentPlanName, 'edit', `edit-no${options.editNo}`, 'draft');
-    await this.ensureDirectory(baseDir);
 
     const version = await this.getNextRevisionEditDraftVersion(options.developmentPlanRevisionId);
-    const now = new Date();
-    const [datePart, timePart] = now.toISOString().split('T');
-    const [year, month, day] = datePart.split('-');
-    const [hours, minutes] = timePart.split(':');
-    const fileName = `${year}-${month}-${day}-${hours}-${minutes}-v${version}.pdf`;
-    const absFilePath = path.join(baseDir, fileName);
-
-    await fsp.writeFile(absFilePath, options.pdfBuffer);
+    // Wave 3 BE-WRITERS — plan-rooted edit-revision key. `editNo` is
+    // the revision's ordinal (revisionNumber). The draft variant is
+    // composed as `draft-{stamp}-v{N}.pdf` to stay distinguishable
+    // from the approved sibling under the same vN/ directory.
+    const fileName = `draft-${this.buildVersionedPdfFileName(version)}`;
+    const fileKey = this.storagePathService.revisionVersionKey({
+      planId: developmentPlan.id,
+      revisionType: 'edit',
+      revisionNumber: options.editNo,
+      revisionId: options.developmentPlanRevisionId,
+      versionNumber: version,
+      fileName,
+    });
+    await this.storagePathService.writeFile(fileKey, options.pdfBuffer);
 
     const pdfRevisionEditDraft = this.pdfRevisionEditDraftRepo.create({
       developmentPlanRevisionId: String(options.developmentPlanRevisionId),
       version,
-      filePath: absFilePath,
+      filePath: fileKey,
       projectIdsSnapshot: options.projectIdsSnapshot,
       projectCount: options.projectIdsSnapshot.length,
       createdById: options.createdById,
@@ -2012,7 +2048,9 @@ export class PdfService {
   async readLatestRevisionEditDraftFile(developmentPlanId: string, developmentPlanRevisionId: string): Promise<{ filePath: string; stream: fs.ReadStream } | null> {
     const meta = await this.getLatestRevisionEditDraftMeta(developmentPlanId, developmentPlanRevisionId);
     if (!meta || !meta.exists) return null;
-    return { filePath: meta.filePath, stream: fs.createReadStream(meta.filePath) };
+    // Wave 3 BE-READERS — resolveStored handles legacy abs + new relative.
+    const absPath = this.storagePathService.resolveStored(meta.filePath);
+    return { filePath: meta.filePath, stream: fs.createReadStream(absPath) };
   }
 
   async getAllRevisionEditDraftVersions(developmentPlanId: string, developmentPlanRevisionId: string): Promise<Array<{ version: number; fileUrl: string; projectCount: number; createdAt: string; createdBy: { id: string; firstname: string; lastname: string }; }>> {
@@ -2037,7 +2075,9 @@ export class PdfService {
       relations: ['createdBy']
     });
     if (!draft) return null;
-    return { filePath: draft.filePath, stream: fs.createReadStream(draft.filePath) };
+    // Wave 3 BE-READERS — resolveStored handles legacy abs + new relative.
+    const absPath = this.storagePathService.resolveStored(draft.filePath);
+    return { filePath: draft.filePath, stream: fs.createReadStream(absPath) };
   }
 
   // ===================================================================
@@ -2277,25 +2317,26 @@ export class PdfService {
   }): Promise<{ version: number; filePath: string; fileUrl: string; projectCount: number; createdAt: string; createdBy: { id: string; firstname: string; lastname: string }; }> {
     const developmentPlan = await this.developmentPlanRepo.findOne({ where: { id: options.developmentPlanId } });
     if (!developmentPlan) throw new Error(`DevelopmentPlan with ID ${options.developmentPlanId} not found`);
-    const developmentPlanName = `Development-Plan-${developmentPlan.startYear}-${developmentPlan.endYear}`;
-
-    const baseDir = path.join(this.getDraftBaseDir(), developmentPlanName, 'change', `change-no${options.revisionCount}`, 'draft');
-    await this.ensureDirectory(baseDir);
 
     const version = await this.getNextRevisionChangeDraftVersion(options.developmentPlanRevisionId);
-    const now = new Date();
-    const [datePart, timePart] = now.toISOString().split('T');
-    const [year, month, day] = datePart.split('-');
-    const [hours, minutes] = timePart.split(':');
-    const fileName = `${year}-${month}-${day}-${hours}-${minutes}-v${version}.pdf`;
-    const absFilePath = path.join(baseDir, fileName);
-
-    await fsp.writeFile(absFilePath, options.pdfBuffer);
+    // Wave 3 BE-WRITERS — plan-rooted change-revision key. `revisionCount`
+    // is the revision's ordinal (revisionNumber) within the change
+    // sibling timeline.
+    const fileName = `draft-${this.buildVersionedPdfFileName(version)}`;
+    const fileKey = this.storagePathService.revisionVersionKey({
+      planId: developmentPlan.id,
+      revisionType: 'change',
+      revisionNumber: options.revisionCount,
+      revisionId: options.developmentPlanRevisionId,
+      versionNumber: version,
+      fileName,
+    });
+    await this.storagePathService.writeFile(fileKey, options.pdfBuffer);
 
     const pdfRevisionChangeDraft = this.pdfRevisionChangeDraftRepo.create({
       developmentPlanRevisionId: String(options.developmentPlanRevisionId),
       version,
-      filePath: absFilePath,
+      filePath: fileKey,
       projectIdsSnapshot: options.projectIdsSnapshot,
       projectCount: options.projectIdsSnapshot.length,
       createdById: options.createdById,
@@ -2332,7 +2373,9 @@ export class PdfService {
   async readLatestRevisionChangeDraftFile(developmentPlanId: string, developmentPlanRevisionId: string): Promise<{ filePath: string; stream: fs.ReadStream } | null> {
     const meta = await this.getLatestRevisionChangeDraftMeta(developmentPlanId, developmentPlanRevisionId);
     if (!meta || !meta.exists) return null;
-    return { filePath: meta.filePath, stream: fs.createReadStream(meta.filePath) };
+    // Wave 3 BE-READERS — resolveStored handles legacy abs + new relative.
+    const absPath = this.storagePathService.resolveStored(meta.filePath);
+    return { filePath: meta.filePath, stream: fs.createReadStream(absPath) };
   }
 
   async getAllRevisionChangeDraftVersions(developmentPlanId: string, developmentPlanRevisionId: string): Promise<Array<{ version: number; fileUrl: string; projectCount: number; createdAt: string; createdBy: { id: string; firstname: string; lastname: string }; }>> {
@@ -2357,7 +2400,9 @@ export class PdfService {
       relations: ['createdBy']
     });
     if (!draft) return null;
-    return { filePath: draft.filePath, stream: fs.createReadStream(draft.filePath) };
+    // Wave 3 BE-READERS — resolveStored handles legacy abs + new relative.
+    const absPath = this.storagePathService.resolveStored(draft.filePath);
+    return { filePath: draft.filePath, stream: fs.createReadStream(absPath) };
   }
 
   // ===================================================================
@@ -2376,25 +2421,22 @@ export class PdfService {
     if (!developmentPlan) throw new Error(`DevelopmentPlan with ID ${options.developmentPlanId} not found`);
     const developmentPlanId = developmentPlan.id;
 
-    const developmentPlanName = `Development-Plan-${developmentPlan.startYear}-${developmentPlan.endYear}`;
-    const baseDir = this.getDevelopmentPlanDir(developmentPlanName);
-    const approvedDir = path.join(baseDir, 'approved');
-    await this.ensureDirectory(approvedDir);
-
     const version = await this.getNextApprovedVersion(developmentPlanId);
-    const now = new Date();
-    const [datePart, timePart] = now.toISOString().split('T');
-    const [year, month, day] = datePart.split('-');
-    const [hours, minutes] = timePart.split(':');
-    const fileName = `${year}-${month}-${day}-${hours}-${minutes}-v${version}.pdf`;
-    const absFilePath = path.join(approvedDir, fileName);
-
-    await fsp.writeFile(absFilePath, options.pdfBuffer);
+    // Wave 3 BE-WRITERS — plan-rooted approved key. Approved sits in the
+    // same `main-plan-{planId}/v{N}/` dir as siblings; the leaf prefix
+    // keeps the legacy "approved/" subfolder semantic via filename.
+    const fileName = `approved-${this.buildVersionedPdfFileName(version)}`;
+    const fileKey = this.storagePathService.mainPlanVersionKey(
+      developmentPlanId,
+      version,
+      fileName,
+    );
+    await this.storagePathService.writeFile(fileKey, options.pdfBuffer);
 
     const pdfApproved = this.pdfApprovedRepo.create({
       developmentPlanId: String(developmentPlanId),
       version,
-      filePath: absFilePath,
+      filePath: fileKey,
       projectIdsSnapshot: options.projectIdsSnapshot,
       projectCount: options.projectIdsSnapshot.length,
       createdById: options.createdById,
@@ -2468,24 +2510,31 @@ export class PdfService {
 
     for (const pdf of pdfs) {
       try {
-        const oldPath = pdf.filePath;
-        const dir = path.dirname(oldPath);
-        const ext = path.extname(oldPath);
-        const baseName = path.basename(oldPath, ext);
+        // Wave 3 BE-WRITERS — preserve stored shape on rewrite.
+        const oldStored = pdf.filePath;
+        const oldAbs = this.storagePathService.resolveStored(oldStored);
+        const dir = path.dirname(oldStored);
+        const ext = path.extname(oldStored);
+        const baseName = path.basename(oldStored, ext);
         const newFileName = `${baseName}.deprecated-${now.getTime()}${ext}`;
-        const newPath = path.join(dir, newFileName);
+        const newStored = (dir === '.' || dir === '')
+          ? newFileName
+          : `${dir}/${newFileName}`;
+        const newAbs = path.isAbsolute(oldStored)
+          ? path.join(path.dirname(oldAbs), newFileName)
+          : this.storagePathService.toAbsolute(newStored);
 
         try {
-          await fsp.access(oldPath);
-          await fsp.rename(oldPath, newPath);
-          deprecatedFiles.push(newPath);
+          await fsp.access(oldAbs);
+          await fsp.rename(oldAbs, newAbs);
+          deprecatedFiles.push(newStored);
         } catch (error) {
-          this.logger.warn(`PDF file not found: ${oldPath}, skipping rename`);
+          this.logger.warn(`PDF file not found: ${oldAbs}, skipping rename`);
         }
 
         await this.pdfApprovedRepo.update(
           { id: pdf.id },
-          { isDeprecated: true, deprecatedAt: now, deprecatedById: deprecatedById, filePath: newPath },
+          { isDeprecated: true, deprecatedAt: now, deprecatedById: deprecatedById, filePath: newStored },
         );
       } catch (error: any) {
         this.logger.error(`Failed to deprecate PDF ${pdf.id}: ${error.message}`);
@@ -2535,18 +2584,22 @@ export class PdfService {
     });
 
     if (!approved) return null;
-    return { filePath: approved.filePath, stream: fs.createReadStream(approved.filePath) };
+    // Wave 3 BE-READERS — resolveStored handles legacy abs + new relative.
+    const absPath = this.storagePathService.resolveStored(approved.filePath);
+    return { filePath: approved.filePath, stream: fs.createReadStream(absPath) };
   }
 
   async readLatestApprovedFileForPlan(developmentPlanId: string): Promise<{ filePath: string; stream: fs.ReadStream } | null> {
     const meta = await this.getLatestApprovedMetaForPlan(developmentPlanId);
     if (!meta || !meta.exists) return null;
 
+    // Wave 3 BE-READERS — resolveStored handles legacy abs + new relative.
+    const absPath = this.storagePathService.resolveStored(meta.filePath);
     try {
-      await fsp.access(meta.filePath);
-      return { filePath: meta.filePath, stream: fs.createReadStream(meta.filePath) };
+      await fsp.access(absPath);
+      return { filePath: meta.filePath, stream: fs.createReadStream(absPath) };
     } catch (error) {
-      this.logger.warn(`PDF file not found: ${meta.filePath}`);
+      this.logger.warn(`PDF file not found: ${meta.filePath} (resolved: ${absPath})`);
       return null;
     }
   }
@@ -2938,29 +2991,24 @@ export class PdfService {
 
     const developmentPlan = await this.developmentPlanRepo.findOne({ where: { id: options.developmentPlanId } });
     if (!developmentPlan) throw new Error(`DevelopmentPlan with ID ${options.developmentPlanId} not found`);
-    const developmentPlanName = `Development-Plan-${developmentPlan.startYear}-${developmentPlan.endYear}`;
 
-    const baseDir = path.join(
-      this.getDevelopmentPlanDir(developmentPlanName),
-      'edit',
-      `edit-no${options.editNo}`,
-      'approved'
-    );
-    await this.ensureDirectory(baseDir);
     const version = await this.getNextRevisionEditApprovedVersion(options.developmentPlanRevisionId);
-    const now = new Date();
-    const [datePart, timePart] = now.toISOString().split('T');
-    const [year, month, day] = datePart.split('-');
-    const [hours, minutes] = timePart.split(':');
-    const fileName = `${year}-${month}-${day}-${hours}-${minutes}-v${version}.pdf`;
-    const absFilePath = path.join(baseDir, fileName);
-
-    await fsp.writeFile(absFilePath, options.pdfBuffer);
+    // Wave 3 BE-WRITERS — plan-rooted edit-revision approved key.
+    const fileName = `approved-${this.buildVersionedPdfFileName(version)}`;
+    const fileKey = this.storagePathService.revisionVersionKey({
+      planId: developmentPlan.id,
+      revisionType: 'edit',
+      revisionNumber: options.editNo,
+      revisionId: options.developmentPlanRevisionId,
+      versionNumber: version,
+      fileName,
+    });
+    await this.storagePathService.writeFile(fileKey, options.pdfBuffer);
 
     const pdfRevisionEditApproved = this.pdfRevisionEditApprovedRepo.create({
       developmentPlanRevisionId: String(options.developmentPlanRevisionId),
       version,
-      filePath: absFilePath,
+      filePath: fileKey,
       projectIdsSnapshot: options.projectIdsSnapshot,
       projectCount: options.projectIdsSnapshot.length,
       createdById: options.createdById,
@@ -3023,7 +3071,9 @@ export class PdfService {
   async readLatestApprovedFileForEditRevision(developmentPlanRevisionId: string): Promise<{ filePath: string; stream: fs.ReadStream } | null> {
     const meta = await this.getLatestApprovedMetaForEditRevision(developmentPlanRevisionId);
     if (!meta || !meta.exists) return null;
-    return { filePath: meta.filePath, stream: fs.createReadStream(meta.filePath) };
+    // Wave 3 BE-READERS — resolveStored handles legacy abs + new relative.
+    const absPath = this.storagePathService.resolveStored(meta.filePath);
+    return { filePath: meta.filePath, stream: fs.createReadStream(absPath) };
   }
 
   // ===================================================================
@@ -3043,29 +3093,24 @@ export class PdfService {
 
     const developmentPlan = await this.developmentPlanRepo.findOne({ where: { id: options.developmentPlanId } });
     if (!developmentPlan) throw new Error(`DevelopmentPlan with ID ${options.developmentPlanId} not found`);
-    const developmentPlanName = `Development-Plan-${developmentPlan.startYear}-${developmentPlan.endYear}`;
 
-    const baseDir = path.join(
-      this.getDevelopmentPlanDir(developmentPlanName),
-      'change',
-      `change-no${options.changeNo}`,
-      'approved'
-    );
-    await this.ensureDirectory(baseDir);
     const version = await this.getNextRevisionChangeApprovedVersion(options.developmentPlanRevisionId);
-    const now = new Date();
-    const [datePart, timePart] = now.toISOString().split('T');
-    const [year, month, day] = datePart.split('-');
-    const [hours, minutes] = timePart.split(':');
-    const fileName = `${year}-${month}-${day}-${hours}-${minutes}-v${version}.pdf`;
-    const absFilePath = path.join(baseDir, fileName);
-
-    await fsp.writeFile(absFilePath, options.pdfBuffer);
+    // Wave 3 BE-WRITERS — plan-rooted change-revision approved key.
+    const fileName = `approved-${this.buildVersionedPdfFileName(version)}`;
+    const fileKey = this.storagePathService.revisionVersionKey({
+      planId: developmentPlan.id,
+      revisionType: 'change',
+      revisionNumber: options.changeNo,
+      revisionId: options.developmentPlanRevisionId,
+      versionNumber: version,
+      fileName,
+    });
+    await this.storagePathService.writeFile(fileKey, options.pdfBuffer);
 
     const pdfRevisionChangeApproved = this.pdfRevisionChangeApprovedRepo.create({
       developmentPlanRevisionId: String(options.developmentPlanRevisionId),
       version,
-      filePath: absFilePath,
+      filePath: fileKey,
       projectIdsSnapshot: options.projectIdsSnapshot,
       projectCount: options.projectIdsSnapshot.length,
       createdById: options.createdById,
@@ -3128,7 +3173,9 @@ export class PdfService {
   async readLatestApprovedFileForChangeRevision(developmentPlanRevisionId: string): Promise<{ filePath: string; stream: fs.ReadStream } | null> {
     const meta = await this.getLatestApprovedMetaForChangeRevision(developmentPlanRevisionId);
     if (!meta || !meta.exists) return null;
-    return { filePath: meta.filePath, stream: fs.createReadStream(meta.filePath) };
+    // Wave 3 BE-READERS — resolveStored handles legacy abs + new relative.
+    const absPath = this.storagePathService.resolveStored(meta.filePath);
+    return { filePath: meta.filePath, stream: fs.createReadStream(absPath) };
   }
 
 }

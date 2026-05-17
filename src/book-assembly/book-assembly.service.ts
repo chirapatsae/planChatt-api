@@ -10,7 +10,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { PDFDocument } from 'pdf-lib';
 
 import { BookAssemblyDraft } from './entities/book-assembly-draft.entity';
@@ -40,7 +40,7 @@ import { UnifiedProjectMapper } from 'src/project-groups/dto/unified-project-dis
 import { ReportFormat } from 'src/development-plan/types/report-format.enum';
 import { handleException } from 'src/util/handleException';
 
-import { BookAssemblyFileService } from './book-assembly-file.service';
+import { BookAssemblyFileService, BookAssemblyLocation } from './book-assembly-file.service';
 import { CancelBookDto } from './dto/cancel-book.dto';
 import { CorrectBookDto } from './dto/correct-book.dto';
 import { VersionResponseDto } from './dto/version-response.dto';
@@ -55,6 +55,11 @@ import {
 } from 'src/common/book-lock/book-lock.service';
 import { STATUS_NAMES } from '../common/status-names';
 import { OrphanCleanupService } from 'src/orphan-cleanup/orphan-cleanup.service';
+
+// Wave 3 BE-READERS — `getDraftPartFile` consumes `draft.partNFilePath`
+// from the DB; resolveStored bridges legacy abs + new relative keys
+// during the migration window (umbrella §7.3).
+import { StoragePathService } from 'src/storage/storage-path.service';
 
 /** Roles permitted to perform assembly write actions (Spec Section 10.1) */
 const ADMIN_ROLES = ['admin', 'super-admin'];
@@ -119,6 +124,10 @@ export class BookAssemblyService {
     private readonly dataSource: DataSource,
     private readonly bookLockService: BookLockService,
     private readonly orphanCleanupService: OrphanCleanupService,
+    // Wave 3 BE-READERS — resolves legacy abs + new relative keys when
+    // streaming `book_assembly_drafts.partNFilePath` values via
+    // `getDraftPartFile`.
+    private readonly storagePathService: StoragePathService,
   ) {}
 
   // ===========================================================================
@@ -218,8 +227,9 @@ export class BookAssemblyService {
         `createDraft: deprecatedVersion query result — ${deprecatedVersion ? `id=${deprecatedVersion.id} versionNumber=${deprecatedVersion.versionNumber}` : 'NULL (no deprecated version found)'}`,
       );
 
-      // Create folder structure
-      this.fileService.createVersionFolders(sourceType, sourceId, targetVersion);
+      // Create folder structure — Wave 3 BE-WRITERS plan-rooted layout.
+      const draftLocation = await this.resolveLocation(sourceType, sourceId);
+      this.fileService.createVersionFolders(draftLocation, targetVersion);
 
       // Create draft record
       const draft = this.draftRepo.create({
@@ -648,10 +658,12 @@ export class BookAssemblyService {
 
       const draft = await this.loadActiveDraft(sourceType, sourceId);
 
-      // Save file to versioned folder
+      // Save file to versioned folder — Wave 3 BE-WRITERS plan-rooted layout.
+      // `filePath` is now the RELATIVE KEY (umbrella §7.2) persisted to
+      // `book_assembly_drafts.part{n}_file_path`.
+      const uploadLocation = await this.resolveLocation(sourceType, sourceId);
       const filePath = this.fileService.savePartFile(
-        sourceType,
-        sourceId,
+        uploadLocation,
         draft.targetVersion,
         partNumber,
         file.buffer,
@@ -743,10 +755,10 @@ export class BookAssemblyService {
 
       await this.notifyProgress(userId, sourceId, 70, 'generated', 'สร้างไฟล์ PDF ส่วนที่ 3 สำเร็จ');
 
-      // Save to versioned folder
+      // Save to versioned folder — Wave 3 BE-WRITERS plan-rooted layout.
+      const generatePart3Location = await this.resolveLocation(sourceType, sourceId);
       const filePath = this.fileService.savePartFile(
-        sourceType,
-        sourceId,
+        generatePart3Location,
         draft.targetVersion,
         3,
         pdfResult.buffer,
@@ -794,10 +806,11 @@ export class BookAssemblyService {
         );
       }
 
-      // Copy the file
+      // Copy the file — Wave 3 BE-WRITERS plan-rooted layout. Returned
+      // `copiedPath` is a RELATIVE KEY persisted to the draft.
+      const reuseLocation = await this.resolveLocation(sourceType, sourceId);
       const copiedPath = this.fileService.copyPartFromVersion(
-        sourceType,
-        sourceId,
+        reuseLocation,
         fromVersionNumber,
         draft.targetVersion,
         partNumber,
@@ -856,9 +869,15 @@ export class BookAssemblyService {
         );
       }
 
-      const part1 = this.fileService.readPartFile(sourceType, sourceId, draft.targetVersion, 1);
-      const part2 = this.fileService.readPartFile(sourceType, sourceId, draft.targetVersion, 2);
-      const part3 = this.fileService.readPartFile(sourceType, sourceId, draft.targetVersion, 3);
+      // Wave 3 BE-WRITERS/READERS — read parts via stored values on the
+      // draft (relative keys post-Wave 3, legacy abs pre-Wave 3 — both
+      // shapes resolved by `StoragePathService.resolveStored`).
+      if (!draft.part1FilePath || !draft.part2FilePath || !draft.part3FilePath) {
+        throw new BadRequestException('Draft parts incomplete — cannot preview');
+      }
+      const part1 = this.fileService.readPartFileByStored(draft.part1FilePath);
+      const part2 = this.fileService.readPartFileByStored(draft.part2FilePath);
+      const part3 = this.fileService.readPartFileByStored(draft.part3FilePath);
 
       return await this.mergePdfBuffers([part1, part2, part3]);
     } catch (error) {
@@ -899,13 +918,24 @@ export class BookAssemblyService {
         throw new NotFoundException('ไม่พบไฟล์สำหรับส่วนนี้');
       }
 
-      this.fileService.assertPathWithinStorageRoot(filePath);
+      // Wave 3 BE-READERS — `partNFilePath` may be a legacy absolute
+      // path (pre-migration DB rows) OR a new relative key (post-Wave 3
+      // BE-WRITERS rows). `resolveStored` handles both shapes and
+      // applies its own safety validation for relative keys; legacy
+      // absolute paths are returned as-is and were trusted at write
+      // time. The legacy `fileService.assertPathWithinStorageRoot`
+      // guard is intentionally NOT called here because it pins to
+      // `{cwd}/storage/book-assembly/` which is incompatible with the
+      // new plan-rooted hierarchy under `{STORAGE_ROOT}` (umbrella §1).
+      // BE-WRITERS owns the repointing of that guard; readers route
+      // through the canonical resolver instead.
+      const absPath = this.storagePathService.resolveStored(filePath);
 
-      if (!fs.existsSync(filePath)) {
+      if (!fs.existsSync(absPath)) {
         throw new NotFoundException('ไม่พบไฟล์บนระบบ');
       }
 
-      return { absPath: filePath, filename: `draft-part-${partNumber}.pdf` };
+      return { absPath, filename: `draft-part-${partNumber}.pdf` };
     } catch (error) {
       handleException(this.logger, error);
     }
@@ -950,10 +980,19 @@ export class BookAssemblyService {
 
         await this.notifyProgress(userId, sourceId, 10, 'starting', 'กำลังเริ่มรวมเล่ม...');
 
+        // Wave 3 BE-WRITERS — resolve plan-rooted location for the
+        // version write (merged + metadata). Reads happen via the
+        // draft's stored part-paths (legacy abs OR new relative key —
+        // both resolved by `resolveStored`).
+        const mergeLocation = await this.resolveLocation(sourceType, sourceId, manager);
+
         // 2. Read all 3 part files
-        const part1 = this.fileService.readPartFile(sourceType, sourceId, draft.targetVersion, 1);
-        const part2 = this.fileService.readPartFile(sourceType, sourceId, draft.targetVersion, 2);
-        const part3 = this.fileService.readPartFile(sourceType, sourceId, draft.targetVersion, 3);
+        if (!draft.part1FilePath || !draft.part2FilePath || !draft.part3FilePath) {
+          throw new BadRequestException('Draft parts incomplete — cannot merge');
+        }
+        const part1 = this.fileService.readPartFileByStored(draft.part1FilePath);
+        const part2 = this.fileService.readPartFileByStored(draft.part2FilePath);
+        const part3 = this.fileService.readPartFileByStored(draft.part3FilePath);
 
         await this.notifyProgress(userId, sourceId, 30, 'merging', 'กำลังรวมไฟล์ PDF...');
 
@@ -962,9 +1001,11 @@ export class BookAssemblyService {
         const mergedPdf = await PDFDocument.load(mergedBuffer);
         const totalPages = mergedPdf.getPageCount();
 
-        // 4. Save merged PDF
+        // 4. Save merged PDF — Wave 3 BE-WRITERS. `mergedFilePath` is
+        // a RELATIVE KEY persisted to `book_assembly_versions
+        // .merged_file_path`.
         const mergedFilePath = this.fileService.saveMergedFile(
-          sourceType, sourceId, draft.targetVersion, mergedBuffer,
+          mergeLocation, draft.targetVersion, mergedBuffer,
         );
 
         await this.notifyProgress(userId, sourceId, 50, 'booking', 'กำลังจองโครงการ...');
@@ -1085,7 +1126,7 @@ export class BookAssemblyService {
         await this.populateLineageForMerge(sourceType, projectIds, savedVersion.id, manager);
 
         // 10. Write metadata.json (non-transactional file write — OK since DB is committed)
-        this.writeVersionMetadata(draft, savedVersion);
+        await this.writeVersionMetadata(draft, savedVersion);
 
         await this.notifyProgress(userId, sourceId, 100, 'completed', 'รวมเล่มสำเร็จแล้ว!');
 
@@ -1331,9 +1372,10 @@ export class BookAssemblyService {
           }
         }
 
-        // 8. Create new draft
+        // 8. Create new draft — Wave 3 BE-WRITERS plan-rooted layout.
         const nextVersion = currentVersion.versionNumber + 1;
-        this.fileService.createVersionFolders(sourceType, sourceId, nextVersion);
+        const correctLocation = await this.resolveLocation(sourceType, sourceId, manager);
+        this.fileService.createVersionFolders(correctLocation, nextVersion);
 
         const draft = manager.create(BookAssemblyDraft, {
           sourceType,
@@ -1360,7 +1402,7 @@ export class BookAssemblyService {
 
           try {
             const copiedPath = this.fileService.copyPartFromVersion(
-              sourceType, sourceId, currentVersion.versionNumber, nextVersion, pn,
+              correctLocation, currentVersion.versionNumber, nextVersion, pn,
             );
             if (pn === 1) {
               draft.part1Status = PartUploadStatus.REUSED;
@@ -1710,25 +1752,54 @@ export class BookAssemblyService {
 
   /**
    * Returns the absolute path to the merged PDF for streaming.
+   *
+   * Wave 3 BE-WRITERS/READERS — the version row's `merged_file_path`
+   * may be a legacy absolute path OR a new relative key. We load the
+   * version, then resolve via `StoragePathService.resolveStored` so
+   * both shapes work during the migration transition window (umbrella
+   * §7.3).
    */
-  getMergedPdfPath(
+  async getMergedPdfPath(
     sourceType: BookAssemblySourceType,
     sourceId: string,
     versionNumber: number,
-  ): string {
-    return this.fileService.getAbsoluteMergedPath(sourceType, sourceId, versionNumber);
+  ): Promise<string> {
+    const version = await this.versionRepo.findOne({
+      where: { sourceType, sourceId, versionNumber },
+    });
+    if (!version || !version.mergedFilePath) {
+      throw new NotFoundException(`ไม่พบไฟล์เล่มรวม v${versionNumber}`);
+    }
+    return this.fileService.getAbsolutePathByStored(version.mergedFilePath);
   }
 
   /**
    * Returns the absolute path to an individual part PDF for streaming.
+   *
+   * Wave 3 BE-WRITERS/READERS — same legacy-abs / new-relative-key
+   * tolerance as `getMergedPdfPath`.
    */
-  getPartPdfPath(
+  async getPartPdfPath(
     sourceType: BookAssemblySourceType,
     sourceId: string,
     versionNumber: number,
     partNumber: number,
-  ): string {
-    return this.fileService.getAbsolutePartPath(sourceType, sourceId, versionNumber, partNumber);
+  ): Promise<string> {
+    this.fileService.validatePartNumber(partNumber);
+    const version = await this.versionRepo.findOne({
+      where: { sourceType, sourceId, versionNumber },
+    });
+    if (!version) {
+      throw new NotFoundException(`ไม่พบเวอร์ชัน v${versionNumber}`);
+    }
+    const stored =
+      partNumber === 1 ? version.part1FilePath :
+      partNumber === 2 ? version.part2FilePath :
+      version.part3FilePath;
+    if (!stored) {
+      throw new NotFoundException(`ไม่พบไฟล์ part-${partNumber}.pdf ในเวอร์ชัน v${versionNumber}`);
+    }
+    return this.fileService.getAbsolutePathByStored(stored);
   }
 
   // ===========================================================================
@@ -2763,6 +2834,50 @@ export class BookAssemblyService {
   }
 
   /**
+   * Wave 3 BE-WRITERS — resolves a `(sourceType, sourceId)` tuple to the
+   * richer `BookAssemblyLocation` that the new plan-rooted file service
+   * (umbrella §7.1) requires. For MAIN_PLAN, `sourceId` already IS the
+   * `planId`. For EDIT_REVISION / CHANGE_REVISION, we load the revision
+   * row to obtain `planId` (parent) + `revisionNumber` (ordinal) — both
+   * are needed to construct `main-plan-{planId}/{edit|change}/{type}-
+   * {revNo}-{revId}/v{N}/`.
+   *
+   * Accepts an optional EntityManager so the resolution runs inside the
+   * caller's transaction (e.g. `merge`).
+   */
+  private async resolveLocation(
+    sourceType: BookAssemblySourceType,
+    sourceId: string,
+    manager?: EntityManager,
+  ): Promise<BookAssemblyLocation> {
+    if (sourceType === BookAssemblySourceType.MAIN_PLAN) {
+      return { kind: 'MAIN_PLAN', planId: sourceId };
+    }
+    const revisionRepo = manager
+      ? manager.getRepository(DevelopmentPlanRevision)
+      : this.devPlanRevisionRepo;
+    const revision = await revisionRepo.findOne({
+      where: { id: sourceId },
+      relations: ['developmentPlan'],
+    });
+    if (!revision || !revision.developmentPlan) {
+      throw new NotFoundException(
+        `DevelopmentPlanRevision or its parent plan not found for sourceId=${sourceId}`,
+      );
+    }
+    const kind =
+      sourceType === BookAssemblySourceType.EDIT_REVISION
+        ? 'EDIT_REVISION'
+        : 'CHANGE_REVISION';
+    return {
+      kind,
+      planId: revision.developmentPlan.id,
+      revisionNumber: revision.revisionNumber,
+      revisionId: revision.id,
+    };
+  }
+
+  /**
    * Resolves the DevelopmentPlan.reportFormat for a given source context.
    *
    * CLAUDE.md §16.3 / §10 — format is owned exclusively by DevelopmentPlan.
@@ -3077,8 +3192,11 @@ export class BookAssemblyService {
     }
   }
 
-  private writeVersionMetadata(draft: BookAssemblyDraft, version: BookAssemblyVersion): void {
+  private async writeVersionMetadata(draft: BookAssemblyDraft, version: BookAssemblyVersion): Promise<void> {
     try {
+      // Wave 3 BE-WRITERS — resolve plan-rooted location for the
+      // metadata.json sidecar write.
+      const location = await this.resolveLocation(version.sourceType, version.sourceId);
       const metadata = {
         version: version.versionNumber,
         sourceType: version.sourceType,
@@ -3118,8 +3236,7 @@ export class BookAssemblyService {
         deprecationReason: null,
       };
       this.fileService.writeMetadataJson(
-        version.sourceType,
-        version.sourceId,
+        location,
         version.versionNumber,
         metadata,
       );

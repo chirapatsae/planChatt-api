@@ -30,6 +30,7 @@ import { UsersService } from 'src/users/users.service';
 import { BookLockService } from 'src/common/book-lock/book-lock.service';
 import { ReportFormat } from './types/report-format.enum';
 import { OrphanCleanupService } from 'src/orphan-cleanup/orphan-cleanup.service';
+import { StoragePathService } from 'src/storage/storage-path.service';
 import {
   ERROR_CODES,
   ERROR_MESSAGES,
@@ -68,6 +69,14 @@ export class DevelopmentPlanService {
     private readonly usersService: UsersService,
     private readonly bookLockService: BookLockService,
     private readonly orphanCleanupService: OrphanCleanupService,
+    // Wave 3 BE-BOOTSTRAP — Storage Layout Restructure.
+    // `StoragePathService` is provided by the `@Global() StorageModule`
+    // (see `backend/src/storage/storage.module.ts`), so no module-level
+    // import is required here. Used by `create` / `createWithPhase` to
+    // eagerly materialize the plan root + 3 fixed subfolders
+    // (`edit/`, `change/`, `supplement/`) per umbrella §7.4 and the
+    // user wording "จะต้องมีสาม folder นี้แน่นอน".
+    private readonly storagePathService: StoragePathService,
   ) { }
 
   private async validatePreviousPlanCompletion(manager: EntityManager): Promise<void> {
@@ -128,7 +137,7 @@ export class DevelopmentPlanService {
         throw new BadRequestException('Start year must be less than end year');
       }
 
-      return await this.dataSource.transaction(async (manager) => {
+      const savedPlan = await this.dataSource.transaction(async (manager) => {
         await this.validatePreviousPlanCompletion(manager);
 
         const existingPlans = await manager.find(DevelopmentPlan);
@@ -175,8 +184,45 @@ export class DevelopmentPlanService {
 
         return await manager.save(newDevelopmentPlan);
       });
+
+      // Wave 3 BE-BOOTSTRAP — eagerly materialize the plan root + 3
+      // fixed subfolders (`edit/`, `change/`, `supplement/`) per
+      // umbrella §7.4 + user wording "จะต้องมีสาม folder นี้แน่นอน".
+      //
+      // Runs POST-COMMIT (NOT inside the transaction) because:
+      //   - Filesystem ops are not transactional. If we ran inside the
+      //     tx and the rename rolled back, we would leave orphan dirs.
+      //   - If the plan insert rolled back, we don't want dirs created.
+      //
+      // Failure handling: log WARN, do NOT throw — the plan was already
+      // committed and the caller's response would otherwise be a lie
+      // about success. Writers will recreate the dirs lazily via
+      // `fs.mkdir(recursive: true)` on first use. This matches CLAUDE.md
+      // §17.2 advisory-only side-effect pattern (filesystem state is
+      // downstream of DB state). `bootstrapPlan` is idempotent.
+      await this.bootstrapPlanStorageBestEffort(savedPlan.id);
+
+      return savedPlan;
     } catch (error) {
       handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * Wave 3 BE-BOOTSTRAP — best-effort, post-commit plan-directory
+   * bootstrap. Swallows any filesystem error and logs a WARN so the
+   * caller's success response is not turned into a 500 after the DB row
+   * is already persisted. Safe to re-run (idempotent — uses
+   * `fs.mkdir({ recursive: true })` inside `StoragePathService`).
+   */
+  private async bootstrapPlanStorageBestEffort(planId: string): Promise<void> {
+    try {
+      await this.storagePathService.bootstrapPlan(planId);
+    } catch (err) {
+      this.logger.warn(
+        `bootstrapPlan failed for plan ${planId}: ${(err as Error).message}. ` +
+          `Plan row is already committed; writers will recreate dirs lazily on first use.`,
+      );
     }
   }
 
@@ -257,7 +303,7 @@ export class DevelopmentPlanService {
         }
       }
 
-      return await this.dataSource.transaction(async (manager) => {
+      const result = await this.dataSource.transaction(async (manager) => {
         await this.validatePreviousPlanCompletion(manager);
 
         const developmentPlanRepository = manager.getRepository(DevelopmentPlan);
@@ -347,6 +393,14 @@ export class DevelopmentPlanService {
 
         return { developmentPlan: savedDevelopmentPlan, planPhases: savedPlanPhases };
       });
+
+      // Wave 3 BE-BOOTSTRAP — post-commit, best-effort bootstrap. Same
+      // rationale as `create` above; `createWithPhase` is the second
+      // plan-insert entry point on this service. See
+      // `bootstrapPlanStorageBestEffort` for failure semantics.
+      await this.bootstrapPlanStorageBestEffort(result.developmentPlan.id);
+
+      return result;
     } catch (error) {
       handleException(this.logger, error);
     }

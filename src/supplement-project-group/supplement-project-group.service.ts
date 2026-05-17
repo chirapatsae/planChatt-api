@@ -497,6 +497,134 @@ export class SupplementProjectGroupService {
   }
 
   /**
+   * SUPPLEMENT_SIDEBAR_BADGES BE-OWNER-COUNTS — Owner-scoped SPG count
+   * envelope powering the 4 sidebar badges for
+   * `/project/supplement/{ready-to-send,verify,edit,pullback}`.
+   *
+   * Predicates (FROZEN per task §7):
+   *   - `ready`    — own SPGs whose latest status is `Ready`
+   *   - `verify`   — own SPGs whose latest status ∈
+   *                  {`Pending`, `Verified`, `Pending_Approval`}
+   *   - `edit`     — own SPGs whose latest status is
+   *                  `Returned_For_Revision` ONLY (narrowed 2026-05-12 —
+   *                  does NOT include `Pull_Back`)
+   *   - `pullBack` — own SPGs whose latest status is `Pull_Back`
+   *
+   * Authority:
+   *   - §4 ownership filter uses `currentWorkHistory.id` — NOT raw `userId`.
+   *   - LAO / non-agency callers receive `{ ready: 0, verify: 0, edit: 0,
+   *     pullBack: 0 }` with HTTP 200 instead of 403 (per umbrella §9 —
+   *     prevents sidebar fetch noise; the sidebar entries are also hidden
+   *     by `onlyLaoIds` on the FE).
+   *   - §2 `workStatus = approved` still applies (delegated to
+   *     `WorkHistoryLookupService.assertWorkStatusApproved` via
+   *     `getCurrent`).
+   *
+   * Compliance:
+   *   - §17.2 advisory-only — output MUST NOT gate any workflow.
+   *   - §17.3 audit separation — this method is READ-ONLY. DO NOT add any
+   *     `TrackingStatus` write here under any circumstance.
+   *
+   * Implementation: ONE SQL round-trip using Postgres `COUNT(*) FILTER
+   * (WHERE …)` aggregation. Reuses the same ownership predicate as
+   * `findMine` (`createdBy.id = :workHistoryId` + `spg.deleted_at IS NULL`
+   * + `is_latest = true`) so count and list cannot drift.
+   */
+  async findMineCounts(
+    userId: string,
+  ): Promise<{
+    ready: number;
+    verify: number;
+    edit: number;
+    pullBack: number;
+  }> {
+    try {
+      const workHistory = await this.workHistoryLookup.getCurrent(
+        this.dataSource.manager,
+        userId,
+      );
+      // §2 workStatus gate. Mirrors `findMine`. Throws 401 on non-approved.
+      this.workHistoryLookup.assertWorkStatusApproved(workHistory);
+
+      // §1 classification gate — LAO / malformed callers get zeros, NOT
+      // 403. This is the deliberate divergence from `findMine`: the
+      // sidebar fetches this on every layout render and a 403 would
+      // surface as a console error noise loop for LAO users who can
+      // see the sidebar entries by other roles' mis-mounting.
+      const amphoeId = workHistory.amphoe?.id;
+      const laoId = workHistory.localAdministrativeOrganization?.id;
+      const isAgency = amphoeId === '3001' && laoId === '3001027';
+      if (!isAgency) {
+        return { ready: 0, verify: 0, edit: 0, pullBack: 0 };
+      }
+
+      // ONE round-trip — Postgres `COUNT(*) FILTER (WHERE …)` aggregation.
+      // The JOIN topology mirrors `findMine` / `buildBaseSpgListQuery`
+      // exactly (same `is_latest = true` filter, same soft-delete
+      // exclusion, same ownership predicate) so badge count and page
+      // list cannot drift (§17.2 advisory parity).
+      const row = await this.supplementProjectGroupRepo
+        .createQueryBuilder('spg')
+        .innerJoin('spg.createdBy', 'createdBy')
+        .innerJoin(
+          'spg.trackingStatus',
+          'latestTracking',
+          'latestTracking.isLatest = :isLatest',
+          { isLatest: true },
+        )
+        .innerJoin('latestTracking.statusId', 'latestStatus')
+        .where('createdBy.id = :workHistoryId', {
+          workHistoryId: workHistory.id,
+        })
+        .andWhere('spg.deleted_at IS NULL')
+        // Lowercase aliases — Postgres folds unquoted identifiers to
+        // lowercase, so we keep the SQL aliases lowercase and map to the
+        // camelCase response keys explicitly below. This avoids any
+        // ambiguity between TypeORM versions / drivers.
+        .select(
+          `COUNT(*) FILTER (WHERE "latestStatus"."name" = 'Ready')`,
+          'ready_count',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE "latestStatus"."name" IN ('Pending','Verified','Pending_Approval'))`,
+          'verify_count',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE "latestStatus"."name" = 'Returned_For_Revision')`,
+          'edit_count',
+        )
+        .addSelect(
+          `COUNT(*) FILTER (WHERE "latestStatus"."name" = 'Pull_Back')`,
+          'pullback_count',
+        )
+        .getRawOne<{
+          ready_count: string | number | null;
+          verify_count: string | number | null;
+          edit_count: string | number | null;
+          pullback_count: string | number | null;
+        }>();
+
+      // `pg` driver returns COUNT as string; coerce defensively. `null`
+      // is impossible here (FILTER aggregates always return 0 on empty)
+      // but guard anyway.
+      const toInt = (v: string | number | null | undefined): number => {
+        if (v === null || v === undefined) return 0;
+        const n = typeof v === 'number' ? v : parseInt(v, 10);
+        return Number.isFinite(n) ? n : 0;
+      };
+
+      return {
+        ready: toInt(row?.ready_count),
+        verify: toInt(row?.verify_count),
+        edit: toInt(row?.edit_count),
+        pullBack: toInt(row?.pullback_count),
+      };
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
    * SUPP-1 BE-03 — Staff review queue endpoint.
    *
    * Returns SPGs whose latest `TrackingStatus.status.name` is in

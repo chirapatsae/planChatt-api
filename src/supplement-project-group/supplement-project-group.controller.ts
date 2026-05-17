@@ -87,6 +87,39 @@ export class SupplementProjectGroupController {
   }
 
   /**
+   * SUPPLEMENT_SIDEBAR_BADGES BE-OWNER-COUNTS — Owner-scoped SPG count
+   * envelope powering the 4 sidebar badges for
+   * `/project/supplement/{ready-to-send,verify,edit,pullback}`.
+   *
+   * Response shape (FROZEN):
+   *   `{ ready: number, verify: number, edit: number, pullBack: number }`
+   *
+   * Authority:
+   *   - agency-classified callers — owner-scoped counts via
+   *     `currentWorkHistory.id` (§4)
+   *   - LAO / non-agency callers — receive all zeros with HTTP 200
+   *     (defensive zero, NOT 403; mirrors the existing FE
+   *     `fallbackZero` pattern so the sidebar fetch never errors)
+   *
+   * §17.2 advisory-only — counts MUST NOT be used as a workflow gate.
+   * §17.3 audit separation — this endpoint is READ-ONLY; no
+   * `TrackingStatus` writes.
+   *
+   * MUST be declared above `GET /:id` to win route resolution
+   * (placed adjacent to `/me` for symmetry).
+   */
+  @Get('me/counts')
+  async findMineCounts(
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    const userId = req.user?.userId;
+    this.logger.log(
+      `Fetching SPG owner counts user=${userId}`,
+    );
+    return this.supplementProjectGroupService.findMineCounts(userId);
+  }
+
+  /**
    * SUPP-1 BE-03 — Staff review queue endpoint.
    *
    * Returns SPGs in {`Pending`, `Verified`, `Pending_Approval`} filtered

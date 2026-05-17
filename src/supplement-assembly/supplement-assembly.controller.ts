@@ -89,15 +89,31 @@ export class SupplementAssemblyController {
   // ===================================================================
 
   /**
-   * TODO(Wave B): wire to `SupplementAssemblyService.getAssemblyCounts`
-   * once the service surface exists. Returns a zero placeholder so the
-   * FE sidebar can render without a 404.
+   * Sidebar badge count for `/local-plan-book/assembly/supplement`.
+   *
+   * Returns the number of ACTIONABLE supplements (head-of-lineage,
+   * open, not booked) under the latest `DevelopmentPlan`. Mirrors the
+   * `activeSupplements` membership rule in `SupplementAssemblyPage`
+   * lines 78-97 / 167-174. Role-gated to admin + super-admin per the
+   * page guard; other roles receive `{ actionable: 0 }` (HTTP 200) per
+   * the §9 fallback-zero convention. §17.2 advisory-only — never gates
+   * any workflow transition.
+   *
+   * Contract source: `docs/tasks/SUPPLEMENT_SIDEBAR_BADGES_BE_ASSEMBLY_COUNT.md` §7.
+   *
+   * NOTE: This route is declared BEFORE any parameterized supplement
+   * route (`:supplementId/...`) so NestJS path matching cannot shadow
+   * it (see the comment block above for the placement contract).
    */
   @Get('counts')
   async getAssemblyCounts(
-    @Req() _req: Request & { user: JwtPayloadUser },
-  ): Promise<{ count: number }> {
-    return { count: 0 };
+    @Req() req: Request & { user: JwtPayloadUser },
+  ): Promise<{ actionable: number }> {
+    const role = req.user?.role;
+    this.logger.log(`Fetching supplement-assembly counts role=${role}`);
+    const actionable =
+      await this.supplementAssemblyService.getActionableCount(role);
+    return { actionable };
   }
 
   /**
@@ -438,7 +454,9 @@ export class SupplementAssemblyController {
       versionNumber,
     );
 
-    const absPath = this.fileService.getMergedFilePath(
+    // Wave 3 BE-WRITERS — service-level helper resolves the stored
+    // merged path (legacy abs OR new relative key) and validates it.
+    const absPath = await this.supplementAssemblyService.getMergedAbsolutePath(
       supplementId,
       versionNumber,
     );
@@ -490,7 +508,10 @@ export class SupplementAssemblyController {
       versionNumber,
     );
 
-    const absPath = this.fileService.getPartFilePath(
+    // Wave 3 BE-WRITERS — service-level helper recomputes the part key
+    // from (location, version, partNumber) since SPG versions don't
+    // persist per-part columns.
+    const absPath = await this.supplementAssemblyService.getPartAbsolutePath(
       supplementId,
       versionNumber,
       partNumber,

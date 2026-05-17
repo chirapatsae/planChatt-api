@@ -401,7 +401,7 @@ export class BookAssemblyController {
     // Validate read access
     await this.bookAssemblyService.getVersionByNumber(sourceType, sourceId, versionNumber, userId);
 
-    const absPath = this.bookAssemblyService.getMergedPdfPath(sourceType, sourceId, versionNumber);
+    const absPath = await this.bookAssemblyService.getMergedPdfPath(sourceType, sourceId, versionNumber);
     const filename = `official-book-v${versionNumber}.pdf`;
     const stat = fs.statSync(absPath);
     res.set({
@@ -444,7 +444,7 @@ export class BookAssemblyController {
     // Validate read access
     await this.bookAssemblyService.getVersionByNumber(sourceType, sourceId, versionNumber, userId);
 
-    const absPath = this.bookAssemblyService.getPartPdfPath(
+    const absPath = await this.bookAssemblyService.getPartPdfPath(
       sourceType,
       sourceId,
       versionNumber,

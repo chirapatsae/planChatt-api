@@ -225,6 +225,14 @@ import { OrphanCleanupModule } from './orphan-cleanup/orphan-cleanup.module';
 // `UnifiedProjectAggregator` via DI token. Dependency direction is
 // one-way; AggregationModule MUST NOT import UnifiedProjectsModule.
 import { UnifiedProjectsModule } from './unified-projects/unified-projects.module';
+// Wave 2 — Storage Layout Restructure (BE-PATH-SERVICE). `StorageModule`
+// is now `@Global` so `StoragePathService` is injectable from any module
+// without explicit import. Registered here in addition to the existing
+// per-feature imports (e.g. `UsersModule`) — `@Global` modules registered
+// twice are a no-op but the root registration is what enables global
+// availability for downstream waves (BE-WRITERS, BE-READERS,
+// BE-BOOTSTRAP, BE-MIGRATION).
+import { StorageModule } from './storage/storage.module';
 
 
 @Module({
@@ -448,6 +456,11 @@ import { UnifiedProjectsModule } from './unified-projects/unified-projects.modul
     // so every other module's TypeORM registration completes first,
     // giving the allow-listed ALTERs a settled DataSource).
     BootstrapModule,
+    // Wave 2 BE-PATH-SERVICE — `@Global` module exposing
+    // `StoragePathService` for every downstream PDF writer / reader.
+    // Order is irrelevant because the service has no module-level
+    // dependency (only ConfigService, registered globally above).
+    StorageModule,
   ],
   controllers: [AppController],
   providers: [AppService],

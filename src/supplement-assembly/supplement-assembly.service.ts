@@ -67,7 +67,10 @@ import { SupplementProjectGroup } from 'src/supplement-project-group/entities/su
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { User } from 'src/users/entities/user.entity';
 
-import { SupplementAssemblyFileService } from './supplement-assembly-file.service';
+import {
+  SupplementAssemblyFileService,
+  SupplementLocation,
+} from './supplement-assembly-file.service';
 import { SupplementPdfService } from 'src/pdf/supplement-pdf.service';
 import { BookLockService } from 'src/common/book-lock/book-lock.service';
 import { OrphanCleanupService } from 'src/orphan-cleanup/orphan-cleanup.service';
@@ -113,6 +116,73 @@ export class SupplementAssemblyService {
     private readonly orphanCleanupService: OrphanCleanupService,
     private readonly dataSource: DataSource,
   ) {}
+
+  // ===================================================================
+  // Public API — Sidebar Counts
+  // ===================================================================
+
+  /**
+   * Returns the number of ACTIONABLE supplements that should appear in
+   * the `/local-plan-book/assembly/supplement` sidebar badge.
+   *
+   * Predicate (FROZEN — must match `SupplementAssemblyPage.tsx`
+   * `activeSupplements` membership rule + the §7.2 contract in
+   * `docs/tasks/SUPPLEMENT_SIDEBAR_BADGES_BE_ASSEMBLY_COUNT.md`):
+   *   - parent `DevelopmentPlan.isLatest = true`
+   *   - `DevelopmentPlanSupplement.isOpen = true`
+   *   - `DevelopmentPlanSupplement.isBooked = false`
+   *   - `DevelopmentPlanSupplement.deletedAt IS NULL` (auto via
+   *     `@DeleteDateColumn`)
+   *   - `hasNewerRevision = false` — i.e. NO strictly-newer
+   *     non-soft-deleted sibling supplement exists under the same plan.
+   *     Replicated server-side as a `NOT EXISTS` subquery because the
+   *     `hasNewerRevision` field on the entity is a runtime-only flag
+   *     (see entity comment) populated by
+   *     `DevelopmentPlanService.decorateBookLockFlags` — there is NO DB
+   *     column. The derivation here mirrors
+   *     `BookLockService.hasStrictlyNewerSibling` for `target =
+   *     'development_plan_supplement'` (W116 — supplement timeline is
+   *     scanned in isolation; revisions do NOT lock supplements).
+   *
+   * Role gate (§4.1, §17.2):
+   *   - admin + super-admin → live count
+   *   - any other role → silent `0` (no 403; mirrors the
+   *     `fallbackZero` convention used by `useSidebarCounts`)
+   *
+   * §17.2 — pure read, advisory only; MUST NOT gate workflow.
+   */
+  async getActionableCount(callerRole: string | undefined): Promise<number> {
+    if (callerRole !== 'admin' && callerRole !== 'super-admin') {
+      return 0;
+    }
+
+    // ONE SQL round-trip. `@DeleteDateColumn` on
+    // `DevelopmentPlanSupplement.deletedAt` is auto-applied by TypeORM
+    // on the primary alias (`s`), so we do not add it explicitly.
+    // The `NOT EXISTS` subquery aliases the same table as `s2` and
+    // explicitly includes `s2.deleted_at IS NULL` because TypeORM's
+    // soft-delete filter does NOT propagate to manually-aliased
+    // subqueries inside a single QueryBuilder.
+    const count = await this.supplementRepo
+      .createQueryBuilder('s')
+      .innerJoin('s.developmentPlan', 'plan')
+      .where('plan.is_latest = :planLatest', { planLatest: true })
+      .andWhere('s.is_open = :isOpen', { isOpen: true })
+      .andWhere('s.is_booked = :isBooked', { isBooked: false })
+      .andWhere(
+        `NOT EXISTS (
+          SELECT 1
+          FROM development_plan_supplement s2
+          WHERE s2.development_plan_id = plan.id
+            AND s2.id <> s.id
+            AND s2.created_at > s.created_at
+            AND s2.deleted_at IS NULL
+        )`,
+      )
+      .getCount();
+
+    return count;
+  }
 
   // ===================================================================
   // Public API — Draft authoring
@@ -489,9 +559,12 @@ export class SupplementAssemblyService {
         supplementId,
         manager,
       );
-      this.fileService.ensureVersionFolders(supplementId, targetVersion);
+      // Wave 3 BE-WRITERS — plan-rooted file-service API requires the
+      // SupplementLocation (planId + supplementNumber + supplementId).
+      const part3Location = await this.resolveLocation(supplementId, manager);
+      this.fileService.ensureVersionFolders(part3Location, targetVersion);
       const filename = `part-3.pdf`;
-      this.fileService.writePart(supplementId, targetVersion, 3, buffer);
+      this.fileService.writePart(part3Location, targetVersion, 3, buffer);
 
       draft.part3Status = SupplementAssemblyPartUploadStatus.GENERATED;
       draft.part3Source = SupplementAssemblyPartSource.GENERATED;
@@ -549,9 +622,11 @@ export class SupplementAssemblyService {
         supplementId,
         manager,
       );
-      this.fileService.ensureVersionFolders(supplementId, targetVersion);
+      // Wave 3 BE-WRITERS — plan-rooted file-service API.
+      const reuseLocation = await this.resolveLocation(supplementId, manager);
+      this.fileService.ensureVersionFolders(reuseLocation, targetVersion);
       this.fileService.copyPartFromVersion(
-        supplementId,
+        reuseLocation,
         fromVersion,
         targetVersion,
         partNumber,
@@ -604,8 +679,14 @@ export class SupplementAssemblyService {
       );
     }
 
+    // Wave 3 BE-WRITERS — plan-rooted file-service API requires
+    // SupplementLocation. Use the default repo manager (no caller-tx).
+    const location = await this.resolveLocation(
+      supplementId,
+      this.supplementRepo.manager,
+    );
     const targetVersion = await this.computeNextVersion(supplementId);
-    return this.fileService.readPart(supplementId, targetVersion, partNumber);
+    return this.fileService.readPart(location, targetVersion, partNumber);
   }
 
   /**
@@ -627,10 +708,15 @@ export class SupplementAssemblyService {
       );
     }
 
+    // Wave 3 BE-WRITERS — plan-rooted file-service API.
+    const previewLocation = await this.resolveLocation(
+      supplementId,
+      this.supplementRepo.manager,
+    );
     const targetVersion = await this.computeNextVersion(supplementId);
-    const part1 = this.fileService.readPart(supplementId, targetVersion, 1);
-    const part2 = this.fileService.readPart(supplementId, targetVersion, 2);
-    const part3 = this.fileService.readPart(supplementId, targetVersion, 3);
+    const part1 = this.fileService.readPart(previewLocation, targetVersion, 1);
+    const part2 = this.fileService.readPart(previewLocation, targetVersion, 2);
+    const part3 = this.fileService.readPart(previewLocation, targetVersion, 3);
     return this.mergePdfBuffers([part1, part2, part3]);
   }
 
@@ -770,19 +856,27 @@ export class SupplementAssemblyService {
       const nextVersion = await this.computeNextVersion(supplementId, manager);
 
       // Step 8 — Write merged buffer to disk.
-      this.fileService.ensureVersionFolders(supplementId, nextVersion);
+      // Wave 3 BE-WRITERS — plan-rooted file-service API. We already
+      // hold `lockedSupplement.developmentPlan` from Step 2, so build
+      // the location locally without a second DB roundtrip.
+      const mergeLocation: SupplementLocation = {
+        planId: lockedSupplement.developmentPlan.id,
+        supplementId: lockedSupplement.id,
+        supplementNumber: lockedSupplement.supplementNumber,
+      };
+      this.fileService.ensureVersionFolders(mergeLocation, nextVersion);
       const part1Buffer = this.fileService.readPart(
-        supplementId,
+        mergeLocation,
         nextVersion,
         1,
       );
       const part2Buffer = this.fileService.readPart(
-        supplementId,
+        mergeLocation,
         nextVersion,
         2,
       );
       const part3Buffer = this.fileService.readPart(
-        supplementId,
+        mergeLocation,
         nextVersion,
         3,
       );
@@ -791,8 +885,10 @@ export class SupplementAssemblyService {
         part2Buffer,
         part3Buffer,
       ]);
+      // `mergedPath` is the RELATIVE KEY (umbrella §7.2) — persisted
+      // verbatim to `supplement_assembly_versions.merged_file_path`.
       const mergedPath = this.fileService.writeMerged(
-        supplementId,
+        mergeLocation,
         nextVersion,
         mergedBuffer,
       );
@@ -966,7 +1062,10 @@ export class SupplementAssemblyService {
         `ไม่พบเวอร์ชัน v${versionNumber} ของรอบเพิ่มเติมนี้`,
       );
     }
-    return this.fileService.readMerged(supplementId, versionNumber);
+    // Wave 3 BE-WRITERS/READERS — read from the stored merged path
+    // (legacy abs OR new relative key — both resolved by
+    // `StoragePathService.resolveStored`).
+    return this.fileService.readMergedFileByStored(row.mergedFilePath);
   }
 
   /**
@@ -992,7 +1091,69 @@ export class SupplementAssemblyService {
         `ไม่พบเวอร์ชัน v${versionNumber} ของรอบเพิ่มเติมนี้`,
       );
     }
-    return this.fileService.readPart(supplementId, versionNumber, partNumber);
+    // Wave 3 BE-WRITERS — part paths are recomputed from
+    // (location, version, partNumber) since SPG versions don't persist
+    // per-part columns. Resolve location via supplement→plan.
+    const downloadLocation = await this.resolveLocation(
+      supplementId,
+      this.supplementRepo.manager,
+    );
+    return this.fileService.readPart(downloadLocation, versionNumber, partNumber);
+  }
+
+  /**
+   * Wave 3 BE-WRITERS — controller helper. Returns the absolute path
+   * to the merged supplement book for streaming. Resolves the stored
+   * value (legacy abs OR new relative key — umbrella §7.3).
+   */
+  async getMergedAbsolutePath(
+    supplementId: string,
+    versionNumber: number,
+  ): Promise<string> {
+    this.fileService.validateVersionNumber(versionNumber);
+    const row = await this.versionRepo.findOne({
+      where: {
+        developmentPlanSupplementId: supplementId,
+        versionNumber,
+      },
+    });
+    if (!row) {
+      throw new NotFoundException(
+        `ไม่พบเวอร์ชัน v${versionNumber} ของรอบเพิ่มเติมนี้`,
+      );
+    }
+    return this.fileService.getAbsolutePathByStored(row.mergedFilePath);
+  }
+
+  /**
+   * Wave 3 BE-WRITERS — controller helper. Returns the absolute path
+   * to a per-part file for streaming. Since SPG versions don't persist
+   * per-part columns, the key is recomputed from
+   * (location, versionNumber, partNumber).
+   */
+  async getPartAbsolutePath(
+    supplementId: string,
+    versionNumber: number,
+    partNumber: number,
+  ): Promise<string> {
+    this.fileService.validateVersionNumber(versionNumber);
+    this.fileService.validatePartNumber(partNumber);
+    const row = await this.versionRepo.findOne({
+      where: {
+        developmentPlanSupplementId: supplementId,
+        versionNumber,
+      },
+    });
+    if (!row) {
+      throw new NotFoundException(
+        `ไม่พบเวอร์ชัน v${versionNumber} ของรอบเพิ่มเติมนี้`,
+      );
+    }
+    const location = await this.resolveLocation(
+      supplementId,
+      this.supplementRepo.manager,
+    );
+    return this.fileService.getAbsolutePartPath(location, versionNumber, partNumber);
   }
 
   // ===================================================================
@@ -1027,9 +1188,11 @@ export class SupplementAssemblyService {
         supplementId,
         manager,
       );
-      this.fileService.ensureVersionFolders(supplementId, targetVersion);
+      // Wave 3 BE-WRITERS — plan-rooted file-service API.
+      const uploadLocation = await this.resolveLocation(supplementId, manager);
+      this.fileService.ensureVersionFolders(uploadLocation, targetVersion);
       this.fileService.writePart(
-        supplementId,
+        uploadLocation,
         targetVersion,
         partNumber,
         buffer,
@@ -1092,6 +1255,29 @@ export class SupplementAssemblyService {
       );
     }
     return workHistory;
+  }
+
+  /**
+   * Wave 3 BE-WRITERS — load supplement (+ parent plan) and return the
+   * `SupplementLocation` shape required by the plan-rooted
+   * `SupplementAssemblyFileService` API (umbrella §7.1).
+   *
+   * `loadSupplementOrFail` is preserved for callers that just need the
+   * entities; this helper wraps it for callers that need the location.
+   */
+  private async resolveLocation(
+    supplementId: string,
+    manager: EntityManager,
+  ): Promise<SupplementLocation> {
+    const { supplement, plan } = await this.loadSupplementOrFail(
+      supplementId,
+      manager,
+    );
+    return {
+      planId: plan.id,
+      supplementId: supplement.id,
+      supplementNumber: supplement.supplementNumber,
+    };
   }
 
   /**

@@ -74,6 +74,11 @@ import {
 import { STATUS_NAMES } from 'src/common/status-names';
 import { ReportFormat } from 'src/development-plan/types/report-format.enum';
 
+// Wave 3 BE-READERS — storage path resolution for the new plan-rooted
+// hierarchy (umbrella §7.3). `resolveStored` accepts legacy absolute
+// paths AND new relative keys during the migration window.
+import { StoragePathService } from 'src/storage/storage-path.service';
+
 // SUPP_PRINT_BE_01b — renderer wiring. The supplement PDF is composed
 // of three doc-definitions (cover → summary → detail) merged via pdf-lib,
 // matching the pattern used by `PdfService.generateProjectsReport*`
@@ -152,34 +157,23 @@ export class SupplementPdfService {
     // multi-buffer merge. The promoted helpers are pure and stateless;
     // no behavior of the main-plan / revision flows is affected.
     private readonly pdfService: PdfService,
+    // Wave 3 BE-READERS — every reader below routes through this
+    // service to resolve legacy abs + new relative `file_path` values
+    // (umbrella §7.3).
+    private readonly storagePathService: StoragePathService,
   ) {}
 
   // ===================================================================
   // Path / version helpers
   // ===================================================================
 
-  private getDraftBaseDir(): string {
-    return path.resolve(__dirname, '../../uploads/pdf');
-  }
-
-  private async ensureDirectory(directoryPath: string): Promise<void> {
-    await fsp.mkdir(directoryPath, { recursive: true });
-  }
-
-  private buildStorageDir(args: {
-    plan: DevelopmentPlan;
-    supplement: DevelopmentPlanSupplement;
-    variant: 'draft' | 'approved';
-  }): string {
-    const planFolder = `Development-Plan-${args.plan.startYear}-${args.plan.endYear}`;
-    const supplementFolder = `supplement-r${args.supplement.supplementNumber}`;
-    return path.join(
-      this.getDraftBaseDir(),
-      planFolder,
-      supplementFolder,
-      args.variant,
-    );
-  }
+  // Wave 3 BE-WRITERS — `getDraftBaseDir` / `buildStorageDir` legacy
+  // helpers (BE-SCAN "Scattered literals" — `'uploads/pdf'` root) have
+  // been removed. The single live writer in this file
+  // (`saveSupplementDraftPdfAndMeta`) now composes its relative key
+  // via `StoragePathService.supplementVersionKey(...)`. Readers that
+  // previously dereferenced these helpers resolve stored paths via
+  // `StoragePathService.resolveStored(...)` (BE-READERS wave).
 
   private buildFileName(version: number): string {
     const now = new Date();
@@ -747,24 +741,28 @@ export class SupplementPdfService {
     projectIdsSnapshot: Array<string | number>;
     createdById: string;
   }): Promise<SupplementPdfVersionPayload> {
-    const baseDir = this.buildStorageDir({
-      plan: args.plan,
-      supplement: args.supplement,
-      variant: 'draft',
-    });
-    await this.ensureDirectory(baseDir);
-
     const version = await this.getNextSupplementDraftVersion(
       args.supplement.id,
     );
-    const fileName = this.buildFileName(version);
-    const absFilePath = path.join(baseDir, fileName);
-    await fsp.writeFile(absFilePath, args.pdfBuffer);
+
+    // Wave 3 BE-WRITERS — plan-rooted supplement-draft key
+    // (umbrella §7.1). Prefix the leaf filename with `draft-` so the
+    // sibling approved artifact (when re-introduced post-Wave SUPP
+    // STANDALONE) stays distinguishable inside the same vN/ directory.
+    const fileName = `draft-${this.buildFileName(version)}`;
+    const fileKey = this.storagePathService.supplementVersionKey({
+      planId: args.plan.id,
+      supplementNumber: args.supplement.supplementNumber,
+      supplementId: args.supplement.id,
+      versionNumber: version,
+      fileName,
+    });
+    await this.storagePathService.writeFile(fileKey, args.pdfBuffer);
 
     const row = this.pdfSupplementDraftRepo.create({
       developmentPlanSupplementId: args.supplement.id,
       version,
-      filePath: absFilePath,
+      filePath: fileKey,
       projectIdsSnapshot: args.projectIdsSnapshot,
       projectCount: args.projectIdsSnapshot.length,
       createdById: args.createdById,
@@ -818,15 +816,17 @@ export class SupplementPdfService {
       where: { id: documentId },
     });
     if (!row) return null;
+    // Wave 3 BE-READERS — resolveStored handles legacy abs + new relative.
+    const absPath = this.storagePathService.resolveStored(row.filePath);
     try {
-      await fsp.access(row.filePath);
+      await fsp.access(absPath);
     } catch {
-      this.logger.warn(`Supplement draft file missing: ${row.filePath}`);
+      this.logger.warn(`Supplement draft file missing: ${row.filePath} (resolved: ${absPath})`);
       return null;
     }
     return {
       filePath: row.filePath,
-      stream: fs.createReadStream(row.filePath),
+      stream: fs.createReadStream(absPath),
     };
   }
 
@@ -873,15 +873,17 @@ export class SupplementPdfService {
       where: { id: documentId },
     });
     if (!row) return null;
+    // Wave 3 BE-READERS — resolveStored handles legacy abs + new relative.
+    const absPath = this.storagePathService.resolveStored(row.filePath);
     try {
-      await fsp.access(row.filePath);
+      await fsp.access(absPath);
     } catch {
-      this.logger.warn(`Supplement approved file missing: ${row.filePath}`);
+      this.logger.warn(`Supplement approved file missing: ${row.filePath} (resolved: ${absPath})`);
       return null;
     }
     return {
       filePath: row.filePath,
-      stream: fs.createReadStream(row.filePath),
+      stream: fs.createReadStream(absPath),
     };
   }
 
@@ -991,15 +993,17 @@ export class SupplementPdfService {
       order: { version: 'DESC' },
     });
     if (!latest) return null;
+    // Wave 3 BE-READERS — resolveStored handles legacy abs + new relative.
+    const absPath = this.storagePathService.resolveStored(latest.filePath);
     try {
-      await fsp.access(latest.filePath);
+      await fsp.access(absPath);
     } catch {
-      this.logger.warn(`Supplement draft file missing: ${latest.filePath}`);
+      this.logger.warn(`Supplement draft file missing: ${latest.filePath} (resolved: ${absPath})`);
       return null;
     }
     return {
       filePath: latest.filePath,
-      stream: fs.createReadStream(latest.filePath),
+      stream: fs.createReadStream(absPath),
     };
   }
 
@@ -1019,15 +1023,17 @@ export class SupplementPdfService {
       where: { developmentPlanSupplementId, version },
     });
     if (!row) return null;
+    // Wave 3 BE-READERS — resolveStored handles legacy abs + new relative.
+    const absPath = this.storagePathService.resolveStored(row.filePath);
     try {
-      await fsp.access(row.filePath);
+      await fsp.access(absPath);
     } catch {
-      this.logger.warn(`Supplement draft file missing: ${row.filePath}`);
+      this.logger.warn(`Supplement draft file missing: ${row.filePath} (resolved: ${absPath})`);
       return null;
     }
     return {
       filePath: row.filePath,
-      stream: fs.createReadStream(row.filePath),
+      stream: fs.createReadStream(absPath),
     };
   }
 
@@ -1107,17 +1113,19 @@ export class SupplementPdfService {
       order: { version: 'DESC' },
     });
     if (!latest) return null;
+    // Wave 3 BE-READERS — resolveStored handles legacy abs + new relative.
+    const absPath = this.storagePathService.resolveStored(latest.filePath);
     try {
-      await fsp.access(latest.filePath);
+      await fsp.access(absPath);
     } catch {
       this.logger.warn(
-        `Supplement approved file missing: ${latest.filePath}`,
+        `Supplement approved file missing: ${latest.filePath} (resolved: ${absPath})`,
       );
       return null;
     }
     return {
       filePath: latest.filePath,
-      stream: fs.createReadStream(latest.filePath),
+      stream: fs.createReadStream(absPath),
     };
   }
 
@@ -1135,15 +1143,17 @@ export class SupplementPdfService {
       where: { developmentPlanSupplementId, version },
     });
     if (!row) return null;
+    // Wave 3 BE-READERS — resolveStored handles legacy abs + new relative.
+    const absPath = this.storagePathService.resolveStored(row.filePath);
     try {
-      await fsp.access(row.filePath);
+      await fsp.access(absPath);
     } catch {
-      this.logger.warn(`Supplement approved file missing: ${row.filePath}`);
+      this.logger.warn(`Supplement approved file missing: ${row.filePath} (resolved: ${absPath})`);
       return null;
     }
     return {
       filePath: row.filePath,
-      stream: fs.createReadStream(row.filePath),
+      stream: fs.createReadStream(absPath),
     };
   }
 
