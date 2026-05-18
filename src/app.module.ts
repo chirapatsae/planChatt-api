@@ -258,14 +258,16 @@ import { ProvinceStrategy } from './province-strategy/entities/province-strategy
 // by downstream Wave 3 (BE-04/05/06) under `/v1/strategic-graph/...`;
 // this wave is entity + module wiring only.
 import { StrategicMappingModule } from './strategic-mapping/strategic-mapping.module';
-import { SdgNationalStrategy } from './strategic-mapping/entities/sdg-national-strategy.entity';
+// CHAIN-CLEANUP 2026-05-18 — schema narrowed to strict NS→MS→SDG↔PS chain.
+// Dropped: SdgNationalStrategy, ProvinceStrategyNationalStrategy,
+// MilestoneProvinceStrategy. Row backup at
+// backups/strategic_cross_links_2026-05-18.sql.
 import { MilestoneSdg } from './strategic-mapping/entities/milestone-sdg.entity';
 import { ProvinceStrategySdg } from './strategic-mapping/entities/province-strategy-sdg.entity';
-import { ProvinceStrategyNationalStrategy } from './strategic-mapping/entities/province-strategy-national-strategy.entity';
-import { PlanSdg } from './strategic-mapping/entities/plan-sdg.entity';
-import { PlanNationalStrategy } from './strategic-mapping/entities/plan-national-strategy.entity';
-import { PlanMilestone } from './strategic-mapping/entities/plan-milestone.entity';
-import { PlanProvinceStrategy } from './strategic-mapping/entities/plan-province-strategy.entity';
+// CLEANUP 2026-05-18: removed PlanSdg / PlanNationalStrategy /
+// PlanMilestone / PlanProvinceStrategy — orphan plan-mapping
+// junctions (4 tables, all 0 rows, no UI consumer).
+import { NationalStrategyMilestone } from './strategic-mapping/entities/national-strategy-milestone.entity';
 
 
 @Module({
@@ -393,19 +395,13 @@ import { PlanProvinceStrategy } from './strategic-mapping/entities/plan-province
         Sdg,
         Milestone,
         ProvinceStrategy,
-        // Strategic Graph BE-03 — DB-02 inter-master junctions (4)
-        // and DB-03 plan-mapping junctions (4). Owned by
-        // `StrategicMappingModule` via `forFeature`; root
-        // registration here is mandatory or TypeORM throws
+        // Strategic Graph — chain junctions (NS→MS→SDG↔PS). Owned by
+        // `StrategicMappingModule` via `forFeature`; root registration
+        // here is mandatory or TypeORM throws
         // `EntityMetadataNotFoundError` (Wave 41 footgun).
-        SdgNationalStrategy,
+        NationalStrategyMilestone,
         MilestoneSdg,
         ProvinceStrategySdg,
-        ProvinceStrategyNationalStrategy,
-        PlanSdg,
-        PlanNationalStrategy,
-        PlanMilestone,
-        PlanProvinceStrategy,
       ],
       synchronize: true,
       extra: {

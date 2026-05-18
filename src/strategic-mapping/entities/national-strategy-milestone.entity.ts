@@ -8,36 +8,33 @@ import {
   Unique,
   UpdateDateColumn,
 } from 'typeorm';
-import { Sdg } from 'src/sdg/entities/sdg.entity';
 import { NationalStrategy } from 'src/national-strategy/entities/national-strategy.entity';
+import { Milestone } from 'src/milestone/entities/milestone.entity';
 import { User } from 'src/users/entities/user.entity';
 
 /**
- * SdgNationalStrategy — Strategic Graph inter-master junction (SDG ↔ National Strategy).
+ * NationalStrategyMilestone — Strategic Graph inter-master junction
+ * (National Strategy ↔ Milestone).
  *
- * Mirrors the DB-02 table `sdg_national_strategy` created by
- * `1779130000000-StrategicGraphJunctions.ts`. Both FKs use ON DELETE
- * RESTRICT (the master row cannot vanish out from under a live mapping).
- * `updated_by` is a soft-tracking audit column (ON DELETE SET NULL) and
- * pairs with `updated_at` for replace-mode audit per the umbrella locked
- * decisions.
+ * Mirrors the table `national_strategy_milestone` created by
+ * `1779150000000-AddStrategicGraphChainJunctions.ts`. Both master FKs use
+ * ON DELETE RESTRICT (the master row cannot vanish out from under a live
+ * mapping). `updated_by` is a soft-tracking audit column (ON DELETE
+ * SET NULL) and pairs with `updated_at` for replace-mode audit per the
+ * STRATEGIC_GRAPH_CHAIN umbrella locked decisions.
  *
  * This is config metadata — NO §12 TrackingStatus interaction.
  */
-@Entity('sdg_national_strategy')
-@Unique('UQ_sdg_national_strategy_pair', ['sdgId', 'nationalStrategyId'])
-@Index(['sdgId'])
+@Entity('national_strategy_milestone')
+@Unique('UQ_national_strategy_milestone_pair', [
+  'nationalStrategyId',
+  'milestoneId',
+])
 @Index(['nationalStrategyId'])
-export class SdgNationalStrategy {
+@Index(['milestoneId'])
+export class NationalStrategyMilestone {
   @PrimaryGeneratedColumn('uuid')
   id: string;
-
-  @Column({ name: 'sdg_id', type: 'uuid' })
-  sdgId: string;
-
-  @ManyToOne(() => Sdg, { onDelete: 'RESTRICT' })
-  @JoinColumn({ name: 'sdg_id' })
-  sdg: Sdg;
 
   @Column({ name: 'national_strategy_id', type: 'uuid' })
   nationalStrategyId: string;
@@ -45,6 +42,13 @@ export class SdgNationalStrategy {
   @ManyToOne(() => NationalStrategy, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'national_strategy_id' })
   nationalStrategy: NationalStrategy;
+
+  @Column({ name: 'milestone_id', type: 'uuid' })
+  milestoneId: string;
+
+  @ManyToOne(() => Milestone, { onDelete: 'RESTRICT' })
+  @JoinColumn({ name: 'milestone_id' })
+  milestone: Milestone;
 
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;

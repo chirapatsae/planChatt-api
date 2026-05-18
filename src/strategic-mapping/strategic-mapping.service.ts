@@ -20,17 +20,12 @@ import { Milestone } from 'src/milestone/entities/milestone.entity';
 import { ProvinceStrategy } from 'src/province-strategy/entities/province-strategy.entity';
 import { Plan } from 'src/plan/entities/plan.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
+import { User } from 'src/users/entities/user.entity';
 import { handleException } from 'src/util/handleException';
 
-import { SdgNationalStrategy } from './entities/sdg-national-strategy.entity';
 import { MilestoneSdg } from './entities/milestone-sdg.entity';
 import { ProvinceStrategySdg } from './entities/province-strategy-sdg.entity';
-import { ProvinceStrategyNationalStrategy } from './entities/province-strategy-national-strategy.entity';
-import { PlanSdg } from './entities/plan-sdg.entity';
-import { PlanNationalStrategy } from './entities/plan-national-strategy.entity';
-import { PlanMilestone } from './entities/plan-milestone.entity';
-import { PlanProvinceStrategy } from './entities/plan-province-strategy.entity';
-import { ReplacePlanMappingsDto } from './dto/replace-plan-mappings.dto';
+import { NationalStrategyMilestone } from './entities/national-strategy-milestone.entity';
 
 /**
  * Strategic Graph BE-04 — Inter-master mapping replace API.
@@ -39,11 +34,17 @@ import { ReplacePlanMappingsDto } from './dto/replace-plan-mappings.dto';
  *   POST /v1/strategic-graph/mapping/:type  (write — replace mode, admin)
  *   GET  /v1/strategic-graph/mapping/:type?sourceId=  (read — any auth)
  *
- * Four `:type` values are dispatched via `TYPE_DISPATCH`:
- *   - sdg-national-strategy
- *   - milestone-sdg
- *   - province-strategy-sdg
- *   - province-strategy-national-strategy
+ * Three `:type` values are dispatched via `TYPE_DISPATCH` (chain order):
+ *   - national-strategy-milestone   (chain step 1: NS → MS)
+ *   - milestone-sdg                 (chain step 2: MS → SDG)
+ *   - province-strategy-sdg         (chain step 3: SDG ↔ PS)
+ *
+ * Cleanup history (2026-05-18): the original design included three
+ * cross-link types (`sdg-national-strategy`, `province-strategy-
+ * national-strategy`, `milestone-province-strategy`) plus their
+ * junction tables. Per user direction the schema was narrowed to the
+ * strict NS→MS→SDG→PS chain. Backup of the dropped rows is preserved
+ * at `backups/strategic_cross_links_2026-05-18.sql`.
  *
  * Authority (umbrella §12 + locked decisions):
  *   - Reads: any authenticated user (controller-level JwtAuthGuard).
@@ -67,10 +68,9 @@ import { ReplacePlanMappingsDto } from './dto/replace-plan-mappings.dto';
  */
 
 type MappingTypeKey =
-  | 'sdg-national-strategy'
+  | 'national-strategy-milestone'
   | 'milestone-sdg'
-  | 'province-strategy-sdg'
-  | 'province-strategy-national-strategy';
+  | 'province-strategy-sdg';
 
 interface DispatchConfig {
   entity: EntityTarget<ObjectLiteral>;
@@ -83,14 +83,14 @@ interface DispatchConfig {
 }
 
 const TYPE_DISPATCH: Record<MappingTypeKey, DispatchConfig> = {
-  'sdg-national-strategy': {
-    entity: SdgNationalStrategy,
-    sourceCol: 'sdgId',
-    targetCol: 'nationalStrategyId',
-    sourceMaster: Sdg,
-    targetMaster: NationalStrategy,
-    sourceMasterLabel: 'Sdg',
-    targetMasterLabel: 'NationalStrategy',
+  'national-strategy-milestone': {
+    entity: NationalStrategyMilestone,
+    sourceCol: 'nationalStrategyId',
+    targetCol: 'milestoneId',
+    sourceMaster: NationalStrategy,
+    targetMaster: Milestone,
+    sourceMasterLabel: 'NationalStrategy',
+    targetMasterLabel: 'Milestone',
   },
   'milestone-sdg': {
     entity: MilestoneSdg,
@@ -110,21 +110,26 @@ const TYPE_DISPATCH: Record<MappingTypeKey, DispatchConfig> = {
     sourceMasterLabel: 'ProvinceStrategy',
     targetMasterLabel: 'Sdg',
   },
-  'province-strategy-national-strategy': {
-    entity: ProvinceStrategyNationalStrategy,
-    sourceCol: 'provinceStrategyId',
-    targetCol: 'nationalStrategyId',
-    sourceMaster: ProvinceStrategy,
-    targetMaster: NationalStrategy,
-    sourceMasterLabel: 'ProvinceStrategy',
-    targetMasterLabel: 'NationalStrategy',
-  },
 };
 
 export interface ReplaceMappingResult {
   count: number;
+  /**
+   * QA-MATRIX-01 H-1: canonical, deduplicated, sorted-ASC target id set
+   * AFTER all writes complete. The matrix FE uses this value as the
+   * server-authoritative clamp on its per-row optimistic state — without
+   * it, every successful commit visually reverts to empty. Backward
+   * compatible: existing callers may ignore the new field.
+   */
+  targetIds: string[];
   updatedAt: Date;
   updatedById: string;
+  /**
+   * QA-MATRIX-01 M-1: pre-projected `firstname lastname` for the writer
+   * so the audit footer renders a human name instead of a raw UUID.
+   * `null` when the user row cannot be resolved (deleted / missing).
+   */
+  updatedByDisplayName: string | null;
 }
 
 export interface GetMappingResult {
@@ -134,54 +139,28 @@ export interface GetMappingResult {
   updatedById: string | null;
 }
 
-export interface PlanMappingsResult {
-  planId: string;
-  sdgIds: string[];
-  nationalStrategyIds: string[];
-  milestoneIds: string[];
-  provinceStrategyIds: string[];
+export interface MatrixSnapshotRow {
+  sourceId: string;
+  targetIds: string[];
+}
+
+export interface MatrixSnapshotResult {
+  type: string;
+  rows: MatrixSnapshotRow[];
   updatedAt: Date | null;
   updatedById: string | null;
+  /**
+   * QA-MATRIX-01 M-1: pre-projected `firstname lastname` matching the
+   * row that produced `updatedAt`. `null` when the table is empty or the
+   * user row cannot be resolved.
+   */
+  updatedByDisplayName: string | null;
 }
 
-interface PlanDimensionConfig {
-  entity: EntityTarget<ObjectLiteral>;
-  targetCol: string;
-  master: EntityTarget<ObjectLiteral>;
-  masterLabel: string;
-}
-
-const PLAN_DIMENSIONS: {
-  sdg: PlanDimensionConfig;
-  nationalStrategy: PlanDimensionConfig;
-  milestone: PlanDimensionConfig;
-  provinceStrategy: PlanDimensionConfig;
-} = {
-  sdg: {
-    entity: PlanSdg,
-    targetCol: 'sdgId',
-    master: Sdg,
-    masterLabel: 'Sdg',
-  },
-  nationalStrategy: {
-    entity: PlanNationalStrategy,
-    targetCol: 'nationalStrategyId',
-    master: NationalStrategy,
-    masterLabel: 'NationalStrategy',
-  },
-  milestone: {
-    entity: PlanMilestone,
-    targetCol: 'milestoneId',
-    master: Milestone,
-    masterLabel: 'Milestone',
-  },
-  provinceStrategy: {
-    entity: PlanProvinceStrategy,
-    targetCol: 'provinceStrategyId',
-    master: ProvinceStrategy,
-    masterLabel: 'ProvinceStrategy',
-  },
-};
+// CLEANUP 2026-05-18: removed PlanMappingsResult / PlanDimensionConfig /
+// PLAN_DIMENSIONS — backed `replacePlanMappings` / `getPlanMappings` /
+// `filterPlans` (BE-05/BE-06), all dropped along with their orphan
+// plan_* junction tables.
 
 @Injectable()
 export class StrategicMappingService {
@@ -268,10 +247,24 @@ export class StrategicMappingService {
           await repo.insert(rows as any);
         }
 
+        // QA-MATRIX-01 H-1 + M-1: canonical sorted targetIds for the FE
+        // clamp, plus a pre-projected display name so the audit footer
+        // does not render a raw UUID. Single SELECT join — no N+1.
+        const canonicalTargetIds = [...dedupedTargetIds].sort();
+        const writer = await manager.getRepository(User).findOne({
+          where: { id: userId },
+          select: { id: true, firstname: true, lastname: true },
+        });
+        const updatedByDisplayName = writer
+          ? `${writer.firstname} ${writer.lastname}`
+          : null;
+
         return {
           count: dedupedTargetIds.length,
+          targetIds: canonicalTargetIds,
           updatedAt: now,
           updatedById: userId,
+          updatedByDisplayName,
         };
       });
     } catch (error) {
@@ -303,234 +296,81 @@ export class StrategicMappingService {
   }
 
   /**
-   * BE-05 — composite plan-mapping replace.
+   * BE-MATRIX-01 — full inter-master snapshot read.
    *
-   * Atomically replaces a plan's strategic alignment across the four
-   * plan-mapping dimensions (SDG / National Strategy / Milestone /
-   * Province Strategy) in a single SQL transaction. Per-dimension
-   * semantics:
-   *   - Field present in DTO → that dimension is replaced (DELETE then
-   *     INSERT).
-   *   - Field omitted → that dimension is preserved untouched.
-   *   - Field = [] → that dimension is cleared (DELETE only).
+   * Returns ALL existing (sourceId, targetIds[]) pairs for one of the four
+   * inter-master relation types in a single round-trip, shaped for the
+   * matrix view (`StrategicGraphMatrixPage`).
    *
-   * Pre-validation runs OUTSIDE the transaction (one batch query per
-   * supplied dimension) so a target-id mismatch surfaces as 400 before
-   * any write begins. Plan existence is checked first → 404.
+   * Contract (task §7.1):
+   *   - `rows[]` sorted ascending by `sourceId` (stable).
+   *   - `targetIds[]` within each row sorted ascending by `targetId`
+   *     (stable). Achieved via the find() `order` clause below.
+   *   - Sources with zero mappings are omitted (frontend treats absent
+   *     sourceIds as an empty array).
+   *   - `updatedAt` is the max `updated_at` across all rows; `updatedById`
+   *     is the `updated_by` of that latest row. Both are null when the
+   *     table is empty.
    *
-   * Authority: admin + super-admin via `assertAdminOrSuperAdmin`.
-   * §12 — config rows; NO TrackingStatus interaction.
+   * Authority: any authenticated user (controller-level JwtAuthGuard).
+   * §12: pure read; no TrackingStatus interaction. §17.2: no AI gating.
    */
-  async replacePlanMappings(
-    planId: string,
-    dto: ReplacePlanMappingsDto,
-    userId: string,
-  ): Promise<PlanMappingsResult> {
+  async getAllMappings(type: string): Promise<MatrixSnapshotResult> {
     try {
-      await this.assertAdminOrSuperAdmin(userId);
+      const config = this.resolveConfig(type);
+      const repo = this.dataSource.getRepository(config.entity);
 
-      // 1. Verify plan exists (varchar PK)
-      const plan = await this.planRepo.findOne({ where: { id: planId } });
-      if (!plan) {
-        throw new NotFoundException(`Plan with ID ${planId} not found`);
-      }
-
-      // 2. Pre-validate every supplied target id (one batch query per
-      //    provided dimension; skips dimensions that are undefined or
-      //    empty).
-      const dimensionPayload: Array<{
-        key: keyof typeof PLAN_DIMENSIONS;
-        ids: string[];
-      }> = [];
-      if (dto.sdgIds !== undefined) {
-        dimensionPayload.push({ key: 'sdg', ids: Array.from(new Set(dto.sdgIds)) });
-      }
-      if (dto.nationalStrategyIds !== undefined) {
-        dimensionPayload.push({
-          key: 'nationalStrategy',
-          ids: Array.from(new Set(dto.nationalStrategyIds)),
-        });
-      }
-      if (dto.milestoneIds !== undefined) {
-        dimensionPayload.push({
-          key: 'milestone',
-          ids: Array.from(new Set(dto.milestoneIds)),
-        });
-      }
-      if (dto.provinceStrategyIds !== undefined) {
-        dimensionPayload.push({
-          key: 'provinceStrategy',
-          ids: Array.from(new Set(dto.provinceStrategyIds)),
-        });
-      }
-
-      for (const dim of dimensionPayload) {
-        if (dim.ids.length === 0) continue;
-        const cfg = PLAN_DIMENSIONS[dim.key];
-        const masterRepo = this.dataSource.getRepository(cfg.master);
-        const found = await masterRepo
-          .createQueryBuilder('t')
-          .select('t.id', 'id')
-          .where('t.id IN (:...ids)', { ids: dim.ids })
-          .getRawMany<{ id: string }>();
-        if (found.length !== dim.ids.length) {
-          const foundIds = new Set(found.map((r) => r.id));
-          const missing = dim.ids.filter((id) => !foundIds.has(id));
-          throw new BadRequestException(
-            `One or more ${cfg.masterLabel} IDs do not exist: ${missing.join(', ')}`,
-          );
-        }
-      }
-
-      // 3. Transaction: per-dimension DELETE + INSERT
-      return await this.dataSource.transaction(async (manager) => {
-        for (const dim of dimensionPayload) {
-          const cfg = PLAN_DIMENSIONS[dim.key];
-          const repo = manager.getRepository(cfg.entity);
-          await repo.delete({ planId } as any);
-          if (dim.ids.length === 0) continue;
-          const rows = dim.ids.map((tid) => ({
-            planId,
-            [cfg.targetCol]: tid,
-            updatedById: userId,
-          }));
-          await repo.insert(rows as any);
-        }
-        return this.getPlanMappings(planId, manager);
+      // QA-MATRIX-01 M-1: eager-load `updatedBy` so the audit footer
+      // can render `firstname lastname` directly without a second
+      // /users/:id call. Single SELECT join — no N+1.
+      const all = await repo.find({
+        order: {
+          [config.sourceCol]: 'ASC',
+          [config.targetCol]: 'ASC',
+        } as any,
+        relations: ['updatedBy'],
       });
-    } catch (error) {
-      handleException(this.logger, error);
-    }
-  }
 
-  /**
-   * BE-05 — composite plan-mapping read.
-   *
-   * Returns the four plan-mapping dimensions for the given plan id. If
-   * the plan has no rows in a dimension, that array is empty (NOT an
-   * error). `updatedAt` / `updatedById` are derived from the most
-   * recently updated junction row across all four dimensions; both are
-   * `null` when the plan has zero mapping rows.
-   *
-   * Accepts an optional `EntityManager` so it can be reused inside
-   * `replacePlanMappings` post-write to return the freshly-mutated state
-   * inside the same transaction.
-   */
-  async getPlanMappings(
-    planId: string,
-    manager?: EntityManager,
-  ): Promise<PlanMappingsResult> {
-    try {
-      const repoLike = manager ?? this.dataSource.manager;
-
-      const [sdgRows, nsRows, mileRows, psRows] = await Promise.all([
-        repoLike.getRepository(PlanSdg).find({ where: { planId } }),
-        repoLike
-          .getRepository(PlanNationalStrategy)
-          .find({ where: { planId } }),
-        repoLike.getRepository(PlanMilestone).find({ where: { planId } }),
-        repoLike
-          .getRepository(PlanProvinceStrategy)
-          .find({ where: { planId } }),
-      ]);
-
-      const allRows: Array<{ updatedAt: Date; updatedById: string | null }> = [
-        ...sdgRows.map((r) => ({
-          updatedAt: r.updatedAt,
-          updatedById: r.updatedById,
-        })),
-        ...nsRows.map((r) => ({
-          updatedAt: r.updatedAt,
-          updatedById: r.updatedById,
-        })),
-        ...mileRows.map((r) => ({
-          updatedAt: r.updatedAt,
-          updatedById: r.updatedById,
-        })),
-        ...psRows.map((r) => ({
-          updatedAt: r.updatedAt,
-          updatedById: r.updatedById,
-        })),
-      ];
-
-      let updatedAt: Date | null = null;
-      let updatedById: string | null = null;
-      for (const r of allRows) {
-        if (!updatedAt || (r.updatedAt && r.updatedAt > updatedAt)) {
-          updatedAt = r.updatedAt;
-          updatedById = r.updatedById;
+      const bySource = new Map<string, string[]>();
+      let latestAt: Date | null = null;
+      let latestById: string | null = null;
+      let latestByDisplayName: string | null = null;
+      for (const r of all as any[]) {
+        const sid = r[config.sourceCol] as string;
+        const tid = r[config.targetCol] as string;
+        if (!bySource.has(sid)) bySource.set(sid, []);
+        bySource.get(sid)!.push(tid);
+        const rUpdatedAt = r.updatedAt as Date | undefined;
+        if (rUpdatedAt && (!latestAt || rUpdatedAt > latestAt)) {
+          latestAt = rUpdatedAt;
+          latestById = (r.updatedById as string | null) ?? null;
+          const writer = r.updatedBy as
+            | { firstname?: string; lastname?: string }
+            | null
+            | undefined;
+          latestByDisplayName =
+            writer && writer.firstname != null && writer.lastname != null
+              ? `${writer.firstname} ${writer.lastname}`
+              : null;
         }
       }
+
+      const rows: MatrixSnapshotRow[] = Array.from(bySource.entries())
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([sourceId, targetIds]) => ({ sourceId, targetIds }));
 
       return {
-        planId,
-        sdgIds: sdgRows.map((r) => r.sdgId),
-        nationalStrategyIds: nsRows.map((r) => r.nationalStrategyId),
-        milestoneIds: mileRows.map((r) => r.milestoneId),
-        provinceStrategyIds: psRows.map((r) => r.provinceStrategyId),
-        updatedAt,
-        updatedById,
+        type,
+        rows,
+        updatedAt: latestAt,
+        updatedById: latestById,
+        updatedByDisplayName: latestByDisplayName,
       };
     } catch (error) {
       handleException(this.logger, error);
     }
   }
 
-  /**
-   * BE-06 — multi-dimension plan filter.
-   *
-   * Returns plans satisfying ALL non-empty filter dimensions (AND across
-   * dimensions). Within a single dimension, the supplied id list is OR'd
-   * (IN). Dimensions absent or empty are NOT filtered.
-   *
-   * Strategy: EXISTS subqueries — preferred over multi-INNER-JOIN to
-   * avoid row multiplication when a plan matches multiple ids inside a
-   * dimension. Per-dimension `(plan_id, *_id)` indexes (DB-02/DB-03)
-   * make each subquery a single-row probe.
-   *
-   * Authority: any authenticated user (read endpoint). §12 — no
-   * TrackingStatus interaction. §17.2 — no AI gating.
-   */
-  async filterPlans(filters: {
-    sdgIds?: string[];
-    nationalStrategyIds?: string[];
-    milestoneIds?: string[];
-    provinceStrategyIds?: string[];
-  }): Promise<Plan[]> {
-    try {
-      const qb = this.planRepo.createQueryBuilder('plan');
-
-      if (filters.sdgIds?.length) {
-        qb.andWhere(
-          `EXISTS (SELECT 1 FROM plan_sdg ps WHERE ps.plan_id = plan.id AND ps.sdg_id IN (:...sdgIds))`,
-          { sdgIds: filters.sdgIds },
-        );
-      }
-      if (filters.nationalStrategyIds?.length) {
-        qb.andWhere(
-          `EXISTS (SELECT 1 FROM plan_national_strategy pns WHERE pns.plan_id = plan.id AND pns.national_strategy_id IN (:...nsIds))`,
-          { nsIds: filters.nationalStrategyIds },
-        );
-      }
-      if (filters.milestoneIds?.length) {
-        qb.andWhere(
-          `EXISTS (SELECT 1 FROM plan_milestone pm WHERE pm.plan_id = plan.id AND pm.milestone_id IN (:...msIds))`,
-          { msIds: filters.milestoneIds },
-        );
-      }
-      if (filters.provinceStrategyIds?.length) {
-        qb.andWhere(
-          `EXISTS (SELECT 1 FROM plan_province_strategy pps WHERE pps.plan_id = plan.id AND pps.province_strategy_id IN (:...psIds))`,
-          { psIds: filters.provinceStrategyIds },
-        );
-      }
-
-      qb.orderBy('plan.id', 'ASC');
-      return await qb.getMany();
-    } catch (error) {
-      handleException(this.logger, error);
-    }
-  }
 
   /**
    * Authority gate mirrors `SdgService.assertAdminOrSuperAdmin`. Required

@@ -1,14 +1,18 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { SdgNationalStrategy } from './entities/sdg-national-strategy.entity';
+// CHAIN-CLEANUP 2026-05-18: schema narrowed to strict
+// NS→MS→SDG→PS chain. Dropped entities:
+//   - SdgNationalStrategy (table sdg_national_strategy)
+//   - ProvinceStrategyNationalStrategy (table province_strategy_national_strategy)
+//   - MilestoneProvinceStrategy (table milestone_province_strategy)
+// Row backup: backups/strategic_cross_links_2026-05-18.sql.
 import { MilestoneSdg } from './entities/milestone-sdg.entity';
 import { ProvinceStrategySdg } from './entities/province-strategy-sdg.entity';
-import { ProvinceStrategyNationalStrategy } from './entities/province-strategy-national-strategy.entity';
-import { PlanSdg } from './entities/plan-sdg.entity';
-import { PlanNationalStrategy } from './entities/plan-national-strategy.entity';
-import { PlanMilestone } from './entities/plan-milestone.entity';
-import { PlanProvinceStrategy } from './entities/plan-province-strategy.entity';
+// CLEANUP 2026-05-18: dropped 4 orphan plan-mapping entities
+// (PlanSdg / PlanNationalStrategy / PlanMilestone / PlanProvinceStrategy)
+// plus their tables — all 0 rows, no UI consumer.
+import { NationalStrategyMilestone } from './entities/national-strategy-milestone.entity';
 
 // BE-04 — master repos for source/target existence validation in the
 // inter-master replace flow. Each is also registered at the root
@@ -45,15 +49,10 @@ import { StrategicMappingController } from './strategic-mapping.controller';
 @Module({
   imports: [
     TypeOrmModule.forFeature([
-      // BE-03 junction entities (8)
-      SdgNationalStrategy,
+      // Strategic chain junctions (3) — NS→MS→SDG↔PS
+      NationalStrategyMilestone,
       MilestoneSdg,
       ProvinceStrategySdg,
-      ProvinceStrategyNationalStrategy,
-      PlanSdg,
-      PlanNationalStrategy,
-      PlanMilestone,
-      PlanProvinceStrategy,
       // BE-04 — master repos for source/target existence validation
       Sdg,
       NationalStrategy,
