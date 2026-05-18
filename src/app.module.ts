@@ -233,6 +233,39 @@ import { UnifiedProjectsModule } from './unified-projects/unified-projects.modul
 // availability for downstream waves (BE-WRITERS, BE-READERS,
 // BE-BOOTSTRAP, BE-MIGRATION).
 import { StorageModule } from './storage/storage.module';
+// Strategic Graph BE-01 — four master vocabulary modules
+// (`NationalStrategy`, `Sdg`, `Milestone`, `ProvinceStrategy`). Each
+// entity MUST be listed in BOTH `TypeOrmModule.forRoot({ entities })`
+// AND `imports: [...]` below or the boot fails with
+// `EntityMetadataNotFoundError` (Wave 41 footgun; umbrella §8.1).
+// Routes are namespaced under `/v1/strategic-graph/...` (user-locked
+// 2026-05-18). Reads are open to any authenticated user; writes are
+// admin + super-admin only (gated inside each service via
+// `assertAdminOrSuperAdmin`, mirroring `DevelopmentIssueService`).
+import { NationalStrategyModule } from './national-strategy/national-strategy.module';
+import { NationalStrategy } from './national-strategy/entities/national-strategy.entity';
+import { SdgModule } from './sdg/sdg.module';
+import { Sdg } from './sdg/entities/sdg.entity';
+import { MilestoneModule } from './milestone/milestone.module';
+import { Milestone } from './milestone/entities/milestone.entity';
+import { ProvinceStrategyModule } from './province-strategy/province-strategy.module';
+import { ProvinceStrategy } from './province-strategy/entities/province-strategy.entity';
+// Strategic Graph BE-03 — eight junction entities + consolidating
+// module (DB-02 inter-master + DB-03 plan-mapping tables). Same
+// Wave 41 footgun as BE-01 above: every `@Entity` must be listed in
+// BOTH `TypeOrmModule.forRoot({ entities: [...] })` AND `imports: [...]`
+// or boot fails with `EntityMetadataNotFoundError`. Routes are mounted
+// by downstream Wave 3 (BE-04/05/06) under `/v1/strategic-graph/...`;
+// this wave is entity + module wiring only.
+import { StrategicMappingModule } from './strategic-mapping/strategic-mapping.module';
+import { SdgNationalStrategy } from './strategic-mapping/entities/sdg-national-strategy.entity';
+import { MilestoneSdg } from './strategic-mapping/entities/milestone-sdg.entity';
+import { ProvinceStrategySdg } from './strategic-mapping/entities/province-strategy-sdg.entity';
+import { ProvinceStrategyNationalStrategy } from './strategic-mapping/entities/province-strategy-national-strategy.entity';
+import { PlanSdg } from './strategic-mapping/entities/plan-sdg.entity';
+import { PlanNationalStrategy } from './strategic-mapping/entities/plan-national-strategy.entity';
+import { PlanMilestone } from './strategic-mapping/entities/plan-milestone.entity';
+import { PlanProvinceStrategy } from './strategic-mapping/entities/plan-province-strategy.entity';
 
 
 @Module({
@@ -352,6 +385,27 @@ import { StorageModule } from './storage/storage.module';
         // project / plan / tracking / users tables — §17.3).
         SystemUsageDailyRollup,
         StatsAccessLog,
+        // Strategic Graph BE-01 — four master vocabulary entities.
+        // Owned by their feature modules via `forFeature`; root
+        // registration here is mandatory or TypeORM throws
+        // `EntityMetadataNotFoundError` (Wave 41 footgun; umbrella §8.1).
+        NationalStrategy,
+        Sdg,
+        Milestone,
+        ProvinceStrategy,
+        // Strategic Graph BE-03 — DB-02 inter-master junctions (4)
+        // and DB-03 plan-mapping junctions (4). Owned by
+        // `StrategicMappingModule` via `forFeature`; root
+        // registration here is mandatory or TypeORM throws
+        // `EntityMetadataNotFoundError` (Wave 41 footgun).
+        SdgNationalStrategy,
+        MilestoneSdg,
+        ProvinceStrategySdg,
+        ProvinceStrategyNationalStrategy,
+        PlanSdg,
+        PlanNationalStrategy,
+        PlanMilestone,
+        PlanProvinceStrategy,
       ],
       synchronize: true,
       extra: {
@@ -463,6 +517,18 @@ import { StorageModule } from './storage/storage.module';
     // Order is irrelevant because the service has no module-level
     // dependency (only ConfigService, registered globally above).
     StorageModule,
+    // Strategic Graph BE-01 — four master vocabulary modules. Order
+    // irrelevant; no cross-module dependencies. Routes namespaced
+    // under `/v1/strategic-graph/...`. DB-02 / DB-03 will add the
+    // junction tables that reference these masters via FK.
+    NationalStrategyModule,
+    SdgModule,
+    MilestoneModule,
+    ProvinceStrategyModule,
+    // Strategic Graph BE-03 — junction entities module. Order is
+    // irrelevant; no cross-module runtime dependency. Wave 3
+    // (BE-04/05/06) will mount the service + controller routes.
+    StrategicMappingModule,
   ],
   controllers: [AppController],
   providers: [AppService],
