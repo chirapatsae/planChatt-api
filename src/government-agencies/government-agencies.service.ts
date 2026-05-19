@@ -58,9 +58,23 @@ export class GovernmentAgenciesService {
     updateGovernmentAgencyDto: UpdateGovernmentAgencyDto,
   ) {
     try {
+      // The DB column `government_agencies.id` is `integer`, but the
+      // entity declares it as `string` (legacy type lie). `preload({ id })`
+      // uses a strict shape comparison and the string `'1'` does not
+      // match the integer primary key — preload returns undefined and
+      // we end up with "not found" on existing rows. Coerce to number
+      // here so preload finds the row; `findOne` works without this
+      // coercion only because pg driver does implicit cast at the
+      // parameter-binding layer.
+      const numericId = Number(id);
+      if (!Number.isFinite(numericId)) {
+        throw new NotFoundException(
+          `Government Agency with ID ${id} not found`,
+        );
+      }
       const governmentAgencyToUpdate =
         await this.governmentAgencyRepository.preload({
-          id,
+          id: numericId as unknown as string,
           ...updateGovernmentAgencyDto,
         });
 

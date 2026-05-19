@@ -258,6 +258,8 @@ import { ProvinceStrategy } from './province-strategy/entities/province-strategy
 // by downstream Wave 3 (BE-04/05/06) under `/v1/strategic-graph/...`;
 // this wave is entity + module wiring only.
 import { StrategicMappingModule } from './strategic-mapping/strategic-mapping.module';
+import { ProjectAlignmentMappingModule } from './project-alignment-mapping/project-alignment-mapping.module';
+import { ProjectAlignmentMapping } from './project-alignment-mapping/entities/project-alignment-mapping.entity';
 // CHAIN-CLEANUP 2026-05-18 — schema narrowed to strict NS→MS→SDG↔PS chain.
 // Dropped: SdgNationalStrategy, ProvinceStrategyNationalStrategy,
 // MilestoneProvinceStrategy. Row backup at
@@ -402,6 +404,9 @@ import { NationalStrategyMilestone } from './strategic-mapping/entities/national
         NationalStrategyMilestone,
         MilestoneSdg,
         ProvinceStrategySdg,
+        // Project alignment triple-keyed bridge. Owned by
+        // `ProjectAlignmentMappingModule`; same Wave 41 dual-reg rule.
+        ProjectAlignmentMapping,
       ],
       synchronize: true,
       extra: {
@@ -525,6 +530,7 @@ import { NationalStrategyMilestone } from './strategic-mapping/entities/national
     // irrelevant; no cross-module runtime dependency. Wave 3
     // (BE-04/05/06) will mount the service + controller routes.
     StrategicMappingModule,
+    ProjectAlignmentMappingModule,
   ],
   controllers: [AppController],
   providers: [AppService],

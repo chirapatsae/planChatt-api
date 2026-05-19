@@ -29,7 +29,7 @@ export class TacticService {
   async create(dto: CreateTacticDto, userId: string): Promise<Tactic> {
     try {
       const workHistory = await this.workHistoryRepository.findOne({
-        where: { id: userId },
+        where: { user: { id: userId }, isCurrent: true },
       });
       if (!workHistory) {
         throw new NotFoundException('Invalid user. Work history not found.');
@@ -108,7 +108,7 @@ export class TacticService {
   async softRemove(id: string, userId: string): Promise<{ message: string }> {
     try {
       const workHistory = await this.workHistoryRepository.findOne({
-        where: { id: userId },
+        where: { user: { id: userId }, isCurrent: true },
       });
       if (!workHistory) {
         throw new NotFoundException('Invalid user. Work history not found.');

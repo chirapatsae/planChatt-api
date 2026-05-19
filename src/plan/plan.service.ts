@@ -57,8 +57,11 @@ export class PlanService {
 
   async create(dto: CreatePlanDto, userId: string): Promise<Plan> {
     try {
+      // userId is the JWT subject (= users.id). work_history is owned
+      // by a user; the CURRENT row (isCurrent=true) is the operator's
+      // organisational context per CLAUDE.md §1.
       const workHistory = await this.workHistoryRepository.findOne({
-        where: { id: userId },
+        where: { user: { id: userId }, isCurrent: true },
       });
       if (!workHistory) {
         throw new NotFoundException('Invalid user. Work history not found.');
@@ -101,7 +104,7 @@ export class PlanService {
   async softRemove(id: string, userId: string): Promise<{ message: string }> {
     try {
       const workHistory = await this.workHistoryRepository.findOne({
-        where: { id: userId },
+        where: { user: { id: userId }, isCurrent: true },
       });
       if (!workHistory) {
         throw new NotFoundException('Invalid user. Work history not found.');

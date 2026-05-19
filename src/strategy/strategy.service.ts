@@ -28,7 +28,7 @@ export class StrategyService {
   async create(dto: CreateStrategyDto, userId: string): Promise<Strategy> {
     try {
       const workHistory = await this.workHistoryRepository.findOne({
-        where: { id: userId },
+        where: { user: { id: userId }, isCurrent: true },
       });
       if (!workHistory) {
         throw new UnauthorizedException(
@@ -112,7 +112,7 @@ export class StrategyService {
   async softRemove(id: string, userId: string): Promise<{ message: string }> {
     try {
       const workHistory = await this.workHistoryRepository.findOne({
-        where: { id: userId },
+        where: { user: { id: userId }, isCurrent: true },
       });
       if (!workHistory) {
         throw new UnauthorizedException(
