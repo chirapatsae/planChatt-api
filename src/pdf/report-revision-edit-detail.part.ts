@@ -1,4 +1,10 @@
 import type { TDocumentDefinitions } from 'pdfmake/interfaces';
+// BE-REV-01 — STRATEGY_BASED external alignment block (4 rows) injected
+// below the Strategy/Tactic/Plan stack and above the column headers.
+// Shared with main-plan renderer (BE-MAIN-01); revision/change PDFs
+// reuse the identical row builder. See PDF_EXTERNAL_ALIGNMENT_BE_REV.md.
+import { buildExternalAlignmentRows } from './report-external-alignment.part';
+import type { AlignmentRow } from 'src/project-alignment-mapping/types/alignment.types';
 
 // Helper function เพื่อตรวจสอบว่าค่ามีการเปลี่ยนแปลงหรือไม่
 const hasChanged = (oldValue: any, newValue: any): boolean => {
@@ -156,17 +162,22 @@ export const createRevisionEditGroupCoverPageDocDefinition = (
 
 // สร้าง detail page สำหรับแต่ละ group (มี header "แบบ ผ.02" ทุกหน้า)
 export const createRevisionEditGroupDetailDocDefinition = (
-  params: Omit<RevisionEditDetailDocParams, 'projects'> & { 
+  params: Omit<RevisionEditDetailDocParams, 'projects'> & {
     groupProjects: Array<{
       current: any;
       previous: any;
       oldAdditionDetail?: string | null;
       additionalDetail?: string | null;
-    }>; 
-    strategyName: string; 
-    tacticName: string; 
-    planName: string; 
+    }>;
+    strategyName: string;
+    /** Strategy code (e.g. STRAT001) — drives ordinal in จ. row */
+    strategyCode?: string | null;
+    tacticName: string;
+    planName: string;
     pageOffset?: number;
+    // Resolved external alignment for THIS (strategy, tactic, plan)
+    // group; `null` when the resolver returned no mapping.
+    alignment?: AlignmentRow | null;
   },
 ): TDocumentDefinitions | null => {
   const {
@@ -180,9 +191,11 @@ export const createRevisionEditGroupDetailDocDefinition = (
     newWord,
     reportType = 'default',
     strategyName,
+    strategyCode = null,
     tacticName,
     planName,
     pageOffset = 0,
+    alignment = null,
   } = params;
 
   if (groupProjects.length === 0) {
@@ -337,22 +350,6 @@ export const createRevisionEditGroupDetailDocDefinition = (
     // สร้าง header rows
     const headerRow1: any[] = [];
     const headerRow2: any[] = [];
-    
-    if (showHeader) {
-      // แถวหัวตาราง "ยุทธศาสตร์ กลยุทธ์ แผนงาน"
-      tableBody.unshift([
-        {
-          colSpan: totalColumns,
-          stack: [
-            { text: `ยุทธศาสตร์: ${strategyName}`, bold: true },
-            { text: `กลยุทธ์: ${tacticName}`, bold: true, margin: [20, 0, 0, 0] },
-            { text: `แผนงาน: ${planName}`, bold: true, margin: [40, 0, 0, 0] },
-          ],
-          border: [false, false, false, false],
-        },
-        ...Array.from({ length: totalColumns - 1 }, () => ({ text: '', border: [false, false, false, false] })),
-      ]);
-    }
 
     groupColumns.forEach(col => {
       if (col === 'budget') {
@@ -370,15 +367,45 @@ export const createRevisionEditGroupDetailDocDefinition = (
         headerRow2.push({ text: '', style: 'tableHeader2' });
       }
     });
-    
+
+    // QA-PDF-ALIGN-02 (2026-05-19) — header band order (top → bottom):
+    //   5 external alignment rows (ก. ข. ค. ง. จ.)
+    // → 1 Strategy/Tactic/Plan stack row
+    // → 2 column-header rows (headerRow1, headerRow2)
+    // = 8 rows total when showHeader=true.
     if (showHeader) {
-      tableBody.splice(1, 0, headerRow1, headerRow2);
+      const alignmentRows = buildExternalAlignmentRows(
+        alignment,
+        { code: strategyCode, name: strategyName },
+        totalColumns,
+      );
+      const stpStackRow = [
+        {
+          colSpan: totalColumns,
+          stack: [
+            { text: `ยุทธศาสตร์: ${strategyName}`, bold: true },
+            { text: `กลยุทธ์: ${tacticName}`, bold: true, margin: [20, 0, 0, 0] },
+            { text: `แผนงาน: ${planName}`, bold: true, margin: [40, 0, 0, 0] },
+          ],
+          border: [false, false, false, false],
+        },
+        ...Array.from({ length: totalColumns - 1 }, () => ({ text: '', border: [false, false, false, false] })),
+      ];
+      tableBody.unshift(
+        ...alignmentRows,
+        stpStackRow,
+        headerRow1,
+        headerRow2,
+      );
     } else {
       tableBody.unshift(headerRow1, headerRow2);
     }
 
     const columnWidths = calculateColumnWidths(groupColumns, years);
-    const headerRows = showHeader ? 3 : 2;
+    // QA-PDF-ALIGN-02 (2026-05-19): headerRows = 8 = 5 alignment + 1 STP
+    // stack + 2 column headers. showHeader=false continuation pages
+    // keep 2 (column headers only).
+    const headerRows = showHeader ? 8 : 2;
 
     return {
       table: { headerRows, widths: columnWidths, body: tableBody },

@@ -36,6 +36,11 @@ import { SupplementScopeModule } from 'src/common/supplement-scope/supplement-sc
 import { WorkHistoryModule } from 'src/work-history/work-history.module';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { RolesGuard } from 'src/auth/roles.guard';
+// BE-MAIN-01 / BE-REV-01 / BE-SUPP-01 — exports `AlignmentResolverService`
+// consumed by the STRATEGY_BASED main-plan, revision, and supplement
+// renderers to batch-resolve external alignment (NS / MS / SDG / PS) per
+// (strategy, tactic, plan) triple.
+import { ProjectAlignmentMappingModule } from 'src/project-alignment-mapping/project-alignment-mapping.module';
 
 @Module({
   imports: [
@@ -78,6 +83,10 @@ import { RolesGuard } from 'src/auth/roles.guard';
     // that resolves the caller's current WorkHistory.
     SupplementScopeModule,
     WorkHistoryModule,
+    // BE-MAIN-01 / BE-REV-01 / BE-SUPP-01 — alignment resolver for the
+    // four-row external block injected into STRATEGY_BASED main-plan,
+    // revision, and supplement PDFs.
+    ProjectAlignmentMappingModule,
   ],
   controllers: [PdfController],
   providers: [PdfService, SupplementPdfService, RolesGuard],

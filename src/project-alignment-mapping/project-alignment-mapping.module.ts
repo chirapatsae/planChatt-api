@@ -5,6 +5,7 @@ import { ProjectAlignmentMapping } from './entities/project-alignment-mapping.en
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { ProjectAlignmentMappingService } from './project-alignment-mapping.service';
 import { ProjectAlignmentMappingController } from './project-alignment-mapping.controller';
+import { AlignmentResolverService } from './alignment-resolver.service';
 
 /**
  * ProjectAlignmentMappingModule — bridge between internal LAO project
@@ -20,7 +21,11 @@ import { ProjectAlignmentMappingController } from './project-alignment-mapping.c
 @Module({
   imports: [TypeOrmModule.forFeature([ProjectAlignmentMapping, WorkHistory])],
   controllers: [ProjectAlignmentMappingController],
-  providers: [ProjectAlignmentMappingService],
-  exports: [TypeOrmModule, ProjectAlignmentMappingService],
+  providers: [ProjectAlignmentMappingService, AlignmentResolverService],
+  exports: [
+    TypeOrmModule,
+    ProjectAlignmentMappingService,
+    AlignmentResolverService,
+  ],
 })
 export class ProjectAlignmentMappingModule {}

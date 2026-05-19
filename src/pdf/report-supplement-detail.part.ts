@@ -23,6 +23,12 @@
 
 import type { TDocumentDefinitions } from 'pdfmake/interfaces';
 import type { SupplementDetailDocParams } from './report.types';
+// BE-SUPP-01 — four-row external alignment block (NS / MS / SDG / PS)
+// injected between the Strategy/Tactic/Plan stack and the column
+// headers. STRATEGY_BASED supplement only; ISSUE_BASED renderer is
+// untouched.
+import type { AlignmentRow } from 'src/project-alignment-mapping/types/alignment.types';
+import { buildExternalAlignmentRows } from './report-external-alignment.part';
 
 const calculateColumnWidths = (selectedCols: string[], years: number[]): string[] => {
   if (selectedCols.length === 0) {
@@ -186,9 +192,15 @@ export const createSupplementGroupDetailDocDefinition = (
   params: Omit<SupplementDetailDocParams, 'projects'> & {
     groupProjects: any[];
     strategyName: string;
+    /** Strategy code (e.g. STRAT001) — drives ordinal in จ. row */
+    strategyCode?: string | null;
     tacticName: string;
     planName: string;
     pageOffset?: number;
+    // Resolved external alignment for this (strategy, tactic, plan)
+    // triple. `null` renders "—" for the ก./ข./ค./ง. rows; จ. always
+    // shows the internal Strategy.
+    alignment?: AlignmentRow | null;
   },
 ): TDocumentDefinitions | null => {
   const {
@@ -202,9 +214,11 @@ export const createSupplementGroupDetailDocDefinition = (
     newWord,
     reportType = 'default',
     strategyName,
+    strategyCode = null,
     tacticName,
     planName,
     pageOffset = 0,
+    alignment = null,
   } = params;
 
   if (!groupProjects || groupProjects.length === 0) {
@@ -372,6 +386,20 @@ export const createSupplementGroupDetailDocDefinition = (
   // column headers, then one row per project. Summary rows append at end.
   const tableBody: any[] = [];
 
+  // QA-PDF-ALIGN-02 (2026-05-19) — header band: 5 external alignment
+  // rows (ก. ข. ค. ง. จ.) → 1 Strategy/Tactic/Plan stack row → 2
+  // column-header rows (appended after this block by the caller).
+  // External alignment block FIRST (above the STP stack) per
+  // source-of-truth template.
+  const alignmentRows = buildExternalAlignmentRows(
+    alignment ?? null,
+    { code: strategyCode, name: strategyName },
+    totalColumns,
+  );
+  for (const alignRow of alignmentRows) {
+    tableBody.push(alignRow);
+  }
+
   // Strategy/Tactic/Plan header row (full colspan).
   tableBody.push([
     {
@@ -459,7 +487,11 @@ export const createSupplementGroupDetailDocDefinition = (
   const columnWidths = calculateColumnWidths(groupColumns, years);
 
   content.push({
-    table: { headerRows: 3, widths: columnWidths, body: tableBody },
+    // QA-PDF-ALIGN-02 (2026-05-19): headerRows = 8 = 5 external
+    // alignment rows (ก. ข. ค. ง. จ.) + 1 Strategy/Tactic/Plan stack +
+    // 2 column-header rows. Multi-page groups need all 8 pinned so the
+    // alignment header band repeats on every page.
+    table: { headerRows: 8, widths: columnWidths, body: tableBody },
     layout: {
       hLineWidth: (i: number, node: any) => {
         if (i === 0) return 0;

@@ -79,6 +79,17 @@ import { ReportFormat } from 'src/development-plan/types/report-format.enum';
 // paths AND new relative keys during the migration window.
 import { StoragePathService } from 'src/storage/storage-path.service';
 
+// BE-SUPP-01 — external alignment block (NS / MS / SDG / PS) for the
+// STRATEGY_BASED supplement detail renderer. One `resolveMany` call per
+// PDF render; per-group rows are looked up by name-key. ISSUE_BASED
+// supplements are untouched.
+import { AlignmentResolverService } from 'src/project-alignment-mapping/alignment-resolver.service';
+import {
+  AlignmentRow,
+  AlignmentTriple,
+  buildTripleKey,
+} from 'src/project-alignment-mapping/types/alignment.types';
+
 // SUPP_PRINT_BE_01b — renderer wiring. The supplement PDF is composed
 // of three doc-definitions (cover → summary → detail) merged via pdf-lib,
 // matching the pattern used by `PdfService.generateProjectsReport*`
@@ -161,6 +172,12 @@ export class SupplementPdfService {
     // service to resolve legacy abs + new relative `file_path` values
     // (umbrella §7.3).
     private readonly storagePathService: StoragePathService,
+    // BE-SUPP-01 — batched alignment resolver. STRATEGY_BASED branch of
+    // `generateSupplementPdfBuffer` calls `resolveMany` exactly ONCE per
+    // render with the unique (strategy, tactic, plan) triples extracted
+    // from the grouped projects. Per-group renderers receive the
+    // resolved `AlignmentRow | null` via the new `alignment` param.
+    private readonly alignmentResolver: AlignmentResolverService,
   ) {}
 
   // ===================================================================
@@ -610,6 +627,41 @@ export class SupplementPdfService {
         groupedProjects.get(groupKey)!.push(project);
       }
 
+      // BE-SUPP-01 — batch external alignment lookup. Extract unique
+      // (strategyId, tacticId, planId) triples by peeking at the first
+      // project of each group, then resolve all in ONE SQL call. The
+      // grouped-projects map is keyed by name (matching the existing
+      // loop below); we keep a parallel name-key → AlignmentRow|null
+      // map so the per-group loop reads alignment by the same key it
+      // already uses for the cover/detail dispatch.
+      const nameKeyToTriple = new Map<string, AlignmentTriple | null>();
+      const triples: AlignmentTriple[] = [];
+      for (const [groupKey, projects] of groupedProjects.entries()) {
+        const head = projects?.[0];
+        const strategyId = head?.strategy?.id;
+        const tacticId = head?.tactic?.id;
+        const planId = head?.plan?.id;
+        if (!strategyId || !tacticId || !planId) {
+          nameKeyToTriple.set(groupKey, null);
+          continue;
+        }
+        const triple: AlignmentTriple = {
+          strategyId: String(strategyId),
+          tacticId: String(tacticId),
+          planId: String(planId),
+        };
+        nameKeyToTriple.set(groupKey, triple);
+        triples.push(triple);
+      }
+      const resolvedAlignment = await this.alignmentResolver.resolveMany(triples);
+      const alignmentByGroupKey = new Map<string, AlignmentRow | null>();
+      for (const [groupKey, triple] of nameKeyToTriple.entries()) {
+        alignmentByGroupKey.set(
+          groupKey,
+          triple ? resolvedAlignment.get(buildTripleKey(triple)) ?? null : null,
+        );
+      }
+
       for (const [groupKey, groupProjects] of groupedProjects.entries()) {
         const [strategyName, tacticName, planName] = groupKey.split('||');
         const coverDoc = createSupplementGroupCoverPageDocDefinition(
@@ -625,6 +677,7 @@ export class SupplementPdfService {
         const coverPdf = await PDFDocument.load(coverBuffer);
         pageOffset += coverPdf.getPageCount();
 
+        const strategyCode = groupProjects?.[0]?.strategy?.id ?? null;
         const detailDoc = createSupplementGroupDetailDocDefinition({
           developmentPlanSupplementName: supplementDisplayName,
           years,
@@ -636,9 +689,11 @@ export class SupplementPdfService {
           newWord,
           reportType: resolvedReportType,
           strategyName,
+          strategyCode,
           tacticName,
           planName,
           pageOffset,
+          alignment: alignmentByGroupKey.get(groupKey) ?? null,
         });
         if (detailDoc) {
           const detailBuffer = await this.pdfService.createPdfBuffer(

@@ -46,6 +46,17 @@ import { ReportFormat } from 'src/development-plan/types/report-format.enum';
 // --- Wave 110 W110-BE-01 — orphan-cleanup cascade ---
 import { OrphanCleanupService } from 'src/orphan-cleanup/orphan-cleanup.service';
 
+// --- BE-MAIN-01 — external alignment block for STRATEGY_BASED PDF ---
+// Resolver is invoked once per render with the full set of unique
+// (strategy, tactic, plan) triples in the book; per-group lookups read
+// the returned Map. STRATEGY_BASED branch ONLY.
+import { AlignmentResolverService } from 'src/project-alignment-mapping/alignment-resolver.service';
+import {
+  AlignmentRow,
+  AlignmentTriple,
+  buildTripleKey,
+} from 'src/project-alignment-mapping/types/alignment.types';
+
 // --- Wave 3 BE-WRITERS — Storage Layout Restructure ---
 // `StoragePathService` is the single source of truth for plan-rooted
 // storage keys (umbrella §7.1). All writers below persist relative
@@ -127,6 +138,12 @@ export class PdfService {
     // Wave 3 BE-WRITERS — every PDF writer below routes through this
     // service to compute the plan-rooted relative key (umbrella §7.1).
     private readonly storagePathService: StoragePathService,
+    // BE-MAIN-01 — main-plan STRATEGY_BASED renderer batches a single
+    // alignment lookup per render via this resolver. See the three
+    // STRATEGY branches in `generateProjectReportWithColumns`,
+    // `generateProjectReportWithPageTracking`, and
+    // `generateProjectDetailsOnly`.
+    private readonly alignmentResolver: AlignmentResolverService,
   ) {
     Wordcut.init();
   }
@@ -162,6 +179,111 @@ export class PdfService {
     const dp = await this.developmentPlanRepo.findOneBy({ isLatest: true });
     if (!dp) throw new Error('DevelopmentPlan not found');
     return dp;
+  }
+
+  // -------------------------------------------------------------------
+  // BE-MAIN-01 — STRATEGY_BASED external alignment helper.
+  //
+  // Walks the grouped-projects map keyed by `${strategyName}||${tactic
+  // Name}||${planName}` (names, not IDs) and extracts the unique
+  // (strategyId, tacticId, planId) triples by peeking at the first
+  // project of each group. The triples are batched into a single
+  // `resolveMany` call — one SQL round-trip per PDF render.
+  //
+  // Returns:
+  //   - `tripleMap`: name-key (`${strategyName}||${tacticName}||${plan
+  //     Name}`) → resolved `AlignmentRow | null`. Per-group renderers
+  //     read this with `tripleMap.get(groupKey) ?? null`.
+  //
+  // Groups whose first project lacks any of the three ids (shouldn't
+  // happen in STRATEGY_BASED but defensive) get `null`, which renders
+  // "—" for all four alignment rows.
+  // -------------------------------------------------------------------
+  private async resolveAlignmentForGroups(
+    groupedProjects: Map<string, any[]>,
+  ): Promise<Map<string, AlignmentRow | null>> {
+    const nameKeyToTriple = new Map<string, AlignmentTriple | null>();
+    const triples: AlignmentTriple[] = [];
+
+    for (const [groupKey, projects] of groupedProjects.entries()) {
+      const head = projects?.[0];
+      const strategyId = head?.strategy?.id;
+      const tacticId = head?.tactic?.id;
+      const planId = head?.plan?.id;
+      if (!strategyId || !tacticId || !planId) {
+        nameKeyToTriple.set(groupKey, null);
+        continue;
+      }
+      const triple: AlignmentTriple = {
+        strategyId: String(strategyId),
+        tacticId: String(tacticId),
+        planId: String(planId),
+      };
+      nameKeyToTriple.set(groupKey, triple);
+      triples.push(triple);
+    }
+
+    const resolved = await this.alignmentResolver.resolveMany(triples);
+
+    const out = new Map<string, AlignmentRow | null>();
+    for (const [groupKey, triple] of nameKeyToTriple.entries()) {
+      if (!triple) {
+        out.set(groupKey, null);
+        continue;
+      }
+      out.set(groupKey, resolved.get(buildTripleKey(triple)) ?? null);
+    }
+    return out;
+  }
+
+  // -------------------------------------------------------------------
+  // BE-REV-01 — resolveAlignmentForRevisionGroups: revision/change variant.
+  //
+  // The revision orchestrators group projects by Strategy/Tactic/Plan
+  // NAMES, but each value is `Array<{ current, previous, ... }>` rather
+  // than a bare project list. Pick the classification triple from
+  // `current` (the revised row); fall back to `previous` when `current`
+  // is missing (deletion-comparison case). One batched `resolveMany`
+  // call per render — no N+1.
+  // -------------------------------------------------------------------
+  private async resolveAlignmentForRevisionGroups(
+    groupedProjects: Map<string, Array<{ current: any; previous: any }>>,
+  ): Promise<Map<string, AlignmentRow | null>> {
+    const nameKeyToTriple = new Map<string, AlignmentTriple | null>();
+    const triples: AlignmentTriple[] = [];
+
+    for (const [groupKey, projects] of groupedProjects.entries()) {
+      const head = projects?.[0];
+      // Prefer current (revised) classification; fall back to previous
+      // when current is null (e.g. deletion-comparison row).
+      const source = head?.current ?? head?.previous;
+      const strategyId = source?.strategy?.id;
+      const tacticId = source?.tactic?.id;
+      const planId = source?.plan?.id;
+      if (!strategyId || !tacticId || !planId) {
+        nameKeyToTriple.set(groupKey, null);
+        continue;
+      }
+      const triple: AlignmentTriple = {
+        strategyId: String(strategyId),
+        tacticId: String(tacticId),
+        planId: String(planId),
+      };
+      nameKeyToTriple.set(groupKey, triple);
+      triples.push(triple);
+    }
+
+    const resolved = await this.alignmentResolver.resolveMany(triples);
+
+    const out = new Map<string, AlignmentRow | null>();
+    for (const [groupKey, triple] of nameKeyToTriple.entries()) {
+      if (!triple) {
+        out.set(groupKey, null);
+        continue;
+      }
+      out.set(groupKey, resolved.get(buildTripleKey(triple)) ?? null);
+    }
+    return out;
   }
 
   // Wave 3 BE-WRITERS — `getDraftBaseDir` / `getDevelopmentPlanDir`
@@ -922,6 +1044,10 @@ export class PdfService {
         strategyGroups.get(strategyName)!.push({ groupKey, projects: groupProjectsValue });
       }
 
+      // BE-MAIN-01 — single batched alignment lookup for the whole
+      // STRATEGY_BASED render pass. One round-trip; no N+1.
+      const alignmentByGroupKey = await this.resolveAlignmentForGroups(groupedProjects);
+
       for (const [strategyName, subGroups] of strategyGroups.entries()) {
         const coverPageDoc = createGroupCoverPageDocDefinition(
           strategyName, developmentPlanName, pageMargins, pageOrientation,
@@ -935,10 +1061,12 @@ export class PdfService {
         for (const group of subGroups) {
           const { groupKey, projects: groupProjectsValue } = group;
           const [, tacticName, planName] = groupKey.split('||');
+          const strategyCode = groupProjectsValue?.[0]?.strategy?.id ?? null;
           const detailDoc = createGroupDetailDocDefinition({
             developmentPlanName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
             pageMargins, pageOrientation, newWord: this.newWord.bind(this),
-            reportType, strategyName, tacticName, planName, pageOffset,
+            reportType, strategyName, strategyCode, tacticName, planName, pageOffset,
+            alignment: alignmentByGroupKey.get(groupKey) ?? null,
           });
 
           if (detailDoc) {
@@ -1077,6 +1205,10 @@ export class PdfService {
         strategyGroups.get(strategyName)!.push({ groupKey, projects: groupProjectsValue });
       }
 
+      // BE-MAIN-01 — single batched alignment lookup for the whole
+      // STRATEGY_BASED render pass. One round-trip; no N+1.
+      const alignmentByGroupKey = await this.resolveAlignmentForGroups(groupedProjects);
+
       for (const [strategyName, subGroups] of strategyGroups.entries()) {
         const coverPageDoc = createGroupCoverPageDocDefinition(
           strategyName, developmentPlanName, pageMargins, pageOrientation,
@@ -1090,12 +1222,18 @@ export class PdfService {
         for (const group of subGroups) {
           const { groupKey, projects: groupProjectsValue } = group;
           const [, tacticName, planName] = groupKey.split('||');
+          // BE-MAIN-01 — alignment is keyed by (strategy, tactic, plan)
+          // triple, so all per-project sub-renders inside this group
+          // share the same resolved row.
+          const groupAlignment = alignmentByGroupKey.get(groupKey) ?? null;
+          const groupStrategyCode = groupProjectsValue?.[0]?.strategy?.id ?? null;
 
           for (const project of groupProjectsValue) {
             const projectDetailDoc = createGroupDetailDocDefinition({
               developmentPlanName, years, groupProjects: [project], availableColumns, columnMap,
               pageMargins, pageOrientation, newWord: this.newWord.bind(this),
-              reportType, strategyName, tacticName, planName, pageOffset,
+              reportType, strategyName, strategyCode: groupStrategyCode, tacticName, planName, pageOffset,
+              alignment: groupAlignment,
             });
 
             if (projectDetailDoc) {
@@ -1198,14 +1336,20 @@ export class PdfService {
         strategyGroups.get(strategyName)!.push({ groupKey, projects: groupProjectsValue });
       }
 
+      // BE-MAIN-01 — single batched alignment lookup for the whole
+      // STRATEGY_BASED render pass. One round-trip; no N+1.
+      const alignmentByGroupKey = await this.resolveAlignmentForGroups(groupedProjects);
+
       for (const [strategyName, subGroups] of strategyGroups.entries()) {
         for (const group of subGroups) {
           const { groupKey, projects: groupProjectsValue } = group;
           const [, tacticName, planName] = groupKey.split('||');
+          const strategyCode = groupProjectsValue?.[0]?.strategy?.id ?? null;
           const detailDoc = createGroupDetailDocDefinition({
             developmentPlanName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
             pageMargins, pageOrientation, newWord: this.newWord.bind(this),
-            reportType, strategyName, tacticName, planName, pageOffset,
+            reportType, strategyName, strategyCode, tacticName, planName, pageOffset,
+            alignment: alignmentByGroupKey.get(groupKey) ?? null,
           });
 
           if (detailDoc) {
@@ -1803,6 +1947,11 @@ export class PdfService {
         pageOffset += summaryPdf.getPageCount();
       }
 
+      // BE-REV-01 — batched alignment lookup (one resolveMany per render).
+      // Keyed by the same `${strategyName}||${tacticName}||${planName}`
+      // groupKey used above; passed into each detail-doc invocation.
+      const alignmentByGroupKey = await this.resolveAlignmentForRevisionGroups(groupedProjects);
+
       for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
         const [strategyName, tacticName, planName] = groupKey.split('||');
         const coverPageDoc = createRevisionEditGroupCoverPageDocDefinition(
@@ -1814,10 +1963,12 @@ export class PdfService {
         const coverPagePdf = await PDFDocument.load(coverPageBuffer);
         pageOffset += coverPagePdf.getPageCount();
 
+        const strategyCode = (groupProjectsValue?.[0]?.current ?? groupProjectsValue?.[0]?.previous)?.strategy?.id ?? null;
         const detailDoc = createRevisionEditGroupDetailDocDefinition({
           developmentPlanRevisionName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
           pageMargins, pageOrientation, newWord: this.newWord.bind(this),
-          reportType: 'inAuthority', strategyName, tacticName, planName, pageOffset,
+          reportType: 'inAuthority', strategyName, strategyCode, tacticName, planName, pageOffset,
+          alignment: alignmentByGroupKey.get(groupKey) ?? null,
         });
 
         if (detailDoc) {
@@ -1959,13 +2110,19 @@ export class PdfService {
         groupedProjects.get(groupKey)!.push(project);
       }
 
+      // BE-REV-01 — batched alignment lookup for user-view details-only.
+      // Identical pattern to `generateRevisionEditDraftReportWithColumns`.
+      const alignmentByGroupKey = await this.resolveAlignmentForRevisionGroups(groupedProjects);
+
       for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
         const [strategyName, tacticName, planName] = groupKey.split('||');
 
+        const userStrategyCode = (groupProjectsValue?.[0]?.current ?? groupProjectsValue?.[0]?.previous)?.strategy?.id ?? null;
         const detailDoc = createRevisionEditGroupDetailDocDefinitionUser({
           developmentPlanRevisionName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
           pageMargins, pageOrientation, newWord: this.newWord.bind(this),
-          reportType: 'inAuthority', strategyName, tacticName, planName, pageOffset,
+          reportType: 'inAuthority', strategyName, strategyCode: userStrategyCode, tacticName, planName, pageOffset,
+          alignment: alignmentByGroupKey.get(groupKey) ?? null,
         });
 
         if (detailDoc) {
@@ -2276,6 +2433,11 @@ export class PdfService {
         pageOffset += summaryPdf.getPageCount();
       }
 
+      // BE-REV-01 — batched alignment lookup for the change-revision book.
+      // Same helper as the edit-revision orchestrator; revision and
+      // change share the renderer (only the source filter differs).
+      const alignmentByGroupKey = await this.resolveAlignmentForRevisionGroups(groupedProjects);
+
       for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
         const [strategyName, tacticName, planName] = groupKey.split('||');
         const coverPageDoc = createRevisionEditGroupCoverPageDocDefinition(
@@ -2287,10 +2449,12 @@ export class PdfService {
         const coverPagePdf = await PDFDocument.load(coverPageBuffer);
         pageOffset += coverPagePdf.getPageCount();
 
+        const strategyCode = (groupProjectsValue?.[0]?.current ?? groupProjectsValue?.[0]?.previous)?.strategy?.id ?? null;
         const detailDoc = createRevisionEditGroupDetailDocDefinition({
           developmentPlanRevisionName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
           pageMargins, pageOrientation, newWord: this.newWord.bind(this),
-          reportType: 'inAuthority', strategyName, tacticName, planName, pageOffset,
+          reportType: 'inAuthority', strategyName, strategyCode, tacticName, planName, pageOffset,
+          alignment: alignmentByGroupKey.get(groupKey) ?? null,
         });
 
         if (detailDoc) {
@@ -2757,6 +2921,9 @@ export class PdfService {
         pageOffset += summaryPdf.getPageCount();
       }
 
+      // BE-REV-01 — batched alignment lookup for the approved-revision book.
+      const alignmentByGroupKey = await this.resolveAlignmentForRevisionGroups(groupedProjects);
+
       for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
         const [strategyName, tacticName, planName] = groupKey.split('||');
         const coverPageDoc = createRevisionEditGroupCoverPageDocDefinition(
@@ -2768,10 +2935,12 @@ export class PdfService {
         const coverPagePdf = await PDFDocument.load(coverPageBuffer);
         pageOffset += coverPagePdf.getPageCount();
 
+        const strategyCode = (groupProjectsValue?.[0]?.current ?? groupProjectsValue?.[0]?.previous)?.strategy?.id ?? null;
         const detailDoc = createRevisionEditGroupDetailDocDefinition({
           developmentPlanRevisionName, years, groupProjects: groupProjectsValue, availableColumns, columnMap,
           pageMargins, pageOrientation, newWord: this.newWord.bind(this),
-          reportType: 'inAuthority', strategyName, tacticName, planName, pageOffset,
+          reportType: 'inAuthority', strategyName, strategyCode, tacticName, planName, pageOffset,
+          alignment: alignmentByGroupKey.get(groupKey) ?? null,
         });
 
         if (detailDoc) {
@@ -2941,6 +3110,12 @@ export class PdfService {
         pageOffset += summaryPdf.getPageCount();
       }
 
+      // BE-REV-01 — batched alignment lookup for the page-tracking
+      // approved-revision render. Per-project loop still uses the
+      // per-group alignment value (every project in a group shares the
+      // same Strategy/Tactic/Plan triple).
+      const alignmentByGroupKey = await this.resolveAlignmentForRevisionGroups(groupedProjects);
+
       for (const [groupKey, groupProjectsValue] of groupedProjects.entries()) {
         const [strategyName, tacticName, planName] = groupKey.split('||');
 
@@ -2953,13 +3128,17 @@ export class PdfService {
         const coverPagePdf = await PDFDocument.load(coverPageBuffer);
         pageOffset += coverPagePdf.getPageCount();
 
+        const groupAlignment = alignmentByGroupKey.get(groupKey) ?? null;
+
         for (const project of groupProjectsValue) {
           pageMap.set(project.current.id, pageOffset + 1);
 
+          const projectStrategyCode = (project?.current ?? project?.previous)?.strategy?.id ?? null;
           const detailDoc = createRevisionEditGroupDetailDocDefinition({
             developmentPlanRevisionName, years, groupProjects: [project], availableColumns, columnMap,
             pageMargins, pageOrientation, newWord: this.newWord.bind(this),
-            reportType: 'inAuthority', strategyName, tacticName, planName, pageOffset,
+            reportType: 'inAuthority', strategyName, strategyCode: projectStrategyCode, tacticName, planName, pageOffset,
+            alignment: groupAlignment,
           });
 
           if (detailDoc) {
@@ -2974,7 +3153,7 @@ export class PdfService {
 
     if (pdfBuffers.length === 0) throw new Error('No PDF documents could be generated');
     const mergedBuffer = await this.mergePdfBuffers(pdfBuffers);
-    
+
     return { buffer: mergedBuffer, pageMap };
   }
 

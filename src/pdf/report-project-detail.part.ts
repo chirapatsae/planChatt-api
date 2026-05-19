@@ -1,5 +1,11 @@
 import type { TDocumentDefinitions } from 'pdfmake/interfaces';
 import type { ProjectDetailDocParams } from './report.types';
+// BE-MAIN-01 — four-row external alignment block (NS / MS / SDG / PS)
+// rendered between the Strategy/Tactic/Plan stack and the column
+// headers. STRATEGY_BASED main-plan only; ISSUE_BASED renderer is
+// untouched.
+import type { AlignmentRow } from 'src/project-alignment-mapping/types/alignment.types';
+import { buildExternalAlignmentRows } from './report-external-alignment.part';
 
 const calculateColumnWidths = (selectedCols: string[], years: number[]): string[] => {
   if (selectedCols.length === 0) {
@@ -109,7 +115,22 @@ export const createGroupCoverPageDocDefinition = (
 
 // สร้าง detail page สำหรับแต่ละ group (มี header "แบบ ผ.02" ทุกหน้า)
 export const createGroupDetailDocDefinition = (
-  params: Omit<ProjectDetailDocParams, 'groupedProjects'> & { groupProjects: any[]; strategyName: string; tacticName: string; planName: string; pageOffset?: number },
+  params: Omit<ProjectDetailDocParams, 'groupedProjects'> & {
+    groupProjects: any[];
+    strategyName: string;
+    /**
+     * Strategy code (e.g. `STRAT001`). Used to render the ordinal in
+     * the จ. row of the external-alignment header block.
+     */
+    strategyCode?: string | null;
+    tacticName: string;
+    planName: string;
+    pageOffset?: number;
+    // Resolved external alignment for this (strategy, tactic, plan)
+    // triple. `null` renders "—" for the ก./ข./ค./ง. rows; the จ. row
+    // ALWAYS renders the internal Strategy regardless of alignment.
+    alignment?: AlignmentRow | null;
+  },
 ): TDocumentDefinitions | null => {
   const {
     developmentPlanName,
@@ -122,9 +143,11 @@ export const createGroupDetailDocDefinition = (
     newWord,
     reportType = 'default',
     strategyName,
+    strategyCode = null,
     tacticName,
     planName,
     pageOffset = 0, // offset สำหรับเลขหน้า (เริ่มจาก reportSummary)
+    alignment = null,
   } = params;
 
   if (groupProjects.length === 0) {
@@ -164,8 +187,21 @@ export const createGroupDetailDocDefinition = (
     const sumByYear: Record<number, number> = Object.fromEntries(years.map(year => [year, 0]));
     const countByYear: Record<number, number> = Object.fromEntries(years.map(year => [year, 0]));
 
-    // แสดงหัวตาราง "ยุทธศาสตร์ กลยุทธ์ แผนงาน" เฉพาะเมื่อ showHeader = true
+    // แสดงหัวตาราง: external-alignment ก-จ (5 rows) → Strategy/Tactic/Plan stack
     if (showHeader) {
+      // External alignment block (5 numbered rows). Renders the ก./ข./ค./ง./จ.
+      // labels with ordinal extracted from each entity code. The จ. row
+      // mirrors the internal Strategy below (redundant by design — matches
+      // the source-of-truth template).
+      const alignmentRows = buildExternalAlignmentRows(
+        alignment,
+        { code: strategyCode, name: strategyName },
+        totalColumns,
+      );
+      for (const row of alignmentRows) {
+        tableBody.push(row);
+      }
+
       tableBody.push([
         {
           colSpan: totalColumns,
@@ -370,7 +406,13 @@ export const createGroupDetailDocDefinition = (
     }
 
     const columnWidths = calculateColumnWidths(groupColumns, years);
-    const headerRows = showHeader ? 3 : 2;
+    // QA-PDF-ALIGN-02 (2026-05-19) — table opens with:
+    //   5 rows external alignment (ก. ข. ค. ง. จ. — single line each)
+    // + 1 row  Strategy/Tactic/Plan stack
+    // + 2 rows column headers (headerRow1 + headerRow2)
+    // = 8 header rows. showHeader=false continuation tables emit only
+    // the 2 column-header rows so the value stays at 2.
+    const headerRows = showHeader ? 8 : 2;
 
     return {
       table: { headerRows, widths: columnWidths, body: tableBody },
