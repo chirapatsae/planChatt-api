@@ -138,6 +138,11 @@ import { AttachmentRevisedProjectGroup } from './attachment-revised-project-grou
 import { AttachmentSupplementProjectGroupsModule } from './attachment-supplement-project-groups/attachment-supplement-project-groups.module';
 import { AttachmentSupplementProjectGroup } from './attachment-supplement-project-groups/entities/attachment-supplement-project-group.entity';
 import { BookAssemblyModule } from './book-assembly/book-assembly.module';
+// Public Archive — anonymous read access to assembled (COMPLETED)
+// development plan books. Anonymous citizens can browse + download via
+// /v1/public/plans/* routes. See `public-archive/public-archive.module.ts`
+// for the security model (no PII, COMPLETED-only versions).
+import { PublicArchiveModule } from './public-archive/public-archive.module';
 import { BookAssemblyDraft } from './book-assembly/entities/book-assembly-draft.entity';
 import { BookAssemblyVersion } from './book-assembly/entities/book-assembly-version.entity';
 import { DeprecationAuditLog } from './book-assembly/entities/deprecation-audit-log.entity';
@@ -479,6 +484,7 @@ import { NationalStrategyMilestone } from './strategic-mapping/entities/national
     AttachmentSupplementProjectGroupsModule,
     AdminDocumentAnalysisModule,
     BookAssemblyModule,
+    PublicArchiveModule,
     // Wave 110 W110-BE-01 — must be imported BEFORE the modules that
     // wire its service into their softRemove / finalize sites. Order
     // here is otherwise irrelevant because the service has no

@@ -2404,12 +2404,22 @@ export class ProjectGroupsService {
     });
 
     if (!workHistory) return countOnly ? 0 : [];
+    // 2026-05-20 — authorization failures here are 403 (ForbiddenException),
+    // NOT 401. Pre-fix this method threw `UnauthorizedException` for
+    // workStatus / role / missing-agency rejections, which produces an
+    // HTTP 401 response. The FE axios interceptor (axios.tsx:73) treats
+    // 401 + token-present as "session expired" and triggers an auto-
+    // logout. The user IS authenticated; they just lack the permission
+    // bit or have an incomplete profile (e.g. an agency user whose
+    // `governmentAgencies` link is missing — the symptom that caused
+    // this fix to be filed). 403 is the semantically correct code:
+    // "you ARE who you say you are, but you may not perform this".
     if (workHistory.workStatus.name !== 'approved')
-      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+      throw new ForbiddenException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
 
     const allowedRoles = ['user', 'staff', 'admin', 'super-admin', 'c-level'];
     if (!allowedRoles.includes(workHistory.role.name))
-      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+      throw new ForbiddenException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
 
     // Validate development plan
     if (!developmentPlanId) {
@@ -2432,13 +2442,29 @@ export class ProjectGroupsService {
       const laoId = workHistory.localAdministrativeOrganization?.id;
 
       if (!laoId) {
-        throw new UnauthorizedException('ไม่พบหน่วยงานของผู้ใช้');
+        // 2026-05-20 — soft-fail for incomplete profile.
+        //
+        // Previously this threw `ForbiddenException` (HTTP 403) which
+        // rendered the revision page as a console-error + blank list.
+        // Semantically, a user without a LAO link has ZERO projects to
+        // revise — `responsibleAgency` is derived from the creator's
+        // LAO/agency context (CLAUDE.md §5.1), so no project can be
+        // attributed to a user with no org link. Returning an empty
+        // list is functionally identical AND lets the FE render a
+        // clean "no projects" state instead of crashing.
+        //
+        // The OTHER guards above (workStatus, role) stay as 403 because
+        // those represent real permission failures, not data gaps.
+        return countOnly ? 0 : [];
       }
 
       if (laoId === '3001027') {
         const agencyId = workHistory.governmentAgencies?.id;
         if (!agencyId) {
-          throw new UnauthorizedException('ไม่พบหน่วยงานของผู้ใช้');
+          // Agency-classified user without a `governmentAgencies`
+          // link has zero qualifying projects (same §5.1 rationale).
+          // Soft-fail to empty so the UI stays usable.
+          return countOnly ? 0 : [];
         }
 
         const filterByAgency = (project: { id?: string; responsibleAgency?: { id?: string } | null }) => {
