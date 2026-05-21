@@ -28,7 +28,7 @@ import type { SupplementDetailDocParams } from './report.types';
 // headers. STRATEGY_BASED supplement only; ISSUE_BASED renderer is
 // untouched.
 import type { AlignmentRow } from 'src/project-alignment-mapping/types/alignment.types';
-import { buildExternalAlignmentRows } from './report-external-alignment.part';
+import { buildExternalAlignmentBlock } from './report-external-alignment.part';
 
 const calculateColumnWidths = (selectedCols: string[], years: number[]): string[] => {
   if (selectedCols.length === 0) {
@@ -306,7 +306,12 @@ export const createSupplementGroupDetailDocDefinition = (
           margin: [0, 2, 0, 0],
         })));
       } else {
-        const marginTop = col === 'target' || col === 'coordinates' ? 3 : 10;
+        // 2026-05-21 — `mainAgency` has 2-line header text; drop to 6pt.
+        const marginTop = col === 'target' || col === 'coordinates'
+          ? 3
+          : col === 'mainAgency'
+          ? 6
+          : 10;
         headerRow1.push({
           text: columnMap[col].text,
           rowSpan: 2,
@@ -386,28 +391,23 @@ export const createSupplementGroupDetailDocDefinition = (
   // column headers, then one row per project. Summary rows append at end.
   const tableBody: any[] = [];
 
-  // QA-PDF-ALIGN-02 (2026-05-19) — header band: 5 external alignment
-  // rows (ก. ข. ค. ง. จ.) → 1 Strategy/Tactic/Plan stack row → 2
-  // column-header rows (appended after this block by the caller).
-  // External alignment block FIRST (above the STP stack) per
-  // source-of-truth template.
-  const alignmentRows = buildExternalAlignmentRows(
-    alignment ?? null,
-    { code: strategyCode, name: strategyName },
-    totalColumns,
-  );
-  for (const alignRow of alignmentRows) {
-    tableBody.push(alignRow);
-  }
+  // QA-PDF-ALIGN-02 (2026-05-21) — header band:
+  //   [outside-table] ก-จ external alignment stack — first page only
+  // → [in-table row]  Strategy/Tactic/Plan stack
+  // → [in-table rows] 2 column-header rows
+  // The ก-จ block is emitted OUTSIDE the table (see content.push below
+  // wrapping the table in a `stack`) so pdfmake's per-page header
+  // repeat covers only STP + column headers; ก-จ appears once at the
+  // top of each group.
 
   // Strategy/Tactic/Plan header row (full colspan).
   tableBody.push([
     {
       colSpan: totalColumns,
       stack: [
-        { text: `ยุทธศาสตร์: ${strategyName}`, bold: true },
-        { text: `กลยุทธ์: ${tacticName}`, bold: true, margin: [20, 0, 0, 0] },
-        { text: `แผนงาน: ${planName}`, bold: true, margin: [40, 0, 0, 0] },
+        { text: `ยุทธศาสตร์: ${strategyName}`, bold: true, lineHeight: 1.2 },
+        { text: `กลยุทธ์: ${tacticName}`, bold: true, margin: [20, 0, 0, 0], lineHeight: 1.2 },
+        { text: `แผนงาน: ${planName}`, bold: true, margin: [40, 0, 0, 0], lineHeight: 1.2 },
       ],
       border: [false, false, false, false],
     },
@@ -487,21 +487,28 @@ export const createSupplementGroupDetailDocDefinition = (
   const columnWidths = calculateColumnWidths(groupColumns, years);
 
   content.push({
-    // QA-PDF-ALIGN-02 (2026-05-19): headerRows = 8 = 5 external
-    // alignment rows (ก. ข. ค. ง. จ.) + 1 Strategy/Tactic/Plan stack +
-    // 2 column-header rows. Multi-page groups need all 8 pinned so the
-    // alignment header band repeats on every page.
-    table: { headerRows: 8, widths: columnWidths, body: tableBody },
-    layout: {
-      hLineWidth: (i: number, node: any) => {
-        if (i === 0) return 0;
-        if (node.table.body[i]?.[0]?.stack) return 0;
-        return 0.3;
+    // 2026-05-21 — ก-จ rendered as a standalone block BEFORE the table
+    // so it appears only on the first page of each group. The table
+    // itself keeps 3 header rows (1 STP + 2 column headers) which
+    // continue to repeat on continuation pages via pdfmake `headerRows`.
+    stack: [
+      buildExternalAlignmentBlock(alignment ?? null, { code: strategyCode, name: strategyName }),
+      {
+        table: { headerRows: 3, widths: columnWidths, body: tableBody },
+        layout: {
+          hLineWidth: (i: number, node: any) => {
+            if (i === 0) return 0;
+            if (node.table.body[i]?.[0]?.stack) return 0;
+            return 0.3;
+          },
+          vLineWidth: () => 0.3,
+          hLineColor: () => '#000',
+          vLineColor: () => '#000',
+          paddingTop: (i: number, node: any) => (node.table.body[i]?.[0]?.stack ? 0 : 2),
+          paddingBottom: (i: number, node: any) => (node.table.body[i]?.[0]?.stack ? 0 : 2),
+        },
       },
-      vLineWidth: () => 0.3,
-      hLineColor: () => '#000',
-      vLineColor: () => '#000',
-    },
+    ],
   });
 
   return {

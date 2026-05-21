@@ -94,22 +94,23 @@ export interface InternalStrategyRef {
  *                   surrounding table (already accounts for budget
  *                   year-expansion by the caller)
  */
-export function buildExternalAlignmentRows(
+/**
+ * Internal helper — build the 5 alignment lines as plain strings.
+ * Shared by both `buildExternalAlignmentRows` (legacy table-row shape)
+ * and `buildExternalAlignmentBlock` (standalone content block, used to
+ * render ก-จ ONCE above the table so it does NOT repeat on
+ * continuation pages via pdfmake `headerRows`).
+ */
+function buildAlignmentLines(
   alignment: AlignmentRow | null,
   strategy: InternalStrategyRef | null,
-  totalColumns: number,
-): any[][] {
-  // Defensive: a zero-column table is degenerate.
-  if (totalColumns < 1) {
-    return [];
-  }
-
+): string[] {
   const ns = alignment?.nationalStrategy ?? null;
   const ms = alignment?.milestone ?? null;
   const sdg = alignment?.sdg ?? null;
   const ps = alignment?.provinceStrategy ?? null;
 
-  const lines: string[] = [
+  return [
     composeLine(
       'ก',
       'ยุทธศาสตร์ชาติ 20 ปี',
@@ -136,23 +137,88 @@ export function buildExternalAlignmentRows(
     `ง.ยุทธศาสตร์จังหวัดที่ ${ordinalFromCode(ps?.code ?? null)} ${(ps?.nameTh ?? '').trim() || '—'}`,
     `จ.ยุทธศาสตร์การพัฒนาของ อปท. ในเขตจังหวัดที่ ${ordinalFromCode(strategy?.code ?? null)} ${(strategy?.name ?? '').trim() || '—'}`,
   ];
+}
 
-  // Each line becomes one full-width row spanning totalColumns. Border
-  // suppressed top/bottom on inner cells to read as a flowing list
-  // rather than a grid.
-  return lines.map((text) => {
-    const row: any[] = [];
-    row.push({
-      colSpan: totalColumns,
+/**
+ * Build the ก-จ alignment block as a STANDALONE pdfmake content item
+ * (not a table row). Used by callers that want the block to appear
+ * ONCE above a table — pdfmake `headerRows` only repeats rows INSIDE
+ * the table, so emitting the block outside guarantees it shows only on
+ * the first page of each group.
+ *
+ * The returned block is a `stack` of 5 bold left-aligned lines with
+ * zero outer margin. Callers SHOULD wrap it in a pdfmake `stack` along
+ * with the table so the two share a single `pageBreak` boundary.
+ */
+export function buildExternalAlignmentBlock(
+  alignment: AlignmentRow | null,
+  strategy: InternalStrategyRef | null,
+): any {
+  const lines = buildAlignmentLines(alignment, strategy);
+  return {
+    stack: lines.map((text) => ({
       text,
-      bold: false,
+      bold: true,
       alignment: 'left',
-      margin: [4, 2, 4, 2],
-      border: [false, false, false, false],
-    });
-    for (let i = 1; i < totalColumns; i += 1) {
-      row.push({});
-    }
-    return row;
+      margin: [0, 0, 0, 0],
+      // 2026-05-21 — extra breathing room between ก-จ lines. 1.2 ≈ 20%
+      // taller than the default single-line box (was 1.3; reduced per
+      // user feedback). The STP stack inside the table uses the same
+      // 1.2 so the two header blocks share one visual rhythm.
+      lineHeight: 1.2,
+    })),
+    // Match the table's default cell paddingLeft (4pt) so ก-จ aligns
+    // with the ยุทธศาสตร์ row that lives as the first body row of the
+    // table immediately below.
+    margin: [4, 0, 4, 0],
+  };
+}
+
+export function buildExternalAlignmentRows(
+  alignment: AlignmentRow | null,
+  strategy: InternalStrategyRef | null,
+  totalColumns: number,
+): any[][] {
+  // Defensive: a zero-column table is degenerate.
+  if (totalColumns < 1) {
+    return [];
+  }
+
+  const lines = buildAlignmentLines(alignment, strategy);
+
+  // 2026-05-21 — collapsed from 5 separate table rows into ONE row
+  // containing a `stack` of 5 text items. Mirrors the structure of
+  // the immediately-following ยุทธศาสตร์/กลยุทธ์/แผนงาน block (also a
+  // single row with a 3-item stack) so the two read as a single
+  // flowing list with identical line spacing.
+  //
+  // Why this matters:
+  //   - 5 separate `<tr>`s pick up pdfmake's per-cell vertical padding
+  //     (~2pt top + 2pt bottom = 4pt between lines, on top of the
+  //     `margin: [4,2,4,2]` we used to set), producing the "blank-row"
+  //     gap the user reported.
+  //   - The Strategy stack uses default stack `lineHeight` only — no
+  //     inter-item padding — so its rows look tight.
+  //   - Left margin was `4` (extra 4pt indent on top of cell paddingLeft),
+  //     pushing ก-จ further right than ยุทธศาสตร์. Setting `margin: 0`
+  //     here makes the two lists share the same left edge.
+  const innerRow: any[] = [];
+  innerRow.push({
+    colSpan: totalColumns,
+    stack: lines.map((text) => ({
+      text,
+      // 2026-05-21 — bolded per user direction so the ก-จ alignment
+      // header reads with the same weight as the ยุทธศาสตร์/กลยุทธ์/แผนงาน
+      // stack that follows it (the two now form one visually unbroken
+      // header band, see paddingTop/paddingBottom overrides in callers).
+      bold: true,
+      alignment: 'left',
+      margin: [0, 0, 0, 0],
+    })),
+    border: [false, false, false, false],
   });
+  for (let i = 1; i < totalColumns; i += 1) {
+    innerRow.push({});
+  }
+  return [innerRow];
 }

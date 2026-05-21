@@ -2,7 +2,7 @@ import type { TDocumentDefinitions } from 'pdfmake/interfaces';
 // BE-REV-01 — STRATEGY_BASED external alignment block (4 rows) injected
 // below the Strategy/Tactic/Plan stack and above the column headers.
 // User-view variant; same renderer as the staff-diff variant.
-import { buildExternalAlignmentRows } from './report-external-alignment.part';
+import { buildExternalAlignmentBlock } from './report-external-alignment.part';
 import type { AlignmentRow } from 'src/project-alignment-mapping/types/alignment.types';
 
 // Helper function เพื่อตรวจสอบว่าค่ามีการเปลี่ยนแปลงหรือไม่
@@ -361,34 +361,38 @@ export const createRevisionEditGroupDetailDocDefinitionUser = (
         headerRow1.push(...Array.from({ length: years.length - 1 }, () => ({ text: '', style: 'tableHeader' })));
         headerRow2.push(...years.map(year => ({ text: year.toString(), style: 'tableHeader', alignment: 'center', margin: [0, 2, 0, 0] })));
       } else {
-        const marginTop = col === 'target' || col === 'coordinates' ? 3 : 10;
+        // 2026-05-21 — `mainAgency` has 2-line header text; drop to 6pt.
+        const marginTop = col === 'target' || col === 'coordinates'
+          ? 3
+          : col === 'mainAgency'
+          ? 6
+          : 10;
         headerRow1.push({ text: columnMap[col].text, rowSpan: 2, style: 'tableHeader2', alignment: 'center', margin: [0, marginTop, 0, 0] });
         headerRow2.push({ text: '', style: 'tableHeader2' });
       }
     });
 
-    // QA-PDF-ALIGN-02 (2026-05-19) — header band: 5 alignment → 1 STP
-    // stack (from previous-revision values for user view) → 2 column
-    // headers. Single unshift keeps the order consistent.
+    // QA-PDF-ALIGN-02 (2026-05-21) — header band:
+    //   [outside-table] ก-จ external alignment stack — first page only
+    // → [in-table row]  STP stack (from previous-revision values for
+    //                   the user view) → 2 column headers
+    // The ก-จ block is OUTSIDE the table so it does NOT repeat via
+    // pdfmake `headerRows`.
+    let prevStrategyName = '-';
+    let prevStrategyCode: string | null = null;
     if (showHeader) {
-      const prevStrategyName = previous?.strategy?.name || strategyName || '-';
-      const prevStrategyCode = previous?.strategy?.id ?? strategyCode ?? null;
+      prevStrategyName = previous?.strategy?.name || strategyName || '-';
+      prevStrategyCode = previous?.strategy?.id ?? strategyCode ?? null;
       const prevTacticName = previous?.tactic?.name || tacticName || '-';
       const prevPlanName = previous?.plan?.name || planName || '-';
-
-      const alignmentRows = buildExternalAlignmentRows(
-        alignment,
-        { code: prevStrategyCode, name: prevStrategyName },
-        totalColumns,
-      );
 
       const stpStackRow = [
         {
           colSpan: totalColumns,
           stack: [
-            { text: `ยุทธศาสตร์: ${prevStrategyName}`, bold: true },
-            { text: `กลยุทธ์: ${prevTacticName}`, bold: true, margin: [20, 0, 0, 0] },
-            { text: `แผนงาน: ${prevPlanName}`, bold: true, margin: [40, 0, 0, 0] },
+            { text: `ยุทธศาสตร์: ${prevStrategyName}`, bold: true, lineHeight: 1.2 },
+            { text: `กลยุทธ์: ${prevTacticName}`, bold: true, margin: [20, 0, 0, 0], lineHeight: 1.2 },
+            { text: `แผนงาน: ${prevPlanName}`, bold: true, margin: [40, 0, 0, 0], lineHeight: 1.2 },
           ],
           border: [false, false, false, false],
         },
@@ -396,7 +400,6 @@ export const createRevisionEditGroupDetailDocDefinitionUser = (
       ];
 
       tableBody.unshift(
-        ...alignmentRows,
         stpStackRow,
         headerRow1,
         headerRow2,
@@ -406,11 +409,11 @@ export const createRevisionEditGroupDetailDocDefinitionUser = (
     }
 
     const columnWidths = calculateColumnWidths(groupColumns, years);
-    // QA-PDF-ALIGN-02: headerRows = 8 = 5 alignment + 1 STP stack + 2
+    // QA-PDF-ALIGN-02 (2026-05-21): headerRows = 3 = 1 STP stack + 2
     // column headers. showHeader=false keeps the value at 2.
-    const headerRows = showHeader ? 8 : 2;
+    const headerRows = showHeader ? 3 : 2;
 
-    return {
+    const tableContent = {
       table: { headerRows, widths: columnWidths, body: tableBody },
       layout: {
         hLineWidth: (i: number, node: any) => {
@@ -420,9 +423,24 @@ export const createRevisionEditGroupDetailDocDefinitionUser = (
         },
         vLineWidth: () => 0.3,
         hLineColor: () => '#000',
-        vLineColor: () => '#000'
+        vLineColor: () => '#000',
+        paddingTop: (i: number, node: any) => (node.table.body[i]?.[0]?.stack ? 0 : 2),
+        paddingBottom: (i: number, node: any) => (node.table.body[i]?.[0]?.stack ? 0 : 2),
       },
-      pageBreak: pageBreakBefore ? 'before' : undefined, // เพิ่ม pageBreakBefore ถ้าต้องการ
+    } as any;
+
+    if (showHeader) {
+      return {
+        stack: [
+          buildExternalAlignmentBlock(alignment, { code: prevStrategyCode, name: prevStrategyName }),
+          tableContent,
+        ],
+        pageBreak: pageBreakBefore ? 'before' : undefined,
+      } as any;
+    }
+    return {
+      ...tableContent,
+      pageBreak: pageBreakBefore ? 'before' : undefined,
     };
   };
 
@@ -699,7 +717,12 @@ export const createRevisionEditGroupDetailDocDefinitionUser = (
         headerRow1.push(...Array.from({ length: years.length - 1 }, () => ({ text: '', style: 'tableHeader' })));
         headerRow2.push(...years.map(year => ({ text: year.toString(), style: 'tableHeader', alignment: 'center', margin: [0, 2, 0, 0] })));
       } else {
-        const marginTop = col === 'target' || col === 'coordinates' ? 3 : 10;
+        // 2026-05-21 — `mainAgency` has 2-line header text; drop to 6pt.
+        const marginTop = col === 'target' || col === 'coordinates'
+          ? 3
+          : col === 'mainAgency'
+          ? 6
+          : 10;
         headerRow1.push({ text: columnMap[col].text, rowSpan: 2, style: 'tableHeader2', alignment: 'center', margin: [0, marginTop, 0, 0] });
         headerRow2.push({ text: '', style: 'tableHeader2' });
       }

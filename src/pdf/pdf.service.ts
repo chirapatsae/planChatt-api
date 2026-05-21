@@ -969,12 +969,22 @@ export class PdfService {
     const pdfBuffers: Buffer[] = [];
     let pageOffset = 0;
 
+    // 2026-05-21 — `projectsOnly` reportType skips BOTH the summary
+    // cover ("รายละเอียดโครงการ" + "บัญชีสรุปโครงการพัฒนา" + "แบบ ผ.01")
+    // AND the per-strategy/issue group cover title pages. Used by the
+    // user-side `/project/print` surface where the citizen wants just
+    // the project detail rows, not the full plan presentation packet.
+    // Other reportTypes (default/draft/approved/inAuthority) keep both
+    // covers; `outAuthority` keeps only the group covers.
+    const skipSummaryCover = reportType === 'outAuthority' || reportType === 'projectsOnly';
+    const skipGroupCovers = reportType === 'projectsOnly';
+
     if (reportFormat === ReportFormat.ISSUE_BASED) {
       // --- ISSUE_BASED path ---
       const { issues, overallSum, overallCount, groupedProjects } = this.prepareIssueBasedReportAggregations(projects, years);
 
       let coverSummaryDoc: TDocumentDefinitions | null = null;
-      if (reportType !== 'outAuthority') {
+      if (!skipSummaryCover) {
         coverSummaryDoc = createIssueBasedSummaryPartDocDefinition({
           developmentPlanName, years, issues, overallSum, overallCount,
           pageMargins, pageOrientation, newWord: this.newWord.bind(this),
@@ -996,14 +1006,16 @@ export class PdfService {
       });
 
       for (const [issueName, issueProjects] of sortedIssueEntries) {
-        const coverPageDoc = createIssueBasedGroupCoverPageDocDefinition(
-          issueName, developmentPlanName, pageMargins, pageOrientation,
-          this.newWord.bind(this), pageOffset,
-        );
-        const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
-        pdfBuffers.push(coverPageBuffer);
-        const coverPagePdf = await PDFDocument.load(coverPageBuffer);
-        pageOffset += coverPagePdf.getPageCount();
+        if (!skipGroupCovers) {
+          const coverPageDoc = createIssueBasedGroupCoverPageDocDefinition(
+            issueName, developmentPlanName, pageMargins, pageOrientation,
+            this.newWord.bind(this), pageOffset,
+          );
+          const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
+          pdfBuffers.push(coverPageBuffer);
+          const coverPagePdf = await PDFDocument.load(coverPageBuffer);
+          pageOffset += coverPagePdf.getPageCount();
+        }
 
         const detailDoc = createIssueBasedGroupDetailDocDefinition({
           developmentPlanName, years, groupProjects: issueProjects, availableColumns, columnMap,
@@ -1023,7 +1035,7 @@ export class PdfService {
       const { strategies, overallSum, overallCount, groupedProjects } = this.prepareReportAggregations(projects, years);
 
       let coverSummaryDoc: TDocumentDefinitions | null = null;
-      if (reportType !== 'outAuthority') {
+      if (!skipSummaryCover) {
         coverSummaryDoc = createSummaryPartDocDefinition({
           developmentPlanName, years, strategies, overallSum, overallCount,
           pageMargins, pageOrientation, newWord: this.newWord.bind(this),
@@ -1049,14 +1061,16 @@ export class PdfService {
       const alignmentByGroupKey = await this.resolveAlignmentForGroups(groupedProjects);
 
       for (const [strategyName, subGroups] of strategyGroups.entries()) {
-        const coverPageDoc = createGroupCoverPageDocDefinition(
-          strategyName, developmentPlanName, pageMargins, pageOrientation,
-          this.newWord.bind(this), pageOffset,
-        );
-        const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
-        pdfBuffers.push(coverPageBuffer);
-        const coverPagePdf = await PDFDocument.load(coverPageBuffer);
-        pageOffset += coverPagePdf.getPageCount();
+        if (!skipGroupCovers) {
+          const coverPageDoc = createGroupCoverPageDocDefinition(
+            strategyName, developmentPlanName, pageMargins, pageOrientation,
+            this.newWord.bind(this), pageOffset,
+          );
+          const coverPageBuffer = await this.createPdfBuffer(coverPageDoc, fonts);
+          pdfBuffers.push(coverPageBuffer);
+          const coverPagePdf = await PDFDocument.load(coverPageBuffer);
+          pageOffset += coverPagePdf.getPageCount();
+        }
 
         for (const group of subGroups) {
           const { groupKey, projects: groupProjectsValue } = group;

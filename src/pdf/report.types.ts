@@ -8,7 +8,13 @@ export type PdfReportType =
   | 'approved'
   | 'inAuthority'
   | 'outAuthority'
-  | 'custom';
+  | 'custom'
+  // 2026-05-21 — user-side `/project/print` export. Skips BOTH the
+  // summary cover ("รายละเอียดโครงการ · บัญชีสรุปโครงการพัฒนา · แบบ ผ.01")
+  // AND the per-strategy/issue group cover title pages. Output is a
+  // pure detail table of the selected projects; suitable for the
+  // submit-attached print packet a user takes to their LAO office.
+  | 'projectsOnly';
 
 export interface PlanSummary {
   planName: string;

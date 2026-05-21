@@ -249,7 +249,12 @@ export const createIssueBasedRevisionGroupDetailDocDefinition = (
         headerRow1.push(...Array.from({ length: years.length - 1 }, () => ({ text: '', style: 'tableHeader' })));
         headerRow2.push(...years.map(year => ({ text: year.toString(), style: 'tableHeader', alignment: 'center', margin: [0, 2, 0, 0] })));
       } else {
-        const marginTop = col === 'target' || col === 'coordinates' ? 3 : 10;
+        // 2026-05-21 — `mainAgency` has 2-line header text; drop to 6pt.
+        const marginTop = col === 'target' || col === 'coordinates'
+          ? 3
+          : col === 'mainAgency'
+          ? 6
+          : 10;
         headerRow1.push({ text: columnMap[col].text, rowSpan: 2, style: 'tableHeader2', alignment: 'center', margin: [0, marginTop, 0, 0] });
         headerRow2.push({ text: '', style: 'tableHeader2' });
       }

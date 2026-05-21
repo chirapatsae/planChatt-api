@@ -234,8 +234,13 @@ export const createIssueBasedGroupDetailDocDefinition = (
           })),
         );
       } else {
+        // 2026-05-21 — `mainAgency` has 2-line header text; drop to 6pt.
         const marginTop =
-          col === 'target' || col === 'coordinates' ? 3 : 10;
+          col === 'target' || col === 'coordinates'
+            ? 3
+            : col === 'mainAgency'
+            ? 6
+            : 10;
         headerRow1.push({
           text: columnMap[col].text,
           rowSpan: 2,

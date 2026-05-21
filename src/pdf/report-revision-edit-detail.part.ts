@@ -3,7 +3,7 @@ import type { TDocumentDefinitions } from 'pdfmake/interfaces';
 // below the Strategy/Tactic/Plan stack and above the column headers.
 // Shared with main-plan renderer (BE-MAIN-01); revision/change PDFs
 // reuse the identical row builder. See PDF_EXTERNAL_ALIGNMENT_BE_REV.md.
-import { buildExternalAlignmentRows } from './report-external-alignment.part';
+import { buildExternalAlignmentBlock } from './report-external-alignment.part';
 import type { AlignmentRow } from 'src/project-alignment-mapping/types/alignment.types';
 
 // Helper function เพื่อตรวจสอบว่าค่ามีการเปลี่ยนแปลงหรือไม่
@@ -362,37 +362,41 @@ export const createRevisionEditGroupDetailDocDefinition = (
         headerRow1.push(...Array.from({ length: years.length - 1 }, () => ({ text: '', style: 'tableHeader' })));
         headerRow2.push(...years.map(year => ({ text: year.toString(), style: 'tableHeader', alignment: 'center', margin: [0, 2, 0, 0] })));
       } else {
-        const marginTop = col === 'target' || col === 'coordinates' ? 3 : 10;
+        // 2026-05-21 — `mainAgency` has 2-line header text; drop to 6pt.
+        const marginTop = col === 'target' || col === 'coordinates'
+          ? 3
+          : col === 'mainAgency'
+          ? 6
+          : 10;
         headerRow1.push({ text: columnMap[col].text, rowSpan: 2, style: 'tableHeader2', alignment: 'center', margin: [0, marginTop, 0, 0] });
         headerRow2.push({ text: '', style: 'tableHeader2' });
       }
     });
 
-    // QA-PDF-ALIGN-02 (2026-05-19) — header band order (top → bottom):
-    //   5 external alignment rows (ก. ข. ค. ง. จ.)
-    // → 1 Strategy/Tactic/Plan stack row
-    // → 2 column-header rows (headerRow1, headerRow2)
-    // = 8 rows total when showHeader=true.
+    // QA-PDF-ALIGN-02 (2026-05-21) — header band order (top → bottom):
+    //   [outside-table] ก-จ external alignment stack — first page only
+    // → [in-table row]  Strategy/Tactic/Plan stack
+    // → [in-table rows] 2 column-header rows (headerRow1, headerRow2)
+    //
+    // The ก-จ block is intentionally OUTSIDE the table so pdfmake's
+    // per-page `headerRows` repeat covers only STP + column headers.
+    // That gives the user-requested behavior: ก-จ appears once at the
+    // top of each group (the "รายละเอียดโครงการ" page) and not on
+    // continuation pages.
     if (showHeader) {
-      const alignmentRows = buildExternalAlignmentRows(
-        alignment,
-        { code: strategyCode, name: strategyName },
-        totalColumns,
-      );
       const stpStackRow = [
         {
           colSpan: totalColumns,
           stack: [
-            { text: `ยุทธศาสตร์: ${strategyName}`, bold: true },
-            { text: `กลยุทธ์: ${tacticName}`, bold: true, margin: [20, 0, 0, 0] },
-            { text: `แผนงาน: ${planName}`, bold: true, margin: [40, 0, 0, 0] },
+            { text: `ยุทธศาสตร์: ${strategyName}`, bold: true, lineHeight: 1.2 },
+            { text: `กลยุทธ์: ${tacticName}`, bold: true, margin: [20, 0, 0, 0], lineHeight: 1.2 },
+            { text: `แผนงาน: ${planName}`, bold: true, margin: [40, 0, 0, 0], lineHeight: 1.2 },
           ],
           border: [false, false, false, false],
         },
         ...Array.from({ length: totalColumns - 1 }, () => ({ text: '', border: [false, false, false, false] })),
       ];
       tableBody.unshift(
-        ...alignmentRows,
         stpStackRow,
         headerRow1,
         headerRow2,
@@ -402,12 +406,11 @@ export const createRevisionEditGroupDetailDocDefinition = (
     }
 
     const columnWidths = calculateColumnWidths(groupColumns, years);
-    // QA-PDF-ALIGN-02 (2026-05-19): headerRows = 8 = 5 alignment + 1 STP
-    // stack + 2 column headers. showHeader=false continuation pages
-    // keep 2 (column headers only).
-    const headerRows = showHeader ? 8 : 2;
+    // QA-PDF-ALIGN-02 (2026-05-21): headerRows = 3 = 1 STP stack + 2
+    // column headers. showHeader=false continuation pages keep 2.
+    const headerRows = showHeader ? 3 : 2;
 
-    return {
+    const tableContent = {
       table: { headerRows, widths: columnWidths, body: tableBody },
       layout: {
         hLineWidth: (i: number, node: any) => {
@@ -417,9 +420,24 @@ export const createRevisionEditGroupDetailDocDefinition = (
         },
         vLineWidth: () => 0.3,
         hLineColor: () => '#000',
-        vLineColor: () => '#000'
+        vLineColor: () => '#000',
+        paddingTop: (i: number, node: any) => (node.table.body[i]?.[0]?.stack ? 0 : 2),
+        paddingBottom: (i: number, node: any) => (node.table.body[i]?.[0]?.stack ? 0 : 2),
       },
-      pageBreak: pageBreakBefore ? 'before' : undefined, // เพิ่ม pageBreakBefore ถ้าต้องการ
+    } as any;
+
+    if (showHeader) {
+      return {
+        stack: [
+          buildExternalAlignmentBlock(alignment, { code: strategyCode, name: strategyName }),
+          tableContent,
+        ],
+        pageBreak: pageBreakBefore ? 'before' : undefined,
+      } as any;
+    }
+    return {
+      ...tableContent,
+      pageBreak: pageBreakBefore ? 'before' : undefined,
     };
   };
 
@@ -666,7 +684,12 @@ export const createRevisionEditGroupDetailDocDefinition = (
         headerRow1.push(...Array.from({ length: years.length - 1 }, () => ({ text: '', style: 'tableHeader' })));
         headerRow2.push(...years.map(year => ({ text: year.toString(), style: 'tableHeader', alignment: 'center', margin: [0, 2, 0, 0] })));
       } else {
-        const marginTop = col === 'target' || col === 'coordinates' ? 3 : 10;
+        // 2026-05-21 — `mainAgency` has 2-line header text; drop to 6pt.
+        const marginTop = col === 'target' || col === 'coordinates'
+          ? 3
+          : col === 'mainAgency'
+          ? 6
+          : 10;
         headerRow1.push({ text: columnMap[col].text, rowSpan: 2, style: 'tableHeader2', alignment: 'center', margin: [0, marginTop, 0, 0] });
         headerRow2.push({ text: '', style: 'tableHeader2' });
       }
@@ -1221,7 +1244,12 @@ export const createRevisionEditDetailDocDefinition = (
         headerRow1.push(...Array.from({ length: years.length - 1 }, () => ({ text: '', style: 'tableHeader' })));
         headerRow2.push(...years.map(year => ({ text: year.toString(), style: 'tableHeader', alignment: 'center', margin: [0, 2, 0, 0] })));
       } else {
-        const marginTop = col === 'target' || col === 'coordinates' ? 3 : 10;
+        // 2026-05-21 — `mainAgency` has 2-line header text; drop to 6pt.
+        const marginTop = col === 'target' || col === 'coordinates'
+          ? 3
+          : col === 'mainAgency'
+          ? 6
+          : 10;
         headerRow1.push({ text: columnMap[col].text, rowSpan: 2, style: 'tableHeader2', alignment: 'center', margin: [0, marginTop, 0, 0] });
         headerRow2.push({ text: '', style: 'tableHeader2' });
       }

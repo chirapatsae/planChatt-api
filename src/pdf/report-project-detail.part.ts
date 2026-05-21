@@ -5,7 +5,7 @@ import type { ProjectDetailDocParams } from './report.types';
 // headers. STRATEGY_BASED main-plan only; ISSUE_BASED renderer is
 // untouched.
 import type { AlignmentRow } from 'src/project-alignment-mapping/types/alignment.types';
-import { buildExternalAlignmentRows } from './report-external-alignment.part';
+import { buildExternalAlignmentBlock } from './report-external-alignment.part';
 
 const calculateColumnWidths = (selectedCols: string[], years: number[]): string[] => {
   if (selectedCols.length === 0) {
@@ -187,28 +187,20 @@ export const createGroupDetailDocDefinition = (
     const sumByYear: Record<number, number> = Object.fromEntries(years.map(year => [year, 0]));
     const countByYear: Record<number, number> = Object.fromEntries(years.map(year => [year, 0]));
 
-    // แสดงหัวตาราง: external-alignment ก-จ (5 rows) → Strategy/Tactic/Plan stack
+    // 2026-05-21 — external alignment (ก-จ) is now emitted OUTSIDE the
+    // table (see return value below). Only the Strategy/Tactic/Plan
+    // stack stays inside the table so that pdfmake `headerRows` keeps
+    // STP + column headers pinned on continuation pages, while ก-จ
+    // appears ONCE on the first page of each group (the page that
+    // carries the "รายละเอียดโครงการ" cover title).
     if (showHeader) {
-      // External alignment block (5 numbered rows). Renders the ก./ข./ค./ง./จ.
-      // labels with ordinal extracted from each entity code. The จ. row
-      // mirrors the internal Strategy below (redundant by design — matches
-      // the source-of-truth template).
-      const alignmentRows = buildExternalAlignmentRows(
-        alignment,
-        { code: strategyCode, name: strategyName },
-        totalColumns,
-      );
-      for (const row of alignmentRows) {
-        tableBody.push(row);
-      }
-
       tableBody.push([
         {
           colSpan: totalColumns,
           stack: [
-            { text: `ยุทธศาสตร์: ${strategyName}`, bold: true },
-            { text: `กลยุทธ์: ${tacticName}`, bold: true, margin: [20, 0, 0, 0] },
-            { text: `แผนงาน: ${planName}`, bold: true, margin: [40, 0, 0, 0] },
+            { text: `ยุทธศาสตร์: ${strategyName}`, bold: true, lineHeight: 1.2 },
+            { text: `กลยุทธ์: ${tacticName}`, bold: true, margin: [20, 0, 0, 0], lineHeight: 1.2 },
+            { text: `แผนงาน: ${planName}`, bold: true, margin: [40, 0, 0, 0], lineHeight: 1.2 },
           ],
           border: [false, false, false, false],
         },
@@ -230,7 +222,15 @@ export const createGroupDetailDocDefinition = (
         headerRow1.push(...Array.from({ length: years.length - 1 }, () => ({ text: '', style: 'tableHeader' })));
         headerRow2.push(...years.map(year => ({ text: year.toString(), style: 'tableHeader', alignment: 'center', margin: [0, 2, 0, 0] })));
       } else {
-        const marginTop = col === 'target' || col === 'coordinates' ? 3 : 10;
+        // 2026-05-21 — `mainAgency` has 2-line header text
+        // ("หน่วยงาน\nรับผิดชอบหลัก") so the 10pt top margin used for
+        // single-line headers pushed it too far down. Drop to 6pt so it
+        // sits visually centered within the 2-row header band.
+        const marginTop = col === 'target' || col === 'coordinates'
+          ? 3
+          : col === 'mainAgency'
+          ? 6
+          : 10;
         headerRow1.push({ text: columnMap[col].text, rowSpan: 2, style: 'tableHeader2', alignment: 'center', margin: [0, marginTop, 0, 0] });
         headerRow2.push({ text: '', style: 'tableHeader2' });
       }
@@ -406,26 +406,52 @@ export const createGroupDetailDocDefinition = (
     }
 
     const columnWidths = calculateColumnWidths(groupColumns, years);
-    // QA-PDF-ALIGN-02 (2026-05-19) — table opens with:
-    //   5 rows external alignment (ก. ข. ค. ง. จ. — single line each)
-    // + 1 row  Strategy/Tactic/Plan stack
+    // QA-PDF-ALIGN-02 (2026-05-21) — table opens with:
+    //   1 row  Strategy/Tactic/Plan stack
     // + 2 rows column headers (headerRow1 + headerRow2)
-    // = 8 header rows. showHeader=false continuation tables emit only
+    // = 3 header rows. showHeader=false continuation tables emit only
     // the 2 column-header rows so the value stays at 2.
-    const headerRows = showHeader ? 8 : 2;
+    //
+    // The 5-line external-alignment (ก. ข. ค. ง. จ.) block lives
+    // OUTSIDE the table — see the wrapping `stack` below. That way
+    // pdfmake's per-page header repeat only covers STP + column
+    // headers, and ก-จ appears once at the top of each group.
+    const headerRows = showHeader ? 3 : 2;
 
-    return {
+    const tableContent = {
       table: { headerRows, widths: columnWidths, body: tableBody },
       layout: {
-        hLineWidth: (i, node) => {
+        hLineWidth: (i: number, node: any) => {
           if (showHeader && i === 0) return 0;
           if (node.table.body[i]?.[0]?.stack) return 0;
           return 0.3;
         },
         vLineWidth: () => 0.3,
         hLineColor: () => '#000',
-        vLineColor: () => '#000'
+        vLineColor: () => '#000',
+        // 2026-05-21 — strip vertical cell padding from stack rows so
+        // the STP stack reads with the same tight spacing as the
+        // standalone ก-จ block above it. The two now form ONE flowing
+        // header band on the first page of each group.
+        paddingTop: (i: number, node: any) => (node.table.body[i]?.[0]?.stack ? 0 : 2),
+        paddingBottom: (i: number, node: any) => (node.table.body[i]?.[0]?.stack ? 0 : 2),
       },
+    } as any;
+
+    // Wrap ก-จ + table in a single stack so they share a pageBreak
+    // boundary. When showHeader=false (continuation table) we skip the
+    // ก-จ block entirely.
+    if (showHeader) {
+      return {
+        stack: [
+          buildExternalAlignmentBlock(alignment, { code: strategyCode, name: strategyName }),
+          tableContent,
+        ],
+        pageBreak: pageBreakBefore ? 'before' : undefined,
+      } as any;
+    }
+    return {
+      ...tableContent,
       pageBreak: pageBreakBefore ? 'before' : undefined,
     };
   };
@@ -695,9 +721,9 @@ export const createProjectDetailPartDocDefinition = (params: ProjectDetailDocPar
       {
         colSpan: totalColumns,
         stack: [
-          { text: `ยุทธศาสตร์: ${strategyName}`, bold: true },
-          { text: `กลยุทธ์: ${tacticName}`, bold: true, margin: [20, 0, 0, 0] },
-          { text: `แผนงาน: ${planName}`, bold: true, margin: [40, 0, 0, 0] },
+          { text: `ยุทธศาสตร์: ${strategyName}`, bold: true, lineHeight: 1.2 },
+          { text: `กลยุทธ์: ${tacticName}`, bold: true, margin: [20, 0, 0, 0], lineHeight: 1.2 },
+          { text: `แผนงาน: ${planName}`, bold: true, margin: [40, 0, 0, 0], lineHeight: 1.2 },
         ],
         border: [false, false, false, false],
       },
@@ -720,7 +746,15 @@ export const createProjectDetailPartDocDefinition = (params: ProjectDetailDocPar
         headerRow2.push(...years.map(year => ({ text: year.toString(), style: 'tableHeader', alignment: 'center', margin: [0, 2, 0, 0] })));
       } else {
         // เอา marginTop ออกสำหรับคอลัมน์ target
-        const marginTop = col === 'target' || col === 'coordinates' ? 3 : 10;
+        // 2026-05-21 — `mainAgency` has 2-line header text
+        // ("หน่วยงาน\nรับผิดชอบหลัก") so the 10pt top margin used for
+        // single-line headers pushed it too far down. Drop to 6pt so it
+        // sits visually centered within the 2-row header band.
+        const marginTop = col === 'target' || col === 'coordinates'
+          ? 3
+          : col === 'mainAgency'
+          ? 6
+          : 10;
         headerRow1.push({ text: columnMap[col].text, rowSpan: 2, style: 'tableHeader2', alignment: 'center', margin: [0, marginTop, 0, 0] });
         headerRow2.push({ text: '', style: 'tableHeader2' });
       }
