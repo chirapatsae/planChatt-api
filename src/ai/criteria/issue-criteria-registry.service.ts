@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, Repository } from 'typeorm';
 import { DevelopmentIssue } from 'src/development-issue/entities/development-issue.entity';
@@ -10,6 +10,11 @@ import {
   NAKHON_RATCHASIMA_ISSUE_RULES,
   NAKHON_RATCHASIMA_RULESET_VERSION,
 } from './nakhon-ratchasima-issue-rules';
+import {
+  extractEntryRoot,
+  extractStrategyRoot,
+  normalizeThaiPhrase,
+} from './strategy-name.util';
 
 /**
  * IssueCriteriaRegistryService — Wave 24 N1.
@@ -160,5 +165,54 @@ export class IssueCriteriaRegistryService {
 
     const entry = this.findByIssueName(issue.name, provinceCode);
     return { issue, entry };
+  }
+
+  /**
+   * STRATEGY_BASED resolver (Wave LAO issue/strategy parity).
+   *
+   * Resolves a `Strategy.name` to the ARRAY of registry entries whose
+   * `issueDisplayName` root matches the Strategy's root after Thai
+   * normalization. A single Strategy MAY map to multiple entries
+   * (1-to-many) because one umbrella can host several sub-issues
+   * (e.g. STRAT003 "ด้านการพัฒนาเศรษฐกิจ" → economic-3-1 + economic-3-2).
+   *
+   * Algorithm (see AUDIT-VERDICT §7.4 — frozen):
+   *   1. `extractStrategyRoot` strips "ยุทธศาสตร์" prefix
+   *   2. `normalizeThaiPhrase` NFC + collapse spelling variations
+   *   3. For each registry entry: take `extractEntryRoot` (text before
+   *      first " — ") and normalize the same way
+   *   4. Match by EXACT equality of normalized roots (no substring)
+   *   5. Return ALL matching entries (array, possibly empty)
+   *
+   * Contract:
+   *   - empty / nullish input → throws `BadRequestException`
+   *   - well-formed input with no match → returns `[]` (never throws)
+   *
+   * Advisory-only per CLAUDE.md §17.2 — return value drives an
+   * advisory UI panel; it MUST NOT gate any workflow transition.
+   * Pure compute — no DB call.
+   */
+  findAllByStrategyName(
+    name: string,
+    provinceCode: ProvinceCode = 'NAKHON_RATCHASIMA',
+  ): IssueRuleEntry[] {
+    if (!name || !name.trim()) {
+      throw new BadRequestException('STRATEGY_NAME_REQUIRED');
+    }
+
+    const strategyRoot = normalizeThaiPhrase(extractStrategyRoot(name));
+    if (!strategyRoot) {
+      return [];
+    }
+
+    const entries = this.provinceIndex.get(provinceCode);
+    if (!entries || entries.length === 0) return [];
+
+    return entries.filter((entry) => {
+      const entryRoot = normalizeThaiPhrase(
+        extractEntryRoot(entry.issueDisplayName),
+      );
+      return entryRoot === strategyRoot;
+    });
   }
 }
