@@ -95,6 +95,9 @@ export class IssueCriteriaEvidenceCheckService {
           // non-hard so the LLM's rationale survives; the merger still
           // prefers evidence-auto pass over an LLM `needs-evidence`.
           hardOverride: false,
+          // Wave LAO+STRATEGY_BASED parity (N5) — stamp source entry
+          // for multi-entry merger attribution. Advisory per §17.2.
+          issueKey: entry.issueKey,
         });
       } else {
         hints.push({
@@ -107,6 +110,9 @@ export class IssueCriteriaEvidenceCheckService {
           // Soft — the LLM MAY override with quoted counter-evidence
           // it reads from the project text (architecture §8).
           hardOverride: false,
+          // Wave LAO+STRATEGY_BASED parity (N5) — stamp source entry
+          // for multi-entry merger attribution. Advisory per §17.2.
+          issueKey: entry.issueKey,
         });
       }
     }

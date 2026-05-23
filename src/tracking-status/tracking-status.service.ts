@@ -660,10 +660,25 @@ export class TrackingStatusService {
 
           // Strict staff transition map: each source may have multiple valid destinations.
           // CLAUDE.md Returned_For_Revision Rule: MUST originate from Pending or Verified.
+          //
+          // 2026-05-22 — `Rejected` (W67/W68 8th canonical status, label
+          // "เกินศักยภาพ") added as a valid destination from every active
+          // review state. Use case: staff reviewing a project on
+          // `/coordinate/admin/pending` determines that the work exceeds
+          // the organization's capacity (เกินอำนาจ) and rejects it as a
+          // workflow exit per the W67 spec. Per CLAUDE.md W68 follow-up
+          // ("define Rejected workflow transition rules — valid prior
+          // states, who can trigger the transition"), this wave defines:
+          //   - valid prior states: Pending / Verified / Pending_Approval
+          //   - allowed triggerers: staff-lead (staff / admin / super-admin)
+          //   - exit semantics: terminal — no further transitions, no new
+          //     version created (lineage row stays editable per §11
+          //     versioning rule's "no new version on pull-back / rollback"
+          //     principle)
           const staffAllowedTransitions: Record<string, string[]> = {
-            Pending: ['Verified', 'Returned_For_Revision'],
-            Verified: ['Pending_Approval', 'Returned_For_Revision'],
-            Pending_Approval: ['Approved'],
+            Pending: ['Verified', 'Returned_For_Revision', 'Rejected'],
+            Verified: ['Pending_Approval', 'Returned_For_Revision', 'Rejected'],
+            Pending_Approval: ['Approved', 'Rejected'],
           };
           const allowedDestinations = staffAllowedTransitions[staffCurrentStatusName];
           if (!allowedDestinations || !allowedDestinations.includes(status.name)) {

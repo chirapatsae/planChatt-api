@@ -114,6 +114,10 @@ export class IssueCriteriaGeoCheckService {
         // Geo auto-check is authoritative — the polygon answer is a
         // fact, not an opinion (architecture §7).
         hardOverride: true,
+        // Wave LAO+STRATEGY_BASED parity (N5) — stamp source entry so
+        // the multi-entry merger can attribute this hint to the correct
+        // CriteriaEvaluationPayload. Advisory per §17.2.
+        issueKey: entry.issueKey,
       });
     }
 

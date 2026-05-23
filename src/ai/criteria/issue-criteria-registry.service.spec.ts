@@ -193,4 +193,105 @@ describe('IssueCriteriaRegistryService — findAllByStrategyName', () => {
     expect(service.findByIssueName(null)).toBeNull();
     expect(service.findByIssueName(undefined)).toBeNull();
   });
+
+  // ---------------------------------------------------------------------
+  // Wave Sub-Type Filter (2026-05-22) — narrow `findAllByStrategyName`
+  // result to a single sub-domain when the user has clicked a sub-type
+  // chip. Empty / unknown code → "general check" mode ([]).
+  //
+  // Bug fixed: production observation 2026-05-22 — Strategy 3 (economic)
+  // pulled BOTH economic-3-1 (เกษตร) and economic-3-2 (อุตสาหกรรม/water)
+  // criteria onto a farming project; the user saw the irrelevant
+  // economic-3-2 evaluation at 0/5 and got a misleading score.
+  // ---------------------------------------------------------------------
+  describe('filterEntriesBySubType — sub-type-aware narrowing', () => {
+    it('subTypeCode 3.1.1 (เกษตร) → exactly [economic-3-1]', () => {
+      const all = service.findAllByStrategyName(
+        'ยุทธศาสตร์ด้านการพัฒนาเศรษฐกิจ',
+      );
+      const filtered = service.filterEntriesBySubType(all, '3.1.1');
+      expect(filtered.map((e) => e.issueKey)).toEqual(['economic-3-1']);
+    });
+
+    it('subTypeCode 3.1.2 (อุตสาหกรรม/SMEs) → exactly [economic-3-1]', () => {
+      // 3.1.2 is also under economic-3-1 — labels are inner-sub-categories
+      // OF that entry; both should resolve to the same parent entry.
+      const all = service.findAllByStrategyName('ด้านการพัฒนาเศรษฐกิจ');
+      const filtered = service.filterEntriesBySubType(all, '3.1.2');
+      expect(filtered.map((e) => e.issueKey)).toEqual(['economic-3-1']);
+    });
+
+    it('subTypeCode 3.2.1 (ขุดลอกแหล่งน้ำ) → exactly [economic-3-2]', () => {
+      const all = service.findAllByStrategyName('ด้านการพัฒนาเศรษฐกิจ');
+      const filtered = service.filterEntriesBySubType(all, '3.2.1');
+      expect(filtered.map((e) => e.issueKey)).toEqual(['economic-3-2']);
+    });
+
+    it('subTypeCode 4.1 (ก่อสร้างถนน) → exactly [urban-4-1to4]', () => {
+      const all = service.findAllByStrategyName('ด้านการพัฒนาเมือง');
+      const filtered = service.filterEntriesBySubType(all, '4.1');
+      expect(filtered.map((e) => e.issueKey)).toEqual(['urban-4-1to4']);
+    });
+
+    it('subTypeCode 4.5 (สาธารณภัย) → exactly [urban-4-5to6]', () => {
+      const all = service.findAllByStrategyName('ด้านการพัฒนาเมือง');
+      const filtered = service.filterEntriesBySubType(all, '4.5');
+      expect(filtered.map((e) => e.issueKey)).toEqual(['urban-4-5to6']);
+    });
+
+    it('empty subTypeCode → [] (general check mode)', () => {
+      const all = service.findAllByStrategyName('ด้านการพัฒนาเศรษฐกิจ');
+      expect(service.filterEntriesBySubType(all, '')).toEqual([]);
+      expect(service.filterEntriesBySubType(all, '   ')).toEqual([]);
+    });
+
+    it('null / undefined subTypeCode → [] (general check mode)', () => {
+      const all = service.findAllByStrategyName('ด้านการพัฒนาเศรษฐกิจ');
+      expect(service.filterEntriesBySubType(all, null)).toEqual([]);
+      expect(service.filterEntriesBySubType(all, undefined)).toEqual([]);
+    });
+
+    it('unknown subTypeCode → [] (defensive, NOT "all entries")', () => {
+      // This is the load-bearing assertion: the prior incorrect behaviour
+      // was to default to ALL entries when there was no match. We MUST
+      // NOT regress to that.
+      const all = service.findAllByStrategyName('ด้านการพัฒนาเศรษฐกิจ');
+      expect(service.filterEntriesBySubType(all, '99.99.99')).toEqual([]);
+      expect(service.filterEntriesBySubType(all, 'garbage-code')).toEqual(
+        [],
+      );
+    });
+
+    it('STRAT001 royal sub-types (1.1, 1.2) → [royal-initiated]', () => {
+      const all = service.findAllByStrategyName(
+        'ยุทธศาสตร์ด้านโครงการตามแนวพระราชดำริ',
+      );
+      expect(
+        service.filterEntriesBySubType(all, '1.1').map((e) => e.issueKey),
+      ).toEqual(['royal-initiated']);
+      expect(
+        service.filterEntriesBySubType(all, '1.2').map((e) => e.issueKey),
+      ).toEqual(['royal-initiated']);
+    });
+
+    it('quality-of-life sub-types (2.1 — 2.5) → [quality-of-life]', () => {
+      const all = service.findAllByStrategyName(
+        'ยุทธศาสตร์ด้านการพัฒนาคุณภาพชีวิต',
+      );
+      for (const code of ['2.1', '2.2', '2.3', '2.4', '2.5']) {
+        const filtered = service.filterEntriesBySubType(all, code);
+        expect(filtered.map((e) => e.issueKey)).toEqual([
+          'quality-of-life',
+        ]);
+      }
+    });
+
+    it('pure function — does not mutate input array', () => {
+      const all = service.findAllByStrategyName('ด้านการพัฒนาเศรษฐกิจ');
+      const before = all.map((e) => e.issueKey);
+      service.filterEntriesBySubType(all, '3.1.1');
+      const after = all.map((e) => e.issueKey);
+      expect(after).toEqual(before);
+    });
+  });
 });

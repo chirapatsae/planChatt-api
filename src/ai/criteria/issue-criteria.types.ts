@@ -34,12 +34,54 @@ export type Criticality = 'blocking' | 'preferred' | 'advisory';
  * Deterministic pre-check type hint. Consumed by the AI pre-check
  * layer (N4) to decide which criterion rows can be resolved without
  * an LLM call. `null` / unset = resolved via LLM only.
+ *
+ * Wave AI-Enforcement-Model (2026-05-22) — added `'title-uniqueness'`
+ * for the "ไม่ซ้ำซ้อนกับภารกิจของ อปท. อื่น" family of criteria. The
+ * check queries the ProjectGroup repository for same-title projects
+ * (excluding self) and emits a deterministic verdict — AI never sees
+ * the criterion in its prompt.
  */
 export type AutoCheckKind =
   | 'cross-amphoe'
   | 'in-protected-zone'
   | 'attachment-presence'
+  | 'title-uniqueness'
   | null;
+
+/**
+ * Wave AI-Enforcement-Model (2026-05-22) — enforcement classification
+ * for a single criterion. Drives WHO produces the verdict:
+ *
+ *   - `llm-prose`   AI judges from generated prose (e.g. "คุ้มค่า",
+ *                   "ดำเนินการในภาพรวมจังหวัด/อำเภอ"). This is the
+ *                   ONLY mode that participates in the LLM call's
+ *                   [CRITERIA] section.
+ *
+ *   - `auto-check`  Deterministic system check resolves the verdict
+ *                   without LLM involvement (geo polygon, attachment
+ *                   presence, title uniqueness). The corresponding
+ *                   `geoAutoCheck` kind picks the service.
+ *
+ *   - `auto-pass`   Implicit by system inclusion — e.g. "อปท. ในพื้นที่
+ *                   ดำเนินการเองไม่ได้" is implied for every project
+ *                   that enters this coordination system. Force
+ *                   verdict='pass' with the criterion's
+ *                   `autoPassRationale` string. AI MUST NOT judge.
+ *
+ *   - `staff-only`  Out of AI's domain expertise (engineering
+ *                   standards, legal compliance, attached-document
+ *                   review). AI MUST NOT judge — force verdict
+ *                   ='not-applicable' with rationale pointing to
+ *                   staff review.
+ *
+ * §17.2 — all four modes remain advisory; never gates workflow.
+ * §17.14 — registry stays bound to LAO-coordination scope.
+ */
+export type CriterionEnforcement =
+  | 'llm-prose'
+  | 'auto-check'
+  | 'auto-pass'
+  | 'staff-only';
 
 /**
  * One checklist item (criterion) evaluated against a single project.
@@ -59,10 +101,27 @@ export interface IssueCriterion {
   evidenceRequired: boolean;
   /** OCR / attachment-tag hints for the evidence auto-check layer. */
   evidenceTags?: string[];
-  /** Deterministic pre-check hint (geo / attachment). */
+  /** Deterministic pre-check hint (geo / attachment / title). */
   geoAutoCheck?: AutoCheckKind;
   /** Regulation citation(s) shown beside the description in UI. */
   sourceRefs?: string[];
+  /**
+   * Wave AI-Enforcement-Model (2026-05-22) — required classification.
+   * Drives WHO produces the verdict. See `CriterionEnforcement` for
+   * the full rationale of each mode. The AI service uses this field
+   * to:
+   *   1. Filter which criteria enter the LLM prompt (`llm-prose` only)
+   *   2. Apply deterministic verdicts for `auto-check` (via service)
+   *   3. Force pass verdicts for `auto-pass` (with `autoPassRationale`)
+   *   4. Force not-applicable verdicts for `staff-only`
+   */
+  enforcement: CriterionEnforcement;
+  /**
+   * Thai rationale shown on the criteria card when verdict is forced
+   * to `pass` via `enforcement: 'auto-pass'`. REQUIRED for auto-pass
+   * criteria; ignored for other enforcement modes.
+   */
+  autoPassRationale?: string;
 }
 
 /**
@@ -160,6 +219,15 @@ export interface CriterionResult {
   rationale: string;
   source: CriterionSource;
   evidenceLink?: string | null;
+  /**
+   * Wave AI-Enforcement-Model (2026-05-22) — mirror of the registry
+   * criterion's `enforcement` so the FE can render an authoritative
+   * "who decided this" badge without inferring from `source`. Optional
+   * to preserve back-compat with stored snapshots written before this
+   * wave (they carry no enforcement field; FE treats absent as 'llm-
+   * prose' for visual default).
+   */
+  enforcement?: CriterionEnforcement;
 }
 
 /**
@@ -197,6 +265,39 @@ export interface CriteriaEvaluationPayload {
 }
 
 /**
+ * Wave LAO+STRATEGY_BASED AI parity (2026-05-21).
+ *
+ * STRATEGY_BASED submissions resolve to 1-N IssueRuleEntries via
+ * findAllByStrategyName. Pre-submit-review evaluates the project
+ * against EACH matched entry independently. The opaque
+ * categories.criteriaEvaluations[] envelope below carries one
+ * CriteriaEvaluationPayload per matched issueKey.
+ *
+ * Back-compat (D1=A): when matched-count === 1, the response ALSO
+ * writes the legacy singular `criteriaEvaluation` key (set to the same
+ * payload object). Readers expecting either shape continue to work.
+ *
+ * §17.4 snapshot-only — each payload independently stamps its
+ * `rulesetVersion`, so historical snapshots remain readable even if
+ * the registry's frozen version bumps in a future wave.
+ */
+export interface CriteriaEvaluationsEnvelope {
+  /**
+   * Array of per-issue evaluation payloads. Length 1-N. Empty array is
+   * NOT emitted — when no entries match, the envelope itself is
+   * omitted from the `categories` bag.
+   */
+  criteriaEvaluations: CriteriaEvaluationPayload[];
+
+  /**
+   * Wave-9 idempotency-compatible single-payload back-compat key.
+   * Populated ONLY when criteriaEvaluations.length === 1 (mirrors the
+   * single payload to ease FE migration). Omitted for length > 1.
+   */
+  criteriaEvaluation?: CriteriaEvaluationPayload;
+}
+
+/**
  * Deterministic pre-check hint produced BEFORE the LLM call. The
  * `source` here lives on the resulting `CriterionResult`, not on the
  * hint itself — the hint only carries WHAT the deterministic signal
@@ -220,4 +321,21 @@ export interface CriterionHint {
    * wins). This flag encodes the precedence rule for the merger.
    */
   hardOverride: boolean;
+  /**
+   * Wave LAO+STRATEGY_BASED parity (N5, 2026-05-21).
+   *
+   * Source `IssueRuleEntry.issueKey` of the entry that produced this
+   * hint. Required for STRATEGY_BASED multi-entry resolution where one
+   * Strategy maps to N (1-6) entries — the merger uses this to attribute
+   * each hint to the correct `CriteriaEvaluationPayload`.
+   *
+   * Optional in the type to preserve byte-identical wire shape with
+   * pre-N5 ISSUE_BASED single-entry runs (where the merger can derive
+   * the source entry from the global lookup unambiguously). New code
+   * SHOULD populate it on every hint; readers MUST tolerate absence
+   * and fall back to global criterionId lookup.
+   *
+   * Advisory-only per §17.2 — does NOT participate in workflow gating.
+   */
+  issueKey?: string;
 }

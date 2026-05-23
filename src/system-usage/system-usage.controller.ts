@@ -17,11 +17,14 @@
  *     endpoint. Replaces the pre-BE-03 inline `assertReadAccess` /
  *     `assertSuperAdmin` helpers and the local `STATS_READ_ROLES` /
  *     `SUPER_ADMIN_ONLY` constants.
- *   - Read endpoints use `STATS_READ` (admin / super-admin / c-level).
- *     Per SEC-01 Required Fix #5, this MUST NOT be widened to
- *     `EXEC_READ` (which would add `staff`); the legacy
- *     `STATS_READ_ROLES` constant deliberately excluded `staff`, so the
- *     migration preserves that exclusion byte-for-byte.
+ *   - Read endpoints use `STATS_READ` (staff / admin / super-admin / c-level).
+ *     2026-05-22 — `staff` added to `STATS_READ` per product-owner
+ *     direction; the FE menu in `layout/Sidebar/menuConfig.tsx` was
+ *     updated in lockstep. The original SEC-01 Required Fix #5 guidance
+ *     (which excluded `staff`) is superseded by the new product
+ *     decision; the underlying telemetry (login counts, page visits)
+ *     contains no PII or project content. `inactive-users` and
+ *     `top-users.csv` remain `SUPER_ADMIN_ONLY` — see below.
  *   - `inactive-users` and `top-users.csv` use `SUPER_ADMIN_ONLY` (more
  *     sensitive PDPA surface).
  *

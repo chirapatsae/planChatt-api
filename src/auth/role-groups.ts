@@ -63,14 +63,21 @@ export const EXEC_READ: readonly Role[] = [
 ] as const;
 
 /**
- * System-usage read — admin / super-admin / c-level (NO staff).
+ * System-usage read — staff / admin / super-admin / c-level.
  *
- * Distinct from `EXEC_READ` because the legacy `STATS_READ_ROLES` constant
- * in `system-usage.controller.ts` deliberately excludes `staff`. Per SEC-01
- * Required Fix #5, BE-03 MUST map system-usage read endpoints to this
- * group, NOT to `EXEC_READ`.
+ * 2026-05-22 widening — `staff` added per user direction. The original
+ * SEC-01 Required Fix #5 guidance deliberately excluded `staff` to keep
+ * system-usage limited to admin-tier roles, but the product owner has
+ * since determined that staff need visibility into login/page-visit
+ * counts as part of their day-to-day verification workflow. The
+ * underlying data (login events, page visits) does not contain PII or
+ * project content; it is operational telemetry. Re-tightening this gate
+ * to admin-only MUST be reflected in BOTH this constant AND the FE
+ * menu config (`layout/Sidebar/menuConfig.tsx` — system-usage rail row)
+ * to avoid drift between the visible menu item and the BE 403 response.
  */
 export const STATS_READ: readonly Role[] = [
+  Role.STAFF,
   Role.ADMIN,
   Role.SUPER_ADMIN,
   Role.C_LEVEL,

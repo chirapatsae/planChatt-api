@@ -43,6 +43,12 @@ import { AiUsageLogsService } from 'src/ai-usage-logs/ai-usage-logs.service';
 import { composeSummaryTh } from 'src/ai-usage-logs/summary-th.util';
 import { sanitizeRequestPayload } from 'src/ai-usage-logs/sanitize-request-payload.util';
 import { scoreToBand } from './utils/ai-score-envelope';
+// Wave LAO-STRATEGY-AI-PARITY Followup G+R Coherence (2026-05-22) —
+// deterministic readinessLabel band computation shared with
+// AiService.generatePreSubmitReview. Overrides whatever the LLM supplies
+// so the numeric score and the band chip can never disagree. See module
+// header in `utils/readiness-label.ts` for full rationale.
+import { deriveReadinessLabel } from './utils/readiness-label';
 // §17.9 — shared delimiter envelope + embedded-token sanitization.
 // The literal `<<<USER_INPUT>>>` / `<<<END>>>` tokens live exclusively
 // in `wrap-user-text.ts` so owner and staff pipelines cannot drift.
@@ -359,6 +365,43 @@ ${formatRubricForReviewer({ isIssueBased })}
 - ถ้า overallScore ≥ 85 ต้องมี suggestions ≤ 2 ข้อ และต้องเป็น priority='high' เท่านั้น; ถ้า 70–84 ≤ 3 ข้อ; ถ้า < 70 ค่อยให้ 3–5 ข้อ
 - 0 ข้อเป็นคำตอบที่ยอมรับได้เมื่อเนื้อหาทุกฟิลด์ผ่านเกณฑ์แล้ว
 
+วลีต่อไปนี้เกี่ยวข้องกับ "หลักฐาน / เอกสารแนบ / รูปถ่าย" — ห้ามใช้ในข้อแนะนำโดยเด็ดขาด (Wave Evidence-Scope Decoupling 2026-05-22):
+- "ควรระบุหลักฐาน..."
+- "ควรแนบเอกสาร..."
+- "ควรแสดงหลักฐาน..."
+- "ควรเพิ่มหลักฐาน..."
+- "ควรแนบรูปถ่าย / ใบอนุญาต / สำเนา..."
+- "ควรมีเอกสารยืนยัน..."
+- "ควรแนบไฟล์..."
+เหตุผล: เอกสารแนบ / หลักฐานเป็นความรับผิดชอบของเจ้าหน้าที่ผู้ตรวจสอบที่จะตรวจของจริงในขั้นตอนถัดไป — AI ไม่มีสิทธิ์เข้าถึงไฟล์แนบและไม่มีหน้าที่ตรวจ AI มีหน้าที่ตรวจคุณภาพ "เนื้อหา prose" ที่ผู้ใช้แก้ไขได้ทันทีเท่านั้น
+หากเกณฑ์ใดต้องการ "evidence" (เช่น หลักฐานสิทธิ์ที่ดิน ใบอนุญาตใช้พื้นที่ ใบรับรอง) — ให้ข้ามเกณฑ์นั้นในการให้ suggestions (ระบบมีกลไกตรวจการแนบไฟล์แยกต่างหาก) แต่ยังให้ verdict ในผลลัพธ์ criteria ได้ตามปกติ
+หากวลีข้างต้นปรากฏในข้อแนะนำ ให้ตัดข้อนั้นออกจาก suggestions ทันที
+
+วลีต่อไปนี้เกี่ยวข้องกับ "การอ้างอิงระเบียบ / มาตรฐาน / กฎหมาย / พ.ร.บ. / พ.ศ." — ห้ามใช้ในข้อแนะนำเป็นรายฟิลด์โดยเด็ดขาด (Wave Field-Scope Decoupling 2026-05-22):
+- "ควรระบุมาตรฐาน..."
+- "ควรอ้างอิงระเบียบ / กฎหมาย / พ.ร.บ. ..."
+- "ควรอ้างถึงพระราชบัญญัติ..."
+- "ควรระบุตามมาตรฐาน..." (เมื่อ "..." เป็นมาตรฐานทางเทคนิค / กรม / กฎหมาย)
+- "ควรเป็นไปตามมาตรฐาน..."
+- "ควรสอดคล้องกับระเบียบ..."
+เหตุผล: ระเบียบ / มาตรฐาน / กฎหมายเป็นข้อมูลพื้นหลัง (background / rationale) ของโครงการ ไม่ใช่เนื้อหาที่ผู้ใช้กรอกในฟิลด์ "วัตถุประสงค์" / "เป้าหมาย" / "ผลที่คาดว่าจะได้รับ" / "ตัวชี้วัด" — ฟิลด์เหล่านี้เป็นการบรรยายโครงการเอง ไม่ใช่ภาพรวมระเบียบ ระบบไม่มีฟิลด์ "หลักการและเหตุผล" ให้ผู้ใช้กรอก ดังนั้นการบอกให้ "ใส่ระเบียบ" จึงเป็นคำแนะนำที่ผู้ใช้แก้ไม่ได้
+หากเกณฑ์ใดเป็นเรื่อง "compliance / มาตรฐานทางเทคนิค / การปฏิบัติตามกฎหมาย" — ให้ verdict เป็น "not-applicable" พร้อม rationale ว่า "ตรวจสอบโดยเจ้าหน้าที่ในขั้นตอน review จากเอกสารแนบของผู้ใช้" และข้ามเกณฑ์นั้นในการให้ suggestions ห้ามให้ verdict เป็น "fail" หรือ "needs-evidence" สำหรับเกณฑ์ประเภทนี้
+หากวลีข้างต้นปรากฏในข้อแนะนำ ให้ตัดข้อนั้นออกจาก suggestions ทันที
+
+หลักการ Field-Scope (Wave Field-Scope Decoupling 2026-05-22) — ก่อนเขียนข้อแนะนำในแต่ละ field ให้ถามว่า "เนื้อหาที่แนะนำตรงตามเจตนาของฟิลด์หรือไม่?":
+- "วัตถุประสงค์" = WHAT โครงการจะทำ + กิจกรรม + กลุ่มเป้าหมาย + ผู้ประสานงาน + ระยะเวลา → ห้ามแนะนำ "ระเบียบ" "มาตรฐาน" "หลักฐาน"
+- "เป้าหมาย" = ตัวเลขเป้าหมาย + ตัวชี้วัด + ค่าฐาน + ระยะเวลาวัดผล + ขอบเขตพื้นที่ → ห้ามแนะนำ "ระเบียบ" "หลักฐาน"
+- "ผลที่คาดว่าจะได้รับ" = ประโยชน์ทางตรง/อ้อม + ระยะสั้น/กลาง/ยาว + กลไก + ตัวชี้วัด → ห้ามแนะนำ "ระเบียบ" "หลักฐาน"
+- "ตัวชี้วัด" = ค่าฐาน + ค่าเป้าหมาย + วิธีวัด + แหล่งอ้างอิงข้อมูล (หน่วยงานราชการ) → ห้ามแนะนำ "ระเบียบ" "หลักฐาน"
+- "งบประมาณ" = ตัวเลขสมเหตุสมผลกับขอบเขต → ห้ามแนะนำ "แจกแจงรายกิจกรรม" "ระเบียบ"
+หากเนื้อหาที่จะแนะนำไม่ตรงกับฟิลด์ใดในรายการข้างต้น — ห้ามใส่ใน suggestions เพราะผู้ใช้แก้ไม่ได้ในฟอร์มที่มีอยู่
+
+วิธีตีความข้อความที่มีแท็ก "(ตัวอย่างจาก AI — โปรดยืนยัน)" (Wave LAO-STRATEGY-AI-PARITY Followup G+R Coherence 2026-05-22):
+- ฝั่งสร้าง (Generator) อาจใส่แท็กนี้ต่อท้ายค่าที่ AI เป็นผู้เสนอ (เช่น ชื่อระบบ ชื่อแหล่งอ้างอิง) เพื่อแจ้งผู้ส่งให้ตรวจสอบก่อนนำส่ง
+- ให้ถือว่าค่าที่อยู่ก่อนแท็กเป็น "เนื้อหาที่กรอกครบ" — pass หลักเกณฑ์ที่เกี่ยวข้องตามปกติ ห้ามตัดสินว่าเป็น "ขาดข้อมูล"
+- ห้ามแนะนำให้ "ลบแท็ก" หรือ "ระบุข้อมูลให้ชัดเจน" เพียงเพราะเห็นแท็กนี้ — แท็กเป็นเครื่องหมายให้ผู้ใช้ ไม่ใช่ช่องว่างของเนื้อหา
+- จะตำหนิเฉพาะเมื่อค่าตัวอย่างที่อยู่ก่อนแท็กไม่สมเหตุสมผลกับบริบท เช่น ชื่อระบบที่ไม่มีจริง หรือแหล่งอ้างอิงปลอม
+
 หมายเหตุ: ประเมินจากเนื้อหาจริง ไม่ใช่แค่ตรวจว่ากรอกหรือไม่ ให้คำแนะนำที่เป็นประโยชน์และปฏิบัติได้จริงในบริบท อปท.`.trim();
 
     // ── Response schema ────────────────────────────────────────────
@@ -592,6 +635,14 @@ ${formatRubricForReviewer({ isIssueBased })}
         dto,
         matchedRule: Boolean(matchedRule),
         overallScore: adjustedScore,
+        // NOTE — the audit row captures the LLM's RAW label (observability),
+        // NOT the deterministic label that the response returns (Wave
+        // LAO-STRATEGY-AI-PARITY Followup G+R Coherence 2026-05-22 derives
+        // the response label from `adjustedScore`). Logging the LLM raw
+        // lets ops detect schema drift / hallucination on the label
+        // independently of the deterministic response override. The two
+        // values MAY diverge by design — that divergence is itself useful
+        // signal for ops.
         readinessLabel: aiResult.readinessLabel,
         suggestionsCount: aiResult.suggestions?.length ?? 0,
         durationMs,
@@ -602,9 +653,18 @@ ${formatRubricForReviewer({ isIssueBased })}
       const { criteria: _raw, ...aiResultBase } = aiResult;
       void _raw;
 
+      // Wave LAO-STRATEGY-AI-PARITY Followup G+R Coherence (2026-05-22) —
+      // derive readinessLabel deterministically from the post-adjustment
+      // score and OVERRIDE the LLM-supplied value. Matches the parity fix
+      // in AiService.generatePreSubmitReview so owner-side and staff-side
+      // review paths share identical band semantics. Advisory-only per
+      // §17.2 — does NOT gate any workflow transition.
+      const derivedReadinessLabel = deriveReadinessLabel(adjustedScore);
+
       return {
         ...aiResultBase,
         overallScore: adjustedScore,
+        readinessLabel: derivedReadinessLabel,
         checklistSummary,
         ...(criteriaEvaluation
           ? { categories: { criteriaEvaluation } }
@@ -872,6 +932,20 @@ ${formatRubricForReviewer({ isIssueBased })}
     for (const r of results) {
       const meta = indexed.get(r.criterionId);
       if (!meta) continue;
+      // Wave Evidence-Scope Decoupling (2026-05-22) — see
+      // `AiService.computeCriticalityPenalty` for full rationale. Skip
+      // score penalty for evidence-required criteria when the LLM
+      // couldn't find evidence in prose (`fail` / `needs-evidence` from
+      // an `llm` source). Deterministic auto-checks (`evidence-auto` /
+      // `geo-auto`) retain their penalty because they are objective.
+      if (
+        meta.evidenceRequired === true &&
+        (r.verdict === 'fail' || r.verdict === 'needs-evidence') &&
+        r.source !== 'evidence-auto' &&
+        r.source !== 'geo-auto'
+      ) {
+        continue;
+      }
       if (r.verdict === 'fail') {
         delta -=
           meta.criticality === 'blocking'

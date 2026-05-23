@@ -9,7 +9,25 @@ import {
  * แบบบูรณาการ (4 ประเด็นการพัฒนา), as transcribed into
  * `docs/architecture/ISSUE_BASED_CRITERIA.md` §2.
  *
- * Invariants (also enforced by unit tests):
+ * --- SCOPE (CRITICAL) — CLAUDE.md §17.14 ----------------------------
+ *
+ * This data file encodes **regulatory criteria for LAO-originated
+ * projects that are coordinated with government agencies for execution
+ * in นครราชสีมา**. It is NOT a generic project-quality registry.
+ *
+ * It MUST NOT be:
+ *   - extended with entries for other provinces (create a sibling
+ *     file like `nakhon-pathom-issue-rules.ts` instead)
+ *   - extended with entries for agency-originated projects (create a
+ *     separate `agency-coordination-rules.ts` instead)
+ *   - consumed by AI services for callers whose classification is
+ *     `agency` per CLAUDE.md §1 (the D4=B gate in `AiService` enforces
+ *     this — do NOT remove that gate)
+ *
+ * See CLAUDE.md §17.14.3 for the canonical expansion path.
+ *
+ * --- Invariants (also enforced by unit tests) ------------------------
+ *
  *   - 6 entries total
  *   - 21 criteria total (3 / 3 / 3 / 5 / 4 / 3)
  *   - every entry carries the same `rulesetVersion`
@@ -73,6 +91,7 @@ export const NAKHON_RATCHASIMA_ISSUE_RULES: IssueRuleEntry[] = [
         criticality: 'advisory',
         evidenceRequired: false,
         sourceRefs: ['หลักเกณฑ์ อบจ. นครราชสีมา — ประเด็น 1'],
+        enforcement: 'llm-prose',
       },
       {
         id: 'C1.b',
@@ -82,6 +101,7 @@ export const NAKHON_RATCHASIMA_ISSUE_RULES: IssueRuleEntry[] = [
         criticality: 'preferred',
         evidenceRequired: false,
         sourceRefs: ['หลักเกณฑ์ อบจ. นครราชสีมา — ประเด็น 1'],
+        enforcement: 'llm-prose',
       },
       {
         id: 'C1.c',
@@ -92,6 +112,8 @@ export const NAKHON_RATCHASIMA_ISSUE_RULES: IssueRuleEntry[] = [
         criticality: 'advisory',
         evidenceRequired: false,
         sourceRefs: ['หลักเกณฑ์ อบจ. นครราชสีมา — ประเด็น 1'],
+        geoAutoCheck: 'title-uniqueness',
+        enforcement: 'auto-check',
       },
     ],
     rulesetVersion: NAKHON_RATCHASIMA_RULESET_VERSION,
@@ -189,6 +211,7 @@ export const NAKHON_RATCHASIMA_ISSUE_RULES: IssueRuleEntry[] = [
         criticality: 'advisory',
         evidenceRequired: false,
         sourceRefs: ['หลักเกณฑ์ อบจ. นครราชสีมา — ประเด็น 2'],
+        enforcement: 'llm-prose',
       },
       {
         id: 'C2.b',
@@ -198,6 +221,7 @@ export const NAKHON_RATCHASIMA_ISSUE_RULES: IssueRuleEntry[] = [
         criticality: 'preferred',
         evidenceRequired: false,
         sourceRefs: ['หลักเกณฑ์ อบจ. นครราชสีมา — ประเด็น 2'],
+        enforcement: 'llm-prose',
       },
       {
         id: 'C2.c',
@@ -208,6 +232,8 @@ export const NAKHON_RATCHASIMA_ISSUE_RULES: IssueRuleEntry[] = [
         criticality: 'advisory',
         evidenceRequired: false,
         sourceRefs: ['หลักเกณฑ์ อบจ. นครราชสีมา — ประเด็น 2'],
+        geoAutoCheck: 'title-uniqueness',
+        enforcement: 'auto-check',
       },
     ],
     rulesetVersion: NAKHON_RATCHASIMA_RULESET_VERSION,
@@ -312,6 +338,7 @@ export const NAKHON_RATCHASIMA_ISSUE_RULES: IssueRuleEntry[] = [
         criticality: 'advisory',
         evidenceRequired: false,
         sourceRefs: ['หลักเกณฑ์ อบจ. นครราชสีมา — ประเด็น 3.1'],
+        enforcement: 'llm-prose',
       },
       {
         id: 'C3_1.b',
@@ -321,6 +348,7 @@ export const NAKHON_RATCHASIMA_ISSUE_RULES: IssueRuleEntry[] = [
         criticality: 'preferred',
         evidenceRequired: false,
         sourceRefs: ['หลักเกณฑ์ อบจ. นครราชสีมา — ประเด็น 3.1'],
+        enforcement: 'llm-prose',
       },
       {
         id: 'C3_1.c',
@@ -331,6 +359,8 @@ export const NAKHON_RATCHASIMA_ISSUE_RULES: IssueRuleEntry[] = [
         criticality: 'advisory',
         evidenceRequired: false,
         sourceRefs: ['หลักเกณฑ์ อบจ. นครราชสีมา — ประเด็น 3.1'],
+        geoAutoCheck: 'title-uniqueness',
+        enforcement: 'auto-check',
       },
     ],
     rulesetVersion: NAKHON_RATCHASIMA_RULESET_VERSION,
@@ -387,6 +417,7 @@ export const NAKHON_RATCHASIMA_ISSUE_RULES: IssueRuleEntry[] = [
         evidenceRequired: false,
         geoAutoCheck: 'cross-amphoe',
         sourceRefs: ['หลักเกณฑ์ อบจ. นครราชสีมา — ประเด็น 3.2'],
+        enforcement: 'auto-check',
       },
       {
         id: 'C3_2.b',
@@ -396,6 +427,7 @@ export const NAKHON_RATCHASIMA_ISSUE_RULES: IssueRuleEntry[] = [
         criticality: 'preferred',
         evidenceRequired: false,
         sourceRefs: ['หลักเกณฑ์ อบจ. นครราชสีมา — ประเด็น 3.2'],
+        enforcement: 'llm-prose',
       },
       {
         id: 'C3_2.c',
@@ -411,6 +443,7 @@ export const NAKHON_RATCHASIMA_ISSUE_RULES: IssueRuleEntry[] = [
           'หลักเกณฑ์ อบจ. นครราชสีมา — ประเด็น 3.2',
           'พ.ร.บ. ป่าสงวนแห่งชาติ / พ.ร.บ. อุทยานแห่งชาติ',
         ],
+        enforcement: 'auto-check',
       },
       {
         id: 'C3_2.d',
@@ -423,6 +456,7 @@ export const NAKHON_RATCHASIMA_ISSUE_RULES: IssueRuleEntry[] = [
         evidenceTags: ['land-use-permit'],
         geoAutoCheck: 'attachment-presence',
         sourceRefs: ['หลักเกณฑ์ อบจ. นครราชสีมา — ประเด็น 3.2'],
+        enforcement: 'staff-only',
       },
       {
         id: 'C3_2.e',
@@ -436,6 +470,7 @@ export const NAKHON_RATCHASIMA_ISSUE_RULES: IssueRuleEntry[] = [
           'ระเบียบ มท. ว่าด้วยการขุดลอก พ.ศ. 2547',
           'พ.ร.บ. การเดินเรือในน่านน้ำไทย',
         ],
+        enforcement: 'staff-only',
       },
     ],
     rulesetVersion: NAKHON_RATCHASIMA_RULESET_VERSION,
@@ -530,6 +565,7 @@ export const NAKHON_RATCHASIMA_ISSUE_RULES: IssueRuleEntry[] = [
         evidenceRequired: false,
         geoAutoCheck: 'cross-amphoe',
         sourceRefs: ['หลักเกณฑ์ อบจ. นครราชสีมา — ประเด็น 4.1-4.4'],
+        enforcement: 'auto-check',
       },
       {
         id: 'C4_1to4.b',
@@ -543,6 +579,7 @@ export const NAKHON_RATCHASIMA_ISSUE_RULES: IssueRuleEntry[] = [
           'หลักเกณฑ์ อบจ. นครราชสีมา — ประเด็น 4.1-4.4',
           'มาตรฐานกรมทางหลวงชนบท พ.ศ. 2550',
         ],
+        enforcement: 'staff-only',
       },
       {
         id: 'C4_1to4.c',
@@ -552,6 +589,7 @@ export const NAKHON_RATCHASIMA_ISSUE_RULES: IssueRuleEntry[] = [
         criticality: 'preferred',
         evidenceRequired: false,
         sourceRefs: ['หลักเกณฑ์ อบจ. นครราชสีมา — ประเด็น 4.1-4.4'],
+        enforcement: 'llm-prose',
       },
       {
         id: 'C4_1to4.d',
@@ -562,6 +600,8 @@ export const NAKHON_RATCHASIMA_ISSUE_RULES: IssueRuleEntry[] = [
         criticality: 'advisory',
         evidenceRequired: false,
         sourceRefs: ['หลักเกณฑ์ อบจ. นครราชสีมา — ประเด็น 4.1-4.4'],
+        enforcement: 'auto-pass',
+        autoPassRationale: 'โครงการเข้าระบบประสานแผน อปท. โดยปริยายแล้วเป็นโครงการที่ อปท. ในพื้นที่ดำเนินการเองไม่ได้ — เกณฑ์นี้ผ่านโดยอัตโนมัติ (ระบบ)',
       },
     ],
     rulesetVersion: NAKHON_RATCHASIMA_RULESET_VERSION,
@@ -631,6 +671,7 @@ export const NAKHON_RATCHASIMA_ISSUE_RULES: IssueRuleEntry[] = [
         criticality: 'advisory',
         evidenceRequired: false,
         sourceRefs: ['หลักเกณฑ์ อบจ. นครราชสีมา — ประเด็น 4.5-4.6'],
+        enforcement: 'llm-prose',
       },
       {
         id: 'C4_5to6.b',
@@ -640,6 +681,7 @@ export const NAKHON_RATCHASIMA_ISSUE_RULES: IssueRuleEntry[] = [
         criticality: 'preferred',
         evidenceRequired: false,
         sourceRefs: ['หลักเกณฑ์ อบจ. นครราชสีมา — ประเด็น 4.5-4.6'],
+        enforcement: 'llm-prose',
       },
       {
         id: 'C4_5to6.d',
@@ -650,6 +692,8 @@ export const NAKHON_RATCHASIMA_ISSUE_RULES: IssueRuleEntry[] = [
         criticality: 'advisory',
         evidenceRequired: false,
         sourceRefs: ['หลักเกณฑ์ อบจ. นครราชสีมา — ประเด็น 4.5-4.6'],
+        geoAutoCheck: 'title-uniqueness',
+        enforcement: 'auto-check',
       },
     ],
     rulesetVersion: NAKHON_RATCHASIMA_RULESET_VERSION,

@@ -90,4 +90,19 @@ export class PreSubmitReviewDto {
   @IsString()
   @IsOptional()
   subTypeCode?: string;
+
+  /**
+   * Wave AI-Enforcement-Model (2026-05-22) — optional self-id used by
+   * the deterministic title-uniqueness pre-check. When set, the
+   * duplicate-title query excludes this project's own row so re-runs
+   * on ReadyToSendPage don't false-positive against the project's
+   * own stored title. AddProject pre-submit flow leaves this empty
+   * because the project row does not yet exist.
+   *
+   * §17.2 advisory — drives a non-blocking criterion verdict.
+   * §17.9 — UUID is a closed-set value; not user prose.
+   */
+  @IsString()
+  @IsOptional()
+  targetProjectId?: string;
 }

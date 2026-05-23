@@ -16,6 +16,14 @@ import { LandUseClassifierService } from './land-use-classifier.service';
 // logging. Provide a permissive stub in every suite so DI resolves.
 import { AiUsageLogsService } from 'src/ai-usage-logs/ai-usage-logs.service';
 import { FeasibilityGateService } from './feasibility/feasibility-gate.service';
+// Wave LAO_STRATEGY_AI_PARITY (N3) — AiService now injects WorkHistory
+// repo for caller classification (D4=B agency gate). Permissive stub in
+// every suite so DI resolves; suites that exercise pre-submit-review
+// override `findOne` per test.
+import { getRepositoryToken } from '@nestjs/typeorm';
+import { WorkHistory } from 'src/work-history/entities/work-history.entity';
+import { PiiRedactorService } from 'src/common/pii/pii-redactor.service';
+import { LLM_CLIENT } from './llm/llm-client.interface';
 
 const mockOpenAI = {
   chat: {
@@ -136,6 +144,31 @@ describe('AiService.generatePromptSuggestions', () => {
         {
           provide: AiUsageLogsService,
           useValue: { create: jest.fn().mockResolvedValue({}) },
+        },
+        {
+          provide: getRepositoryToken(WorkHistory),
+          useValue: { findOne: jest.fn().mockResolvedValue(null) },
+        },
+        // 2026-05-22 — N3 added LLM_CLIENT + PiiRedactor as required
+        // constructor deps but did not propagate the mocks to these
+        // pre-existing beforeEach blocks. Inline minimal stubs here
+        // so the TestingModule can compile; the pre-existing tests
+        // don't exercise these paths (legacy tests stub OpenAI at the
+        // module level instead).
+        {
+          provide: LLM_CLIENT,
+          useValue: {
+            providerName: 'stub',
+            createChatCompletion: jest.fn(),
+            createChatCompletionStream: jest.fn(),
+          },
+        },
+        {
+          provide: PiiRedactorService,
+          useValue: {
+            redactText: jest.fn((s: string) => ({ output: s, redactions: [] })),
+            redactForPrompt: jest.fn((s: string) => ({ output: s, redactions: [] })),
+          },
         },
       ],
     }).compile();
@@ -387,6 +420,31 @@ describe('AiService — buildIssueBasedPrompt (Wave 30 N2 prompt blocks)', () =>
         {
           provide: AiUsageLogsService,
           useValue: { create: jest.fn().mockResolvedValue({}) },
+        },
+        {
+          provide: getRepositoryToken(WorkHistory),
+          useValue: { findOne: jest.fn().mockResolvedValue(null) },
+        },
+        // 2026-05-22 — N3 added LLM_CLIENT + PiiRedactor as required
+        // constructor deps but did not propagate the mocks to these
+        // pre-existing beforeEach blocks. Inline minimal stubs here
+        // so the TestingModule can compile; the pre-existing tests
+        // don't exercise these paths (legacy tests stub OpenAI at the
+        // module level instead).
+        {
+          provide: LLM_CLIENT,
+          useValue: {
+            providerName: 'stub',
+            createChatCompletion: jest.fn(),
+            createChatCompletionStream: jest.fn(),
+          },
+        },
+        {
+          provide: PiiRedactorService,
+          useValue: {
+            redactText: jest.fn((s: string) => ({ output: s, redactions: [] })),
+            redactForPrompt: jest.fn((s: string) => ({ output: s, redactions: [] })),
+          },
         },
       ],
     }).compile();
@@ -984,6 +1042,31 @@ describe('AiService — buildGeoPreview (Wave 35 N1)', () => {
           provide: AiUsageLogsService,
           useValue: { create: jest.fn().mockResolvedValue({}) },
         },
+        {
+          provide: getRepositoryToken(WorkHistory),
+          useValue: { findOne: jest.fn().mockResolvedValue(null) },
+        },
+        // 2026-05-22 — N3 added LLM_CLIENT + PiiRedactor as required
+        // constructor deps but did not propagate the mocks to these
+        // pre-existing beforeEach blocks. Inline minimal stubs here
+        // so the TestingModule can compile; the pre-existing tests
+        // don't exercise these paths (legacy tests stub OpenAI at the
+        // module level instead).
+        {
+          provide: LLM_CLIENT,
+          useValue: {
+            providerName: 'stub',
+            createChatCompletion: jest.fn(),
+            createChatCompletionStream: jest.fn(),
+          },
+        },
+        {
+          provide: PiiRedactorService,
+          useValue: {
+            redactText: jest.fn((s: string) => ({ output: s, redactions: [] })),
+            redactForPrompt: jest.fn((s: string) => ({ output: s, redactions: [] })),
+          },
+        },
       ],
     }).compile();
     service = module.get<AiService>(AiService);
@@ -1149,5 +1232,606 @@ describe('AiService — buildGeoPreview (Wave 35 N1)', () => {
     });
 
     expect(result.feasibility).toEqual({ isFeasible: true, severity: 'pass' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wave LAO_STRATEGY_AI_PARITY (N3) — pre-submit-review STRATEGY_BASED LAO
+// criteria injection + multi-issue response envelope.
+//
+// Coverage:
+//   1. ISSUE_BASED LAO regression — envelope shape preserved (no
+//      criteriaEvaluations key, only legacy criteriaEvaluation)
+//   2. STRATEGY_BASED LAO match=1 — both keys (back-compat mirror)
+//   3. STRATEGY_BASED LAO match=2 — only criteriaEvaluations (no mirror)
+//   4. STRATEGY_BASED LAO match=0 — neither key (no envelope)
+//   5. STRATEGY_BASED Agency — neither key (D4=B backend gate)
+//   6. LLM unknown issueKey → 502 (§17.9)
+//   7. LLM criterionId not in matched whitelist → 502 (§17.9)
+// ---------------------------------------------------------------------------
+describe('AiService.generatePreSubmitReview — STRATEGY_BASED LAO parity (N3)', () => {
+  let service: AiService;
+
+  // ── Permissive DI stubs ────────────────────────────────────────────────
+  const mockLlmClient = {
+    providerName: 'stub' as const,
+    createChatCompletion: jest.fn(),
+    createChatCompletionStream: jest.fn(),
+  };
+  const mockPiiRedactor = {
+    redactText: jest.fn((s: string) => ({ output: s, redactions: [] })),
+    redactForPrompt: jest.fn((s: string) => ({ output: s, redactions: [] })),
+  } as unknown as PiiRedactorService;
+
+  const mockPrecheck = {
+    evaluate: jest.fn().mockResolvedValue({
+      response: { categories: {} },
+    }),
+  };
+  const mockQuotas = {
+    checkAndLogUsage: jest.fn().mockResolvedValue(undefined),
+    findQuotaIdByUserId: jest.fn().mockResolvedValue('quota-1'),
+  };
+  const mockGeoCheck = {
+    evaluate: jest.fn().mockReturnValue([]),
+  };
+  const mockEvidenceCheck = {
+    evaluate: jest.fn().mockReturnValue([]),
+  };
+  // Single shared registry stub; per-test the methods are re-pointed
+  // via jest.fn().mockReturnValueOnce so the same instance can drive
+  // every cardinality case (STRAT001..STRAT005) and the ISSUE_BASED
+  // regression case.
+  const mockRegistry = {
+    findByIssueId: jest.fn(),
+    findByIssueName: jest.fn(),
+    findAllByStrategyName: jest.fn(),
+    listAllForProvince: jest.fn().mockReturnValue([]),
+    getCurrentRulesetVersion: jest.fn().mockReturnValue('2026-04-18'),
+  };
+  const mockWorkHistoryRepo = {
+    findOne: jest.fn(),
+  };
+
+  // Helper: fabricate a registry entry quickly with one or two
+  // criteria. Province / rulesetVersion are stable across the suite.
+  const makeEntry = (
+    issueKey: string,
+    criteria: Array<{
+      id: string;
+      label?: string;
+      criticality?: 'blocking' | 'preferred' | 'advisory';
+    }>,
+  ) => ({
+    provinceCode: 'NAKHON_RATCHASIMA' as const,
+    issueKey,
+    issueDisplayName: `${issueKey} — display`,
+    characteristics: [],
+    matchers: { exactNames: [], keywordContains: [] },
+    subTypes: [],
+    criteria: criteria.map((c) => ({
+      id: c.id,
+      label: c.label ?? `label-${c.id}`,
+      description: 'desc',
+      weight: 3,
+      criticality: c.criticality ?? 'preferred',
+      evidenceRequired: false,
+    })),
+    rulesetVersion: '2026-04-18',
+    sourceRefs: [],
+  });
+
+  // Helper: build an LLM completion stub with a `criteria` payload.
+  const makeCompletion = (
+    criteria: Array<{
+      criterionId: string;
+      verdict: string;
+      rationale: string;
+      issueKey?: string;
+    }>,
+    overrides?: Partial<{ overallScore: number }>,
+  ) => ({
+    choices: [
+      {
+        message: {
+          content: JSON.stringify({
+            overallScore: overrides?.overallScore ?? 80,
+            readinessLabel: 'ควรปรับปรุง',
+            rationale: 'rationale',
+            strongPoint: 'strong',
+            suggestions: [],
+            criteria,
+          }),
+        },
+      },
+    ],
+    usage: { prompt_tokens: 100, completion_tokens: 50 },
+    model: 'gpt-4o',
+  });
+
+  const minimalDto = (
+    overrides: Partial<{
+      reportFormat: 'STRATEGY_BASED' | 'ISSUE_BASED';
+      strategyName: string;
+      developmentIssueId: string;
+      developmentIssueName: string;
+    }> = {},
+  ) =>
+    ({
+      reportFormat: overrides.reportFormat ?? 'STRATEGY_BASED',
+      strategyName: overrides.strategyName,
+      developmentIssueId: overrides.developmentIssueId,
+      developmentIssueName: overrides.developmentIssueName,
+      project: {
+        title: 'โครงการทดสอบ',
+        objective: 'วัตถุประสงค์',
+        goal: 'เป้าหมาย',
+        expected: 'ผล',
+        indicator: 'ตัวชี้วัด',
+        budgets: [{ year: 2569, quantity: 100000 }],
+      },
+      attachments: [],
+    }) as unknown as import('./dto/pre-submit-review.dto').PreSubmitReviewDto;
+
+  // ── WorkHistory helpers (CLAUDE.md §1) ─────────────────────────────────
+  // PK columns are string in the entities; mirror that here.
+  const laoWorkHistory = {
+    id: 'wh-lao',
+    amphoe: { id: '4002' },
+    localAdministrativeOrganization: { id: '4002001' },
+  };
+  const agencyWorkHistory = {
+    id: 'wh-agency',
+    amphoe: { id: '3001' },
+    localAdministrativeOrganization: { id: '3001027' },
+  };
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    mockLlmClient.createChatCompletion.mockReset();
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        AiService,
+        { provide: LLM_CLIENT, useValue: mockLlmClient },
+        { provide: PiiRedactorService, useValue: mockPiiRedactor },
+        { provide: SmartApprovePrecheckService, useValue: mockPrecheck },
+        { provide: AiUsageQuotasService, useValue: mockQuotas },
+        { provide: AiContextService, useValue: {} },
+        { provide: IssueCriteriaRegistryService, useValue: mockRegistry },
+        { provide: IssueCriteriaGeoCheckService, useValue: mockGeoCheck },
+        { provide: IssueCriteriaEvidenceCheckService, useValue: mockEvidenceCheck },
+        {
+          provide: GeoFeatureLookupService,
+          useValue: { resolveFeatureForPoint: jest.fn().mockReturnValue(null) },
+        },
+        {
+          provide: GeoConflictService,
+          useValue: {
+            resolveProjectType: jest.fn().mockReturnValue('unknown'),
+            analyze: jest.fn().mockReturnValue(null),
+          },
+        },
+        {
+          provide: AdminBoundaryLookupService,
+          useValue: { resolveAdminBoundary: jest.fn().mockReturnValue(null) },
+        },
+        {
+          provide: LandUseClassifierService,
+          useValue: { classify: jest.fn().mockResolvedValue(null) },
+        },
+        {
+          provide: FeasibilityGateService,
+          useValue: { evaluate: jest.fn().mockReturnValue(null) },
+        },
+        {
+          provide: AiUsageLogsService,
+          useValue: { create: jest.fn().mockResolvedValue({}) },
+        },
+        {
+          provide: getRepositoryToken(WorkHistory),
+          useValue: mockWorkHistoryRepo,
+        },
+      ],
+    }).compile();
+    service = module.get<AiService>(AiService);
+  });
+
+  it('ISSUE_BASED LAO regression — envelope shape unchanged (criteriaEvaluation only, no plural key)', async () => {
+    mockWorkHistoryRepo.findOne.mockResolvedValue(laoWorkHistory);
+    const entry = makeEntry('issue-foo', [
+      { id: 'C1', criticality: 'preferred' },
+    ]);
+    mockRegistry.findByIssueId.mockResolvedValue({ issue: {}, entry });
+    mockLlmClient.createChatCompletion.mockResolvedValue(
+      makeCompletion([
+        { criterionId: 'C1', verdict: 'pass', rationale: 'r1' },
+      ]),
+    );
+
+    const dto = minimalDto({
+      reportFormat: 'ISSUE_BASED',
+      developmentIssueId: '11111111-1111-1111-1111-111111111111',
+    });
+    const result = (await service.generatePreSubmitReview(
+      dto,
+      'user-1',
+    )) as any;
+
+    expect(result.categories).toBeDefined();
+    // ISSUE_BASED is single-match by construction; envelope writes both
+    // the plural key (length 1) AND the legacy singular mirror.
+    expect(result.categories.criteriaEvaluations).toHaveLength(1);
+    expect(result.categories.criteriaEvaluation).toEqual(
+      result.categories.criteriaEvaluations[0],
+    );
+    // Sanity: the merger produced one result row tagged with the issueKey.
+    const payload = result.categories.criteriaEvaluations[0];
+    expect(payload.issueKey).toBe('issue-foo');
+    expect(payload.results).toHaveLength(1);
+  });
+
+  it('STRATEGY_BASED LAO match=1 — both keys (back-compat mirror)', async () => {
+    mockWorkHistoryRepo.findOne.mockResolvedValue(laoWorkHistory);
+    const entry = makeEntry('strat002-issue', [
+      { id: 'S2_a', criticality: 'preferred' },
+    ]);
+    mockRegistry.findAllByStrategyName.mockReturnValue([entry]);
+    mockLlmClient.createChatCompletion.mockResolvedValue(
+      makeCompletion([
+        { criterionId: 'S2_a', verdict: 'pass', rationale: 'ok' },
+      ]),
+    );
+
+    const result = (await service.generatePreSubmitReview(
+      minimalDto({ strategyName: 'ยุทธศาสตร์ A' }),
+      'user-1',
+    )) as any;
+
+    expect(result.categories).toBeDefined();
+    expect(result.categories.criteriaEvaluations).toHaveLength(1);
+    expect(result.categories.criteriaEvaluation).toBe(
+      result.categories.criteriaEvaluations[0],
+    );
+    expect(result.categories.criteriaEvaluation.issueKey).toBe(
+      'strat002-issue',
+    );
+  });
+
+  it('STRATEGY_BASED LAO match=2 — only criteriaEvaluations (no mirror)', async () => {
+    mockWorkHistoryRepo.findOne.mockResolvedValue(laoWorkHistory);
+    const e1 = makeEntry('econ-3-1', [
+      { id: 'E1_a', criticality: 'preferred' },
+    ]);
+    const e2 = makeEntry('econ-3-2', [
+      { id: 'E2_a', criticality: 'preferred' },
+    ]);
+    mockRegistry.findAllByStrategyName.mockReturnValue([e1, e2]);
+    mockLlmClient.createChatCompletion.mockResolvedValue(
+      makeCompletion([
+        {
+          criterionId: 'E1_a',
+          verdict: 'pass',
+          rationale: 'r1',
+          issueKey: 'econ-3-1',
+        },
+        {
+          criterionId: 'E2_a',
+          verdict: 'needs-evidence',
+          rationale: 'r2',
+          issueKey: 'econ-3-2',
+        },
+      ]),
+    );
+
+    const result = (await service.generatePreSubmitReview(
+      minimalDto({ strategyName: 'ยุทธศาสตร์ด้านการพัฒนาเศรษฐกิจ' }),
+      'user-1',
+    )) as any;
+
+    expect(result.categories.criteriaEvaluations).toHaveLength(2);
+    expect(result.categories.criteriaEvaluation).toBeUndefined();
+    const keys = result.categories.criteriaEvaluations
+      .map((p: any) => p.issueKey)
+      .sort();
+    expect(keys).toEqual(['econ-3-1', 'econ-3-2']);
+  });
+
+  it('STRATEGY_BASED LAO match=0 — no envelope, no criteria block in prompt', async () => {
+    mockWorkHistoryRepo.findOne.mockResolvedValue(laoWorkHistory);
+    mockRegistry.findAllByStrategyName.mockReturnValue([]);
+    mockLlmClient.createChatCompletion.mockResolvedValue(
+      makeCompletion([]), // LLM returns no criteria
+    );
+
+    const result = (await service.generatePreSubmitReview(
+      minimalDto({ strategyName: 'ยุทธศาสตร์ที่ไม่ตรงกับ registry' }),
+      'user-1',
+    )) as any;
+
+    // No categories envelope when no match.
+    expect(result.categories).toBeUndefined();
+    // Prompt sent to the LLM MUST NOT carry [CRITERIA_JSON] / [CRITERIA].
+    const callArgs = mockLlmClient.createChatCompletion.mock.calls[0][0];
+    const systemMsg = callArgs.messages.find((m: any) => m.role === 'system');
+    expect(systemMsg.content).not.toContain('[CRITERIA_JSON]');
+    expect(systemMsg.content).not.toContain('[CRITERIA]');
+  });
+
+  it('STRATEGY_BASED Agency — D4=B backend gate skips criteria injection', async () => {
+    mockWorkHistoryRepo.findOne.mockResolvedValue(agencyWorkHistory);
+    // Even if registry would match, the gate MUST short-circuit on
+    // classification and skip the lookup entirely.
+    mockRegistry.findAllByStrategyName.mockReturnValue([
+      makeEntry('should-not-be-used', [{ id: 'X' }]),
+    ]);
+    mockLlmClient.createChatCompletion.mockResolvedValue(makeCompletion([]));
+
+    const result = (await service.generatePreSubmitReview(
+      minimalDto({ strategyName: 'ยุทธศาสตร์ A' }),
+      'user-agency',
+    )) as any;
+
+    expect(result.categories).toBeUndefined();
+    // Registry lookup MUST NOT have been invoked for agency caller.
+    expect(mockRegistry.findAllByStrategyName).not.toHaveBeenCalled();
+  });
+
+  it('LLM output with unknown issueKey → 502 (§17.9)', async () => {
+    mockWorkHistoryRepo.findOne.mockResolvedValue(laoWorkHistory);
+    const e1 = makeEntry('econ-3-1', [{ id: 'E1_a' }]);
+    const e2 = makeEntry('econ-3-2', [{ id: 'E2_a' }]);
+    mockRegistry.findAllByStrategyName.mockReturnValue([e1, e2]);
+    mockLlmClient.createChatCompletion.mockResolvedValue(
+      makeCompletion([
+        {
+          criterionId: 'E1_a',
+          verdict: 'pass',
+          rationale: 'r1',
+          issueKey: 'NOT-IN-MATCHED-SET',
+        },
+      ]),
+    );
+
+    await expect(
+      service.generatePreSubmitReview(
+        minimalDto({ strategyName: 'ยุทธศาสตร์ A' }),
+        'user-1',
+      ),
+    ).rejects.toThrow(/AI_SCHEMA_DRIFT/);
+  });
+
+  it('LLM output with criterionId outside matched whitelist → 502 (§17.9)', async () => {
+    mockWorkHistoryRepo.findOne.mockResolvedValue(laoWorkHistory);
+    const e1 = makeEntry('econ-3-1', [{ id: 'E1_a' }]);
+    const e2 = makeEntry('econ-3-2', [{ id: 'E2_a' }]);
+    mockRegistry.findAllByStrategyName.mockReturnValue([e1, e2]);
+    mockLlmClient.createChatCompletion.mockResolvedValue(
+      makeCompletion([
+        {
+          criterionId: 'NOT-A-VALID-CRITERION',
+          verdict: 'pass',
+          rationale: 'r1',
+          issueKey: 'econ-3-1',
+        },
+      ]),
+    );
+
+    await expect(
+      service.generatePreSubmitReview(
+        minimalDto({ strategyName: 'ยุทธศาสตร์ A' }),
+        'user-1',
+      ),
+    ).rejects.toThrow(/AI_SCHEMA_DRIFT/);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Wave LAO_STRATEGY_AI_PARITY (N3 prompt-lift, 2026-05-22) —
+  // per-criterion verdict enforcement.
+  // Source: docs/tasks/wave-lao-strategy-ai-parity-followup/
+  //          N3-prompt-force-per-criterion-verdicts.md
+  // ─────────────────────────────────────────────────────────────────────
+
+  it('N3 prompt-lift — STRAT004 multi-entry returns verdicts for ALL 8 criteria (4+4) — none skipped', async () => {
+    mockWorkHistoryRepo.findOne.mockResolvedValue(laoWorkHistory);
+    const urban1to4 = makeEntry('urban-4-1to4', [
+      { id: 'C4_1to4.a', criticality: 'preferred' },
+      { id: 'C4_1to4.b', criticality: 'preferred' },
+      { id: 'C4_1to4.c', criticality: 'preferred' },
+      { id: 'C4_1to4.d', criticality: 'preferred' },
+    ]);
+    const urban5to6 = makeEntry('urban-4-5to6', [
+      { id: 'C4_5to6.a', criticality: 'preferred' },
+      { id: 'C4_5to6.b', criticality: 'preferred' },
+      { id: 'C4_5to6.c', criticality: 'preferred' },
+      { id: 'C4_5to6.d', criticality: 'preferred' },
+    ]);
+    mockRegistry.findAllByStrategyName.mockReturnValue([urban1to4, urban5to6]);
+    mockLlmClient.createChatCompletion.mockResolvedValue(
+      makeCompletion(
+        [
+          {
+            criterionId: 'C4_1to4.a',
+            verdict: 'pass',
+            rationale: 'C4_1to4.a: ระบุ อปท. ข้ามเขตชัดเจน',
+            issueKey: 'urban-4-1to4',
+          },
+          {
+            criterionId: 'C4_1to4.b',
+            verdict: 'needs-evidence',
+            rationale: 'C4_1to4.b: ยังไม่ได้อ้างมาตรฐาน พ.ศ. 2550',
+            issueKey: 'urban-4-1to4',
+          },
+          {
+            criterionId: 'C4_1to4.c',
+            verdict: 'pass',
+            rationale: 'C4_1to4.c: ตัวชี้วัดระบุ',
+            issueKey: 'urban-4-1to4',
+          },
+          {
+            criterionId: 'C4_1to4.d',
+            verdict: 'needs-evidence',
+            rationale: 'C4_1to4.d: ต้องระบุเหตุผลที่ อปท. ทำเองไม่ได้',
+            issueKey: 'urban-4-1to4',
+          },
+          {
+            criterionId: 'C4_5to6.a',
+            verdict: 'pass',
+            rationale: 'C4_5to6.a: ระบุพื้นที่',
+            issueKey: 'urban-4-5to6',
+          },
+          {
+            criterionId: 'C4_5to6.b',
+            verdict: 'pass',
+            rationale: 'C4_5to6.b: ระบุมาตรฐาน',
+            issueKey: 'urban-4-5to6',
+          },
+          {
+            criterionId: 'C4_5to6.c',
+            verdict: 'pass',
+            rationale: 'C4_5to6.c: ตัวชี้วัดครบ',
+            issueKey: 'urban-4-5to6',
+          },
+          {
+            criterionId: 'C4_5to6.d',
+            verdict: 'pass',
+            rationale: 'C4_5to6.d: เหตุผล อปท.',
+            issueKey: 'urban-4-5to6',
+          },
+        ],
+        { overallScore: 78 },
+      ),
+    );
+
+    const result = (await service.generatePreSubmitReview(
+      minimalDto({ strategyName: 'ยุทธศาสตร์ด้านโครงสร้างพื้นฐาน' }),
+      'user-1',
+    )) as any;
+
+    expect(result.categories.criteriaEvaluations).toHaveLength(2);
+    const totalResults = result.categories.criteriaEvaluations.reduce(
+      (acc: number, p: any) => acc + p.results.length,
+      0,
+    );
+    expect(totalResults).toBe(8);
+    // Every payload must carry the right count.
+    const byKey: Record<string, number> = {};
+    for (const p of result.categories.criteriaEvaluations) {
+      byKey[p.issueKey] = p.results.length;
+    }
+    expect(byKey['urban-4-1to4']).toBe(4);
+    expect(byKey['urban-4-5to6']).toBe(4);
+  });
+
+  it('N3 prompt-lift — LLM omits a registry criterion → 502 AI_SCHEMA_DRIFT_MISSING_CRITERION', async () => {
+    mockWorkHistoryRepo.findOne.mockResolvedValue(laoWorkHistory);
+    const urban1to4 = makeEntry('urban-4-1to4', [
+      { id: 'C4_1to4.a', criticality: 'preferred' },
+      { id: 'C4_1to4.b', criticality: 'preferred' },
+      { id: 'C4_1to4.c', criticality: 'preferred' },
+      { id: 'C4_1to4.d', criticality: 'preferred' },
+    ]);
+    mockRegistry.findAllByStrategyName.mockReturnValue([urban1to4]);
+    // LLM omits C4_1to4.b
+    mockLlmClient.createChatCompletion.mockResolvedValue(
+      makeCompletion([
+        {
+          criterionId: 'C4_1to4.a',
+          verdict: 'pass',
+          rationale: 'r-a',
+        },
+        {
+          criterionId: 'C4_1to4.c',
+          verdict: 'pass',
+          rationale: 'r-c',
+        },
+        {
+          criterionId: 'C4_1to4.d',
+          verdict: 'needs-evidence',
+          rationale: 'r-d',
+        },
+      ]),
+    );
+
+    await expect(
+      service.generatePreSubmitReview(
+        minimalDto({ strategyName: 'ยุทธศาสตร์ด้านโครงสร้างพื้นฐาน' }),
+        'user-1',
+      ),
+    ).rejects.toThrow(/AI_SCHEMA_DRIFT_MISSING_CRITERION/);
+  });
+
+  it('N3 prompt-lift — system prompt carries the anti-duplication + per-criterion directives (ISSUE_BASED and STRATEGY_BASED)', async () => {
+    // STRATEGY_BASED path with one registry match
+    mockWorkHistoryRepo.findOne.mockResolvedValue(laoWorkHistory);
+    const entry = makeEntry('strat-foo', [
+      { id: 'S_a', criticality: 'preferred' },
+    ]);
+    mockRegistry.findAllByStrategyName.mockReturnValue([entry]);
+    mockLlmClient.createChatCompletion.mockResolvedValue(
+      makeCompletion([
+        { criterionId: 'S_a', verdict: 'pass', rationale: 'S_a: ok' },
+      ]),
+    );
+    await service.generatePreSubmitReview(
+      minimalDto({ strategyName: 'ยุทธศาสตร์ A' }),
+      'user-1',
+    );
+
+    const stratCall = mockLlmClient.createChatCompletion.mock.calls[0][0];
+    const stratSystem = stratCall.messages.find(
+      (m: any) => m.role === 'system',
+    ).content as string;
+
+    // Strengthened directives present on STRATEGY_BASED path.
+    expect(stratSystem).toContain(
+      'ประเมินทุกเกณฑ์เป็นรายข้อ — เป็นสาระสำคัญของการตอบ ไม่ใช่ส่วนเสริม',
+    );
+    expect(stratSystem).toContain(
+      'ทุก criterionId ที่อยู่ใน [CRITERIA_JSON] ต้องมี verdict ตอบครบทุกข้อ',
+    );
+    expect(stratSystem).toContain(
+      'ห้ามส่ง suggestions ที่ทับซ้อนกับ rationale ของเกณฑ์',
+    );
+    expect(stratSystem).toContain(
+      'suggestions รวมแล้วต้องไม่เกิน 2 ข้อในกรณีที่มี criteria ตอบกลับ',
+    );
+    // §17.2 — evaluation language only; no gating verbs.
+    expect(stratSystem).not.toMatch(/ต้องผ่าน|ห้ามส่ง โครงการ|ต้องอนุมัติ/);
+
+    // Now ISSUE_BASED path — same `criteriaSystemTail` must carry
+    // the strengthening too.
+    mockLlmClient.createChatCompletion.mockReset();
+    const issueEntry = makeEntry('issue-foo', [
+      { id: 'I_a', criticality: 'preferred' },
+    ]);
+    mockRegistry.findByIssueId.mockResolvedValue({
+      issue: {},
+      entry: issueEntry,
+    });
+    mockLlmClient.createChatCompletion.mockResolvedValue(
+      makeCompletion([
+        { criterionId: 'I_a', verdict: 'pass', rationale: 'I_a: ok' },
+      ]),
+    );
+    await service.generatePreSubmitReview(
+      minimalDto({
+        reportFormat: 'ISSUE_BASED',
+        developmentIssueId: '22222222-2222-2222-2222-222222222222',
+      }),
+      'user-1',
+    );
+
+    const issueCall = mockLlmClient.createChatCompletion.mock.calls[0][0];
+    const issueSystem = issueCall.messages.find(
+      (m: any) => m.role === 'system',
+    ).content as string;
+
+    expect(issueSystem).toContain(
+      'ประเมินทุกเกณฑ์เป็นรายข้อ — เป็นสาระสำคัญของการตอบ ไม่ใช่ส่วนเสริม',
+    );
+    expect(issueSystem).toContain(
+      'ห้ามส่ง suggestions ที่ทับซ้อนกับ rationale ของเกณฑ์',
+    );
   });
 });

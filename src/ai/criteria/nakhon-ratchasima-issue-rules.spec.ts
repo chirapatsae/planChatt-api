@@ -107,3 +107,77 @@ describe('NAKHON_RATCHASIMA_ISSUE_RULES — Wave 39 exampleActivities coverage',
     expect(total).toBe(102);
   });
 });
+
+// ---------------------------------------------------------------------
+// Wave AI-Enforcement-Model (2026-05-22) — every criterion in the
+// frozen registry MUST carry an `enforcement` classification. The four
+// modes (`llm-prose` / `auto-check` / `auto-pass` / `staff-only`) drive
+// which criteria reach the LLM and which are resolved deterministically.
+// ---------------------------------------------------------------------
+describe('NAKHON_RATCHASIMA_ISSUE_RULES — enforcement annotation (Wave 2026-05-22)', () => {
+  const ALL_CRITERIA = NAKHON_RATCHASIMA_ISSUE_RULES.flatMap((e) => e.criteria);
+  const VALID_MODES = new Set([
+    'llm-prose',
+    'auto-check',
+    'auto-pass',
+    'staff-only',
+  ]);
+
+  it('every criterion in the registry declares an enforcement mode', () => {
+    for (const c of ALL_CRITERIA) {
+      expect(c.enforcement).toBeDefined();
+      expect(VALID_MODES.has(c.enforcement)).toBe(true);
+    }
+  });
+
+  it('expected enforcement-mode count (frozen, audit on registry edits)', () => {
+    const counts = ALL_CRITERIA.reduce<Record<string, number>>((acc, c) => {
+      acc[c.enforcement] = (acc[c.enforcement] ?? 0) + 1;
+      return acc;
+    }, {});
+    // Frozen distribution per user classification 2026-05-22:
+    // 10 llm-prose / 7 auto-check / 1 auto-pass / 3 staff-only
+    expect(counts).toEqual({
+      'llm-prose': 10,
+      'auto-check': 7,
+      'auto-pass': 1,
+      'staff-only': 3,
+    });
+  });
+
+  it('auto-pass criteria carry an autoPassRationale string', () => {
+    const autoPassCriteria = ALL_CRITERIA.filter(
+      (c) => c.enforcement === 'auto-pass',
+    );
+    for (const c of autoPassCriteria) {
+      expect(typeof c.autoPassRationale).toBe('string');
+      expect((c.autoPassRationale ?? '').length).toBeGreaterThan(20);
+    }
+  });
+
+  it('C4_1to4.d (อปท. ทำเองไม่ได้) is the auto-pass criterion', () => {
+    const c = ALL_CRITERIA.find((c) => c.id === 'C4_1to4.d');
+    expect(c?.enforcement).toBe('auto-pass');
+  });
+
+  it('C4_1to4.b (มาตรฐาน 2550) and C3_2.e (พ.ร.บ. ขุดลอก) are staff-only', () => {
+    const standard = ALL_CRITERIA.find((c) => c.id === 'C4_1to4.b');
+    const regulation = ALL_CRITERIA.find((c) => c.id === 'C3_2.e');
+    expect(standard?.enforcement).toBe('staff-only');
+    expect(regulation?.enforcement).toBe('staff-only');
+  });
+
+  it('title-uniqueness auto-check covers C1.c, C2.c, C3_1.c, C4_5to6.d', () => {
+    const titleAutoCheck = ALL_CRITERIA.filter(
+      (c) =>
+        c.enforcement === 'auto-check' &&
+        c.geoAutoCheck === 'title-uniqueness',
+    );
+    expect(titleAutoCheck.map((c) => c.id).sort()).toEqual([
+      'C1.c',
+      'C2.c',
+      'C3_1.c',
+      'C4_5to6.d',
+    ]);
+  });
+});

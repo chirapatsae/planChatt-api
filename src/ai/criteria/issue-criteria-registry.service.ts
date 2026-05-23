@@ -25,7 +25,34 @@ import {
  *   - AiService AI-generate prompt injection (N3)
  *   - AiService pre-submit review prompt injection (N4)
  *
- * Design notes:
+ * --- SEMANTIC SCOPE (CRITICAL) — CLAUDE.md §17.14 ---------------------
+ *
+ * The registry served by this service encodes **regulatory evaluation
+ * criteria for projects that LAO (องค์กรปกครองส่วนท้องถิ่น) coordinates
+ * with government agencies for execution**. It is NOT a generic project-
+ * quality registry.
+ *
+ * Concretely:
+ *   - province scope: NAKHON_RATCHASIMA only (Wave 24 entries)
+ *   - caller scope:   LAO classification per CLAUDE.md §1 only —
+ *                     Agency callers MUST NOT reach this service for
+ *                     STRATEGY_BASED criteria injection (D4=B gate in
+ *                     AiService is the enforcement point)
+ *   - project scope:  LAO-originated main-plan projects handed off to
+ *                     government agencies for execution (NOT Revision /
+ *                     Change / Supplement / Agency-direct)
+ *
+ * Future expansion to other province or to agency-originated projects
+ * MUST add a separate registry data file (e.g. `agency-coordination-
+ * rules.ts`) — never extend `nakhon-ratchasima-issue-rules.ts` with
+ * cross-scope entries. See CLAUDE.md §17.14.3 for the canonical
+ * expansion path.
+ *
+ * The boundary is enforced at three layers (caller gate / registry
+ * data shape / score adjustment) — see CLAUDE.md §17.14.1.
+ *
+ * --- Design notes ----------------------------------------------------
+ *
  *   - Matching is case-sensitive on NFC-normalized strings. Thai text
  *     normalization matters because OSes and input methods emit NFC
  *     vs NFD forms interchangeably.
@@ -214,5 +241,65 @@ export class IssueCriteriaRegistryService {
       );
       return entryRoot === strategyRoot;
     });
+  }
+
+  /**
+   * Filter a set of registry entries down to those whose sub-types
+   * include `subTypeCode`. Used by `AiService` AFTER `findAllByStrategyName`
+   * to narrow the criteria-injection scope to the exact sub-domain the
+   * user clicked (e.g. "เกษตร" → 3.1.1 → economic-3-1 only, drop
+   * economic-3-2).
+   *
+   * Wave Sub-Type Filter (2026-05-22) — fixes the bug where STRATEGY_BASED
+   * LAO Strategy "ด้านพัฒนาเศรษฐกิจ" injected BOTH economic-3-1 and
+   * economic-3-2 criteria onto a farming project, causing the irrelevant
+   * economic-3-2 (industry/water) checks to score the project at 0/5 and
+   * suggest documents the user had no reason to attach.
+   *
+   * Match policy (CLAUDE.md §17.14 boundary preserved):
+   *   - empty / nullish `subTypeCode`  → return `[]` ("general check"
+   *     mode — Reviewer falls back to generic rubric; no per-criterion
+   *     evaluation). Per user design decision 2026-05-22, the prior
+   *     behaviour of "inject every entry" was found to be incorrect — if
+   *     the user has not disambiguated, AI MUST NOT presume.
+   *   - exact match against `entry.subTypes[].code`  → return entries
+   *     containing that code (typically one entry, since codes are
+   *     unique across the Nakhon Ratchasima registry; multiple is
+   *     accepted defensively if a future registry duplicates a code)
+   *   - non-empty but unknown code  → return `[]` (defensive — do not
+   *     guess which entry the user meant)
+   *
+   * Inputs are caller-supplied registry entries — typically the output
+   * of `findAllByStrategyName`. The helper is pure compute, no I/O.
+   *
+   * §17.2 advisory-only — return value drives criteria injection; never
+   * gates a workflow transition.
+   */
+  filterEntriesBySubType(
+    entries: IssueRuleEntry[],
+    subTypeCode: string | null | undefined,
+  ): IssueRuleEntry[] {
+    // Empty / nullish → "general check" mode. Caller treats this as
+    // "no criteria injection"; the Reviewer falls back to the generic
+    // scoring rubric. This is the AUTHORITATIVE behaviour after the
+    // 2026-05-22 design pivot — do not "default to all entries".
+    if (subTypeCode === null || subTypeCode === undefined) return [];
+    const trimmed = String(subTypeCode).trim();
+    if (trimmed.length === 0) return [];
+
+    // Exact code match within entry.subTypes[]. Defensive against the
+    // (currently theoretical) case where a code appears in multiple
+    // entries — we return all matches; the Reviewer treats this as
+    // multi-entry composition under the same Strategy.
+    const matched = entries.filter((entry) =>
+      entry.subTypes.some((subType) => subType.code === trimmed),
+    );
+
+    // No match → return [] (defensive). Do NOT fall back to "all entries"
+    // because that re-introduces the original bug. The user has either
+    // (a) sent a stale code from a different strategy → drop it, or
+    // (b) sent garbage → drop it. Either way, fall through to general
+    // check mode rather than evaluate against unrelated criteria.
+    return matched;
   }
 }

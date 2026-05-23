@@ -11,6 +11,9 @@ import {
 // constructor formerly lived in this file; it now lives in
 // `OpenAILlmClient` exclusively (see docs/ops/openai-dpa.md).
 import { LLM_CLIENT, LlmClient } from './llm/llm-client.interface';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { AiUsageQuotasService } from 'src/ai-usage-quotas/ai-usage-quotas.service';
 // Wave 36 N2 — rich detail logging. One write per LLM call; isolated
 // in try/catch so logging failure NEVER aborts the user-facing AI
@@ -32,6 +35,12 @@ import { AiContextService, AiEnrichedContext } from './ai-context.service';
 import { calculateAiCost } from './utils/cost-calculator';
 import { getUsdToThbFx } from 'src/ai-usage-quotas/fx-config';
 import { translateInferredAreaType } from './utils/mismatch-advisor';
+// Wave LAO-STRATEGY-AI-PARITY Followup G+R Coherence (2026-05-22) —
+// deterministic readinessLabel band computation. Overrides whatever the
+// LLM supplies so the numeric score and the band chip can never disagree
+// (production observation: score=59 with label="พร้อมส่ง"). See module
+// header for full rationale.
+import { deriveReadinessLabel } from './utils/readiness-label';
 // §17.9 — delimiter envelope + embedded-token sanitization. Shared
 // with StaffReviewPromptService so the policy cannot drift. Owner
 // (this file) and staff pipelines MUST emit the delimiter pair only
@@ -68,9 +77,11 @@ import { IssueCriteriaRegistryService } from './criteria/issue-criteria-registry
 import {
   composeCriteriaContextBlock,
   composeExamplesSection,
+  composeMultiEntryCriteriaContextBlock,
 } from './criteria/compose-criteria-context';
 import {
   CriteriaEvaluationPayload,
+  CriteriaEvaluationsEnvelope,
   CriterionHint,
   CriterionResult,
   CriterionVerdict,
@@ -80,6 +91,7 @@ import {
 // prompt + response merger. Advisory per §17.2; hints are system-
 // generated (UNDELIMITED), user text remains delimited (§17.9).
 import { IssueCriteriaGeoCheckService } from './criteria/issue-criteria-geo-check.service';
+import { IssueCriteriaTitleUniquenessCheckService } from './criteria/issue-criteria-title-uniqueness-check.service';
 import {
   IssueCriteriaEvidenceCheckService,
   EvidenceAttachmentInput,
@@ -172,6 +184,10 @@ export class AiService {
     // Wave 24 N4 — deterministic pre-checks for criteria verdicts.
     private readonly geoCheckService: IssueCriteriaGeoCheckService,
     private readonly evidenceCheckService: IssueCriteriaEvidenceCheckService,
+    // Wave AI-Enforcement-Model (2026-05-22) — deterministic title-
+    // uniqueness pre-check (the C*_.c "ไม่ซ้ำซ้อนกับภารกิจของ อปท. อื่น"
+    // family of criteria). Resolves verdict via a read-only DB query.
+    private readonly titleUniquenessService: IssueCriteriaTitleUniquenessCheckService,
     // Wave 29 N1 — advisory ground-truth lookup. Read-only.
     private readonly geoFeatureLookup: GeoFeatureLookupService,
     // Wave 30 N1 — deterministic feature × project-type conflict
@@ -196,8 +212,57 @@ export class AiService {
     // LLM call in this service can redact user-controlled text before
     // delimiter wrap + LLM dispatch.
     private readonly piiRedactor: PiiRedactorService,
+    // Wave LAO_STRATEGY_AI_PARITY (N3) — caller-classification source.
+    // Used ONLY for D4=B backend gate: agency callers skip STRATEGY_BASED
+    // criteria injection. CLAUDE.md §1 classification is resolved from
+    // the current WorkHistory (amphoe.id=3001 AND
+    // localAdministrativeOrganization.id=3001027 ⇒ agency, else lao).
+    // Read-only / advisory — no workflow gating per §17.2.
+    @InjectRepository(WorkHistory)
+    private readonly workHistoryRepo: Repository<WorkHistory>,
   ) {
     // PRIV-W44-01 — OpenAI constructor moved to `OpenAILlmClient`.
+  }
+
+  /**
+   * Wave LAO_STRATEGY_AI_PARITY (N3) — caller classification (LAO vs agency).
+   *
+   * Source of truth: CLAUDE.md §1 User Classification Rules — resolves from
+   * the user's current/latest WorkHistory (`isCurrent = true`).
+   *
+   *   agency  ↔  amphoe.id = 3001 AND localAdministrativeOrganization.id = 3001027
+   *   lao     ↔  any other case
+   *
+   * Used ONLY by the pre-submit-review STRATEGY_BASED criteria-injection
+   * gate to enforce D4=B (agency callers skip criteria injection). Failure
+   * to resolve the WorkHistory MUST be treated as "not LAO" so that the
+   * STRATEGY_BASED prompt stays byte-identical to pre-N3 for any caller
+   * whose WorkHistory cannot be loaded — advisory per §17.2 (gate miss
+   * = no extra prompt content, never an error or workflow block).
+   */
+  private async isLaoCaller(userId: string): Promise<boolean> {
+    try {
+      const wh = await this.workHistoryRepo.findOne({
+        where: { user: { id: userId }, isCurrent: true },
+        relations: ['amphoe', 'localAdministrativeOrganization'],
+      });
+      if (!wh) return false;
+      // §1 — agency if BOTH match; else lao. ID columns are string PKs
+      // (`amphoes.id`, `local_administrative_organizations.id`); compare
+      // as strings to avoid silent number/string mismatches.
+      const amphoeId = String(wh.amphoe?.id ?? '');
+      const laoId = String(wh.localAdministrativeOrganization?.id ?? '');
+      const isAgency = amphoeId === '3001' && laoId === '3001027';
+      return !isAgency;
+    } catch (err) {
+      // Fail-closed for the LAO gate: a resolve failure means we cannot
+      // confirm LAO classification, so we MUST NOT inject the criteria
+      // block (STRATEGY_BASED path stays byte-identical). Log only.
+      this.logger.warn(
+        `[AI-PreSubmit] caller classification lookup failed; treating as non-LAO: ${err instanceof Error ? err.message : err}`,
+      );
+      return false;
+    }
   }
 
   /**
@@ -261,6 +326,10 @@ export class AiService {
     // unaffected by contract.
     let criteriaBlock = '';
     let matchedRule: IssueRuleEntry | null = null;
+    // Wave LAO_STRATEGY_AI_PARITY N2 — sibling gate metadata for
+    // STRATEGY_BASED + LAO criteria injection. Populated only when the
+    // STRATEGY_BASED sibling branch resolves a non-empty array.
+    let matchedEntries: IssueRuleEntry[] = [];
     if (isIssueBased && dto.developmentIssueId) {
       try {
         const lookup = await this.issueCriteriaRegistry.findByIssueId(
@@ -298,6 +367,70 @@ export class AiService {
         this.logger.warn(
           `[AI-Generate] criteria registry lookup failed; falling back to generic ISSUE_BASED prompt: ${err instanceof Error ? err.message : err}`,
         );
+      }
+    }
+    // Wave LAO_STRATEGY_AI_PARITY N2 — sibling gate for STRATEGY_BASED
+    // criteria injection. LAO-only per backend gate decision (D4=B):
+    // agency callers MUST receive a byte-identical pre-Wave prompt even
+    // when their Strategy name resolves to a registry entry. Classification
+    // follows CLAUDE.md §1 (LAO = NOT (amphoeId='3001' AND laoOrgId='3001027'))
+    // resolved against the CURRENT/LATEST WorkHistory — NOT from client DTO
+    // (2026-05-22 reconciliation with N3 per QA-PARITY §A: SoT must be
+    // WorkHistory `isCurrent=true`, never the request payload).
+    // Empty match (STRAT005) → silently skip the block; prompt is
+    // byte-identical to pre-Wave for that case too.
+    // Advisory per §17.2; SYSTEM-controlled static text per §17.9.
+    else if (!isIssueBased && dto.strategy) {
+      const isLaoCaller = await this.isLaoCaller(userId);
+      if (isLaoCaller) {
+        try {
+          matchedEntries = this.issueCriteriaRegistry.findAllByStrategyName(
+            dto.strategy,
+          );
+          // Wave Sub-Type Filter (2026-05-22) — narrow to the sub-type
+          // the user clicked. Empty subTypeCode → [] → no criteria
+          // injection ("general check" mode). See registry helper
+          // doc-comment for the full rationale; the short version is
+          // that "inject every matched entry under the Strategy" was
+          // found to be incorrect because it dragged in irrelevant
+          // sub-domain criteria (e.g. economic-3-2 industry rules on
+          // a farming project under STRAT003).
+          matchedEntries = this.issueCriteriaRegistry.filterEntriesBySubType(
+            matchedEntries,
+            dto.subTypeCode,
+          );
+          if (matchedEntries.length > 0) {
+            criteriaBlock = composeMultiEntryCriteriaContextBlock(
+              matchedEntries,
+              {
+                format: 'STRATEGY_BASED',
+                rulesetVersion: matchedEntries[0].rulesetVersion,
+                strategyName: dto.strategy,
+              },
+            );
+            // §17 logging discipline — log registry metadata ONLY,
+            // never user-supplied content. matchedIssueKeys is recorded
+            // for ops observability (cost / parity adoption tracking).
+            // 2026-05-22 — also log resolved subTypeCode (registry data,
+            // not user prose) so we can verify the filter is taking
+            // effect in production.
+            this.logger.debug(
+              `[AI-Generate] criteria-injected STRATEGY_BASED ` +
+                `strategyRoot="${dto.strategy}" ` +
+                `subTypeCode=${dto.subTypeCode ?? 'none'} ` +
+                `matchedIssueKeys=${matchedEntries.map((e) => e.issueKey).join(',')} ` +
+                `rulesetVersions=${[...new Set(matchedEntries.map((e) => e.rulesetVersion))].join(',')} ` +
+                `inputTextLength=${criteriaBlock.length}`,
+            );
+          }
+        } catch (err) {
+          // Registry failures (e.g. BadRequestException for empty/nullish
+          // strategy name) MUST never block generation — advisory per §17.2.
+          this.logger.warn(
+            `[AI-Generate] STRATEGY_BASED registry lookup failed; falling back: ${err instanceof Error ? err.message : err}`,
+          );
+          matchedEntries = [];
+        }
       }
     }
 
@@ -630,6 +763,18 @@ export class AiService {
           adminBoundaryResolved: Boolean(adminBoundary),
           landUsePrimaryUse: landUseHint?.primaryUse ?? null,
           feasibilitySeverity: feasibility?.severity ?? null,
+          // Wave LAO_STRATEGY_AI_PARITY N2 — STRATEGY_BASED + LAO
+          // criteria-injection observability. Null on the ISSUE_BASED
+          // path (uses `matchedRule.issueKey` upstream) and on
+          // STRATEGY_BASED+agency / STRATEGY_BASED+LAO+no-match.
+          matchedIssueKeys:
+            matchedEntries.length > 0
+              ? matchedEntries.map((e) => e.issueKey)
+              : null,
+          matchedRulesetVersions:
+            matchedEntries.length > 0
+              ? [...new Set(matchedEntries.map((e) => e.rulesetVersion))]
+              : null,
         },
         targetId: undefined,
         targetKind: 'none',
@@ -2389,17 +2534,39 @@ ${instructions}`.trim();
         passed: cat.status === 'ผ่าน',
       }));
 
-    // ── Wave 24 N4 — criteria-aware scope gate ────────────────────────────────
-    // Strict conjunction: reportFormat === 'ISSUE_BASED' AND the
-    // registry matches a DevelopmentIssue (by id if provided, else by
-    // name). Any miss => byte-identical to pre-Wave-24 behavior.
-    //   - Agency / STRATEGY_BASED: NEVER enters this branch
-    //   - Unmatched issue: NEVER enters this branch
-    //   - Registry failure: NEVER enters this branch (advisory only)
-    // Advisory-only per §17.2 — no workflow gating derives from any of this.
-    let matchedRule: IssueRuleEntry | null = null;
+    // ── Wave 24 N4 / LAO_STRATEGY_AI_PARITY N3 — criteria-aware scope gate ──
+    //
+    // Two sibling branches, both advisory-only per §17.2 (no workflow
+    // gating derives from any of this) and both classification-aware:
+    //
+    //   (a) ISSUE_BASED (Wave 24 N4 — unchanged):
+    //         registry match by `developmentIssueId` (preferred) or
+    //         `developmentIssueName` → single `IssueRuleEntry`.
+    //         Byte-identical to pre-N3.
+    //
+    //   (b) STRATEGY_BASED + LAO (N3):
+    //         registry match by `strategyName` →
+    //         `IssueRuleEntry[]` (length 0..N). Agency callers are
+    //         excluded via `isLaoCaller(userId)` (D4=B) so the
+    //         STRATEGY_BASED prompt remains byte-identical for agency.
+    //
+    // Any gate miss (no DTO field, no match, registry / classifier
+    // failure) ⇒ no criteria injection, no envelope. Failures MUST NOT
+    // bubble; they degrade silently to "no criteria block".
+    let matchedRules: IssueRuleEntry[] = [];
     let criterionHints: CriterionHint[] = [];
+    // [PRE-SUBMIT-CRITERIA-DEBUG] Gate input — diagnostic only (§17.2 advisory).
+    // Logs DTO field NAMES / presence, never user-controlled prose (§17.9).
+    try {
+      this.logger.log(
+        `[PRE-SUBMIT-CRITERIA-DEBUG] gate-input userId=${userId} reportFormat=${dto.reportFormat ?? 'undefined'} isIssueBased=${isIssueBased} hasStrategyName=${Boolean(dto.strategyName)} hasDevelopmentIssueId=${Boolean(dto.developmentIssueId)} hasDevelopmentIssueName=${Boolean(dto.developmentIssueName)}`,
+      );
+    } catch {
+      /* log MUST NOT throw — §17 observability discipline */
+    }
     if (isIssueBased) {
+      // ── (a) ISSUE_BASED — unchanged single-entry path ─────────────────────
+      let matchedRule: IssueRuleEntry | null = null;
       try {
         if (dto.developmentIssueId) {
           const lookup = await this.issueCriteriaRegistry.findByIssueId(
@@ -2417,40 +2584,111 @@ ${instructions}`.trim();
         );
         matchedRule = null;
       }
-      if (matchedRule) {
-        // Run deterministic pre-checks. Both services are side-effect
-        // free and cheap; failures must not bubble (advisory).
+      if (matchedRule) matchedRules = [matchedRule];
+    } else if (dto.strategyName) {
+      // ── (b) STRATEGY_BASED + LAO — N3 sibling gate ───────────────────────
+      // D4=B backend gate: agency callers MUST NOT receive criteria
+      // injection on STRATEGY_BASED. Resolve classification once.
+      let isLao = false;
+      try {
+        isLao = await this.isLaoCaller(userId);
+      } catch {
+        isLao = false;
+      }
+      // [PRE-SUBMIT-CRITERIA-DEBUG] LAO classification — gate is D4=B
+      // (agency callers MUST NOT receive criteria injection on STRATEGY_BASED).
+      try {
+        this.logger.log(
+          `[PRE-SUBMIT-CRITERIA-DEBUG] lao-classification userId=${userId} isLao=${isLao} branch=STRATEGY_BASED`,
+        );
+      } catch {
+        /* log MUST NOT throw */
+      }
+      if (isLao) {
         try {
-          const geoHints = this.geoCheckService.evaluate(matchedRule, {
+          matchedRules = this.issueCriteriaRegistry.findAllByStrategyName(
+            dto.strategyName,
+          );
+          // Wave Sub-Type Filter (2026-05-22) — narrow to the sub-type
+          // the user clicked on the AddProject AI panel (or implicitly
+          // via the Strategy chip on ReadyToSendPage). Empty subTypeCode
+          // → [] → no per-criterion evaluation ("general check" mode).
+          // The Reviewer falls back to the generic rubric, scoring the
+          // project on prose quality alone. See registry helper for
+          // the full design rationale.
+          matchedRules = this.issueCriteriaRegistry.filterEntriesBySubType(
+            matchedRules,
+            dto.subTypeCode,
+          );
+        } catch (err) {
+          this.logger.warn(
+            `[AI-PreSubmit] STRATEGY_BASED registry lookup failed; skipping criteria injection: ${err instanceof Error ? err.message : err}`,
+          );
+          matchedRules = [];
+        }
+      }
+    }
+    // [PRE-SUBMIT-CRITERIA-DEBUG] Registry resolution — registry metadata
+    // only (issueKey / rulesetVersion / subTypeCode are static config or
+    // closed-set chip identifiers, NOT user prose).
+    try {
+      this.logger.log(
+        `[PRE-SUBMIT-CRITERIA-DEBUG] registry-resolution matchedCount=${matchedRules.length} matchedIssueKeys=[${matchedRules.map((e) => e.issueKey).join(',')}] rulesetVersions=[${[...new Set(matchedRules.map((e) => e.rulesetVersion))].join(',')}] subTypeCode=${dto.subTypeCode ?? 'none'}`,
+      );
+    } catch {
+      /* log MUST NOT throw */
+    }
+
+    if (matchedRules.length > 0) {
+      // Run deterministic pre-checks per matched entry. Both services
+      // are side-effect free and cheap; failures must not bubble.
+      const evidenceAttachments: EvidenceAttachmentInput[] = (
+        dto.attachments ?? []
+      ).map((a) => ({
+        id: a.id,
+        aiTopic: a.aiTopic ?? null,
+        aiSummary: a.aiSummary ?? null,
+        evidenceLink: a.evidenceLink ?? null,
+      }));
+      for (const entry of matchedRules) {
+        try {
+          const geoHints = this.geoCheckService.evaluate(entry, {
             startLat: project.startLat ?? null,
             startLng: project.startLng ?? null,
             endLat: project.endLat ?? null,
             endLng: project.endLng ?? null,
           });
-          const evidenceAttachments: EvidenceAttachmentInput[] = (
-            dto.attachments ?? []
-          ).map((a) => ({
-            id: a.id,
-            aiTopic: a.aiTopic ?? null,
-            aiSummary: a.aiSummary ?? null,
-            evidenceLink: a.evidenceLink ?? null,
-          }));
           const evidenceHints = this.evidenceCheckService.evaluate(
-            matchedRule,
+            entry,
             evidenceAttachments,
           );
-          criterionHints = [...geoHints, ...evidenceHints];
+          // Wave AI-Enforcement-Model (2026-05-22) — title-uniqueness
+          // deterministic check. Resolves verdict for the C*_.c
+          // "ไม่ซ้ำซ้อนกับภารกิจของ อปท. อื่น" family. AddProject calls
+          // this with no targetId (project not saved yet) → counts ALL
+          // matches; ReadyToSendPage passes targetId=project.id → excludes
+          // self. Failures degrade silently to "no hint" (LLM fallback).
+          const titleHints = await this.titleUniquenessService.resolveTitleUniqueness(
+            entry,
+            project.title,
+            (dto as any).targetProjectId ?? null,
+          );
+          criterionHints.push(...geoHints, ...evidenceHints, ...titleHints);
         } catch (err) {
           this.logger.warn(
-            `[AI-PreSubmit] pre-check evaluation failed; continuing without hints: ${err instanceof Error ? err.message : err}`,
+            `[AI-PreSubmit] pre-check evaluation failed for issueKey=${entry.issueKey}; continuing: ${err instanceof Error ? err.message : err}`,
           );
-          criterionHints = [];
         }
-        this.logger.debug(
-          `[AI-PreSubmit] criteria-injected issueKey=${matchedRule.issueKey} rulesetVersion=${matchedRule.rulesetVersion} criteriaCount=${matchedRule.criteria.length} hints=${criterionHints.length}`,
-        );
       }
+      this.logger.debug(
+        `[AI-PreSubmit] criteria-injected matchedIssueKeys=${matchedRules
+          .map((e) => e.issueKey)
+          .join(',')} rulesetVersions=${[
+          ...new Set(matchedRules.map((e) => e.rulesetVersion)),
+        ].join(',')} criteriaCount=${matchedRules.reduce((a, e) => a + e.criteria.length, 0)} hints=${criterionHints.length}`,
+      );
     }
+    const hasCriteriaMatch = matchedRules.length > 0;
 
     // ── Step 2: Build quality-focused GPT-4o prompt ───────────────────────────
     const totalBudget = (project.budgets ?? []).reduce(
@@ -2500,16 +2738,52 @@ ${instructions}`.trim();
     ]
       .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
       .join('\n');
-    const criteriaContextBlock = matchedRule
-      ? composeCriteriaContextBlock(matchedRule, {
+    // Composer selection (byte-identity discipline):
+    //   - ISSUE_BASED single match → existing single-entry composer WITH
+    //     `subTypeCode` / `userInputText` opts (UNCHANGED — preserves
+    //     pre-N3 [SUB_TYPE_SCOPE] emission for ISSUE_BASED).
+    //   - STRATEGY_BASED LAO match (1 or N) → multi-entry composer with
+    //     `format: 'STRATEGY_BASED'` and the resolved strategy name.
+    //   - No match → empty string (no criteria block).
+    let criteriaContextBlock = '';
+    if (hasCriteriaMatch) {
+      if (isIssueBased) {
+        // Preserve Wave 24 byte-identity for ISSUE_BASED. `matchedRules[0]`
+        // is the only entry (ISSUE_BASED is by definition 1:1).
+        criteriaContextBlock = composeCriteriaContextBlock(matchedRules[0], {
           subTypeCode: dto.subTypeCode,
           userInputText: subTypeUserInputAggregate,
-        })
-      : '';
-    const criteriaJsonBlock =
-      matchedRule
+        });
+      } else {
+        // STRATEGY_BASED + LAO (N3). Multi-entry composer carries each
+        // entry's `[ISSUE]` header so the LLM can attribute verdicts.
+        // `rulesetVersion` is taken from the FIRST matched entry for the
+        // top-level header; per-entry versions are emitted inside each
+        // sub-block (see composeMultiEntryCriteriaContextBlock).
+        criteriaContextBlock = composeMultiEntryCriteriaContextBlock(
+          matchedRules,
+          {
+            format: 'STRATEGY_BASED',
+            rulesetVersion: matchedRules[0].rulesetVersion,
+            strategyName: dto.strategyName,
+          },
+        );
+      }
+    }
+
+    // `[CRITERIA_JSON]` schema:
+    //   - N=1 → legacy single shape (byte-identity baseline):
+    //         [ { id, label, description, criticality, evidenceRequired } ]
+    //     Each criterion id is guaranteed unique within a single entry,
+    //     so an issueKey discriminator is unnecessary.
+    //   - N>1 → per-entry envelope shape (STRATEGY_BASED only):
+    //         [ { issueKey, criteria: [ { id, label, ... } ] } ]
+    //     The downstream merger uses `issueKey` to whitelist criterionIds
+    //     per matched entry (§17.9).
+    const criteriaJsonBlock = hasCriteriaMatch
+      ? matchedRules.length === 1
         ? `[CRITERIA_JSON]\n${JSON.stringify(
-            matchedRule.criteria.map((c) => ({
+            matchedRules[0].criteria.map((c) => ({
               id: c.id,
               label: c.label,
               description: c.description,
@@ -2517,9 +2791,21 @@ ${instructions}`.trim();
               evidenceRequired: c.evidenceRequired,
             })),
           )}`
-        : '';
+        : `[CRITERIA_JSON]\n${JSON.stringify(
+            matchedRules.map((entry) => ({
+              issueKey: entry.issueKey,
+              criteria: entry.criteria.map((c) => ({
+                id: c.id,
+                label: c.label,
+                description: c.description,
+                criticality: c.criticality,
+                evidenceRequired: c.evidenceRequired,
+              })),
+            })),
+          )}`
+      : '';
     const hintsJsonBlock =
-      matchedRule && criterionHints.length > 0
+      hasCriteriaMatch && criterionHints.length > 0
         ? `[HINTS_JSON]\n${JSON.stringify(
             criterionHints.map((h) => ({
               criterionId: h.criterionId,
@@ -2529,16 +2815,57 @@ ${instructions}`.trim();
             })),
           )}`
         : '';
-    const criteriaInstructionBlock = matchedRule
-      ? [
-          '[CRITERIA_OUTPUT_RULES]',
-          '- สำหรับทุกเกณฑ์ใน [CRITERIA_JSON] ให้ระบุผลใน field "criteria" ของ JSON ตอบกลับ',
-          '- verdict ∈ {pass, fail, needs-evidence, not-applicable}',
-          '- ใช้ criterionId ตรงตามที่ให้มาเท่านั้น (ห้ามสร้างรหัสใหม่)',
-          '- ถ้ามี HINTS_JSON ให้ใช้เป็นบริบทหลัก เว้นแต่จะมีหลักฐานคัดค้านชัดเจนในเนื้อหาโครงการ',
-          '- ถ้าไม่แน่ใจ → needs-evidence',
-          '- ผลลัพธ์ต้องครบถ้วนทุกเกณฑ์ และห้ามส่ง field criteria เมื่อไม่ได้รับ [CRITERIA_JSON]',
-        ].join('\n')
+    // Instruction block:
+    //   - N=1 path → byte-identical to pre-N3 (no per-row issueKey).
+    //   - N>1 path → adds the multi-issue requirement that each output
+    //     row include its `issueKey` discriminator.
+    //
+    // Wave LAO_STRATEGY_AI_PARITY (N3 prompt-lift, 2026-05-22) —
+    // strengthened per
+    // `docs/tasks/wave-lao-strategy-ai-parity-followup/N3-prompt-force-per-criterion-verdicts.md`.
+    // Per-criterion verdicts are now first-class output; generic
+    // `suggestions[]` MUST NOT duplicate criterion rationale. Directives
+    // use evaluation language only (§17.2 — no gating verbs). Applies
+    // identically to N=1 and N>1 branches and to both ISSUE_BASED and
+    // STRATEGY_BASED entry points (same `criteriaSystemTail`).
+    const CRITERIA_RULES_COMMON_HEAD: ReadonlyArray<string> = [
+      '- ประเมินทุกเกณฑ์เป็นรายข้อ — เป็นสาระสำคัญของการตอบ ไม่ใช่ส่วนเสริม',
+      '- ทุก criterionId ที่อยู่ใน [CRITERIA_JSON] ต้องมี verdict ตอบครบทุกข้อ ห้ามข้าม',
+      '- verdict ต้องเลือกจาก {pass, fail, needs-evidence, not-applicable} เท่านั้น',
+      '- "pass" ให้ได้ก็ต่อเมื่อ description ของ criterion ถูกพูดถึงอย่างเฉพาะเจาะจงในเนื้อหาโครงการ (objective / target / indicator / expected) — ห้ามให้ pass แค่เพราะ "โครงการดูดี"',
+      '- "needs-evidence" เมื่อ criterion เกี่ยวข้องแต่เนื้อหายังไม่ระบุครบ — rationale ต้องระบุว่าผู้ใช้ควรเพิ่มข้อมูลอะไร',
+      '- "fail" เมื่อเนื้อหาขัดแย้งกับ criterion อย่างชัดเจน',
+      '- "not-applicable" เมื่อ criterion ไม่เกี่ยวข้องกับลักษณะโครงการเลย (พบได้น้อย — ต้องอธิบายเหตุผล)',
+      '- rationale ของแต่ละ verdict ต้องอ้าง criterionId และอ้างอิงเนื้อหาโครงการเป็นรูปธรรม (ตัวเลข สถานที่ มาตรฐาน กลไก) — ห้ามใช้คำกว้างหรือข้อความซ้ำกัน',
+      '- ถ้าเกณฑ์มี evidenceRequired=true และเนื้อหาไม่ได้กล่าวถึงหลักฐานนั้นอย่างชัดเจน → "needs-evidence" พร้อม rationale บอกว่าต้องเพิ่มหลักฐานอะไร',
+      '- ใช้ criterionId ตรงตามที่ให้มาเท่านั้น (ห้ามสร้างรหัสใหม่)',
+      '- ถ้ามี HINTS_JSON ให้ใช้เป็นบริบทหลัก เว้นแต่จะมีหลักฐานคัดค้านชัดเจนในเนื้อหาโครงการ',
+      '- ถ้าไม่แน่ใจ → "needs-evidence"',
+    ];
+    const CRITERIA_RULES_COMMON_TAIL: ReadonlyArray<string> = [
+      '- field "suggestions" เป็นข้อเสนอแนะเสริมที่ "ไม่เกี่ยวกับเกณฑ์" เท่านั้น (priority ต่ำกว่าเกณฑ์เสมอ)',
+      '- ห้ามส่ง suggestions ที่ทับซ้อนกับ rationale ของเกณฑ์ใด ๆ — ถ้าประเด็นนั้นถูกครอบคลุมโดยเกณฑ์แล้ว ให้ตัดออกจาก suggestions',
+      '- ถ้า overallScore ≥ 85 และทุกเกณฑ์เป็น "pass" → suggestions ต้องเป็น array ว่าง []',
+      '- suggestions รวมแล้วต้องไม่เกิน 2 ข้อในกรณีที่มี criteria ตอบกลับ (ลดทอนจาก cap ทั่วไป)',
+    ];
+    const criteriaInstructionBlock = hasCriteriaMatch
+      ? matchedRules.length === 1
+        ? [
+            '[CRITERIA_OUTPUT_RULES]',
+            '- สำหรับทุกเกณฑ์ใน [CRITERIA_JSON] ให้ระบุผลใน field "criteria" ของ JSON ตอบกลับ',
+            ...CRITERIA_RULES_COMMON_HEAD,
+            '- ผลลัพธ์ต้องครบถ้วนทุกเกณฑ์ และห้ามส่ง field criteria เมื่อไม่ได้รับ [CRITERIA_JSON]',
+            ...CRITERIA_RULES_COMMON_TAIL,
+          ].join('\n')
+        : [
+            '[CRITERIA_OUTPUT_RULES]',
+            '- [CRITERIA_JSON] เป็น array ของ envelope { issueKey, criteria: [...] } — โครงการนี้ผูกกับหลายประเด็น',
+            '- ให้ประเมินครบทุกเกณฑ์ในทุก envelope และส่งผลรวมใน field "criteria" ของ JSON ตอบกลับ',
+            '- ทุกแถวใน "criteria" ต้องระบุ field "issueKey" ตรงกับ envelope ที่ criterionId นั้นอยู่ (ห้ามข้ามหรือสลับ)',
+            ...CRITERIA_RULES_COMMON_HEAD,
+            '- ผลลัพธ์ต้องครบถ้วนทุกเกณฑ์ของทุก envelope และห้ามส่ง field criteria เมื่อไม่ได้รับ [CRITERIA_JSON]',
+            ...CRITERIA_RULES_COMMON_TAIL,
+          ].join('\n')
       : '';
     const criteriaSystemTail = [
       criteriaContextBlock,
@@ -2598,6 +2925,43 @@ ${formatRubricForReviewer({ isIssueBased })}
 - "ควรระบุการจัดสรรงบประมาณ" (อนุญาตเฉพาะเมื่อใช้คู่กับคำว่า "สมเหตุสมผล" หรือ "สอดคล้องกับขอบเขต" เท่านั้น)
 หากวลีเหล่านี้ปรากฏในข้อแนะนำเกี่ยวกับงบประมาณ ให้ตัดข้อนั้นออกจาก suggestions ทันที — ให้แนะนำเรื่องงบประมาณเฉพาะเมื่อยอดรวมไม่สมเหตุสมผลกับขอบเขตเท่านั้น (น้อยเกินไป หรือ มากเกินไป)
 
+วลีต่อไปนี้เกี่ยวข้องกับ "หลักฐาน / เอกสารแนบ / รูปถ่าย" — ห้ามใช้ในข้อแนะนำโดยเด็ดขาด (Wave Evidence-Scope Decoupling 2026-05-22):
+- "ควรระบุหลักฐาน..."
+- "ควรแนบเอกสาร..."
+- "ควรแสดงหลักฐาน..."
+- "ควรเพิ่มหลักฐาน..."
+- "ควรแนบรูปถ่าย / ใบอนุญาต / สำเนา..."
+- "ควรมีเอกสารยืนยัน..."
+- "ควรแนบไฟล์..."
+เหตุผล: เอกสารแนบ / หลักฐานเป็นความรับผิดชอบของเจ้าหน้าที่ผู้ตรวจสอบที่จะตรวจของจริงในขั้นตอนถัดไป — AI ไม่มีสิทธิ์เข้าถึงไฟล์แนบและไม่มีหน้าที่ตรวจ AI มีหน้าที่ตรวจคุณภาพ "เนื้อหา prose" ที่ผู้ใช้แก้ไขได้ทันทีเท่านั้น
+หากเกณฑ์ใดต้องการ "evidence" (เช่น หลักฐานสิทธิ์ที่ดิน ใบอนุญาตใช้พื้นที่ ใบรับรอง) — ให้ข้ามเกณฑ์นั้นในการให้ suggestions (ระบบมีกลไกตรวจการแนบไฟล์แยกต่างหาก) แต่ยังให้ verdict ในผลลัพธ์ criteria ได้ตามปกติ
+หากวลีข้างต้นปรากฏในข้อแนะนำ ให้ตัดข้อนั้นออกจาก suggestions ทันที
+
+วลีต่อไปนี้เกี่ยวข้องกับ "การอ้างอิงระเบียบ / มาตรฐาน / กฎหมาย / พ.ร.บ. / พ.ศ." — ห้ามใช้ในข้อแนะนำเป็นรายฟิลด์โดยเด็ดขาด (Wave Field-Scope Decoupling 2026-05-22):
+- "ควรระบุมาตรฐาน..."
+- "ควรอ้างอิงระเบียบ / กฎหมาย / พ.ร.บ. ..."
+- "ควรอ้างถึงพระราชบัญญัติ..."
+- "ควรระบุตามมาตรฐาน..." (เมื่อ "..." เป็นมาตรฐานทางเทคนิค / กรม / กฎหมาย)
+- "ควรเป็นไปตามมาตรฐาน..."
+- "ควรสอดคล้องกับระเบียบ..."
+เหตุผล: ระเบียบ / มาตรฐาน / กฎหมายเป็นข้อมูลพื้นหลัง (background / rationale) ของโครงการ ไม่ใช่เนื้อหาที่ผู้ใช้กรอกในฟิลด์ "วัตถุประสงค์" / "เป้าหมาย" / "ผลที่คาดว่าจะได้รับ" / "ตัวชี้วัด" — ฟิลด์เหล่านี้เป็นการบรรยายโครงการเอง ไม่ใช่ภาพรวมระเบียบ ระบบไม่มีฟิลด์ "หลักการและเหตุผล" ให้ผู้ใช้กรอก ดังนั้นการบอกให้ "ใส่ระเบียบ" จึงเป็นคำแนะนำที่ผู้ใช้แก้ไม่ได้
+หากเกณฑ์ใดเป็นเรื่อง "compliance / มาตรฐานทางเทคนิค / การปฏิบัติตามกฎหมาย" — ให้ verdict เป็น "not-applicable" พร้อม rationale ว่า "ตรวจสอบโดยเจ้าหน้าที่ในขั้นตอน review จากเอกสารแนบของผู้ใช้" และข้ามเกณฑ์นั้นในการให้ suggestions ห้ามให้ verdict เป็น "fail" หรือ "needs-evidence" สำหรับเกณฑ์ประเภทนี้
+หากวลีข้างต้นปรากฏในข้อแนะนำ ให้ตัดข้อนั้นออกจาก suggestions ทันที
+
+หลักการ Field-Scope (Wave Field-Scope Decoupling 2026-05-22) — ก่อนเขียนข้อแนะนำในแต่ละ field ให้ถามว่า "เนื้อหาที่แนะนำตรงตามเจตนาของฟิลด์หรือไม่?":
+- "วัตถุประสงค์" = WHAT โครงการจะทำ + กิจกรรม + กลุ่มเป้าหมาย + ผู้ประสานงาน + ระยะเวลา → ห้ามแนะนำ "ระเบียบ" "มาตรฐาน" "หลักฐาน"
+- "เป้าหมาย" = ตัวเลขเป้าหมาย + ตัวชี้วัด + ค่าฐาน + ระยะเวลาวัดผล + ขอบเขตพื้นที่ → ห้ามแนะนำ "ระเบียบ" "หลักฐาน"
+- "ผลที่คาดว่าจะได้รับ" = ประโยชน์ทางตรง/อ้อม + ระยะสั้น/กลาง/ยาว + กลไก + ตัวชี้วัด → ห้ามแนะนำ "ระเบียบ" "หลักฐาน"
+- "ตัวชี้วัด" = ค่าฐาน + ค่าเป้าหมาย + วิธีวัด + แหล่งอ้างอิงข้อมูล (หน่วยงานราชการ) → ห้ามแนะนำ "ระเบียบ" "หลักฐาน"
+- "งบประมาณ" = ตัวเลขสมเหตุสมผลกับขอบเขต → ห้ามแนะนำ "แจกแจงรายกิจกรรม" "ระเบียบ"
+หากเนื้อหาที่จะแนะนำไม่ตรงกับฟิลด์ใดในรายการข้างต้น — ห้ามใส่ใน suggestions เพราะผู้ใช้แก้ไม่ได้ในฟอร์มที่มีอยู่
+
+วิธีตีความข้อความที่มีแท็ก "(ตัวอย่างจาก AI — โปรดยืนยัน)" (Wave LAO-STRATEGY-AI-PARITY Followup G+R Coherence 2026-05-22):
+- ฝั่งสร้าง (Generator) อาจใส่แท็กนี้ต่อท้ายค่าที่ AI เป็นผู้เสนอ (เช่น ชื่อระบบ ชื่อแหล่งอ้างอิง) เพื่อแจ้งผู้ใช้ให้ตรวจสอบ
+- ให้ถือว่าค่าที่อยู่ก่อนแท็กเป็น "เนื้อหาที่กรอกครบ" — pass หลักเกณฑ์ที่เกี่ยวข้องตามปกติ ห้ามตัดสินว่าเป็น "ขาดข้อมูล"
+- ห้ามแนะนำให้ "ลบแท็ก" หรือ "ระบุข้อมูลให้ชัดเจน" เพียงเพราะเห็นแท็กนี้ — แท็กเป็นเครื่องหมายให้ผู้ใช้ ไม่ใช่ช่องว่างของเนื้อหา
+- จะตำหนิเฉพาะเมื่อค่าตัวอย่างที่อยู่ก่อนแท็กไม่สมเหตุสมผลกับบริบท เช่น ชื่อระบบที่ไม่มีจริง หรือแหล่งอ้างอิงปลอม
+
 หมายเหตุ: ประเมินจากเนื้อหาจริง ไม่ใช่แค่ตรวจว่ากรอกหรือไม่ ให้คำแนะนำที่เป็นประโยชน์และปฏิบัติได้จริงในบริบทองค์กรปกครองส่วนท้องถิ่น`.trim();
 
     // Wave 24 N4 — criteria schema branch. When `matchedRule` is set
@@ -2639,20 +3003,48 @@ ${formatRubricForReviewer({ isIssueBased })}
       'strongPoint',
       'suggestions',
     ];
-    if (matchedRule) {
+    if (hasCriteriaMatch) {
+      // OpenAI strict json_schema mode requires every declared property
+      // to be listed in `required`. N>1 promotes `issueKey` to a
+      // required per-row field (§17.9 — the multi-issue discriminator
+      // MUST be authored by the LLM so the merger can attribute
+      // verdicts unambiguously). N=1 keeps the legacy 3-key shape for
+      // byte-identity with pre-N3.
+      const isMulti = matchedRules.length > 1;
+      const criteriaItemProperties: Record<string, unknown> = {
+        criterionId: { type: 'string' as const },
+        verdict: {
+          type: 'string' as const,
+          enum: ['pass', 'fail', 'needs-evidence', 'not-applicable'],
+        },
+        rationale: { type: 'string' as const },
+      };
+      const criteriaItemRequired = ['criterionId', 'verdict', 'rationale'];
+      if (isMulti) {
+        criteriaItemProperties.issueKey = { type: 'string' as const };
+        criteriaItemRequired.push('issueKey');
+      }
+      // Wave LAO_STRATEGY_AI_PARITY (N3 prompt-lift, 2026-05-22) —
+      // tighten schema discipline (§17.9): when registry criteria are
+      // injected, the LLM MUST emit one verdict per registry criterion
+      // across all matched entries. `minItems` is a strict-mode
+      // schema-tightening (not loosening), so OpenAI structured-output
+      // will reject under-counted arrays before they reach the merger.
+      // The merger's existing schema-drift check (502
+      // AI_SCHEMA_DRIFT) remains the byte-level enforcement for
+      // unknown ids / verdicts; this layer ensures coverage at the
+      // structured-output boundary.
+      const totalRegistryCriteria = matchedRules.reduce(
+        (acc, e) => acc + e.criteria.length,
+        0,
+      );
       baseProperties.criteria = {
         type: 'array' as const,
+        minItems: totalRegistryCriteria,
         items: {
           type: 'object' as const,
-          properties: {
-            criterionId: { type: 'string' as const },
-            verdict: {
-              type: 'string' as const,
-              enum: ['pass', 'fail', 'needs-evidence', 'not-applicable'],
-            },
-            rationale: { type: 'string' as const },
-          },
-          required: ['criterionId', 'verdict', 'rationale'],
+          properties: criteriaItemProperties,
+          required: criteriaItemRequired,
           additionalProperties: false,
         },
       };
@@ -2721,9 +3113,19 @@ ${formatRubricForReviewer({ isIssueBased })}
       let parsedLabel: string | null = null;
       let parsedStrongLen = 0;
       let suggestionsCount = 0;
+      let llmRawCriteriaCount = 0;
       try {
         const p = JSON.parse(content);
         parsedScore = typeof p?.overallScore === 'number' ? p.overallScore : null;
+        // NOTE on parsedLabel — the audit log row captures the LLM's RAW
+        // label (LLM observability), NOT the deterministic label that the
+        // response returns (Wave LAO-STRATEGY-AI-PARITY Followup G+R
+        // Coherence 2026-05-22 derives the response label from
+        // adjustedScore; see end of try block). Logging the LLM raw lets
+        // ops detect schema drift / LLM hallucination on the label
+        // independently of the response-side deterministic override. The
+        // two values MAY diverge by design — that divergence is itself a
+        // useful signal.
         parsedLabel =
           typeof p?.readinessLabel === 'string' ? p.readinessLabel : null;
         parsedStrongLen =
@@ -2731,6 +3133,7 @@ ${formatRubricForReviewer({ isIssueBased })}
         suggestionsCount = Array.isArray(p?.suggestions)
           ? p.suggestions.length
           : 0;
+        llmRawCriteriaCount = Array.isArray(p?.criteria) ? p.criteria.length : 0;
       } catch {
         /* tolerate malformed content for log purposes */
       }
@@ -2772,7 +3175,25 @@ ${formatRubricForReviewer({ isIssueBased })}
           strongPointLength: parsedStrongLen,
           suggestionsCount,
           contentLength: content.length,
-          matchedRule: Boolean(matchedRule),
+          // Pre-N3 boolean kept for log-shape continuity. True whenever
+          // any registry match was injected (ISSUE_BASED 1:1 or
+          // STRATEGY_BASED 1..N), false otherwise.
+          matchedRule: hasCriteriaMatch,
+          // Wave LAO_STRATEGY_AI_PARITY (N3) — observability for the
+          // multi-issue STRATEGY_BASED gate. Empty arrays when no
+          // match. `inputTextLength` is already captured above in the
+          // outer detail log row; these fields surface registry-side
+          // adoption per wave so ops can monitor parity rollout.
+          matchedIssueKeys: matchedRules.map((e) => e.issueKey),
+          matchedRulesetVersions: [
+            ...new Set(matchedRules.map((e) => e.rulesetVersion)),
+          ],
+          matchedCount: matchedRules.length,
+          // N1 observability — count of per-criterion verdicts in the raw
+          // LLM response BEFORE merger. Proves the LLM produced the
+          // expected number of rows even when downstream merge / schema
+          // validation rejects them.
+          llmRawCriteriaCount,
         },
         targetKind: 'none',
         durationMs,
@@ -2788,28 +3209,65 @@ ${formatRubricForReviewer({ isIssueBased })}
           message: string;
           priority: 'high' | 'medium' | 'low';
         }[];
+        // `issueKey` is REQUIRED on each row when matchedRules.length>1
+        // (multi-issue STRATEGY_BASED — schema branch). N=1 keeps the
+        // legacy 3-key shape; merger tolerates either input.
         criteria?: Array<{
           criterionId: string;
           verdict: string;
           rationale: string;
+          issueKey?: string;
         }>;
       };
 
-      // Wave 24 N4 — merge criteria verdicts with deterministic hints.
-      // Enforces §17.9 schema-drift rejection for unknown ids / verdicts
-      // (502 AI_SCHEMA_DRIFT) before the payload reaches the response.
-      let criteriaEvaluation: CriteriaEvaluationPayload | null = null;
+      // Wave 24 N4 / LAO_STRATEGY_AI_PARITY N3 — merge criteria verdicts
+      // with deterministic hints. The merger now accepts the matched
+      // entry SET and routes LLM rows per `issueKey` (N>1) or by
+      // criterionId uniqueness (N=1). Schema-drift rejection (§17.9)
+      // happens inside `mergeCriteriaResults` — 502 on unknown ids,
+      // unknown verdicts, or unknown / missing issueKey under N>1.
+      let criteriaEnvelope: CriteriaEvaluationsEnvelope | null = null;
       let overallScoreAdjustment = 0;
-      if (matchedRule) {
-        criteriaEvaluation = this.mergeCriteriaResults(
-          matchedRule,
+      if (hasCriteriaMatch) {
+        // [PRE-SUBMIT-CRITERIA-DEBUG] LLM raw criteria count — captured
+        // BEFORE merger so schema-drift 502 (§17.9) still surfaces the
+        // pre-merge row count for diagnosis. Counts only, no verdict text.
+        try {
+          const llmRawCriteriaCount = Array.isArray(aiResult.criteria)
+            ? aiResult.criteria.length
+            : 0;
+          this.logger.log(
+            `[PRE-SUBMIT-CRITERIA-DEBUG] llm-raw-criteria pre-merge count=${llmRawCriteriaCount} matchedCount=${matchedRules.length}`,
+          );
+        } catch {
+          /* log MUST NOT throw */
+        }
+        criteriaEnvelope = this.mergeCriteriaResults(
+          matchedRules,
           criterionHints,
           aiResult.criteria ?? [],
         );
-        overallScoreAdjustment = this.computeCriticalityPenalty(
-          matchedRule,
-          criteriaEvaluation.results,
-        );
+        try {
+          this.logger.log(
+            `[PRE-SUBMIT-CRITERIA-DEBUG] merge-result evaluationsCount=${criteriaEnvelope?.criteriaEvaluations.length ?? 0} totalRows=${(criteriaEnvelope?.criteriaEvaluations ?? []).reduce((a, p) => a + (p.results?.length ?? 0), 0)}`,
+          );
+        } catch {
+          /* log MUST NOT throw */
+        }
+        // Sum criticality-weighted deltas across ALL matched entries.
+        // The function is per-entry; results are partitioned by issueKey
+        // inside each payload, so we walk per matched entry and feed
+        // only the matching payload's `results`.
+        for (const entry of matchedRules) {
+          const payload = criteriaEnvelope.criteriaEvaluations.find(
+            (p) => p.issueKey === entry.issueKey,
+          );
+          if (!payload) continue;
+          overallScoreAdjustment += this.computeCriticalityPenalty(
+            entry,
+            payload.results,
+          );
+        }
       }
 
       const adjustedScore = Math.min(
@@ -2821,19 +3279,52 @@ ${formatRubricForReviewer({ isIssueBased })}
       );
 
       // Strip the raw `criteria` field from the spread — we expose the
-      // structured payload under `categories.criteriaEvaluation` only.
+      // structured payload under `categories.criteriaEvaluations[]`
+      // (and back-compat `categories.criteriaEvaluation` when N=1).
       const { criteria: _raw, ...aiResultBase } = aiResult;
       void _raw;
+
+      // Wave LAO_STRATEGY_AI_PARITY (N3) — envelope shape (D1=A):
+      //   - 0 matches → no `categories` key emitted
+      //   - 1 match   → both `criteriaEvaluations` (length 1) AND
+      //                 legacy `criteriaEvaluation` (mirror of the
+      //                 only payload) for FE back-compat
+      //   - N matches → only `criteriaEvaluations` (length N); legacy
+      //                 singular key OMITTED
+      //
+      // The merger already produces the correct envelope shape; the
+      // response simply lifts it under `categories`. Spread keeps the
+      // optional `criteriaEvaluation` mirror only when present (length 1).
+      let categoriesPayload: Record<string, unknown> | undefined;
+      if (
+        criteriaEnvelope &&
+        criteriaEnvelope.criteriaEvaluations.length > 0
+      ) {
+        categoriesPayload = {
+          criteriaEvaluations: criteriaEnvelope.criteriaEvaluations,
+          ...(criteriaEnvelope.criteriaEvaluation !== undefined
+            ? { criteriaEvaluation: criteriaEnvelope.criteriaEvaluation }
+            : {}),
+        };
+      }
+
+      // Wave LAO-STRATEGY-AI-PARITY Followup G+R Coherence (2026-05-22) —
+      // derive readinessLabel deterministically from the post-adjustment
+      // score and OVERRIDE the LLM-supplied value. Prevents the
+      // production-observed inconsistency where score=59 was paired with
+      // label="พร้อมส่ง" (band chip and numeric score disagreed). See
+      // `utils/readiness-label.ts` for band thresholds (85+ / 60-84 / 0-59).
+      // Advisory-only per §17.2 — does NOT gate any workflow transition.
+      const derivedReadinessLabel = deriveReadinessLabel(adjustedScore);
 
       return {
         ...aiResultBase,
         // Belt-and-braces: clamp score even though json_schema enforces it.
         // When criteria matched, blend in the criticality-weighted delta.
         overallScore: adjustedScore,
+        readinessLabel: derivedReadinessLabel,
         checklistSummary,
-        ...(criteriaEvaluation
-          ? { categories: { criteriaEvaluation } }
-          : {}),
+        ...(categoriesPayload ? { categories: categoriesPayload } : {}),
         model: completion.model || 'gpt-4o',
         usage: {
           prompt_tokens: completion.usage?.prompt_tokens ?? 0,
@@ -2877,76 +3368,296 @@ ${formatRubricForReviewer({ isIssueBased })}
   }
 
   /**
-   * Wave 24 N4 — merge the LLM's per-criterion verdicts with the
-   * deterministic pre-check hints into a single `CriteriaEvaluationPayload`.
+   * Wave 24 N4 / Wave LAO_STRATEGY_AI_PARITY (N3) — merge the LLM's
+   * per-criterion verdicts with the deterministic pre-check hints into
+   * a `CriteriaEvaluationsEnvelope` carrying ONE payload per matched
+   * registry entry.
    *
-   * Precedence rules (architecture §7 / §8):
-   *   1. Validate the LLM rows — unknown criterionId OR unknown verdict
-   *      value raises `502 AI_SCHEMA_DRIFT` per §17.9 (unknown values
-   *      MUST NOT silently mutate state).
-   *   2. For every criterion in the entry, look up the LLM row by id.
+   * Cardinality (D1=A):
+   *   - 0 entries → empty envelope (defensive — caller short-circuits)
+   *   - 1 entry   → envelope.criteriaEvaluations is a single-element
+   *                 array AND envelope.criteriaEvaluation mirrors it
+   *                 (legacy FE back-compat)
+   *   - N entries → envelope.criteriaEvaluations is an N-element array
+   *                 keyed by issueKey; legacy singular key OMITTED
+   *
+   * Schema-drift discipline (§17.9 — applied BEFORE state mutation):
+   *   - unknown criterionId → 502 AI_SCHEMA_DRIFT
+   *   - unknown verdict     → 502 AI_SCHEMA_DRIFT
+   *   - unknown issueKey    → 502 AI_SCHEMA_DRIFT (multi-entry only;
+   *                           N=1 tolerates a missing `issueKey` since
+   *                           the row implicitly belongs to the only
+   *                           matched entry)
+   *   - missing issueKey under N>1 → 502 AI_SCHEMA_DRIFT
+   *
+   * Precedence rules per payload (architecture §7 / §8 — UNCHANGED
+   * from the original single-entry merger):
+   *   1. For every criterion in the entry, look up the LLM row by id.
    *      If missing, fill with a `needs-evidence` placeholder sourced
    *      from hints or LLM absence; the result array length always
-   *      equals `entry.criteria.length` (N6 acceptance).
-   *   3. Apply hints:
-   *      - `geo-auto` (hardOverride=true): the deterministic verdict
-   *        WINS over any contradicting LLM verdict; the LLM rationale
-   *        is preserved when available.
-   *      - `evidence-auto` `pass` (soft): upgrades any non-pass LLM
-   *        verdict to pass and attaches `evidenceLink`.
-   *      - `evidence-auto` `needs-evidence` (soft): only applied when
+   *      equals `entry.criteria.length`.
+   *   2. Apply hints:
+   *      - `geo-auto` (hardOverride=true): deterministic verdict WINS
+   *        over any contradicting LLM verdict; LLM rationale preserved.
+   *      - `evidence-auto` `pass` (soft): upgrades non-pass LLM verdict
+   *        to pass and attaches `evidenceLink`.
+   *      - `evidence-auto` `needs-evidence` (soft): applied only when
    *        the LLM also says non-pass; an LLM `pass` (quoting counter-
    *        evidence) wins.
-   *   4. `source` is STAMPED by the merger — the LLM is never trusted
+   *   3. `source` is STAMPED by the merger — the LLM is never trusted
    *      to claim `geo-auto` / `evidence-auto` (§17.9).
    *
-   * Advisory per §17.2 — the resulting verdicts are UI signals, not
-   * workflow gates. Returned object is persisted into Wave 13's opaque
-   * `categories` bag unchanged.
+   * Advisory per §17.2 — verdicts are UI signals, not workflow gates.
+   * Envelope is persisted opaquely into Wave 13's `categories` jsonb.
    */
   private mergeCriteriaResults(
-    entry: IssueRuleEntry,
+    entries: IssueRuleEntry[],
     hints: CriterionHint[],
     llmCriteria: Array<{
       criterionId: string;
       verdict: string;
       rationale: string;
+      issueKey?: string;
     }>,
-  ): CriteriaEvaluationPayload {
+  ): CriteriaEvaluationsEnvelope {
+    if (entries.length === 0) {
+      // No matched entries — caller is expected to short-circuit, but
+      // we tolerate this defensively and emit an empty envelope.
+      return { criteriaEvaluations: [] };
+    }
+
     const ALLOWED_VERDICTS: ReadonlySet<CriterionVerdict> = new Set<
       CriterionVerdict
     >(['pass', 'fail', 'needs-evidence', 'not-applicable']);
-    const validIds = new Set(entry.criteria.map((c) => c.id));
-    const hintsById = new Map<string, CriterionHint>();
-    for (const h of hints) hintsById.set(h.criterionId, h);
 
-    // §17.9 schema-drift enforcement — reject unknown criterionId OR
-    // unknown verdict BEFORE mutating state.
+    // Build per-issueKey whitelists for §17.9 enforcement and downstream
+    // routing. `criterionIdToIssueKey` supports the N=1 case where the
+    // LLM is allowed to omit `issueKey` (legacy byte-identity shape) —
+    // we resolve the row's owner by criterionId lookup.
+    const issueKeysInBatch = new Set(entries.map((e) => e.issueKey));
+    const validIdsByIssueKey = new Map<string, Set<string>>();
+    const criterionIdToIssueKey = new Map<string, string>();
+    for (const entry of entries) {
+      validIdsByIssueKey.set(
+        entry.issueKey,
+        new Set(entry.criteria.map((c) => c.id)),
+      );
+      for (const c of entry.criteria) {
+        // Registry guarantees uniqueness of criterion ids within an
+        // entry; cross-entry collisions would be a registry bug. If a
+        // collision is ever encountered, the LAST writer wins here and
+        // the LLM is REQUIRED to disambiguate via `issueKey` (N>1).
+        criterionIdToIssueKey.set(c.id, entry.issueKey);
+      }
+    }
+    const isMulti = entries.length > 1;
+
+    // Wave LAO_STRATEGY_AI_PARITY (N3 prompt-lift, 2026-05-22) —
+    // §17.9 schema-drift enforcement (coverage). The strengthened
+    // prompt + `minItems` schema cap should make the LLM emit every
+    // registry criterion; this merger-side guard is the byte-level
+    // fallback that rejects partial coverage as 502
+    // AI_SCHEMA_DRIFT_MISSING_CRITERION. Coverage is per-issueKey: we
+    // count incoming rows by (issueKey, criterionId) and check against
+    // the registry whitelists assembled above.
+    const incomingByIssueKey = new Map<string, Set<string>>();
+    for (const entry of entries) {
+      incomingByIssueKey.set(entry.issueKey, new Set());
+    }
     for (const row of llmCriteria) {
-      if (!validIds.has(row.criterionId)) {
+      const owningIssueKey =
+        row.issueKey ?? criterionIdToIssueKey.get(row.criterionId);
+      if (!owningIssueKey) continue; // handled by drift check below
+      const set = incomingByIssueKey.get(owningIssueKey);
+      if (set) set.add(row.criterionId);
+    }
+    for (const entry of entries) {
+      const seen = incomingByIssueKey.get(entry.issueKey) ?? new Set();
+      // Wave AI-Enforcement-Model (2026-05-22) — the LLM is now only
+      // shown llm-prose criteria in the prompt, so missing-coverage
+      // detection MUST only check llm-prose ids. auto-pass / auto-check
+      // / staff-only criteria are filled deterministically downstream;
+      // their absence from the LLM payload is expected, not drift.
+      const expectedLlmIds = entry.criteria
+        .filter((c) => c.enforcement === 'llm-prose')
+        .map((c) => c.id);
+      const missing = expectedLlmIds.filter((id) => !seen.has(id));
+      if (missing.length > 0) {
         throw new InternalServerErrorException(
-          `AI_SCHEMA_DRIFT: unknown criterionId '${row.criterionId}' (issueKey=${entry.issueKey})`,
+          `AI_SCHEMA_DRIFT_MISSING_CRITERION: issueKey='${entry.issueKey}' missing=[${missing.join(',')}]`,
         );
       }
+    }
+
+    // §17.9 schema-drift enforcement — reject unknown criterionId,
+    // unknown verdict, unknown issueKey, OR missing issueKey under N>1
+    // BEFORE mutating state.
+    for (const row of llmCriteria) {
       if (!ALLOWED_VERDICTS.has(row.verdict as CriterionVerdict)) {
         throw new InternalServerErrorException(
           `AI_SCHEMA_DRIFT: unknown verdict '${row.verdict}' (criterionId=${row.criterionId})`,
         );
       }
+      // Determine the owning issueKey for this row.
+      let owningIssueKey: string | undefined = row.issueKey;
+      if (!owningIssueKey) {
+        if (isMulti) {
+          throw new InternalServerErrorException(
+            `AI_SCHEMA_DRIFT: missing issueKey on criteria row (criterionId=${row.criterionId})`,
+          );
+        }
+        // N=1 — single entry, all rows belong to it implicitly.
+        owningIssueKey = entries[0].issueKey;
+      } else if (!issueKeysInBatch.has(owningIssueKey)) {
+        throw new InternalServerErrorException(
+          `AI_SCHEMA_DRIFT: unknown issueKey '${owningIssueKey}' (criterionId=${row.criterionId})`,
+        );
+      }
+      const whitelist = validIdsByIssueKey.get(owningIssueKey);
+      if (!whitelist || !whitelist.has(row.criterionId)) {
+        throw new InternalServerErrorException(
+          `AI_SCHEMA_DRIFT: unknown criterionId '${row.criterionId}' (issueKey=${owningIssueKey})`,
+        );
+      }
     }
 
-    const llmById = new Map<
+    // Partition LLM rows by issueKey for per-entry payload assembly.
+    const llmByIssueKey = new Map<
       string,
-      { verdict: CriterionVerdict; rationale: string }
+      Map<string, { verdict: CriterionVerdict; rationale: string }>
     >();
+    for (const entry of entries) {
+      llmByIssueKey.set(entry.issueKey, new Map());
+    }
     for (const row of llmCriteria) {
-      llmById.set(row.criterionId, {
+      const owningIssueKey = row.issueKey ?? entries[0].issueKey;
+      llmByIssueKey.get(owningIssueKey)!.set(row.criterionId, {
         verdict: row.verdict as CriterionVerdict,
         rationale: row.rationale,
       });
     }
 
+    // Hints are not currently issue-tagged at the producer side, so we
+    // route them by criterionId → owning issueKey. Cross-entry
+    // criterion-id collisions are not expected from the registry.
+    const hintsByIssueKey = new Map<string, Map<string, CriterionHint>>();
+    for (const entry of entries) {
+      hintsByIssueKey.set(entry.issueKey, new Map());
+    }
+    for (const h of hints) {
+      const owner =
+        criterionIdToIssueKey.get(h.criterionId) ?? entries[0].issueKey;
+      const map = hintsByIssueKey.get(owner);
+      if (map) map.set(h.criterionId, h);
+    }
+
+    // Assemble one CriteriaEvaluationPayload per matched entry.
+    const payloads: CriteriaEvaluationPayload[] = entries.map((entry) =>
+      this.buildSingleEntryPayload(
+        entry,
+        hintsByIssueKey.get(entry.issueKey) ?? new Map(),
+        llmByIssueKey.get(entry.issueKey) ?? new Map(),
+      ),
+    );
+
+    return {
+      criteriaEvaluations: payloads,
+      ...(payloads.length === 1 ? { criteriaEvaluation: payloads[0] } : {}),
+    };
+  }
+
+  /**
+   * Wave LAO_STRATEGY_AI_PARITY (N3) — per-entry payload builder
+   * extracted from the legacy single-entry `mergeCriteriaResults`. The
+   * precedence rules (geo-auto hardOverride wins; evidence-auto pass
+   * upgrades; evidence-auto needs-evidence soft) are UNCHANGED — only
+   * the dispatch around it now operates over a partitioned input.
+   */
+  private buildSingleEntryPayload(
+    entry: IssueRuleEntry,
+    hintsById: Map<string, CriterionHint>,
+    llmById: Map<string, { verdict: CriterionVerdict; rationale: string }>,
+  ): CriteriaEvaluationPayload {
     const results: CriterionResult[] = entry.criteria.map((criterion) => {
+      // Wave AI-Enforcement-Model (2026-05-22) — enforcement-mode dispatch.
+      // BEFORE checking LLM / hints, short-circuit on the criterion's
+      // declared enforcement so AI never gets a chance to mis-judge:
+      //
+      //   - 'auto-pass'  → force verdict='pass' with autoPassRationale,
+      //                    source='geo-auto' (closest existing source —
+      //                    UI treats both geo-auto and evidence-auto as
+      //                    "ระบบตรวจ"). No LLM input considered.
+      //
+      //   - 'staff-only' → force verdict='not-applicable' with the
+      //                    staff-review pointer rationale. AI did not
+      //                    even see this criterion in the [CRITERIA]
+      //                    section of the prompt (filtered upstream by
+      //                    composeCriteriaContextBlock). No LLM input.
+      //
+      //   - 'auto-check' → use the deterministic hint exclusively. If
+      //                    no hint produced (e.g., service failure), we
+      //                    fall through to 'needs-evidence' (defensive)
+      //                    rather than asking the LLM.
+      //
+      //   - 'llm-prose'  → existing precedence: LLM verdict + hint
+      //                    refinement (geo hardOverride / evidence-auto).
+      //
+      // §17.2 — all modes remain advisory; never gates workflow.
+      // §17.14 — criteria stay bound to LAO-coordination registry scope.
+      if (criterion.enforcement === 'auto-pass') {
+        return {
+          criterionId: criterion.id,
+          label: criterion.label,
+          verdict: 'pass' as CriterionVerdict,
+          rationale:
+            criterion.autoPassRationale ??
+            'ผ่านโดยอัตโนมัติ (ระบบ) — โครงการที่อยู่ในระบบนี้สอดคล้องเกณฑ์โดยปริยาย',
+          source: 'geo-auto',
+          enforcement: 'auto-pass',
+        };
+      }
+      if (criterion.enforcement === 'staff-only') {
+        return {
+          criterionId: criterion.id,
+          label: criterion.label,
+          verdict: 'not-applicable' as CriterionVerdict,
+          rationale:
+            'เกณฑ์นี้ต้องตรวจสอบโดยเจ้าหน้าที่ผู้เชี่ยวชาญในขั้นตอน review — AI ไม่มีหน้าที่ประเมิน (เช่น มาตรฐานทางวิศวกรรม / ระเบียบกฎหมาย / เอกสารแนบ)',
+          source: 'evidence-auto',
+          enforcement: 'staff-only',
+        };
+      }
+      if (criterion.enforcement === 'auto-check') {
+        const hint = hintsById.get(criterion.id) ?? null;
+        if (hint) {
+          return {
+            criterionId: criterion.id,
+            label: criterion.label,
+            verdict: hint.suggestedVerdict,
+            rationale: hint.reason,
+            source: hint.kind, // 'geo-auto' or 'evidence-auto'
+            enforcement: 'auto-check',
+            ...(hint.evidenceLink !== undefined
+              ? { evidenceLink: hint.evidenceLink }
+              : {}),
+          };
+        }
+        // Defensive: no hint produced (service failure / unsupported
+        // geoAutoCheck kind). Fall through to needs-evidence rather
+        // than asking the LLM, because the LLM was never told about
+        // this criterion.
+        return {
+          criterionId: criterion.id,
+          label: criterion.label,
+          verdict: 'needs-evidence' as CriterionVerdict,
+          rationale:
+            'ระบบไม่สามารถตรวจสอบเกณฑ์นี้โดยอัตโนมัติได้ในรอบนี้ — โปรดให้เจ้าหน้าที่ตรวจ',
+          source: 'evidence-auto',
+          enforcement: 'auto-check',
+        };
+      }
+
+      // enforcement === 'llm-prose' — existing precedence preserved below.
       const hint = hintsById.get(criterion.id) ?? null;
       const llm = llmById.get(criterion.id) ?? null;
 
@@ -2998,6 +3709,7 @@ ${formatRubricForReviewer({ isIssueBased })}
         verdict,
         rationale,
         source,
+        enforcement: 'llm-prose' as const,
         ...(evidenceLink !== undefined ? { evidenceLink } : {}),
       };
     });
@@ -3051,6 +3763,28 @@ ${formatRubricForReviewer({ isIssueBased })}
         continue;
       }
       if (r.verdict === 'not-applicable') continue;
+      // Wave Evidence-Scope Decoupling (2026-05-22) — evidence-required
+      // criteria are STAFF-REVIEW territory, not AI prose-review. When
+      // such a criterion lands on `fail` / `needs-evidence` with an
+      // LLM-derived source (i.e. NO deterministic `evidence-auto` /
+      // `geo-auto` hint upgrade), it means the LLM couldn't find evidence
+      // mentioned in the prose — which is expected, because evidence
+      // lives in attachments the AI cannot read. Treat as a no-op for
+      // score purposes; the verdict is still emitted on the criteria
+      // card so staff sees it during their human review.
+      //
+      // Exception: when source is `evidence-auto` (deterministic
+      // attachment-presence check found a mismatch) the penalty is kept,
+      // because that is an objective signal we CAN attribute to user
+      // action (attached the wrong tag or no tag at all).
+      if (
+        c.evidenceRequired === true &&
+        (r.verdict === 'fail' || r.verdict === 'needs-evidence') &&
+        r.source !== 'evidence-auto' &&
+        r.source !== 'geo-auto'
+      ) {
+        continue;
+      }
       const isFail = r.verdict === 'fail';
       if (c.criticality === 'blocking') delta += isFail ? -30 : -15;
       else if (c.criticality === 'preferred') delta += isFail ? -10 : -5;
