@@ -76,6 +76,39 @@ const MAX_IDENTITY_ATTEMPTS = 3;
 /** Lock duration after exceeding retry limit */
 const IDENTITY_LOCK_MS = 15 * 60 * 1000; // 15 minutes
 
+/**
+ * Wave 2026-05-22 (W-BE-01) — statuses excluded from the readiness
+ * `totalCount` denominator that powers the "ขาดอีก N รายการ" deficit
+ * chip on `/local-plan-book/assembly/main` (and the revision-round
+ * equivalent).
+ *
+ * Rationale (per CLAUDE.md):
+ *   - READY      — pre-submission; never part of the in-flight deficit.
+ *   - PULL_BACK  — owner withdrew (GLOBAL PULL BACK RULE). If the owner
+ *                  does not resubmit before finalize, §18.4.1 orphan
+ *                  cascade auto-resets the PG to `Ready` and notifies
+ *                  the owner (§18.7). It MUST NOT inflate the deficit
+ *                  chip while we wait for that cascade.
+ *   - REJECTED   — W67 workflow exit state ("เกินศักยภาพ"); routed
+ *                  through the separate `/coordinate/admin/out-authority`
+ *                  pipeline. MUST NEVER count toward main-plan readiness.
+ *
+ * Approved + Pending + Verified + Pending_Approval + Returned_For_Revision
+ * remain countable in `totalCount`.
+ *
+ * This constant is the SINGLE source of truth for the exclusion list —
+ * it is reused by both `getMainPlanReadiness` and
+ * `getRevisionRoundReadiness` so the two methods cannot drift.
+ *
+ * The book-content query (this file, lines ~2770–2790) is unrelated to
+ * this constant — it filters to `Approved` only and remains untouched.
+ */
+const READINESS_EXCLUSION_STATUSES = [
+  STATUS_NAMES.READY,
+  STATUS_NAMES.PULL_BACK,
+  STATUS_NAMES.REJECTED,
+] as const;
+
 @Injectable()
 export class BookAssemblyService {
   private readonly logger = new Logger(BookAssemblyService.name);
@@ -2020,7 +2053,9 @@ export class BookAssemblyService {
       .where('rp.developmentPlanRevision = :sourceId', { sourceId })
       .andWhere('rp.deletedAt IS NULL')
       .andWhere('ts.isLatest = :isLatest', { isLatest: true })
-      .andWhere('status.name <> :excludeReady', { excludeReady: STATUS_NAMES.READY })
+      .andWhere('status.name NOT IN (:...excludedStatuses)', {
+        excludedStatuses: READINESS_EXCLUSION_STATUSES,
+      })
       .getCount();
 
     const approvedCount = await this.revisedProjectGroupRepo
@@ -2052,7 +2087,9 @@ export class BookAssemblyService {
       .where('rp.developmentPlanRevision = :sourceId', { sourceId })
       .andWhere('rp.deletedAt IS NULL')
       .andWhere('ts.isLatest = :isLatest', { isLatest: true })
-      .andWhere('status.name <> :excludeReady', { excludeReady: STATUS_NAMES.READY })
+      .andWhere('status.name NOT IN (:...excludedStatuses)', {
+        excludedStatuses: READINESS_EXCLUSION_STATUSES,
+      })
       .andWhere('amp.id = :amphoeId', { amphoeId: '3001' })
       .andWhere('lao.id = :laoId', { laoId: '3001027' })
       .getCount();
@@ -2112,7 +2149,9 @@ export class BookAssemblyService {
       .andWhere('pg.deletedAt IS NULL')
       .andWhere('pg.isDraft = :isDraft', { isDraft: false })
       .andWhere('ts.isLatest = :isLatest', { isLatest: true })
-      .andWhere('status.name <> :excludeReady', { excludeReady: STATUS_NAMES.READY })
+      .andWhere('status.name NOT IN (:...excludedStatuses)', {
+        excludedStatuses: READINESS_EXCLUSION_STATUSES,
+      })
       .getCount();
 
     const approvedCount = await this.projectGroupRepo
@@ -2147,7 +2186,9 @@ export class BookAssemblyService {
       .andWhere('pg.deletedAt IS NULL')
       .andWhere('pg.isDraft = :isDraft', { isDraft: false })
       .andWhere('ts.isLatest = :isLatest', { isLatest: true })
-      .andWhere('status.name <> :excludeReady', { excludeReady: STATUS_NAMES.READY })
+      .andWhere('status.name NOT IN (:...excludedStatuses)', {
+        excludedStatuses: READINESS_EXCLUSION_STATUSES,
+      })
       .andWhere('amp.id = :amphoeId', { amphoeId: '3001' })
       .andWhere('lao.id = :laoId', { laoId: '3001027' })
       .getCount();

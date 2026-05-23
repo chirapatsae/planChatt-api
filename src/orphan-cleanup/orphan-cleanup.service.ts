@@ -52,10 +52,10 @@ interface PendingPgResetNotification {
 const FINALIZE_NON_TARGET_STATUSES: ReadonlySet<string> = new Set<string>([
   STATUS_NAMES.READY,
   STATUS_NAMES.APPROVED,
-  // Rejected is the W67 8th canonical status — workflow exit. Not yet in
-  // STATUS_NAMES (frozen at the 7-name set per the file header), so we
-  // hard-code the literal name here exactly as seeded by W67.
-  'Rejected',
+  // Rejected is the W67 8th canonical status — workflow exit state
+  // ("เกินศักยภาพ"). It is now registered in STATUS_NAMES (W67 catch-up);
+  // the literal-string fallback used in earlier waves has been removed.
+  STATUS_NAMES.REJECTED,
 ]);
 
 /**
@@ -436,6 +436,15 @@ export class OrphanCleanupService {
     // Pessimistic lock the PG row (CLAUDE.md §18 + workflow doc Phase A).
     // We need the creator WorkHistory's amphoe + LAO context to classify
     // agency vs LAO origin per CLAUDE.md §1.
+    //
+    // Postgres rejects `FOR UPDATE` against an outer-join'd query with
+    //   `FOR UPDATE cannot be applied to the nullable side of an outer join`
+    // because the join sides could yield NULL rows. We need the joined
+    // context (createdBy + amphoe + LAO + responsibleAgency) for the §1
+    // classification + §7 responsibleAgency clearing logic, but the lock
+    // should only apply to the PG row itself. The `lockTables: ['pg']`
+    // argument produces `FOR UPDATE OF "pg"` which Postgres accepts even
+    // with outer joins — the joined tables are read but not locked.
     const pg = await em
       .createQueryBuilder(ProjectGroup, 'pg')
       .leftJoinAndSelect('pg.createdBy', 'createdBy')
@@ -447,7 +456,7 @@ export class OrphanCleanupService {
       .leftJoinAndSelect('pg.responsibleAgency', 'responsibleAgency')
       .where('pg.id = :pgId', { pgId })
       .andWhere('pg.deletedAt IS NULL')
-      .setLock('pessimistic_write')
+      .setLock('pessimistic_write', undefined, ['pg'])
       .getOne();
     if (!pg) return false;
 
@@ -810,7 +819,7 @@ export class OrphanCleanupService {
         // For RPG finalize, terminal set is {Approved, Rejected} per
         // workflow doc action matrix. Ready RPGs do not exist in normal
         // workflow but we exclude Approved/Rejected only here.
-        nonTarget: [STATUS_NAMES.APPROVED, 'Rejected'],
+        nonTarget: [STATUS_NAMES.APPROVED, STATUS_NAMES.REJECTED],
       });
     }
     qb.select('rpg.id', 'id');
@@ -839,7 +848,7 @@ export class OrphanCleanupService {
       qb.andWhere(
         '(st.name IS NULL OR st.name NOT IN (:...nonTarget))',
         {
-          nonTarget: [STATUS_NAMES.APPROVED, 'Rejected'],
+          nonTarget: [STATUS_NAMES.APPROVED, STATUS_NAMES.REJECTED],
         },
       );
     }

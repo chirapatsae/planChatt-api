@@ -3,15 +3,18 @@
  *
  * Source of truth:
  *   - CLAUDE.md -> Core Status Machine
- *     The 7 canonical workflow statuses used across the Project Bank system:
+ *     The 8 canonical workflow statuses used across the Project Bank system:
  *       Ready, Pending, Verified, Pending_Approval, Approved, Pull_Back,
- *       Returned_For_Revision.
+ *       Returned_For_Revision, Rejected (W67 — "เกินศักยภาพ" workflow exit).
  *   - CLAUDE.md -> Status Naming Constraint
  *     The literal name "Revision" is RESERVED and MUST NOT be used as a status
  *     value (it collides with the DevelopmentPlanRevision entity). The approved
  *     replacement is "Returned_For_Revision".
  *   - CLAUDE.md -> Returned_For_Revision Rule
  *     Semantics for the staff-triggered "return to owner for correction" flow.
+ *   - CLAUDE.md -> Rejected Status (W67)
+ *     8th canonical status; workflow exit state indicating the project exceeds
+ *     organizational capacity.
  *
  * Purpose:
  *   Give backend code (services, filters, specs, future migrations) a single
@@ -38,10 +41,11 @@ export const STATUS_NAMES = Object.freeze({
   APPROVED: 'Approved',
   PULL_BACK: 'Pull_Back',
   RETURNED_FOR_REVISION: 'Returned_For_Revision',
+  REJECTED: 'Rejected',
 } as const);
 
 /**
- * Union of the 7 canonical status-name string literals.
+ * Union of the 8 canonical status-name string literals.
  *
  * Derived directly from {@link STATUS_NAMES} so that adding / renaming a key
  * in the frozen object automatically updates the type surface.

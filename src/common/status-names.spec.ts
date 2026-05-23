@@ -9,7 +9,7 @@ describe('STATUS_NAMES (backend canonical status-name constants)', () => {
       expect(Object.isFrozen(STATUS_NAMES)).toBe(true);
     });
 
-    it('exposes exactly 7 keys — the canonical Core Status Machine names', () => {
+    it('exposes exactly 8 keys — the canonical Core Status Machine names (W67)', () => {
       expect(Object.keys(STATUS_NAMES).sort()).toEqual(
         [
           'APPROVED',
@@ -17,11 +17,12 @@ describe('STATUS_NAMES (backend canonical status-name constants)', () => {
           'PENDING_APPROVAL',
           'PULL_BACK',
           'READY',
+          'REJECTED',
           'RETURNED_FOR_REVISION',
           'VERIFIED',
         ].sort(),
       );
-      expect(Object.keys(STATUS_NAMES)).toHaveLength(7);
+      expect(Object.keys(STATUS_NAMES)).toHaveLength(8);
     });
   });
 
@@ -37,6 +38,7 @@ describe('STATUS_NAMES (backend canonical status-name constants)', () => {
       ['APPROVED', 'Approved'],
       ['PULL_BACK', 'Pull_Back'],
       ['RETURNED_FOR_REVISION', 'Returned_For_Revision'],
+      ['REJECTED', 'Rejected'],
     ] as const)('STATUS_NAMES.%s === %j', (key, expected) => {
       expect(STATUS_NAMES[key as keyof typeof STATUS_NAMES]).toBe(expected);
     });
@@ -70,7 +72,8 @@ describe('STATUS_NAMES (backend canonical status-name constants)', () => {
       expect(isStatusName('Revision')).toBe(false);
       expect(isStatusName('')).toBe(false);
       expect(isStatusName('pending')).toBe(false); // wrong case
-      expect(isStatusName('Rejected')).toBe(false); // not in canonical set
+      // Note: 'Rejected' is now a canonical status (W67) and is therefore
+      // accepted by isStatusName — see the canonical-name suite above.
     });
 
     it('narrows the string type to StatusName on success', () => {

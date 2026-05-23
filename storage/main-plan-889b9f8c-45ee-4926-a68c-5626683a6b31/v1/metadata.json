@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "sourceType": "main_plan",
+  "sourceId": "889b9f8c-45ee-4926-a68c-5626683a6b31",
+  "status": "completed",
+  "correctionMode": null,
+  "correctionReason": null,
+  "parts": {
+    "part1": {
+      "source": "uploaded",
+      "originalFileName": "à¹à¸­à¸à¸ªà¸²à¸£ A.pdf",
+      "uploadedBy": "f5a42966-cece-4a49-9cbd-e5a0bfe201fc",
+      "uploadedAt": "2026-05-23T09:00:34.886Z"
+    },
+    "part2": {
+      "source": "uploaded",
+      "originalFileName": "à¹à¸­à¸à¸ªà¸²à¸£ B.pdf",
+      "uploadedBy": "f5a42966-cece-4a49-9cbd-e5a0bfe201fc",
+      "uploadedAt": "2026-05-23T09:00:42.872Z"
+    },
+    "part3": {
+      "source": "generated",
+      "projectCount": 6,
+      "projectIds": [
+        "3904803f-bbdb-498d-9a20-943b2f1710d5",
+        "4859f0fd-79e4-484b-9c2f-b6c12caf16d8",
+        "cbbe4f28-77bc-4935-bec7-789bccb4dbb8",
+        "e281aac9-d977-487f-bfb8-e20680fc9950",
+        "ccc1d3f8-321d-480c-a24f-3f043d40b94c",
+        "5b2137c8-e51a-454a-a99c-3717b9631612"
+      ],
+      "generatedAt": "2026-05-23T09:41:54.422Z"
+    }
+  },
+  "merged": {
+    "fileName": "official-book-v1.pdf",
+    "mergedAt": "2026-05-23T10:02:30.655Z",
+    "totalPages": 20
+  },
+  "createdBy": "f5a42966-cece-4a49-9cbd-e5a0bfe201fc",
+  "createdAt": "2026-05-23T10:02:30.561Z",
+  "deprecatedAt": null,
+  "deprecatedBy": null,
+  "deprecationReason": null
+}
