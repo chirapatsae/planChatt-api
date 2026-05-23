@@ -99,8 +99,13 @@ export interface PublicProjectSearchHit {
  *   - Comments / staff remarks
  *   - User PII (email, phone, line uid, citizen id)
  *   - AI snapshot rows (§17 — read-side authorization is owner / staff)
- *   - Internal flags: isDraft, isBooked, bookedAt, pageNumber,
+ *   - Internal flags: isDraft, isBooked, bookedAt,
  *     deletedAt, createdAt, updatedAt
+ *
+ * `pageNumber` is now ALSO exposed in the `book` section because the
+ * assembled PDF book is itself public per §16 / §18 — surfacing the
+ * page index that a citizen would look up in the same PDF is no
+ * broader than the existing public surface.
  *
  * Budget WAS previously deferred but is now exposed as a SUMMARY ONLY
  * (total amount + per-year breakdown). Budget rows are already
@@ -144,6 +149,13 @@ export interface PublicProjectDetailDto {
   };
   /** Agency NAME only — no contact info, no address, no phone (PDPA). */
   responsibleAgencyName: string | null;
+  /**
+   * Originating LAO NAME — populated ONLY for LAO-coordinated projects
+   * (CLAUDE.md §5.2). For agency-origin projects this is `null` and
+   * the FE suppresses the "ประสานมาจาก" line. Name ONLY; the LAO row
+   * carries no PII directly.
+   */
+  originAgencyName: string | null;
   parentPlan: {
     planId: string;
     planName: string;
@@ -156,6 +168,13 @@ export interface PublicProjectDetailDto {
     bookName: string;
     latestVersionNumber: number;
     downloadUrl: string;
+    /**
+     * Page index inside the assembled PDF that this project appears
+     * on. NULL when the project hasn't been booked yet OR the book
+     * generation didn't write a page index. Citizens use this to
+     * locate the project quickly inside a downloaded PDF.
+     */
+    pageNumber: number | null;
   };
   /** Always 'อนุมัติ' on this endpoint (eligibility predicate enforces it). */
   currentStatusThName: string;
@@ -551,6 +570,7 @@ export class PublicArchiveService {
       .leftJoinAndSelect('pg.plan', 'planClassification')
       .leftJoinAndSelect('pg.developmentIssue', 'devIssue')
       .leftJoinAndSelect('pg.responsibleAgency', 'respAgency')
+      .leftJoinAndSelect('pg.originAgencyId', 'originAgency')
       .leftJoinAndSelect('pg.budgets', 'budgets')
       .leftJoin('pg.trackingStatus', 'ts', 'ts.isLatest = true')
       .leftJoin('ts.statusId', 'status')
@@ -602,6 +622,7 @@ export class PublicArchiveService {
       planClassificationName: pg.plan?.name ?? null,
       developmentIssueName: pg.developmentIssue?.name ?? null,
       responsibleAgencyName: pg.responsibleAgency?.name ?? null,
+      originAgencyName: pg.originAgencyId?.name ?? null,
       budgets: pg.budgets ?? [],
       parentPlan: plan,
       book: {
@@ -609,6 +630,7 @@ export class PublicArchiveService {
         sourceId: plan.id,
         bookName: plan.name,
         latestVersionNumber: latestVersion.versionNumber,
+        pageNumber: pg.pageNumber,
       },
     });
   }
@@ -628,6 +650,7 @@ export class PublicArchiveService {
       .leftJoinAndSelect('rpg.plan', 'planClassification')
       .leftJoinAndSelect('rpg.developmentIssue', 'devIssue')
       .leftJoinAndSelect('rpg.responsibleAgency', 'respAgency')
+      .leftJoinAndSelect('rpg.originAgencyId', 'originAgency')
       .leftJoinAndSelect('rpg.budgets', 'budgets')
       .leftJoin('rpg.trackingStatus', 'ts', 'ts.isLatest = true')
       .leftJoin('ts.statusId', 'status')
@@ -696,6 +719,7 @@ export class PublicArchiveService {
       planClassificationName: rpg.plan?.name ?? null,
       developmentIssueName: rpg.developmentIssue?.name ?? null,
       responsibleAgencyName: rpg.responsibleAgency?.name ?? null,
+      originAgencyName: rpg.originAgencyId?.name ?? null,
       budgets: rpg.budgets ?? [],
       parentPlan: plan,
       book: {
@@ -703,6 +727,7 @@ export class PublicArchiveService {
         sourceId: rev.id,
         bookName: `${revTypeName} ครั้งที่ ${rev.revisionNumber}`,
         latestVersionNumber: latestVersion.versionNumber,
+        pageNumber: rpg.pageNumber,
       },
     });
   }
@@ -735,6 +760,11 @@ export class PublicArchiveService {
     developmentIssueName: string | null;
     responsibleAgencyName: string | null;
     /**
+     * Originating LAO name for LAO-coordinated projects. Null for
+     * agency-origin projects (FE suppresses the line). CLAUDE.md §5.2.
+     */
+    originAgencyName: string | null;
+    /**
      * Raw Budget rows from the project. The assembler keeps ONLY
      * `{year, amount}` pairs — every other column (id, FK metadata,
      * createdAt) is discarded so a future entity drift cannot leak.
@@ -746,6 +776,7 @@ export class PublicArchiveService {
       sourceId: string;
       bookName: string;
       latestVersionNumber: number;
+      pageNumber: number | null;
     };
   }): PublicProjectDetailDto {
     const plan = input.parentPlan;
@@ -797,6 +828,7 @@ export class PublicArchiveService {
         return { totalAmount, perYear };
       })(),
       responsibleAgencyName: input.responsibleAgencyName,
+      originAgencyName: input.originAgencyName,
       parentPlan: {
         planId: plan.id,
         planName: plan.name,
@@ -817,6 +849,7 @@ export class PublicArchiveService {
           input.book.sourceId,
           input.book.latestVersionNumber,
         ),
+        pageNumber: input.book.pageNumber,
       },
       currentStatusThName: 'อนุมัติ',
     };
