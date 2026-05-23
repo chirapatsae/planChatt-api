@@ -26,7 +26,7 @@
  * any workflow transition; CLAUDE.md ownership rules are unaffected.
  */
 
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ILike, In, Repository } from 'typeorm';
 
@@ -40,6 +40,7 @@ import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { BookAssemblyService } from 'src/book-assembly/book-assembly.service';
+import { ReportFormat } from 'src/development-plan/types/report-format.enum';
 
 /* ── Public DTO shapes (no PII) ──────────────────────────────────── */
 
@@ -79,8 +80,91 @@ export interface PublicProjectSearchHit {
   bookName: string;
 }
 
+/**
+ * Public Archive — Project Detail DTO (PDPA-bound contract).
+ *
+ * This DTO is the SOLE redaction mechanism for the detail endpoint —
+ * the service constructs it field-by-field and NEVER spreads an entity
+ * into the response. Adding a field here is a deliberate, reviewable
+ * action; an entity column drift will NOT silently leak.
+ *
+ * See `docs/tasks/wave-public-archive-project-detail/BE-01.md` §7.3 for
+ * the canonical whitelist and the explicit exclusion list.
+ *
+ * Excluded by design (NEVER emit):
+ *   - createdBy (WorkHistory) — exposes creator user id + LAO / agency
+ *   - responsibleAgency contact info (phone, address) — only `name`
+ *     is exposed via `responsibleAgencyName`
+ *   - TrackingStatus history rows — staff names + transition reasons
+ *   - Comments / staff remarks
+ *   - User PII (email, phone, line uid, citizen id)
+ *   - AI snapshot rows (§17 — read-side authorization is owner / staff)
+ *   - Internal flags: isDraft, isBooked, bookedAt, pageNumber,
+ *     deletedAt, createdAt, updatedAt
+ *
+ * Budget WAS previously deferred but is now exposed as a SUMMARY ONLY
+ * (total amount + per-year breakdown). Budget rows are already
+ * published verbatim in the assembled PDF books (which are themselves
+ * public per §16 / §18), so a per-year summary is no broader than the
+ * existing public surface. We deliberately do NOT expose per-row
+ * `id`, `createdAt`, or any owning-FK metadata — only `{year, amount}`
+ * pairs and the total.
+ */
+export interface PublicProjectDetailDto {
+  projectId: string;
+  projectTitle: string;
+  objective: string;
+  goal: string;
+  expected: string;
+  projectYear: number;
+  /** Populated for STRATEGY_BASED plans only; null for ISSUE_BASED (§16.5). */
+  indicator: string | null;
+  classification: {
+    reportFormat: 'STRATEGY_BASED' | 'ISSUE_BASED';
+    strategyName?: string;
+    tacticName?: string;
+    planName?: string;
+    developmentIssueName?: string;
+  };
+  geo: {
+    startLat: number | null;
+    startLng: number | null;
+    endLat: number | null;
+    endLng: number | null;
+  };
+  /**
+   * Budget summary (year + amount only — no per-row id, no FK
+   * metadata). Same data is already in the published PDF books.
+   * `totalAmount` is the sum across all years; `perYear` is sorted
+   * ascending by year.
+   */
+  budget: {
+    totalAmount: number;
+    perYear: Array<{ year: number; amount: number }>;
+  };
+  /** Agency NAME only — no contact info, no address, no phone (PDPA). */
+  responsibleAgencyName: string | null;
+  parentPlan: {
+    planId: string;
+    planName: string;
+    startYear: number;
+    endYear: number;
+  };
+  book: {
+    sourceType: 'main_plan' | 'edit_revision' | 'change_revision';
+    sourceId: string;
+    bookName: string;
+    latestVersionNumber: number;
+    downloadUrl: string;
+  };
+  /** Always 'อนุมัติ' on this endpoint (eligibility predicate enforces it). */
+  currentStatusThName: string;
+}
+
 @Injectable()
 export class PublicArchiveService {
+  private readonly logger = new Logger(PublicArchiveService.name);
+
   constructor(
     @InjectRepository(BookAssemblyVersion)
     private readonly versionRepo: Repository<BookAssemblyVersion>,
@@ -94,6 +178,31 @@ export class PublicArchiveService {
     private readonly revisedProjectGroupRepo: Repository<RevisedProjectGroup>,
     private readonly bookAssemblyService: BookAssemblyService,
   ) {}
+
+  /**
+   * Shared eligibility predicate for the public surface.
+   *
+   * A DevelopmentPlan is "publicly published" when it has at least one
+   * `BookAssemblyVersion` with `sourceType=MAIN_PLAN` and
+   * `status=COMPLETED`. This Set is the gate used by BOTH
+   * `searchProjects` and `getProjectDetail` — every public-facing
+   * project lookup MUST filter through it so anonymous callers can
+   * never reach a project whose plan has no public assembled copy.
+   *
+   * Refreshed on every call (no caching) — a plan that was de-published
+   * mid-session MUST disappear immediately. Cheap query (small table,
+   * indexed on (sourceType, status)).
+   */
+  private async getPublishedPlanIds(): Promise<Set<string>> {
+    const publishedMainVersions = await this.versionRepo.find({
+      where: {
+        sourceType: BookAssemblySourceType.MAIN_PLAN,
+        status: BookAssemblyVersionStatus.COMPLETED,
+      },
+      select: { sourceId: true },
+    });
+    return new Set(publishedMainVersions.map((v) => v.sourceId));
+  }
 
   /**
    * Build the path the FE will hand to its axios instance. The leading
@@ -325,14 +434,9 @@ export class PublicArchiveService {
 
     // Pre-fetch plans that have at least one published main book to
     // avoid surfacing projects whose plan has no public assembled copy.
-    const publishedMainVersions = await this.versionRepo.find({
-      where: {
-        sourceType: BookAssemblySourceType.MAIN_PLAN,
-        status: BookAssemblyVersionStatus.COMPLETED,
-      },
-      order: { mergedAt: 'DESC' },
-    });
-    const publishedPlanIds = new Set(publishedMainVersions.map((v) => v.sourceId));
+    // Delegates to the shared `getPublishedPlanIds` helper so the
+    // eligibility predicate stays consistent with `getProjectDetail`.
+    const publishedPlanIds = await this.getPublishedPlanIds();
     if (publishedPlanIds.size === 0) return [];
 
     // PG search.
@@ -394,5 +498,327 @@ export class PublicArchiveService {
       });
 
     return [...pgHits, ...rpgHits].slice(0, limit);
+  }
+
+  /* ── #4 Project detail (anon access) ─────────────────────────── */
+
+  /**
+   * Returns a PII-redacted detail DTO for a single approved project
+   * (PG or RPG) whose parent plan has at least one COMPLETED published
+   * book. Used by the public-archive detail modal + permalink page.
+   *
+   * Uniform 404 contract — every ineligibility (not found, soft-deleted,
+   * not approved, plan not publicly published, sourceType / id mismatch)
+   * returns the SAME `NotFoundException('ไม่พบโครงการที่ระบุ')`. This
+   * prevents enumeration of internal projects and PDPA leakage.
+   *
+   * Branches on:
+   *   - `sourceType` → PG vs RPG repo
+   *   - parent plan's `reportFormat` → STRATEGY_BASED vs ISSUE_BASED
+   *     classification fields (§16.5)
+   */
+  async getProjectDetail(
+    sourceType: 'main_plan' | 'edit_revision' | 'change_revision',
+    projectId: string,
+  ): Promise<PublicProjectDetailDto> {
+    // Cheap UUID shape gate. Defensive — Express already strips most
+    // junk via param parsing but a malformed string would otherwise
+    // raise a 500 from Postgres' uuid cast.
+    if (!projectId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(projectId)) {
+      throw new NotFoundException('ไม่พบโครงการที่ระบุ');
+    }
+
+    const publishedPlanIds = await this.getPublishedPlanIds();
+    if (publishedPlanIds.size === 0) {
+      throw new NotFoundException('ไม่พบโครงการที่ระบุ');
+    }
+
+    if (sourceType === 'main_plan') {
+      return this.getProjectGroupDetail(projectId, publishedPlanIds);
+    }
+    return this.getRevisedProjectGroupDetail(projectId, sourceType, publishedPlanIds);
+  }
+
+  private async getProjectGroupDetail(
+    projectId: string,
+    publishedPlanIds: Set<string>,
+  ): Promise<PublicProjectDetailDto> {
+    const pg = await this.projectGroupRepo
+      .createQueryBuilder('pg')
+      .leftJoinAndSelect('pg.developmentPlan', 'plan')
+      .leftJoinAndSelect('pg.strategy', 'strategy')
+      .leftJoinAndSelect('pg.tactic', 'tactic')
+      .leftJoinAndSelect('pg.plan', 'planClassification')
+      .leftJoinAndSelect('pg.developmentIssue', 'devIssue')
+      .leftJoinAndSelect('pg.responsibleAgency', 'respAgency')
+      .leftJoinAndSelect('pg.budgets', 'budgets')
+      .leftJoin('pg.trackingStatus', 'ts', 'ts.isLatest = true')
+      .leftJoin('ts.statusId', 'status')
+      .where('pg.id = :id', { id: projectId })
+      .andWhere('pg.deletedAt IS NULL')
+      .andWhere('status.name = :statusName', { statusName: 'Approved' })
+      .getOne();
+
+    if (!pg || !pg.developmentPlan) {
+      throw new NotFoundException('ไม่พบโครงการที่ระบุ');
+    }
+    const plan = pg.developmentPlan;
+    if (!publishedPlanIds.has(plan.id)) {
+      throw new NotFoundException('ไม่พบโครงการที่ระบุ');
+    }
+
+    const latestVersion = await this.versionRepo.findOne({
+      where: {
+        sourceType: BookAssemblySourceType.MAIN_PLAN,
+        sourceId: plan.id,
+        status: BookAssemblyVersionStatus.COMPLETED,
+      },
+      order: { versionNumber: 'DESC' },
+    });
+    if (!latestVersion) {
+      // Defensive: predicate already required at least one, but the
+      // plan may have just been de-published in a race. Uniform 404.
+      throw new NotFoundException('ไม่พบโครงการที่ระบุ');
+    }
+
+    this.logger.log(
+      `[public] detail main_plan id=${pg.id} plan=${plan.id} v${latestVersion.versionNumber}`,
+    );
+
+    return this.assembleDetail({
+      projectId: pg.id,
+      title: pg.title,
+      objective: pg.objective,
+      goal: pg.goal,
+      expected: pg.expected,
+      projectYear: pg.projectYear,
+      indicator: pg.indicator,
+      startLat: pg.startLat,
+      startLng: pg.startLng,
+      endLat: pg.endLat,
+      endLng: pg.endLng,
+      strategyName: pg.strategy?.name ?? null,
+      tacticName: pg.tactic?.name ?? null,
+      planClassificationName: pg.plan?.name ?? null,
+      developmentIssueName: pg.developmentIssue?.name ?? null,
+      responsibleAgencyName: pg.responsibleAgency?.name ?? null,
+      budgets: pg.budgets ?? [],
+      parentPlan: plan,
+      book: {
+        sourceType: 'main_plan',
+        sourceId: plan.id,
+        bookName: plan.name,
+        latestVersionNumber: latestVersion.versionNumber,
+      },
+    });
+  }
+
+  private async getRevisedProjectGroupDetail(
+    projectId: string,
+    sourceType: 'edit_revision' | 'change_revision',
+    publishedPlanIds: Set<string>,
+  ): Promise<PublicProjectDetailDto> {
+    const rpg = await this.revisedProjectGroupRepo
+      .createQueryBuilder('rpg')
+      .leftJoinAndSelect('rpg.developmentPlanRevision', 'rev')
+      .leftJoinAndSelect('rev.developmentPlan', 'plan')
+      .leftJoinAndSelect('rev.revisionType', 'revType')
+      .leftJoinAndSelect('rpg.strategy', 'strategy')
+      .leftJoinAndSelect('rpg.tactic', 'tactic')
+      .leftJoinAndSelect('rpg.plan', 'planClassification')
+      .leftJoinAndSelect('rpg.developmentIssue', 'devIssue')
+      .leftJoinAndSelect('rpg.responsibleAgency', 'respAgency')
+      .leftJoinAndSelect('rpg.budgets', 'budgets')
+      .leftJoin('rpg.trackingStatus', 'ts', 'ts.isLatest = true')
+      .leftJoin('ts.statusId', 'status')
+      .where('rpg.id = :id', { id: projectId })
+      .andWhere('rpg.deletedAt IS NULL')
+      .andWhere('status.name = :statusName', { statusName: 'Approved' })
+      .getOne();
+
+    if (!rpg || !rpg.developmentPlanRevision || !rpg.developmentPlanRevision.developmentPlan) {
+      throw new NotFoundException('ไม่พบโครงการที่ระบุ');
+    }
+
+    const rev = rpg.developmentPlanRevision;
+    const plan = rev.developmentPlan!;
+    if (!publishedPlanIds.has(plan.id)) {
+      throw new NotFoundException('ไม่พบโครงการที่ระบุ');
+    }
+
+    // Enforce sourceType ↔ revisionType pairing. Mismatched calls
+    // (main_plan param against an RPG id, change_revision against an
+    // edit RPG, …) get a uniform 404.
+    const revTypeName = rev.revisionType?.name;
+    const expectedTypeName: 'แก้ไข' | 'เปลี่ยนแปลง' =
+      sourceType === 'change_revision' ? 'เปลี่ยนแปลง' : 'แก้ไข';
+    if (revTypeName !== expectedTypeName) {
+      throw new NotFoundException('ไม่พบโครงการที่ระบุ');
+    }
+
+    const bookSourceType =
+      sourceType === 'change_revision'
+        ? BookAssemblySourceType.CHANGE_REVISION
+        : BookAssemblySourceType.EDIT_REVISION;
+    const latestVersion = await this.versionRepo.findOne({
+      where: {
+        sourceType: bookSourceType,
+        sourceId: rev.id,
+        status: BookAssemblyVersionStatus.COMPLETED,
+      },
+      order: { versionNumber: 'DESC' },
+    });
+    if (!latestVersion) {
+      // The revision book itself may have no published version even
+      // though the parent plan is published. Uniform 404 — the public
+      // surface only shows projects whose own book is downloadable.
+      throw new NotFoundException('ไม่พบโครงการที่ระบุ');
+    }
+
+    this.logger.log(
+      `[public] detail ${sourceType} id=${rpg.id} rev=${rev.id} v${latestVersion.versionNumber}`,
+    );
+
+    return this.assembleDetail({
+      projectId: rpg.id,
+      title: rpg.title,
+      objective: rpg.objective,
+      goal: rpg.goal,
+      expected: rpg.expected,
+      projectYear: rpg.projectYear,
+      indicator: rpg.indicator,
+      startLat: rpg.startLat,
+      startLng: rpg.startLng,
+      endLat: rpg.endLat,
+      endLng: rpg.endLng,
+      strategyName: rpg.strategy?.name ?? null,
+      tacticName: rpg.tactic?.name ?? null,
+      planClassificationName: rpg.plan?.name ?? null,
+      developmentIssueName: rpg.developmentIssue?.name ?? null,
+      responsibleAgencyName: rpg.responsibleAgency?.name ?? null,
+      budgets: rpg.budgets ?? [],
+      parentPlan: plan,
+      book: {
+        sourceType,
+        sourceId: rev.id,
+        bookName: `${revTypeName} ครั้งที่ ${rev.revisionNumber}`,
+        latestVersionNumber: latestVersion.versionNumber,
+      },
+    });
+  }
+
+  /**
+   * Field-by-field DTO assembly. NEVER spread an entity here — every
+   * field is named explicitly so a future entity column drift cannot
+   * leak through accidentally (PDPA + §17 audit-trail integrity).
+   *
+   * Branches on parent plan's `reportFormat` per §16.5 to keep the
+   * classification shape mutually exclusive. If the source row has a
+   * shape that does not match `reportFormat` (legacy bug), the
+   * populated half is emitted as-is — see BE-01 §11 risk note.
+   */
+  private assembleDetail(input: {
+    projectId: string;
+    title: string;
+    objective: string;
+    goal: string;
+    expected: string;
+    projectYear: number;
+    indicator: string | null;
+    startLat: number | null;
+    startLng: number | null;
+    endLat: number | null;
+    endLng: number | null;
+    strategyName: string | null;
+    tacticName: string | null;
+    planClassificationName: string | null;
+    developmentIssueName: string | null;
+    responsibleAgencyName: string | null;
+    /**
+     * Raw Budget rows from the project. The assembler keeps ONLY
+     * `{year, amount}` pairs — every other column (id, FK metadata,
+     * createdAt) is discarded so a future entity drift cannot leak.
+     */
+    budgets: Array<{ year: number; quantity: number | string }>;
+    parentPlan: DevelopmentPlan;
+    book: {
+      sourceType: 'main_plan' | 'edit_revision' | 'change_revision';
+      sourceId: string;
+      bookName: string;
+      latestVersionNumber: number;
+    };
+  }): PublicProjectDetailDto {
+    const plan = input.parentPlan;
+    const reportFormat: 'STRATEGY_BASED' | 'ISSUE_BASED' =
+      plan.reportFormat === ReportFormat.ISSUE_BASED ? 'ISSUE_BASED' : 'STRATEGY_BASED';
+
+    const classification: PublicProjectDetailDto['classification'] =
+      reportFormat === 'ISSUE_BASED'
+        ? {
+            reportFormat,
+            developmentIssueName: input.developmentIssueName ?? undefined,
+          }
+        : {
+            reportFormat,
+            strategyName: input.strategyName ?? undefined,
+            tacticName: input.tacticName ?? undefined,
+            planName: input.planClassificationName ?? undefined,
+          };
+
+    return {
+      projectId: input.projectId,
+      projectTitle: input.title,
+      objective: input.objective,
+      goal: input.goal,
+      expected: input.expected,
+      projectYear: input.projectYear,
+      indicator: reportFormat === 'STRATEGY_BASED' ? input.indicator : null,
+      classification,
+      geo: {
+        startLat: input.startLat !== null ? Number(input.startLat) : null,
+        startLng: input.startLng !== null ? Number(input.startLng) : null,
+        endLat: input.endLat !== null ? Number(input.endLat) : null,
+        endLng: input.endLng !== null ? Number(input.endLng) : null,
+      },
+      budget: (() => {
+        // Aggregate raw rows → {year, amount} per year (sum across
+        // duplicates, defensive). decimal columns arrive as strings
+        // from pg, hence `Number()` here.
+        const perYearMap = new Map<number, number>();
+        for (const row of input.budgets) {
+          const amount = Number(row.quantity);
+          if (!Number.isFinite(amount)) continue;
+          perYearMap.set(row.year, (perYearMap.get(row.year) ?? 0) + amount);
+        }
+        const perYear = Array.from(perYearMap.entries())
+          .map(([year, amount]) => ({ year, amount }))
+          .sort((a, b) => a.year - b.year);
+        const totalAmount = perYear.reduce((sum, r) => sum + r.amount, 0);
+        return { totalAmount, perYear };
+      })(),
+      responsibleAgencyName: input.responsibleAgencyName,
+      parentPlan: {
+        planId: plan.id,
+        planName: plan.name,
+        startYear: plan.startYear,
+        endYear: plan.endYear,
+      },
+      book: {
+        sourceType: input.book.sourceType,
+        sourceId: input.book.sourceId,
+        bookName: input.book.bookName,
+        latestVersionNumber: input.book.latestVersionNumber,
+        downloadUrl: this.buildDownloadUrl(
+          input.book.sourceType === 'main_plan'
+            ? BookAssemblySourceType.MAIN_PLAN
+            : input.book.sourceType === 'change_revision'
+              ? BookAssemblySourceType.CHANGE_REVISION
+              : BookAssemblySourceType.EDIT_REVISION,
+          input.book.sourceId,
+          input.book.latestVersionNumber,
+        ),
+      },
+      currentStatusThName: 'อนุมัติ',
+    };
   }
 }

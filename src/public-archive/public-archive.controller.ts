@@ -31,6 +31,7 @@ import { BookAssemblySourceType } from 'src/book-assembly/enums/book-assembly.en
 import {
   PublicArchiveService,
   PublicPlanDto,
+  PublicProjectDetailDto,
   PublicProjectSearchHit,
 } from './public-archive.service';
 
@@ -85,6 +86,49 @@ export class PublicArchiveController {
   async searchProjects(@Query('q') q?: string): Promise<PublicProjectSearchHit[]> {
     if (!q || q.trim().length < 2) return [];
     return this.publicArchiveService.searchProjects(q, 50);
+  }
+
+  /**
+   * GET /v1/public/plans/projects/:sourceType/:projectId
+   *
+   * Returns a PII-redacted detail DTO for a single approved project
+   * (ProjectGroup for `main_plan`, RevisedProjectGroup for `edit_revision`
+   * / `change_revision`) whose parent plan has at least one COMPLETED
+   * published book. Reuses the same eligibility predicate as
+   * `searchProjects` via the shared `getPublishedPlanIds` helper.
+   *
+   * Anonymous: NO `@UseGuards`. Auth header (if present) is ignored.
+   *
+   * Uniform 404 on every ineligibility (project missing, soft-deleted,
+   * not approved, parent plan not publicly published, sourceType vs id
+   * mismatch). MUST NOT distinguish "exists but ineligible" from "does
+   * not exist" — PDPA + enumeration defense.
+   *
+   * Route ordering: this MUST be declared BEFORE the parameterized
+   * `:sourceType/:sourceId/v:versionNumber/pdf` route below so Express
+   * matches `/projects/:sourceType/:projectId` literally and does NOT
+   * capture `projects` as `:sourceType`. The route ordering convention
+   * is already established by `projects/search` above.
+   */
+  @Get('projects/:sourceType/:projectId')
+  async getProjectDetail(
+    @Param('sourceType') sourceType: string,
+    @Param('projectId') projectId: string,
+  ): Promise<PublicProjectDetailDto> {
+    if (
+      sourceType !== 'main_plan' &&
+      sourceType !== 'edit_revision' &&
+      sourceType !== 'change_revision'
+    ) {
+      // sourceType validation is sharper than the eligibility 404 —
+      // the parameter is a closed enum, not a UUID, so we return 400
+      // (matches the existing PDF route's validation pattern).
+      throw new BadRequestException('sourceType ไม่ถูกต้อง');
+    }
+    return this.publicArchiveService.getProjectDetail(
+      sourceType as 'main_plan' | 'edit_revision' | 'change_revision',
+      projectId,
+    );
   }
 
   /**
