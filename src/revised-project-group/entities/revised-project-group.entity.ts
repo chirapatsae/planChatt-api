@@ -97,6 +97,17 @@ export class RevisedProjectGroup {
   @Column({ type: 'int', nullable: true })
   pageNumber: number | null;
 
+  /**
+   * Engagement counters (CLAUDE.md §17.3 advisory metadata).
+   * See `ProjectGroup` for the full rationale — counters are
+   * denormalized snapshots of the append-only event log.
+   */
+  @Column({ name: 'like_count', type: 'int', default: 0 })
+  likeCount: number;
+
+  @Column({ name: 'view_count', type: 'int', default: 0 })
+  viewCount: number;
+
   @ManyToOne(() => Strategy, (strategy) => strategy.projectGroup, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',

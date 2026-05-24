@@ -2,6 +2,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ProjectGroupsService } from './project-groups.service';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ProjectGroup } from './entities/project-group.entity';
+// Wave SUPP-4 / BE-01 — SPG repo is now a constructor dep.
+import { SupplementProjectGroup } from '../supplement-project-group/entities/supplement-project-group.entity';
 import { WorkHistory } from '../work-history/entities/work-history.entity';
 import { BudgetPlan } from 'src/budget_plan/entities/budget_plan.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
@@ -84,6 +86,7 @@ describe('ProjectGroupsService', () => {
         { provide: getRepositoryToken(Tactic), useValue: tacticRepo },
         { provide: getRepositoryToken(Plan), useValue: planRepo },
         { provide: getRepositoryToken(Budget), useValue: budgetRepo },
+        { provide: getRepositoryToken(SupplementProjectGroup), useValue: createMockRepository<SupplementProjectGroup>() },
         { provide: DataSource, useValue: dataSource },
       ],
     }).compile();

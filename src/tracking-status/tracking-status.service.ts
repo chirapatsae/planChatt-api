@@ -19,12 +19,15 @@ import { TrackingStatus } from './entities/tracking-status.entity';
 import { Comment } from 'src/comments/entities/comment.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
-// SUPP-1 / BE-02 — SPG support.
+// SUPP-1 / BE-02 + Wave SUPP-4 — SPG support.
 // Mirrors the PG / RPG paths above but uses agency-based responsibility (Q3,
 // `WorkHistoryGovernmentAgencyResponsibility`, the RPG pattern) for staff
 // transitions and rollback. Pull_Back rules are byte-for-byte identical to PG
-// (Q4 verbatim parity). Rollback hard-deletes the SPG row per §14.6, even
-// though SPG is a leaf in SUPP-1 — see TODO(SUPP-4) at the delete site.
+// (Q4 verbatim parity). Wave SUPP-4: SPG rollback is now §14-aware — the
+// §14 descendant guard (`LineageLockService.assertDeletable`) rejects rollback
+// when a live RPG descendant (prev_project_type='supplement') exists. The
+// §14.6 ghost-descendant hard-delete is intentionally NOT applied to SPG
+// because SPG is the ROOT of its lineage (no upstream parent to unlock).
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
 import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entities/development-plan-supplement.entity';
 import { handleException } from 'src/util/handleException';
@@ -3192,19 +3195,22 @@ export class TrackingStatusService {
   }
 
   /**
-   * SUPP-1 / BE-02 — Staff-led rollback for SupplementProjectGroup.
+   * SUPP-1 / BE-02 + Wave SUPP-4 — Staff-led rollback for SupplementProjectGroup.
    *
    * Mirrors `rollbackRevisionProjectGroupStatus` with two differences:
    *   1. Scope is the SPG's supplement chain (parent DevelopmentPlan +
    *      DevelopmentPlanSupplement), not a DevelopmentPlanRevision.
    *   2. Responsibility check is AGENCY-BASED (Q3, mirror of RPG).
    *
-   * Per §14.6 the rolled-back SPG row is hard-deleted as the FINAL step of
-   * the transaction. In SUPP-1 SPG is a leaf (no descendants possible
-   * because `revised_project_groups.prev_project_type` enum lacks
-   * `'supplement'`), so this is functionally a no-op for upstream unlock —
-   * but the invariant is implemented now so SUPP-4 inherits a correct
-   * foundation. See the TODO(SUPP-4) marker at the delete site.
+   * §14 descendant guard — Wave SUPP-4. Now that
+   * `revised_project_groups.prev_project_type` includes `'supplement'`,
+   * an SPG may have live RPG descendants. The §14.8 guard rejects rollback
+   * with `409 PROJECT_HAS_DESCENDANT` whenever such a descendant exists,
+   * matching the RPG rollback semantics. There is NO hard-delete of the
+   * SPG row itself: SPG is the ROOT of its own lineage (no upstream
+   * parent to unlock), so the §14.6 ghost-descendant fix does not apply.
+   * Natural rollback semantics (hard-delete latest TrackingStatus +
+   * restore previous to isLatest=true) are preserved.
    *
    * The `clearResponsibleAgency` flag is inapplicable to SPG because every
    * SPG is agency-origin (§9 of the supplement workflow). We silently
@@ -3306,15 +3312,17 @@ export class TrackingStatusService {
           );
         }
 
-        // 6.5 CLAUDE.md §14 — Version Lineage Immutability.
-        // SUPP-1 leaf-case: SPG cannot have descendants today because
-        // `revised_project_groups.prev_project_type` does not yet include
-        // `'supplement'` (deferred to SUPP-4). LineageLockService therefore
-        // has no `'supplement'` LineageProjectType — calling it would be a
-        // type error. The guard is intentionally OMITTED here for SUPP-1
-        // and MUST be added back in SUPP-4 once the enum is extended.
-        // The rollback hard-delete below proceeds because no descendants
-        // can exist.
+        // 6.5 CLAUDE.md §14 — Version Lineage Immutability (Wave SUPP-4).
+        // An SPG with a non-deleted RPG descendant
+        // (prev_project_type='supplement') is locked and cannot be rolled
+        // back — the descendant would be orphaned. Reject with
+        // PROJECT_HAS_DESCENDANT before any audit mutation. The guard
+        // delegates to LineageLockService per §14.8.
+        await this.lineageLockService.assertDeletable(
+          supplementProjectGroupId,
+          'supplement',
+          manager,
+        );
 
         // 7. Status constraint — cannot rollback from Pull_Back or Ready.
         const currentTracking = await manager.findOne(TrackingStatus, {
@@ -3366,35 +3374,23 @@ export class TrackingStatusService {
           { isLatest: true },
         );
 
-        // 2026-05-16 — REMOVED the §14.6 hard-delete of the SPG row.
+        // Wave SUPP-4 — §14.6 hard-delete of the SPG row INTENTIONALLY
+        // NOT applied here.
         //
-        // The previous implementation hard-deleted the SPG row "for
-        // future SUPP-4 readiness" — the rationale being that once SPG
-        // can be the parent of an RPG, the hard-delete is necessary to
-        // unlock the upstream parent per §14.6 ghost-descendant fix.
+        // §14.6 ghost-descendant fix mandates the hard-delete only for
+        // rows that have an UPSTREAM parent which might still reference
+        // them (so that parent unlocks). SPG is the ROOT of its own
+        // lineage — there is no `prev_project_id` edge pointing AT an SPG
+        // — so removing the SPG row would do nothing for parent-unlock
+        // and would gratuitously destroy the project + its attachments
+        // (which use `ON DELETE RESTRICT` on the SPG FK, see
+        // `AttachmentSupplementProjectGroup`).
         //
-        // BUT in SUPP-1 through SUPP-3 (current wave) SPG is a LEAF —
-        // nothing references it upstream — so the hard-delete was a
-        // functional no-op for parent-unlocking purposes AND a
-        // destructive operation from the user's perspective: clicking
-        // "rollback" silently deleted the project + its attachments,
-        // which is NOT what staff-led rollback is supposed to mean.
-        //
-        // Rollback semantics restored to the natural / user-expected
-        // behavior:
-        //   - hard-delete the latest TrackingStatus (step 10 above)
-        //   - restore the previous TrackingStatus to `isLatest = true`
-        //   - SPG row itself stays intact, status reverts to whatever
-        //     it was before the rolled-back transition
-        //
-        // When SUPP-4 lands (and `RevisedProjectGroup.prev_project_type`
-        // gains `'supplement'`), the §14.6 hard-delete MUST be re-added
-        // — but ONLY when the SPG has live descendants, and with the
-        // attachment + tracking-status cleanup applied in the same tx
-        // to satisfy the `ON DELETE RESTRICT` FK on
-        // `attachment_supplement_project_groups`. See
-        // docs/reports/SUPPLEMENT_REPORT_FORMAT_CHAIN.md for the
-        // cross-cutting SPG audit notes.
+        // The §14 descendant guard at step 6.5 above already ensures the
+        // SPG has NO live RPG descendant before this point, so the SPG
+        // remains a leaf-of-lineage from §14's perspective and natural
+        // rollback semantics (latest TrackingStatus hard-delete + previous
+        // restored to isLatest=true) are correct.
 
         return {
           message: `ย้อนสถานะสำเร็จ (กลับไปเป็น "${previousTracking.statusId.name}")`,

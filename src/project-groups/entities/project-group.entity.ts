@@ -75,6 +75,19 @@ export class ProjectGroup {
   @Column({ type: 'int', nullable: true })
   pageNumber: number | null;
 
+  /**
+   * Engagement counters (CLAUDE.md §17.3 advisory metadata).
+   * Denormalized for fast list / detail reads; the canonical event log
+   * lives in `engagement_likes` / `engagement_view_events`. No FK
+   * relationship exists between the event tables and this column, so
+   * §14 / §18 cascades do not affect engagement history.
+   */
+  @Column({ name: 'like_count', type: 'int', default: 0 })
+  likeCount: number;
+
+  @Column({ name: 'view_count', type: 'int', default: 0 })
+  viewCount: number;
+
   @ManyToOne(() => Strategy, (strategy) => strategy.projectGroup, {
     onDelete: 'CASCADE',
     onUpdate: 'CASCADE',

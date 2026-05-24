@@ -11,6 +11,8 @@ import {
 import { RevisedProjectGroup } from './entities/revised-project-group.entity';
 import { DevelopmentPlanRevision } from '../development-plan-revision/entities/development-plan-revision.entity';
 import { ProjectGroup } from '../project-groups/entities/project-group.entity';
+// Wave SUPP-4 / BE-01 — SPG repo is now a constructor dep.
+import { SupplementProjectGroup } from '../supplement-project-group/entities/supplement-project-group.entity';
 import { DevelopmentPlan } from '../development-plan/entities/development-plan.entity';
 import { Strategy } from '../strategy/entities/strategy.entity';
 import { Tactic } from '../tactic/entities/tactic.entity';
@@ -56,6 +58,7 @@ describe('RevisedProjectGroupService', () => {
         { provide: getRepositoryToken(RevisedProjectGroup), useValue: revisedProjectGroupRepo },
         { provide: getRepositoryToken(DevelopmentPlanRevision), useValue: createMockRepository<DevelopmentPlanRevision>() },
         { provide: getRepositoryToken(ProjectGroup), useValue: createMockRepository<ProjectGroup>() },
+        { provide: getRepositoryToken(SupplementProjectGroup), useValue: createMockRepository<SupplementProjectGroup>() },
         { provide: getRepositoryToken(DevelopmentPlan), useValue: createMockRepository<DevelopmentPlan>() },
         { provide: getRepositoryToken(Strategy), useValue: createMockRepository<Strategy>() },
         { provide: getRepositoryToken(Tactic), useValue: createMockRepository<Tactic>() },

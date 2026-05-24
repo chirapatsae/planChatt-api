@@ -15,6 +15,13 @@ import { LineageLockModule } from 'src/common/lineage-lock/lineage-lock.module';
 import { ProjectClassificationModule } from 'src/common/project-classification/project-classification.module';
 import { DevelopmentIssue } from 'src/development-issue/entities/development-issue.entity';
 import { UsersModule } from 'src/users/users.module';
+// Wave SUPP-4 / BE-01 — SPG repo is consumed by the create-RPG fork path
+// to resolve the source SupplementProjectGroup when
+// `prevProjectType='supplement'`. Registered via `forFeature` (no service
+// injection needed — the existing `SupplementProjectGroupModule` is NOT
+// imported, to avoid a circular dependency loop with TrackingStatus +
+// AiModule).
+import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
 
 @Module({
   imports: [
@@ -29,6 +36,7 @@ import { UsersModule } from 'src/users/users.module';
       WorkHistory,
       Budget,
       DevelopmentIssue,
+      SupplementProjectGroup,
     ]),
     LineageLockModule,
     ProjectClassificationModule,

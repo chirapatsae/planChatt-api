@@ -59,6 +59,11 @@ import { Tactic } from 'src/tactic/entities/tactic.entity';
 import { Plan } from 'src/plan/entities/plan.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { Budget } from 'src/budget/entities/budget.entity';
+// Wave SUPP-4 / BE-01 — SPG repo is now a constructor dependency of
+// RevisedProjectGroupService for the supplement-source fork path. The
+// existing 'original'/'revised' cases don't exercise it, but the DI
+// container needs a stub so module compile does not fail.
+import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
 import { GovernmentAgency } from 'src/government-agencies/entities/government-agency.entity';
 import {
@@ -308,6 +313,7 @@ describe('RevisedProjectGroupService — W74 lineage FK end-to-end (CLAUDE.md §
           useValue: repoStub(),
         },
         { provide: getRepositoryToken(ProjectGroup), useValue: repoStub() },
+        { provide: getRepositoryToken(SupplementProjectGroup), useValue: repoStub() },
         { provide: getRepositoryToken(DevelopmentPlan), useValue: repoStub() },
         { provide: getRepositoryToken(Strategy), useValue: repoStub() },
         { provide: getRepositoryToken(Tactic), useValue: repoStub() },

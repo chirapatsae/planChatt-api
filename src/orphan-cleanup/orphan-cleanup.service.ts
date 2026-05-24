@@ -690,10 +690,14 @@ export class OrphanCleanupService {
     });
     if (ids.length === 0) return 0;
 
-    // Supplement project groups have no `prevProjectId` lineage edge to
-    // RPG, so the §14 live-descendant guard is structurally a no-op —
-    // there is no descendant table that references SPG rows. We still
-    // emit a warning if a future schema change introduces a descendant.
+    // Wave SUPP-4 — SPG can now be the parent of an RPG via
+    // `prev_project_type='supplement'`. Reject the entire cancel/finalize
+    // transaction if any candidate SPG has a LIVE external RPG descendant
+    // (one that is NOT in any current candidate set — typically because
+    // the RPG lives under a different DPR that is NOT being cleaned up).
+    // Mirrors the RPG guard at line 585 (§18.8 + §14.3).
+    await this.assertNoLiveExternalDescendantSpg(args.em, ids);
+
     let count = 0;
     for (const spgId of ids) {
       const wrote = await this.tombstoneAndSoftDeleteSpg({
@@ -903,6 +907,44 @@ export class OrphanCleanupService {
         .join(', ');
       throw new ConflictException(
         `${ORPHAN_CASCADE_HAS_LIVE_DESCENDANT}: ไม่สามารถยกเลิก/รวมเล่มได้ เนื่องจากโครงการแก้ไขในเล่มนี้มีเวอร์ชันที่ใช้งานอยู่ภายนอก (CLAUDE.md §18.8/§14.3) [${summary}${offenders.length > 5 ? ', ...' : ''}]`,
+      );
+    }
+  }
+
+  /**
+   * Wave SUPP-4 — SPG analogue of `assertNoLiveExternalDescendantRpg`.
+   *
+   * Once `prev_project_type='supplement'` exists, an SPG MAY have RPG
+   * descendants that live under a different DPR. The cancel/finalize
+   * cascade of a supplement book MUST abort if any candidate SPG has a
+   * live RPG descendant (descendants of an SPG live under a DPR by
+   * construction — they cannot be in the SPG candidate set — so every
+   * hit is "external" by definition).
+   */
+  private async assertNoLiveExternalDescendantSpg(
+    em: EntityManager,
+    candidateSpgIds: string[],
+  ): Promise<void> {
+    if (candidateSpgIds.length === 0) return;
+
+    const rows = await em
+      .createQueryBuilder(RevisedProjectGroup, 'child')
+      .select('child.id', 'descendantId')
+      .addSelect('child.prevProjectId', 'parentId')
+      .where('child.deletedAt IS NULL')
+      .andWhere('child.prev_project_type = :type', {
+        type: PrevProjectType.SUPPLEMENT,
+      })
+      .andWhere('child.prev_project_id IN (:...ids)', { ids: candidateSpgIds })
+      .getRawMany<{ parentId: string; descendantId: string }>();
+
+    if (rows.length > 0) {
+      const summary = rows
+        .slice(0, 5)
+        .map((o) => `${o.parentId}->${o.descendantId}`)
+        .join(', ');
+      throw new ConflictException(
+        `${ORPHAN_CASCADE_HAS_LIVE_DESCENDANT}: ไม่สามารถยกเลิก/รวมเล่มเพิ่มเติมได้ เนื่องจากโครงการเพิ่มเติมในเล่มนี้มีเวอร์ชันแก้ไข/เปลี่ยนแปลงที่ใช้งานอยู่ภายนอก (CLAUDE.md §18.8/§14.3) [${summary}${rows.length > 5 ? ', ...' : ''}]`,
       );
     }
   }

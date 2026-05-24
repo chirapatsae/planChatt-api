@@ -12,9 +12,19 @@ import {
 } from 'class-validator';
 import { CreateBudgetDto } from 'src/budget/dto/create-budget.dto';
 
+/**
+ * CLAUDE.md §14 / Wave SUPP-4 — lineage discriminator for the
+ * `(prev_project_id, prev_project_type)` pair on `revised_project_groups`.
+ *
+ * - `ORIGINAL`   → parent is a `ProjectGroup` (main-plan fork)
+ * - `REVISION`   → parent is a `RevisedProjectGroup` (chained revision fork)
+ * - `SUPPLEMENT` → parent is a `SupplementProjectGroup` (supplement fork —
+ *                  added in Wave SUPP-4, DB-01 widened the PG enum)
+ */
 export enum PrevProjectType {
   ORIGINAL = 'original',
   REVISION = 'revised',
+  SUPPLEMENT = 'supplement',
 }
 
 export class CreateRevisedProjectGroupDto {

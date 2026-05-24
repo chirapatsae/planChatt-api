@@ -18,16 +18,20 @@ import {
   BadRequestException,
   Controller,
   Get,
+  Inject,
   Logger,
   Param,
   ParseIntPipe,
   Query,
+  Req,
   Res,
+  forwardRef,
 } from '@nestjs/common';
-import { Response } from 'express';
+import { Request, Response } from 'express';
 import * as fs from 'fs';
 
 import { BookAssemblySourceType } from 'src/book-assembly/enums/book-assembly.enums';
+import { PublicEngagementService } from 'src/public-engagement/public-engagement.service';
 import {
   PublicArchiveService,
   PublicPlanDto,
@@ -39,7 +43,11 @@ import {
 export class PublicArchiveController {
   private readonly logger = new Logger(PublicArchiveController.name);
 
-  constructor(private readonly publicArchiveService: PublicArchiveService) {}
+  constructor(
+    private readonly publicArchiveService: PublicArchiveService,
+    @Inject(forwardRef(() => PublicEngagementService))
+    private readonly engagementService: PublicEngagementService,
+  ) {}
 
   /**
    * GET /v1/public/plans
@@ -63,8 +71,14 @@ export class PublicArchiveController {
       }
       year = parsed;
     }
+    // `'supplement'` added in Wave public-archive-supplement BE-01.
+    // Unknown values silently coerce to `'all'` (matches existing
+    // behaviour for forward-compat with future filter values).
     const type =
-      typeRaw === 'main' || typeRaw === 'edit' || typeRaw === 'change'
+      typeRaw === 'main' ||
+      typeRaw === 'edit' ||
+      typeRaw === 'change' ||
+      typeRaw === 'supplement'
         ? typeRaw
         : 'all';
     return this.publicArchiveService.listPlans({ q, year, type });
@@ -118,15 +132,21 @@ export class PublicArchiveController {
     if (
       sourceType !== 'main_plan' &&
       sourceType !== 'edit_revision' &&
-      sourceType !== 'change_revision'
+      sourceType !== 'change_revision' &&
+      sourceType !== 'supplement'
     ) {
       // sourceType validation is sharper than the eligibility 404 —
       // the parameter is a closed enum, not a UUID, so we return 400
       // (matches the existing PDF route's validation pattern).
+      // `'supplement'` added in Wave public-archive-supplement BE-01.
       throw new BadRequestException('sourceType ไม่ถูกต้อง');
     }
     return this.publicArchiveService.getProjectDetail(
-      sourceType as 'main_plan' | 'edit_revision' | 'change_revision',
+      sourceType as
+        | 'main_plan'
+        | 'edit_revision'
+        | 'change_revision'
+        | 'supplement',
       projectId,
     );
   }
@@ -145,28 +165,76 @@ export class PublicArchiveController {
    */
   @Get(':sourceType/:sourceId/v:versionNumber/pdf')
   async downloadPdf(
-    @Param('sourceType') sourceType: BookAssemblySourceType,
+    @Param('sourceType') sourceType: string,
     @Param('sourceId') sourceId: string,
     @Param('versionNumber', ParseIntPipe) versionNumber: number,
+    @Req() req: Request,
     @Res() res: Response,
   ): Promise<void> {
     if (versionNumber < 1) {
       throw new BadRequestException('versionNumber ต้องเป็นจำนวนเต็มบวก');
     }
+    // Closed enum widened in Wave public-archive-supplement BE-01 to
+    // accept `'supplement'` alongside the three BookAssembly source
+    // types. The supplement assembly subsystem lives in its own
+    // dedicated table per `docs/supplement-book-domain.md` §9, but
+    // the public URL shape is uniform.
     if (
       sourceType !== BookAssemblySourceType.MAIN_PLAN &&
       sourceType !== BookAssemblySourceType.EDIT_REVISION &&
-      sourceType !== BookAssemblySourceType.CHANGE_REVISION
+      sourceType !== BookAssemblySourceType.CHANGE_REVISION &&
+      sourceType !== 'supplement'
     ) {
       throw new BadRequestException('sourceType ไม่ถูกต้อง');
     }
+    const resolvedSourceType = sourceType as BookAssemblySourceType | 'supplement';
 
     const absPath = await this.publicArchiveService.resolvePublicPdfPath(
-      sourceType,
+      resolvedSourceType,
       sourceId,
       versionNumber,
     );
-    this.logger.log(`[public] stream ${sourceType}/${sourceId} v${versionNumber}`);
+    this.logger.log(`[public] stream ${resolvedSourceType}/${sourceId} v${versionNumber}`);
+
+    // Engagement counter increment — fired BEFORE streaming so that
+    // even a connection-drop after `pipe()` still counts. Wrapped to
+    // swallow any failure — analytics MUST NOT block the PDF stream.
+    // PDPA: read deviceId from header `X-Engagement-Device-Id` OR query
+    // param `?d=<uuid>`. UUID-shape validation is defensive — anything
+    // malformed is treated as null.
+    //
+    // NOTE (Wave public-archive-supplement BE-01): supplement downloads
+    // are streamed and audited via the same controller hook, but the
+    // `recordDownload` engagement path does NOT yet roll up supplement
+    // book-level downloads into the parent plan's `download_count`.
+    // This matches task BE-01 §6.6 decision — supplement book-level
+    // download counter is out of scope; per §5 the supplement download
+    // counter parity with revisions (which also lack per-revision
+    // download counters) is intentional. We skip `recordDownload` for
+    // supplement to avoid emitting a download event with an unsupported
+    // `sourceType`; the PDF stream itself remains unaffected.
+    if (resolvedSourceType !== 'supplement') {
+      const rawHeader = req.headers['x-engagement-device-id'];
+      const rawQuery = (req.query?.['d'] as string | undefined) ?? undefined;
+      const deviceCandidate = (
+        Array.isArray(rawHeader) ? rawHeader[0] : rawHeader
+      ) || rawQuery || null;
+      const deviceId =
+        deviceCandidate && /^[0-9a-f-]{36}$/i.test(deviceCandidate)
+          ? deviceCandidate
+          : null;
+      await this.engagementService.recordDownload({
+        sourceType:
+          resolvedSourceType === BookAssemblySourceType.MAIN_PLAN
+            ? 'main_plan'
+            : resolvedSourceType === BookAssemblySourceType.EDIT_REVISION
+              ? 'edit_revision'
+              : 'change_revision',
+        sourceId,
+        versionNumber,
+        deviceId,
+      });
+    }
 
     const stat = fs.statSync(absPath);
     const filename = `local-development-plan-v${versionNumber}.pdf`;

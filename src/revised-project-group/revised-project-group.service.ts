@@ -9,7 +9,8 @@ import {
 import { Status } from 'src/status/entities/status.entity';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
-import { CreateRevisedProjectGroupDto } from './dto/create-revised-project-group.dto';
+import { CreateRevisedProjectGroupDto, PrevProjectType } from './dto/create-revised-project-group.dto';
+import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
 import { UpdateRevisedProjectGroupDto } from './dto/update-revised-project-group.dto';
 import { RevisedProjectGroup } from './entities/revised-project-group.entity';
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
@@ -51,6 +52,13 @@ export class RevisedProjectGroupService {
 
     @InjectRepository(ProjectGroup)
     private readonly projectGroupRepo: Repository<ProjectGroup>,
+
+    // Wave SUPP-4 / BE-01 — SPG can now be a parent of an RPG via
+    // `prev_project_type = 'supplement'`. The repository is used by the
+    // create-path (resolve + validate the source SPG) and by
+    // `findAllVersions` (lineage walk when the chain root is an SPG).
+    @InjectRepository(SupplementProjectGroup)
+    private readonly supplementProjectGroupRepo: Repository<SupplementProjectGroup>,
 
     @InjectRepository(DevelopmentPlan)
     private readonly developmentPlanRepo: Repository<DevelopmentPlan>,
@@ -164,10 +172,12 @@ export class RevisedProjectGroupService {
     }
     if (
       !dto.prevProjectType ||
-      (dto.prevProjectType !== 'original' && dto.prevProjectType !== 'revised')
+      (dto.prevProjectType !== 'original' &&
+        dto.prevProjectType !== 'revised' &&
+        dto.prevProjectType !== 'supplement')
     ) {
       throw new BadRequestException(
-        'LINEAGE_FK_REQUIRED: prevProjectType must be "original" or "revised"',
+        'LINEAGE_FK_REQUIRED: prevProjectType must be "original", "revised", or "supplement"',
       );
     }
 
@@ -198,6 +208,88 @@ export class RevisedProjectGroupService {
           plan,
           workHistory,
         ] = await this.validateForeignKeys(manager, dto, userId, format);
+
+        // Wave SUPP-4 / BE-01 — SPG-source fork path. When the caller
+        // declares `prevProjectType='supplement'`, resolve the source SPG
+        // via `prevProjectId` (mirrors the 'revised' branch which uses
+        // `prevProjectId` alone, NOT a separate `supplementProjectGroupId`
+        // column on the RPG entity — by-design per task §3.3).
+        //
+        // Validates per §10 (scope binding), §16.5 (classification shape
+        // is enforced by the DB CHECK on SPG insert, but re-asserted here),
+        // §1 (agency-only authoring is already enforced by
+        // `validateForeignKeys` at lines 2113-2118).
+        let sourceSupplementProjectGroup: SupplementProjectGroup | null = null;
+        if (dto.prevProjectType === PrevProjectType.SUPPLEMENT) {
+          sourceSupplementProjectGroup = await manager.findOne(
+            SupplementProjectGroup,
+            {
+              where: { id: dto.prevProjectId },
+              relations: [
+                'developmentPlanSupplement',
+                'developmentPlanSupplement.developmentPlan',
+                'strategy',
+                'tactic',
+                'plan',
+                'developmentIssue',
+                'responsibleAgency',
+                'originAgencyId',
+                'amphoe',
+                'localAdministrativeOrganization',
+              ],
+            },
+          );
+          if (!sourceSupplementProjectGroup) {
+            throw new NotFoundException(
+              `SupplementProjectGroup (source) ID not found: ${dto.prevProjectId}`,
+            );
+          }
+
+          // §10 same-bucket guard: the SPG's parent supplement MUST live
+          // under the SAME DevelopmentPlan as the target revision (DPR).
+          // Otherwise the lineage would cross book buckets, breaking
+          // §15.2 parallel-sibling semantics.
+          const spgPlanId =
+            sourceSupplementProjectGroup.developmentPlanSupplement
+              ?.developmentPlan?.id;
+          const dprPlanId = developmentPlanRevision.developmentPlan?.id;
+          if (!spgPlanId || !dprPlanId || spgPlanId !== dprPlanId) {
+            throw new BadRequestException(
+              'LINEAGE_PLAN_MISMATCH: โครงการต้นฉบับ (SPG) อยู่ภายใต้แผนพัฒนาฯ คนละเล่มกับรอบการแก้ไข/เปลี่ยนแปลง',
+            );
+          }
+
+          // SPG must currently be Approved (mirrors the PG-source rule).
+          const latestSpgTracking = await manager.findOne(TrackingStatus, {
+            where: {
+              supplementProjectGroupId: { id: sourceSupplementProjectGroup.id },
+              isLatest: true,
+            },
+            relations: ['statusId'],
+          });
+          if (
+            !latestSpgTracking ||
+            latestSpgTracking.statusId?.name !== 'Approved'
+          ) {
+            throw new BadRequestException(
+              'โครงการต้นฉบับ (SPG) ต้องมีสถานะ Approved เท่านั้นจึงจะสามารถยื่นขอแก้ไขหรือเปลี่ยนแปลงได้',
+            );
+          }
+
+          // §16.5 classification-shape re-validation. The DB CHECK on
+          // `supplement_project_groups` already guarantees exactly-one-shape
+          // for the SPG row itself, but the validator below ensures the
+          // incoming DTO matches the resolved plan format (defence in
+          // depth — the caller might submit mismatched classification IDs
+          // hoping to "convert" the shape on fork; reject loudly).
+          this.classificationValidator.validate(format, {
+            strategyId: dto.strategyId,
+            tacticId: dto.tacticId,
+            planId: dto.planId,
+            developmentIssueId: dto.developmentIssueId,
+            indicator: dto.indicator,
+          });
+        }
 
         // §16 — for ISSUE_BASED plans, resolve and validate the
         // DevelopmentIssue FK now. Belt-and-braces plan scope check:
@@ -1780,7 +1872,9 @@ export class RevisedProjectGroupService {
 
   async findProjectComparison(id: string): Promise<{
     current: RevisedProjectGroup;
-    previous: ProjectGroup | RevisedProjectGroup | null;
+    // Wave SUPP-4 — `previous` may now be a SupplementProjectGroup when
+    // the current RPG was forked from an SPG.
+    previous: ProjectGroup | RevisedProjectGroup | SupplementProjectGroup | null;
   }> {
     try {
       // ดึงข้อมูลโครงการปัจจุบัน
@@ -1816,7 +1910,7 @@ export class RevisedProjectGroupService {
         );
       }
 
-      let previous: ProjectGroup | RevisedProjectGroup | null = null;
+      let previous: ProjectGroup | RevisedProjectGroup | SupplementProjectGroup | null = null;
       // W57-DB-01: prevProjectId is now `string | null | undefined` after the
       // entity-type tightening. Skip the lookup if it's missing — a row
       // without a prev pointer has no previous version by definition.
@@ -1867,6 +1961,33 @@ export class RevisedProjectGroupService {
             'responsibleAgency',
           ]
         })
+      } else if (current.prevProjectType === PrevProjectType.SUPPLEMENT && current.prevProjectId) {
+        // Wave SUPP-4 — SPG-rooted RPG forks. Load the source SPG via the
+        // dedicated repo so the comparison view can render the supplement
+        // baseline alongside the current RPG. The return type is widened
+        // to `any` in the existing signature (PG | RPG | null) — adding
+        // SPG here is type-compatible at the call sites which treat
+        // `previous` as a generic project shape for diffing.
+        previous = (await this.supplementProjectGroupRepo.findOne({
+          where: { id: current.prevProjectId },
+          relations: [
+            'developmentPlanSupplement',
+            'developmentPlanSupplement.developmentPlan',
+            'strategy',
+            'tactic',
+            'plan',
+            'developmentIssue',
+            'createdBy',
+            'createdBy.user',
+            'budgets',
+            'trackingStatus',
+            'trackingStatus.statusId',
+            'trackingStatus.createdBy',
+            'trackingStatus.createdBy.user',
+            'originAgencyId',
+            'responsibleAgency',
+          ],
+        })) as any;
       } else {
         throw new NotFoundException(
           `Previous project type not found: ${current.prevProjectType}`,
@@ -2241,6 +2362,23 @@ export class RevisedProjectGroupService {
       rootProjectGroupId = requestedRevisedProject.projectGroup?.id || null;
 
       if (!rootProjectGroupId) {
+        // Wave SUPP-4 — when this RPG is the head of an SPG-rooted
+        // lineage (`prev_project_type='supplement'`), no parent
+        // ProjectGroup exists. The chain root is the SPG itself.
+        //
+        // Returning a minimal envelope (current RPG only, no PG-based
+        // sibling list) is acceptable: FE-01 will treat SPG-rooted
+        // chains as single-entry version trees in Wave SUPP-4. A
+        // deeper SPG-side walker (collecting all RPGs forked from the
+        // same SPG into a chain view) can land in a follow-up wave.
+        if (requestedRevisedProject.prevProjectType === PrevProjectType.SUPPLEMENT) {
+          return {
+            original: null,
+            current: currentProject,
+            currentId: projectId,
+            revisions: [currentProject],
+          };
+        }
         throw new NotFoundException('ไม่พบโครงการต้นฉบับของรายการแก้ไขนี้');
       }
 

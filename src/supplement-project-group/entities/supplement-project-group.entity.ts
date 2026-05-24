@@ -215,6 +215,21 @@ export class SupplementProjectGroup {
   additionalDetail: string | null;
 
   /**
+   * Denormalized engagement counters (Wave public-archive-supplement
+   * BE-01). Mirror the `project_groups` / `revised_project_groups`
+   * shape — both default to 0 (non-null). CLAUDE.md §17.2 advisory;
+   * never gates workflow. The increment paths live in
+   * `PublicEngagementService` and use UUID-only `target_id` rows in
+   * `engagement_likes` / `engagement_view_events` per §17.3 audit
+   * separation (no FK to this table).
+   */
+  @Column({ name: 'like_count', type: 'int', default: 0 })
+  likeCount: number;
+
+  @Column({ name: 'view_count', type: 'int', default: 0 })
+  viewCount: number;
+
+  /**
    * SUPP-3 / BE-07 — Attachments uploaded against this SPG. The FK on
    * `attachment_supplement_project_groups` uses `ON DELETE RESTRICT`
    * (NOT `CASCADE`) so the §12 audit trail survives SPG soft-delete.

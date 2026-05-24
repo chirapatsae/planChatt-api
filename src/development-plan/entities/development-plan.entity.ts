@@ -58,6 +58,19 @@ export class DevelopmentPlan {
   })
   reportFormat: ReportFormat;
 
+  /**
+   * Engagement counters (CLAUDE.md §17.3 advisory metadata).
+   * `viewCount` covers anonymous book-card hits; `downloadCount` covers
+   * successful PDF stream initiations across every published version
+   * under this plan. The append-only audit lives in
+   * `engagement_view_events` / `engagement_download_events` (no FK).
+   */
+  @Column({ name: 'view_count', type: 'int', default: 0 })
+  viewCount: number;
+
+  @Column({ name: 'download_count', type: 'int', default: 0 })
+  downloadCount: number;
+
   @CreateDateColumn({ name: 'create_at' })
   createAt: Date;
 

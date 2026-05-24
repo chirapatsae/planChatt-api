@@ -1,5 +1,6 @@
 import { ProjectGroup } from '../entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
+import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
 import { Status } from 'src/status/entities/status.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
 import { Budget } from 'src/budget/entities/budget.entity';
@@ -40,8 +41,10 @@ export interface IUnifiedProjectDisplay {
   pageNumber: number | null;
   createdAt: Date;
   attachments?: (AttachmentProjectGroup | AttachmentRevisedProjectGroup)[];
-  // Type แยกว่ามาจากไหน
-  projectType: 'original' | 'revised';
+  // Type แยกว่ามาจากไหน. Wave SUPP-4 — `'supplement'` added so the
+  // Revision/Change source picker can offer SPG-approved projects as a
+  // fork source. FE echoes this value back as `prevProjectType` on POST.
+  projectType: 'original' | 'revised' | 'supplement';
 
   // ถ้าเป็น revised จะมี reference กลับไปหาโครงการแม่
   originalProjectId?: string;
@@ -197,5 +200,65 @@ export class UnifiedProjectMapper {
         return this.fromRevisedProjectGroup(project);
       }
     });
+  }
+
+  /**
+   * Wave SUPP-4 / BE-01 — map a SupplementProjectGroup into the unified
+   * shape so the Revision/Change source picker can render SPG-approved
+   * rows alongside PG-approved and RPG-approved rows.
+   *
+   * `hasDescendant` follows the §14 lock semantics: true when at least
+   * one non-soft-deleted RevisedProjectGroup references this SPG via
+   * `(prev_project_id = spg.id, prev_project_type = 'supplement')`.
+   *
+   * Field mapping notes:
+   *   - `projectType = 'supplement'` so FE-01 can echo it back as
+   *     `prevProjectType` on the create-RPG POST.
+   *   - `projectGroup` is null — SPGs are not children of any PG.
+   *   - `isBooked` / `bookedAt` / `additionalDetail` are NOT mirrored
+   *     on the SPG entity in the same shape; default sensibly.
+   *   - `developmentPlan` is resolved via the parent supplement chain
+   *     so downstream consumers can read `report_format` without an
+   *     additional JOIN.
+   */
+  static fromSupplementProjectGroup(
+    spg: SupplementProjectGroup,
+    hasDescendant?: boolean,
+  ): IUnifiedProjectDisplay {
+    return {
+      id: spg.id,
+      title: spg.title,
+      objective: spg.objective,
+      goal: spg.goal,
+      startLat: spg.startLat,
+      startLng: spg.startLng,
+      endLat: spg.endLat,
+      endLng: spg.endLng,
+      indicator: spg.indicator,
+      expected: spg.expected,
+      projectYear: spg.projectYear,
+      createdAt: spg.createdAt,
+      projectType: 'supplement',
+      projectGroup: null,
+      strategy: spg.strategy,
+      tactic: spg.tactic,
+      plan: spg.plan,
+      developmentIssue: spg.developmentIssue,
+      developmentPlan: spg.developmentPlanSupplement?.developmentPlan,
+      createdBy: spg.createdBy,
+      originAgencyId: spg.originAgencyId,
+      responsibleAgency: spg.responsibleAgency,
+      amphoe: spg.amphoe ?? undefined,
+      localAdministrativeOrganization:
+        spg.localAdministrativeOrganization ?? undefined,
+      budgets: spg.budgets,
+      trackingStatus: spg.trackingStatus,
+      attachments: spg.attachments as any,
+      isBooked: false,
+      bookedAt: null,
+      pageNumber: spg.pageNumber,
+      additionalDetail: spg.additionalDetail,
+      hasDescendant: hasDescendant ?? false,
+    };
   }
 }

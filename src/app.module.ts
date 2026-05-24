@@ -143,6 +143,16 @@ import { BookAssemblyModule } from './book-assembly/book-assembly.module';
 // /v1/public/plans/* routes. See `public-archive/public-archive.module.ts`
 // for the security model (no PII, COMPLETED-only versions).
 import { PublicArchiveModule } from './public-archive/public-archive.module';
+// Wave engagement-counters BE-01 — anonymous like / view / download
+// surface for the public archive. Entities (engagement_likes,
+// engagement_view_events, engagement_download_events) carry UUID
+// `target_id` + discriminator WITHOUT FK per CLAUDE.md §17.3 — the
+// audit log MUST survive §14.6 staff-led rollback and §18 orphan
+// cleanup without ever being touched. IP / UA are NEVER persisted.
+import { PublicEngagementModule } from './public-engagement/public-engagement.module';
+import { EngagementLike } from './public-engagement/entities/engagement-like.entity';
+import { EngagementViewEvent } from './public-engagement/entities/engagement-view-event.entity';
+import { EngagementDownloadEvent } from './public-engagement/entities/engagement-download-event.entity';
 import { BookAssemblyDraft } from './book-assembly/entities/book-assembly-draft.entity';
 import { BookAssemblyVersion } from './book-assembly/entities/book-assembly-version.entity';
 import { DeprecationAuditLog } from './book-assembly/entities/deprecation-audit-log.entity';
@@ -412,6 +422,14 @@ import { NationalStrategyMilestone } from './strategic-mapping/entities/national
         // Project alignment triple-keyed bridge. Owned by
         // `ProjectAlignmentMappingModule`; same Wave 41 dual-reg rule.
         ProjectAlignmentMapping,
+        // Wave engagement-counters BE-01 — anonymous engagement audit
+        // tables. NO FK to project / plan / tracking tables (§17.3).
+        // Owned by `PublicEngagementModule` via `forFeature`; root
+        // registration here is required for metadata resolution
+        // (Wave 41 footgun; umbrella §8.1).
+        EngagementLike,
+        EngagementViewEvent,
+        EngagementDownloadEvent,
       ],
       synchronize: true,
       extra: {
@@ -485,6 +503,11 @@ import { NationalStrategyMilestone } from './strategic-mapping/entities/national
     AdminDocumentAnalysisModule,
     BookAssemblyModule,
     PublicArchiveModule,
+    // Wave engagement-counters BE-01 — must be imported AFTER
+    // PublicArchiveModule because the engagement service consumes the
+    // shared `getPublishedPlanIdsPublic()` predicate (forwardRef on
+    // both sides handles the bidirectional dependency).
+    PublicEngagementModule,
     // Wave 110 W110-BE-01 — must be imported BEFORE the modules that
     // wire its service into their softRemove / finalize sites. Order
     // here is otherwise irrelevant because the service has no

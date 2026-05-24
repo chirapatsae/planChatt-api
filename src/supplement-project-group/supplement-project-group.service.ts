@@ -886,7 +886,9 @@ export class SupplementProjectGroupService {
           'development_plan_supplement',
           manager,
         );
-        // TODO(SUPP-4): functional once SPG can be the parent of an RPG.
+        // §14 — Wave SUPP-4: SPG can now be a parent of an RPG
+        // (prev_project_type = 'supplement'). Reject mutation if any live
+        // RPG descendant exists.
         await this.assertNoSupplementDescendant(id, manager);
 
         // §16.5 classification shape against the parent plan resolved
@@ -1049,9 +1051,8 @@ export class SupplementProjectGroupService {
           'development_plan_supplement',
           manager,
         );
-        // TODO(SUPP-4): becomes functional when SPG can be the parent
-        // of an RPG (`prev_project_type = 'supplement'`). Until then,
-        // SPG is a leaf and this stub returns without throwing.
+        // §14 — Wave SUPP-4: SPG soft-delete is rejected when any live RPG
+        // descendant references this SPG via prev_project_type='supplement'.
         await this.assertNoSupplementDescendant(id, manager);
 
         const result = await manager.softDelete(SupplementProjectGroup, id);
@@ -1248,26 +1249,29 @@ export class SupplementProjectGroupService {
   }
 
   /**
-   * §14 leaf-case stub. In SUPP-1 through SUPP-3, SPG cannot be the
-   * `prev_project` of any RPG (the `prev_project_type` enum has no
-   * `'supplement'` variant), so this method intentionally returns
-   * without consulting `LineageLockService`.
+   * §14 Version Lineage Immutability — SPG branch (Wave SUPP-4).
    *
-   * TODO(SUPP-4): replace the body with a call to
-   *   `this.lineageLockService.assertEditable(id, 'supplement', manager)`
-   * — once `LineageLockService` learns the `'supplement'` parent kind.
-   * The call site here is preserved so SUPP-4 does NOT need to revisit
-   * any SPG service code (§14 enforcement only changes location).
+   * Once an RPG references this SPG via `(prev_project_id = spg.id,
+   * prev_project_type = 'supplement')` AND that RPG is not soft-deleted,
+   * the SPG row is LOCKED for mutation / deletion per §14.2. The guard
+   * MUST run BEFORE any repository write (§14.9) and MUST share the
+   * caller's `EntityManager` so it participates in the same transaction.
+   *
+   * Wave SUPP-1..3 left this as a no-op stub because the
+   * `prev_project_type` enum lacked `'supplement'`. DB-01 widened the
+   * enum and BE-01 extended `LineageLockService.LineageProjectType` to
+   * include `'supplement'`, so the call is now live.
    */
   private async assertNoSupplementDescendant(
-    _id: string,
-    _manager: EntityManager,
+    id: string,
+    manager: EntityManager,
   ): Promise<void> {
-    // SUPP-1 leaf: no possible descendant exists. Intentional no-op.
-    // Reference the service so it remains a real dependency (and so
-    // SUPP-4 only needs to swap the body, not add an import).
-    void this.lineageLockService;
-    return;
+    // §14.3 — both update and soft-delete share the same "no descendant"
+    // invariant for SPG; use assertEditable so the thrown message reads
+    // naturally for the mutation paths that call this helper (update,
+    // softRemove). For pure-delete paths, the error semantics are
+    // identical (`PROJECT_HAS_DESCENDANT`).
+    await this.lineageLockService.assertEditable(id, 'supplement', manager);
   }
 
   /**

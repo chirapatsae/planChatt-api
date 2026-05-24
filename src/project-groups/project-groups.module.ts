@@ -12,6 +12,7 @@ import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
 import { Strategy } from 'src/strategy/entities/strategy.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
+import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
 import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
 import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
@@ -37,6 +38,10 @@ import { BulkUploadModule } from './bulk-upload/bulk-upload.module';
       DevelopmentPlan,
       TrackingStatus,
       RevisedProjectGroup,
+      // Wave SUPP-4 / BE-01 — SPG-approved rows surfaced by the
+      // `/project-groups/latest-all-approved` source-list endpoint as
+      // valid fork sources for Revision/Change.
+      SupplementProjectGroup,
       DevelopmentPlanRevision,
       Amphoe,
       LocalAdministrativeOrganization,

@@ -203,9 +203,14 @@ export class UnifiedProjectEnricherService {
     // batch instead of serial. Each call is a `manager.exists(...)`
     // against the indexed `(prev_project_id, prev_project_type)`
     // column pair, so the cost is constant per row.
-    const [pgLockMap, rpgLockMap] = await Promise.all([
+    const spgIds = spgRows.map((s) => s.id);
+    const [pgLockMap, rpgLockMap, spgLockMap] = await Promise.all([
       this.batchLineageLocks(mainIds, 'original'),
       this.batchLineageLocks(revisedIds, 'revised'),
+      // Wave SUPP-4 — SPG can now have RPG descendants
+      // (prev_project_type='supplement'). Fan-out the lock query the
+      // same way PG/RPG do.
+      this.batchLineageLocks(spgIds, 'supplement'),
     ]);
 
     // Build the `projectId → RowEnrichment` lookup map. Rows that fail
@@ -220,10 +225,9 @@ export class UnifiedProjectEnricherService {
       if (e) enrichmentByProjectId.set(rpg.id, e);
     }
     for (const spg of spgRows) {
-      // TODO(SUPP-4) — when SPG→RPG lineage lands, replace `false` with
-      // a `LineageLockService.hasNonDeletedDescendant(spg.id, 'supplement', ...)`
-      // call (and extend `LineageProjectType` accordingly).
-      const e = this.buildSpgEnrichment(spg, false);
+      // Wave SUPP-4 — SPG lineage lock now live. Sources `spgLockMap`
+      // populated by `batchLineageLocks(..., 'supplement')` above.
+      const e = this.buildSpgEnrichment(spg, spgLockMap.get(spg.id) ?? false);
       if (e) enrichmentByProjectId.set(spg.id, e);
     }
 
@@ -264,7 +268,7 @@ export class UnifiedProjectEnricherService {
    */
   private async batchLineageLocks(
     ids: readonly string[],
-    type: 'original' | 'revised',
+    type: 'original' | 'revised' | 'supplement',
   ): Promise<Map<string, boolean>> {
     if (ids.length === 0) return new Map();
     const manager = this.dataSource.manager;

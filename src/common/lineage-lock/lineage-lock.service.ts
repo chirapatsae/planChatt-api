@@ -6,12 +6,15 @@ import { PrevProjectType } from 'src/revised-project-group/dto/create-revised-pr
 /**
  * Lineage type discriminator used by LineageLockService.
  *
- * - 'original' targets a ProjectGroup (main-plan) row. Its descendants are
- *   RevisedProjectGroup rows whose prev_project_type = 'original'.
- * - 'revised' targets a RevisedProjectGroup row. Its descendants are
- *   RevisedProjectGroup rows whose prev_project_type = 'revised'.
+ * - 'original'   targets a ProjectGroup (main-plan) row. Its descendants are
+ *                RevisedProjectGroup rows whose prev_project_type = 'original'.
+ * - 'revised'    targets a RevisedProjectGroup row. Its descendants are
+ *                RevisedProjectGroup rows whose prev_project_type = 'revised'.
+ * - 'supplement' targets a SupplementProjectGroup row (Wave SUPP-4). Its
+ *                descendants are RevisedProjectGroup rows whose
+ *                prev_project_type = 'supplement'.
  */
-export type LineageProjectType = 'original' | 'revised';
+export type LineageProjectType = 'original' | 'revised' | 'supplement';
 
 /**
  * Canonical error code prefix thrown when a row has a non-deleted descendant
@@ -49,10 +52,26 @@ export class LineageLockService {
   ): Promise<boolean> {
     if (!projectId) return false;
 
-    const enumValue =
-      projectType === 'original'
-        ? PrevProjectType.ORIGINAL
-        : PrevProjectType.REVISION;
+    // Wave SUPP-4 — discriminator now covers SPG. The enum-string mapping is
+    // intentionally exhaustive (the TS exhaustiveness check below catches any
+    // future LineageProjectType addition at compile time).
+    let enumValue: PrevProjectType;
+    switch (projectType) {
+      case 'original':
+        enumValue = PrevProjectType.ORIGINAL;
+        break;
+      case 'revised':
+        enumValue = PrevProjectType.REVISION;
+        break;
+      case 'supplement':
+        enumValue = PrevProjectType.SUPPLEMENT;
+        break;
+      default: {
+        const _exhaustive: never = projectType;
+        void _exhaustive;
+        return false;
+      }
+    }
 
     // TypeORM `exists` honours the entity's @DeleteDateColumn by default,
     // so soft-deleted descendants are excluded — matching §14.2 semantics.

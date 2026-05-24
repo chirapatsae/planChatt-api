@@ -25,6 +25,7 @@ import { handleException } from 'src/util/handleException';
 import { GovernmentAgency } from 'src/government-agencies/entities/government-agency.entity';
 import { User } from 'src/users/entities/user.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
+import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
 import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
 import { LocalAdministrativeOrganization } from 'src/local-administrative-organizations/entities/local-administrative-organization.entity';
@@ -89,6 +90,12 @@ export class ProjectGroupsService {
 
     @InjectRepository(RevisedProjectGroup)
     private readonly revisedProjectGroupRepo: Repository<RevisedProjectGroup>,
+
+    // Wave SUPP-4 / BE-01 — SPG-approved rows participate in
+    // `findLatestAllProjectsApproved` so Revision/Change can fork from a
+    // supplement project.
+    @InjectRepository(SupplementProjectGroup)
+    private readonly supplementProjectGroupRepo: Repository<SupplementProjectGroup>,
 
     @InjectRepository(DevelopmentPlanRevision)
     private readonly developmentPlanRevisionRepo: Repository<DevelopmentPlanRevision>,
@@ -1780,6 +1787,29 @@ export class ProjectGroupsService {
   }
 
   /**
+   * Wave SUPP-4 — Batched lineage-lock lookup for SupplementProjectGroup rows.
+   * Returns the subset of input ids whose SPG has at least one live RPG
+   * descendant (`prev_project_type='supplement'`). Mirrors the PG/RPG
+   * helpers byte-for-byte (parametrized by enum string only).
+   */
+  private async findSupplementProjectGroupIdsWithDescendants(
+    supplementProjectGroupIds: string[],
+  ): Promise<Set<string>> {
+    if (!supplementProjectGroupIds || supplementProjectGroupIds.length === 0)
+      return new Set();
+
+    const rows = await this.revisedProjectGroupRepo
+      .createQueryBuilder('r')
+      .select('DISTINCT r.prev_project_id', 'parentId')
+      .where('r.prev_project_id IN (:...ids)', { ids: supplementProjectGroupIds })
+      .andWhere('r.prev_project_type = :t', { t: 'supplement' })
+      .andWhere('r.deleted_at IS NULL')
+      .getRawMany<{ parentId: string }>();
+
+    return new Set(rows.map((r) => r.parentId));
+  }
+
+  /**
    * Query original projects (ProjectGroup) ที่ไม่มี active revision และ status = Approved
    */
   private async findOriginalApprovedProjects(
@@ -2437,6 +2467,14 @@ export class ProjectGroupsService {
     // ดึง original ที่ไม่เคยถูก revise
     let original = await this.findOriginalWithoutRevision(developmentPlanId, 'Approved', true);
 
+    // Wave SUPP-4 / BE-01 — pull SPG-approved rows under the same parent
+    // plan so the Revision/Change source picker can offer them as fork
+    // sources. Status filtered to `Approved` via latest-tracking inner-
+    // join; soft-deleted SPGs excluded by TypeORM's @DeleteDateColumn.
+    let approvedSupplement = await this.findApprovedSupplementProjectsForRevise(
+      developmentPlanId,
+    );
+
     // จำกัดการมองเห็นตามบทบาท
     if (workHistory.role.name === 'user') {
       const laoId = workHistory.localAdministrativeOrganization?.id;
@@ -2477,21 +2515,31 @@ export class ProjectGroupsService {
 
         latestRevised = latestRevised.filter(filterByAgency);
         original = original.filter(filterByAgency);
+        approvedSupplement = approvedSupplement.filter(filterByAgency);
       } else {
         latestRevised = [];
         original = [];
+        approvedSupplement = [];
       }
     }
 
-    if (countOnly) return latestRevised.length + original.length;
+    if (countOnly)
+      return latestRevised.length + original.length + approvedSupplement.length;
 
     // CLAUDE.md §14 — batched lineage-lock lookups. This endpoint powers the
-    // Revision picker; an approved PG that already has a descendant must
-    // surface as locked so FE-LOCK-06 can disable fork actions.
-    const [lockedPgIds, lockedRpgIds] = await Promise.all([
+    // Revision picker; an approved PG/RPG/SPG that already has a descendant
+    // must surface as locked so FE-LOCK-06 can disable fork actions.
+    const [lockedPgIds, lockedRpgIds, lockedSpgIds] = await Promise.all([
       this.findProjectGroupIdsWithDescendants(original.map((p) => p.id)),
       this.findRevisedProjectGroupIdsWithDescendants(latestRevised.map((r) => r.id)),
+      this.findSupplementProjectGroupIdsWithDescendants(
+        approvedSupplement.map((s) => s.id),
+      ),
     ]);
+
+    // Mask PII on SPG rows before they leave the boundary (PG/RPG already
+    // masked inside their respective query helpers — keep parity).
+    await this.maskCreatedByUserOnProjects(approvedSupplement as any);
 
     const unified = [
       ...latestRevised.map((x) =>
@@ -2500,9 +2548,69 @@ export class ProjectGroupsService {
       ...original.map((x) =>
         UnifiedProjectMapper.fromProjectGroup(x, lockedPgIds.has(x.id))
       ),
+      ...approvedSupplement.map((x) =>
+        UnifiedProjectMapper.fromSupplementProjectGroup(x, lockedSpgIds.has(x.id)),
+      ),
     ];
 
     return unified;
+  }
+
+  /**
+   * Wave SUPP-4 / BE-01 — query helper for `findLatestAllProjectsApproved`.
+   * Returns SPG rows under the given DevelopmentPlan whose latest
+   * `TrackingStatus.status.name = 'Approved'`. Soft-deleted SPGs are
+   * excluded by TypeORM's @DeleteDateColumn.
+   *
+   * The relations match `UnifiedProjectMapper.fromSupplementProjectGroup`
+   * field requirements (developmentPlan via supplement chain,
+   * classification, geo, responsibleAgency, budgets, trackingStatus).
+   */
+  private async findApprovedSupplementProjectsForRevise(
+    developmentPlanId: string,
+  ): Promise<SupplementProjectGroup[]> {
+    return this.supplementProjectGroupRepo
+      .createQueryBuilder('spg')
+      .leftJoinAndSelect('spg.developmentPlanSupplement', 'dps')
+      .leftJoinAndSelect('dps.developmentPlan', 'parentPlan')
+      .leftJoinAndSelect('spg.strategy', 'strategy')
+      .leftJoinAndSelect('spg.tactic', 'tactic')
+      .leftJoinAndSelect('spg.plan', 'plan')
+      .leftJoinAndSelect('spg.developmentIssue', 'developmentIssue')
+      .leftJoinAndSelect('spg.createdBy', 'createdBy')
+      .leftJoinAndSelect('createdBy.user', 'createdByUser')
+      .leftJoinAndSelect('createdBy.amphoe', 'createdByAmphoe')
+      .leftJoinAndSelect(
+        'createdBy.localAdministrativeOrganization',
+        'createdByLao',
+      )
+      .leftJoinAndSelect('spg.amphoe', 'amphoe')
+      .leftJoinAndSelect(
+        'spg.localAdministrativeOrganization',
+        'localAdministrativeOrganization',
+      )
+      .leftJoinAndSelect('spg.originAgencyId', 'originAgency')
+      .leftJoinAndSelect('spg.responsibleAgency', 'responsibleAgency')
+      .leftJoinAndSelect('spg.budgets', 'budgets')
+      .leftJoinAndSelect('spg.attachments', 'attachments')
+      .innerJoin(
+        'spg.trackingStatus',
+        'latestTrackingStatus',
+        'latestTrackingStatus.isLatest = :isLatest',
+        { isLatest: true },
+      )
+      .innerJoinAndSelect(
+        'latestTrackingStatus.statusId',
+        'latestStatus',
+        'latestStatus.name = :statusName',
+        { statusName: 'Approved' },
+      )
+      .leftJoinAndSelect('spg.trackingStatus', 'trackingStatus')
+      .leftJoinAndSelect('trackingStatus.statusId', 'status')
+      .where('parentPlan.id = :developmentPlanId', { developmentPlanId })
+      .andWhere('spg.deleted_at IS NULL')
+      .orderBy('spg.created_at', 'DESC')
+      .getMany();
   }
 
   async findOutAuthorityByPdf(options: { id: string, userId: string }): Promise<ProjectGroup[]> {
