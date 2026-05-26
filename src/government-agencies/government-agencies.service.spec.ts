@@ -40,6 +40,7 @@ describe('GovernmentAgenciesService', () => {
     deletedAt: undefined,
     workHistory: [],
     responsibleAgencyProjectGroup: [],
+    divisions: [],
   };
 
   const mockGovernmentAgency2: GovernmentAgency = {
@@ -49,6 +50,7 @@ describe('GovernmentAgenciesService', () => {
     deletedAt: undefined,
     workHistory: [],
     responsibleAgencyProjectGroup: [],
+    divisions: [],
   };
 
   beforeEach(async () => {

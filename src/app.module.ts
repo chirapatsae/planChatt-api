@@ -44,6 +44,8 @@ import { PositionsModule } from './positions/positions.module';
 import { Position } from './positions/entities/position.entity';
 import { GovernmentAgenciesModule } from './government-agencies/government-agencies.module';
 import { GovernmentAgency } from './government-agencies/entities/government-agency.entity';
+import { DivisionsModule } from './divisions/divisions.module';
+import { Division } from './divisions/entities/division.entity';
 import { WorkHistoryAmphoeResponsibilityModule } from './work-history-amphoe-responsibility/work-history-amphoe-responsibility.module';
 import { WorkHistoryAmphoeResponsibility } from './work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity';
 import { WorkHistoryGovernmentAgencyResponsibilityModule } from './work-history-government-agency-responsibility/work-history-government-agency-responsibility.module';
@@ -386,6 +388,7 @@ import { NationalStrategyMilestone } from './strategic-mapping/entities/national
         WorkStatus,
         Position,
         GovernmentAgency,
+        Division,
         AiUsageQuota,
         AiUsageLog,
         AiPreSubmitSnapshot,
@@ -535,6 +538,7 @@ import { NationalStrategyMilestone } from './strategic-mapping/entities/national
     WorkStatusModule,
     PositionsModule,
     GovernmentAgenciesModule,
+    DivisionsModule,
     WorkHistoryAmphoeResponsibilityModule,
     WorkHistoryGovernmentAgencyResponsibilityModule,
     UserActivityLogsModule,

@@ -1,3 +1,4 @@
+import { Division } from 'src/divisions/entities/division.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import {
@@ -42,6 +43,12 @@ export class GovernmentAgency {
     },
   )
   responsibleAgencyProjectGroup: ProjectGroup[];
+
+  @OneToMany(() => Division, (division) => division.governmentAgency, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  })
+  divisions: Division[];
 
   projectCount?: number;
 }
