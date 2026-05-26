@@ -1,36 +1,25 @@
 import { Module } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { BookAssemblyFileService } from './book-assembly-file.service';
-import { DeprecationAuditLog } from './entities/deprecation-audit-log.entity';
 
 /**
- * Slim shared-infrastructure module (CLEANUP wave BE-02, 2026-05-26).
+ * Slim shared-infrastructure module.
  *
- * After the OPTION-A-FULL-SPLIT CLEANUP wave deleted the legacy
- * `BookAssemblyService` + `BookAssemblyController` + every legacy
- * `book_assembly_*` entity / DTO / enum, this module now exposes ONLY
- * the two shared-infrastructure pieces called out by CLAUDE.md §20.10.3
- * (Q3=B file-service exemption + audit-log entity preservation):
+ * After OPTION-A-FULL-SPLIT CLEANUP (2026-05-26) this module exposes
+ * ONLY `BookAssemblyFileService` — the single source of truth for on-
+ * disk PDF path resolution, consumed by `MainAssemblyService`,
+ * `EditAssemblyService`, and `ChangeAssemblyService` per the Q3=B
+ * file-service exemption documented in CLAUDE.md §20.10.3.
+ * `SupplementAssemblyService` has its own `supplement-assembly-file.service.ts`
+ * and does NOT consume this provider.
  *
- *   1. `BookAssemblyFileService` — single source of truth for on-disk
- *      path resolution. Imported by `MainAssemblyService`,
- *      `EditAssemblyService`, `ChangeAssemblyService`, and (transitively)
- *      `SupplementAssemblyService` via their respective module imports.
- *
- *   2. `DeprecationAuditLog` entity — registered in
- *      `TypeOrmModule.forFeature` so the supplement-side audit writer
- *      (`SupplementAssemblyService.validateSupplementDeprecationAuth`)
- *      continues to bind a repo. Future-wave parity for the four
- *      standalone services may grow audit-write coverage here.
- *
- * The module no longer declares any controller. The downstream
- * `MainAssemblyModule`, `EditAssemblyModule`, and `ChangeAssemblyModule`
- * continue to import `BookAssemblyModule` to consume the exported
- * `BookAssemblyFileService` provider — that import chain is unchanged.
+ * The post-CLEANUP DeprecationAuditLog entity / table / 2 enums were
+ * also deleted (0 live writers, 0 historical rows) as a follow-up
+ * mini cleanup (2026-05-26). All legacy `book_assembly_*` tables,
+ * the polymorphic `BookAssemblyService`, controller, entities, DTOs,
+ * enums, and the Wave 4 storage-migration CLI have been removed.
  */
 @Module({
-  imports: [TypeOrmModule.forFeature([DeprecationAuditLog])],
   providers: [BookAssemblyFileService],
   exports: [BookAssemblyFileService],
 })

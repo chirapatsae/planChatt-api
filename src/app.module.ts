@@ -153,15 +153,12 @@ import { PublicEngagementModule } from './public-engagement/public-engagement.mo
 import { EngagementLike } from './public-engagement/entities/engagement-like.entity';
 import { EngagementViewEvent } from './public-engagement/entities/engagement-view-event.entity';
 import { EngagementDownloadEvent } from './public-engagement/entities/engagement-download-event.entity';
-// CLEANUP wave BE-02 (2026-05-26) — the legacy `BookAssemblyDraft`,
-// `BookAssemblyVersion`, and `BookProjectLineage` entities have been
-// deleted alongside the legacy `BookAssemblyService` / `BookAssembly
-// Controller`. Only `DeprecationAuditLog` survives in `src/book-assembly/`
-// as shared-infrastructure (CLAUDE.md §20.10.3 — file-service exemption
-// chain). The supplement-side audit writer continues to bind to this
-// entity; future-wave parity may extend audit-write coverage to the
-// four standalone subsystems (main/edit/change/supplement).
-import { DeprecationAuditLog } from './book-assembly/entities/deprecation-audit-log.entity';
+// CLEANUP wave (2026-05-26) — the legacy `BookAssemblyDraft`,
+// `BookAssemblyVersion`, `BookProjectLineage`, and `DeprecationAuditLog`
+// entities + their tables have all been deleted alongside the legacy
+// `BookAssemblyService` / `BookAssemblyController`. `src/book-assembly/`
+// now exposes only `BookAssemblyFileService` per the Q3=B file-service
+// exemption (CLAUDE.md §20.10.3); zero entities remain to register.
 // SUPP_STANDALONE_DB_01 — standalone Supplement Assembly entities.
 // Q3=B duplicate of BookAssembly shape in dedicated tables; zero shared
 // mutable surface with BookAssembly. Root-DataSource registration is
@@ -424,11 +421,11 @@ import { NationalStrategyMilestone } from './strategic-mapping/entities/national
         AttachmentProjectGroup,
         AttachmentRevisedProjectGroup,
         AttachmentSupplementProjectGroup,
-        // CLEANUP wave BE-02 — `BookAssemblyDraft`, `BookAssemblyVersion`,
-        // and `BookProjectLineage` removed (legacy `book_assembly_*`
-        // tables targeted by upcoming CLEANUP DB-01). `DeprecationAuditLog`
-        // preserved per CLAUDE.md §20.10.3.
-        DeprecationAuditLog,
+        // CLEANUP wave (2026-05-26) — every legacy `book_assembly_*`
+        // entity has been deleted alongside `DeprecationAuditLog`
+        // (0 live writers, 0 historical rows). `src/book-assembly/` now
+        // contributes ZERO entities; only `BookAssemblyFileService`
+        // remains per CLAUDE.md §20.10.3 Q3=B file-service exemption.
         // SUPP_STANDALONE_DB_01 — owned by `SupplementAssemblyModule`
         // (created by BE_04); root registration here is required for
         // metadata resolution. §15 / §18.2.1 — no FK into book_assembly_*
