@@ -12,13 +12,16 @@ import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entit
  *   locked as soon as ANY child exists (draft or booked, any type).
  *
  * - 'development_plan_revision' targets a DevelopmentPlanRevision row. It
- *   is locked iff ANY strictly-newer (by created_at) non-soft-deleted
- *   sibling child of the same plan exists, across BOTH revisions and
- *   supplements. This is the OQ-2=(B) "LINEAR ACROSS TYPES" / "GLOBAL
- *   TIMELINE" choice — see CLAUDE.md §15.2.
+ *   is locked iff ANY strictly-newer (by `bookedAt`) non-soft-deleted,
+ *   booked (`bookedAt IS NOT NULL`) sibling child of the same plan exists,
+ *   across BOTH revisions and supplements. Drafts (`bookedAt IS NULL`) do
+ *   NOT participate in the lock chain — they are governed by `isOpen` and
+ *   plan-phase scope, not §15. See CLAUDE.md §15.2 / §15.3 / §15.7 /
+ *   wave-lineage-linear-chain-by-bookedAt (LINEAR CHAIN ACROSS CATEGORIES,
+ *   ordered by `bookedAt`).
  *
  * - 'development_plan_supplement' targets a DevelopmentPlanSupplement row.
- *   Same global-timeline semantics as 'development_plan_revision'.
+ *   Same linear-chain-by-bookedAt semantics as 'development_plan_revision'.
  */
 export type BookLockTarget =
   | 'development_plan'
@@ -27,9 +30,9 @@ export type BookLockTarget =
 
 /**
  * Canonical error code prefix thrown when a book artifact has a
- * non-soft-deleted newer child and therefore cannot be mutated or deleted
- * (CLAUDE.md §15). Frontend (`frontend/src/api/axios.tsx`) and integration
- * tests rely on this exact string prefix.
+ * non-soft-deleted strictly-newer-booked sibling and therefore cannot be
+ * mutated or deleted (CLAUDE.md §15). Frontend (`frontend/src/api/axios.tsx`)
+ * and integration tests rely on this exact string prefix.
  */
 export const BOOK_HAS_NEWER_REVISION = 'BOOK_HAS_NEWER_REVISION';
 
@@ -39,13 +42,19 @@ export const BOOK_HAS_NEWER_REVISION = 'BOOK_HAS_NEWER_REVISION';
  * Single source of truth for the Book Lineage Immutability invariant
  * defined in CLAUDE.md §15. A book artifact row A is locked
  * (non-editable, non-deletable) if and only if there exists any
- * non-soft-deleted strictly-newer sibling child of its containing plan,
- * across BOTH `development_plan_revision` and `development_plan_supplement`
- * tables.
+ * non-soft-deleted strictly-newer-booked sibling child of its containing
+ * plan, across BOTH `development_plan_revision` and
+ * `development_plan_supplement` tables. Ordering is by `booked_at` —
+ * NOT `created_at` — so the lock chain reflects the actual published
+ * book timeline, not draft creation order.
+ *
+ * Drafts (`booked_at IS NULL`) are excluded from the chain on both ends:
+ *   - A draft self always returns `false` (drafts are not in the chain).
+ *   - A draft sibling never locks a booked self (draft `booked_at` is NULL).
  *
  * The service is stateless, transaction-aware (accepts an EntityManager so
  * it participates in the caller's transaction), and role-agnostic. There
- * is NO staff-lead exemption — per §15.5, all roles (including
+ * is NO staff-lead exemption — per §15.6, all roles (including
  * super-admin) obey the lock.
  *
  * Detection is LIVE — there is no cached `is_frozen` column. The column
@@ -66,10 +75,11 @@ export class BookLockService {
 
   /**
    * Returns true when the target book artifact has at least one
-   * non-soft-deleted newer sibling child (or any child, in the case of
-   * DevelopmentPlan). Uses global-timeline detection across BOTH
-   * `development_plan_revision` and `development_plan_supplement` for
-   * revision/supplement targets — see CLAUDE.md §15.2.
+   * non-soft-deleted strictly-newer-booked sibling child (or any child,
+   * in the case of DevelopmentPlan). Uses linear-chain-by-bookedAt
+   * detection across BOTH `development_plan_revision` and
+   * `development_plan_supplement` for revision/supplement targets — see
+   * CLAUDE.md §15.2 (post-wave-lineage-linear-chain-by-bookedAt rewrite).
    */
   async hasNewerRevision(
     id: string,
@@ -82,10 +92,6 @@ export class BookLockService {
       return this.hasAnyChildForPlan(id, manager);
     }
 
-    // Load the target row's plan id + created_at so we can compare against
-    // its siblings in the global timeline. We deliberately ignore the
-    // target's artifact kind when scanning siblings — OQ-2=(B) global
-    // lineage means a revision can lock a supplement and vice versa.
     const ctx = await this.loadLineageContext(id, target, manager);
     if (!ctx) {
       // Row does not exist or is soft-deleted; treat as unlocked so the
@@ -94,13 +100,16 @@ export class BookLockService {
       return false;
     }
 
-    return this.hasStrictlyNewerSibling(
+    // Drafts are NOT in the §15 lock chain — they are governed by other
+    // gates (`isOpen`, plan-phase scope). A draft self always reports
+    // unlocked even if newer booked siblings exist.
+    if (ctx.bookedAt === null) return false;
+
+    return this.hasStrictlyNewerBookedSibling(
       ctx.developmentPlanId,
-      ctx.createdAt,
+      ctx.bookedAt,
       ctx.selfId,
-      target,
       manager,
-      ctx.ownRevisionTypeId ?? null,
     );
   }
 
@@ -151,7 +160,10 @@ export class BookLockService {
   /**
    * DevelopmentPlan lock predicate — returns true if the plan has ANY
    * non-soft-deleted child (revision OR supplement). Draft children count
-   * exactly the same as booked children per §15.1.
+   * exactly the same as booked children per §15.1 — the plan-level
+   * predicate is intentionally broader than the revision/supplement-level
+   * predicate, because §15.3 plan-blocked-operation semantics require
+   * locking the plan the moment ANY descendant exists.
    */
   private async hasAnyChildForPlan(
     planId: string,
@@ -169,9 +181,15 @@ export class BookLockService {
   }
 
   /**
-   * Loads the (developmentPlanId, createdAt, selfId) tuple for a revision
+   * Loads the (developmentPlanId, bookedAt, selfId) tuple for a revision
    * or supplement target. Returns null if the row does not exist or is
    * soft-deleted.
+   *
+   * Post-wave-lineage-linear-chain-by-bookedAt: reads `bookedAt` instead of
+   * `createdAt`, and drops the previous `revisionType` join entirely —
+   * the revised predicate scans ALL siblings under the same plan
+   * regardless of category, so per-type partitioning is no longer
+   * needed.
    */
   private async loadLineageContext(
     id: string,
@@ -179,18 +197,8 @@ export class BookLockService {
     manager: EntityManager,
   ): Promise<{
     developmentPlanId: string;
-    createdAt: Date;
+    bookedAt: Date | null;
     selfId: string;
-    /**
-     * Only populated for `development_plan_revision` targets. Used by
-     * `hasStrictlyNewerSibling` to partition the revision-vs-revision
-     * scan by `revisionType.id` so that edit-vs-change rounds are
-     * treated as parallel siblings that do NOT lock each other
-     * (W116-BE-01 / CLAUDE.md §15.2 partitioned-sibling refinement).
-     * Null for supplement targets — supplements remain unified
-     * cross-type per §15.2 unchanged behavior.
-     */
-    ownRevisionTypeId?: string | null;
   } | null> {
     if (target === 'development_plan_revision') {
       // TypeORM auto-applies `deleted_at IS NULL` for @DeleteDateColumn
@@ -199,33 +207,24 @@ export class BookLockService {
       // the plan row itself is never inspected for soft-delete state
       // because the invariant is "does this revision have a newer
       // sibling in the plan", not "is the plan alive".
-      //
-      // We also pull `revisionType.id` so that downstream sibling
-      // detection can partition revision-vs-revision by type — edit
-      // rounds and change rounds are PARALLEL siblings per W116-BE-01,
-      // even though supplement-vs-revision remains cross-type.
       const row = await manager
         .getRepository(DevelopmentPlanRevision)
         .createQueryBuilder('r')
-        .select(['r.id', 'r.createdAt'])
+        .select(['r.id', 'r.bookedAt'])
         .leftJoin('r.developmentPlan', 'plan')
         .addSelect('plan.id', 'planId')
-        .leftJoin('r.revisionType', 'rtype')
-        .addSelect('rtype.id', 'revisionTypeId')
         .where('r.id = :id', { id })
         .getRawOne<{
           r_id: string;
-          r_created_at: Date;
+          r_booked_at: Date | null;
           planId: string | null;
-          revisionTypeId: string | null;
         }>();
 
       if (!row || !row.planId) return null;
       return {
         developmentPlanId: row.planId,
-        createdAt: row.r_created_at,
+        bookedAt: row.r_booked_at ?? null,
         selfId: row.r_id,
-        ownRevisionTypeId: row.revisionTypeId ?? null,
       };
     }
 
@@ -233,100 +232,78 @@ export class BookLockService {
     const row = await manager
       .getRepository(DevelopmentPlanSupplement)
       .createQueryBuilder('s')
-      .select(['s.id', 's.createdAt'])
+      .select(['s.id', 's.bookedAt'])
       .leftJoin('s.developmentPlan', 'plan')
       .addSelect('plan.id', 'planId')
       .where('s.id = :id', { id })
       .getRawOne<{
         s_id: string;
-        s_created_at: Date;
+        s_booked_at: Date | null;
         planId: string | null;
       }>();
 
     if (!row || !row.planId) return null;
     return {
       developmentPlanId: row.planId,
-      createdAt: row.s_created_at,
+      bookedAt: row.s_booked_at ?? null,
       selfId: row.s_id,
     };
   }
 
   /**
-   * Global-timeline "strictly newer sibling" predicate.
+   * Linear-chain-by-bookedAt "strictly newer booked sibling" predicate.
    *
-   * Returns true when ANY non-soft-deleted row in either
-   * `development_plan_revision` or `development_plan_supplement` belongs
-   * to the same plan and has `created_at > ownCreatedAt` (excluding the
-   * target row itself).
+   * Returns true when ANY non-soft-deleted, booked (`bookedAt IS NOT NULL`)
+   * row in either `development_plan_revision` or
+   * `development_plan_supplement` belongs to the same plan and has
+   * `bookedAt > ownBookedAt` (excluding the target row itself).
    *
-   * Implementation note: TypeORM's `MoreThan` operator compares on the
-   * same column mapping used by the entity metadata, so we can use the
-   * plain `where` shape without raw SQL. Each predicate translates to an
-   * indexed lookup on `(development_plan_id)` followed by an in-memory
-   * timestamp comparison on the small per-plan subset (<20 rows in
-   * practice — see §15.2 index consideration).
+   * Cross-category by design — a booked supplement locks an older booked
+   * revision and vice versa. Equal-bookedAt peers are treated as
+   * concurrent peers (strict `>` comparison ensures ties are NOT locks).
+   *
+   * Implementation note: TypeORM auto-applies the soft-delete filter
+   * (`deleted_at IS NULL`) on the primary alias of a `@DeleteDateColumn`
+   * entity, so we do not add it explicitly here. The `bookedAt IS NOT
+   * NULL` filter excludes draft siblings from the chain — drafts are
+   * not in the published lineage.
    */
-  private async hasStrictlyNewerSibling(
+  private async hasStrictlyNewerBookedSibling(
     planId: string,
-    ownCreatedAt: Date,
+    ownBookedAt: Date,
     selfId: string,
-    target: Exclude<BookLockTarget, 'development_plan'>,
     manager: EntityManager,
-    ownRevisionTypeId: string | null,
   ): Promise<boolean> {
-    // Scan development_plan_revision first — most plans have more
-    // revisions than supplements in practice, so this short-circuits
-    // the common case faster. TypeORM auto-applies the soft-delete
-    // filter (deleted_at IS NULL) on the primary alias of a
-    // @DeleteDateColumn entity, so we do not add it explicitly here.
-    //
-    // W116-BE-02 (forward-compat for supplement module) — all child
-    // categories under a plan are now PARALLEL SIBLINGS:
-    //   - Revision-vs-revision: partitioned by `revisionType.id`
-    //     (edit / change / future types are independent timelines)
-    //   - Supplement-vs-supplement: same-category timeline
-    //   - Revision-vs-supplement: NO cross-category lock either
-    //     direction
-    // Project-level deduplication is enforced by
-    // `assertProjectsNotInSiblingBook` at the book-assembly layer
-    // against COMPLETED sibling versions, NOT via book-lineage lock.
-    //
-    // Implementation: when target is a revision, scan only revisions
-    // of the same revisionType; when target is a supplement, scan
-    // only supplements. Cross-category scans are dropped entirely.
-    if (target === 'development_plan_revision') {
-      const revisionQb = manager
+    // Probe both child categories in parallel. Either match short-
+    // circuits the lock decision. Each predicate translates to an
+    // indexed lookup on `(development_plan_id, booked_at)` followed by
+    // an in-memory timestamp comparison on the small per-plan subset
+    // (<20 rows in practice — see DB-01 partial-index addition).
+    const [newerRevision, newerSupplement] = await Promise.all([
+      manager
         .getRepository(DevelopmentPlanRevision)
         .createQueryBuilder('r')
         .select('r.id')
         .leftJoin('r.developmentPlan', 'plan')
-        .leftJoin('r.revisionType', 'rtype')
         .where('plan.id = :planId', { planId })
-        .andWhere('r.createdAt > :ownCreatedAt', { ownCreatedAt })
-        .andWhere('r.id <> :selfId', { selfId });
-      // Type partitioning is generic — filter by whatever
-      // revisionType the target carries. A NULL FK (should never
-      // happen — column is non-nullable) falls through to the
-      // pre-partition cross-type scan so §15 still holds.
-      if (ownRevisionTypeId) {
-        revisionQb.andWhere('rtype.id = :ownRevisionTypeId', {
-          ownRevisionTypeId,
-        });
-      }
-      const newerRevision = await revisionQb.limit(1).getRawOne();
-      return !!newerRevision;
-    }
+        .andWhere('r.bookedAt IS NOT NULL')
+        .andWhere('r.bookedAt > :ownBookedAt', { ownBookedAt })
+        .andWhere('r.id <> :selfId', { selfId })
+        .limit(1)
+        .getRawOne(),
+      manager
+        .getRepository(DevelopmentPlanSupplement)
+        .createQueryBuilder('s')
+        .select('s.id')
+        .leftJoin('s.developmentPlan', 'plan')
+        .where('plan.id = :planId', { planId })
+        .andWhere('s.bookedAt IS NOT NULL')
+        .andWhere('s.bookedAt > :ownBookedAt', { ownBookedAt })
+        .andWhere('s.id <> :selfId', { selfId })
+        .limit(1)
+        .getRawOne(),
+    ]);
 
-    // target === 'development_plan_supplement'
-    const supplementQb = manager
-      .getRepository(DevelopmentPlanSupplement)
-      .createQueryBuilder('s')
-      .select('s.id')
-      .leftJoin('s.developmentPlan', 'plan')
-      .where('plan.id = :planId', { planId })
-      .andWhere('s.createdAt > :ownCreatedAt', { ownCreatedAt })
-      .andWhere('s.id <> :selfId', { selfId });
-    const newerSupplement = await supplementQb.limit(1).getRawOne();
-    return !!newerSupplement;
+    return !!newerRevision || !!newerSupplement;
   }
 }

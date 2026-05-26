@@ -42,6 +42,18 @@ export class DevelopmentPlanSupplement {
   @Column({ name: 'end_date', type: 'timestamp', nullable: true })
   endDate: Date | null;
 
+  /**
+   * CLAUDE.md §15.2 / §15.3 Book Lineage Immutability — finalize-moment
+   * timestamp used by the cross-category linear-chain ordering
+   * (wave-lineage-linear-chain-by-bookedAt). NULL while the supplement
+   * is a draft (`isBooked = false`); set at the moment `isBooked` flips
+   * to `true` (BE-01 wires the write). Backfilled per DB-01 migration
+   * from `supplement_assembly_versions.merged_at` joined on
+   * `development_plan_supplement_id` (fallback `created_at`).
+   */
+  @Column({ name: 'booked_at', type: 'timestamptz', nullable: true })
+  bookedAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

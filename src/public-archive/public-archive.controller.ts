@@ -30,10 +30,10 @@ import {
 import { Request, Response } from 'express';
 import * as fs from 'fs';
 
-import { BookAssemblySourceType } from 'src/book-assembly/enums/book-assembly.enums';
 import { PublicEngagementService } from 'src/public-engagement/public-engagement.service';
 import {
   PublicArchiveService,
+  PublicBookSourceType,
   PublicPlanDto,
   PublicProjectDetailDto,
   PublicProjectSearchHit,
@@ -138,15 +138,10 @@ export class PublicArchiveController {
       // sourceType validation is sharper than the eligibility 404 —
       // the parameter is a closed enum, not a UUID, so we return 400
       // (matches the existing PDF route's validation pattern).
-      // `'supplement'` added in Wave public-archive-supplement BE-01.
       throw new BadRequestException('sourceType ไม่ถูกต้อง');
     }
     return this.publicArchiveService.getProjectDetail(
-      sourceType as
-        | 'main_plan'
-        | 'edit_revision'
-        | 'change_revision'
-        | 'supplement',
+      sourceType as PublicBookSourceType,
       projectId,
     );
   }
@@ -174,20 +169,19 @@ export class PublicArchiveController {
     if (versionNumber < 1) {
       throw new BadRequestException('versionNumber ต้องเป็นจำนวนเต็มบวก');
     }
-    // Closed enum widened in Wave public-archive-supplement BE-01 to
-    // accept `'supplement'` alongside the three BookAssembly source
-    // types. The supplement assembly subsystem lives in its own
-    // dedicated table per `docs/supplement-book-domain.md` §9, but
-    // the public URL shape is uniform.
+    // Closed enum — every public surface accepts the same four source
+    // types. CLEANUP wave BE-02 (2026-05-26) replaces the legacy
+    // `BookAssemblySourceType` literal lookups with raw string-literal
+    // checks; the four standalone subsystems own the per-type tables.
     if (
-      sourceType !== BookAssemblySourceType.MAIN_PLAN &&
-      sourceType !== BookAssemblySourceType.EDIT_REVISION &&
-      sourceType !== BookAssemblySourceType.CHANGE_REVISION &&
+      sourceType !== 'main_plan' &&
+      sourceType !== 'edit_revision' &&
+      sourceType !== 'change_revision' &&
       sourceType !== 'supplement'
     ) {
       throw new BadRequestException('sourceType ไม่ถูกต้อง');
     }
-    const resolvedSourceType = sourceType as BookAssemblySourceType | 'supplement';
+    const resolvedSourceType = sourceType as PublicBookSourceType;
 
     const absPath = await this.publicArchiveService.resolvePublicPdfPath(
       resolvedSourceType,
@@ -223,13 +217,14 @@ export class PublicArchiveController {
         deviceCandidate && /^[0-9a-f-]{36}$/i.test(deviceCandidate)
           ? deviceCandidate
           : null;
+      // CLEANUP wave BE-02 — `resolvedSourceType` is already typed
+      // as `PublicBookSourceType` literal union; the legacy
+      // `BookAssemblySourceType` enum lookup is no longer needed.
+      // The outer `if (resolvedSourceType !== 'supplement')` guard
+      // ensures we never pass `'supplement'` to `recordDownload`,
+      // which only accepts the three BookAssembly source types.
       await this.engagementService.recordDownload({
-        sourceType:
-          resolvedSourceType === BookAssemblySourceType.MAIN_PLAN
-            ? 'main_plan'
-            : resolvedSourceType === BookAssemblySourceType.EDIT_REVISION
-              ? 'edit_revision'
-              : 'change_revision',
+        sourceType: resolvedSourceType as 'main_plan' | 'edit_revision' | 'change_revision',
         sourceId,
         versionNumber,
         deviceId,

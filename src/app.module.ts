@@ -153,10 +153,15 @@ import { PublicEngagementModule } from './public-engagement/public-engagement.mo
 import { EngagementLike } from './public-engagement/entities/engagement-like.entity';
 import { EngagementViewEvent } from './public-engagement/entities/engagement-view-event.entity';
 import { EngagementDownloadEvent } from './public-engagement/entities/engagement-download-event.entity';
-import { BookAssemblyDraft } from './book-assembly/entities/book-assembly-draft.entity';
-import { BookAssemblyVersion } from './book-assembly/entities/book-assembly-version.entity';
+// CLEANUP wave BE-02 (2026-05-26) — the legacy `BookAssemblyDraft`,
+// `BookAssemblyVersion`, and `BookProjectLineage` entities have been
+// deleted alongside the legacy `BookAssemblyService` / `BookAssembly
+// Controller`. Only `DeprecationAuditLog` survives in `src/book-assembly/`
+// as shared-infrastructure (CLAUDE.md §20.10.3 — file-service exemption
+// chain). The supplement-side audit writer continues to bind to this
+// entity; future-wave parity may extend audit-write coverage to the
+// four standalone subsystems (main/edit/change/supplement).
 import { DeprecationAuditLog } from './book-assembly/entities/deprecation-audit-log.entity';
-import { BookProjectLineage } from './book-assembly/entities/book-project-lineage.entity';
 // SUPP_STANDALONE_DB_01 — standalone Supplement Assembly entities.
 // Q3=B duplicate of BookAssembly shape in dedicated tables; zero shared
 // mutable surface with BookAssembly. Root-DataSource registration is
@@ -167,6 +172,53 @@ import { BookProjectLineage } from './book-assembly/entities/book-project-lineag
 import { SupplementAssemblyDraft } from './supplement-assembly/entities/supplement-assembly-draft.entity';
 import { SupplementAssemblyVersion } from './supplement-assembly/entities/supplement-assembly-version.entity';
 import { SupplementAssemblyVersionProject } from './supplement-assembly/entities/supplement-assembly-version-project.entity';
+// Wave A1 / DB-01 — standalone MAIN_PLAN Assembly entities. Same Q3=B
+// duplicate / root-registration footgun as SUPP_STANDALONE_DB_01 above:
+// `forFeature` in `MainAssemblyModule` provides the repo injection
+// token, but the metadata MUST also be listed in the root `entities[]`
+// list below or TypeORM throws `EntityMetadataNotFoundError` at boot.
+// BE-01 (cloned `MainAssemblyService`) is deferred — DB-01 only ships
+// schema + module skeleton.
+import { MainAssemblyDraft } from './main-assembly/entities/main-assembly-draft.entity';
+import { MainAssemblyVersion } from './main-assembly/entities/main-assembly-version.entity';
+import { MainAssemblyVersionProject } from './main-assembly/entities/main-assembly-version-project.entity';
+import { MainProjectLineage } from './main-assembly/entities/main-project-lineage.entity';
+import { MainAssemblyModule } from './main-assembly/main-assembly.module';
+// Wave A2 / DB-01 + BE-01 — standalone EDIT_REVISION Assembly entities.
+// Same Q3=B duplicate / root-registration footgun as the MAIN entities
+// above: `forFeature` in `EditAssemblyModule` provides the repo
+// injection token, but the metadata MUST also be listed in the root
+// `entities[]` list below or TypeORM throws
+// `EntityMetadataNotFoundError` at boot. BE-01 (cloned
+// `EditAssemblyService`) ships alongside this registration; the legacy
+// `BookAssemblyService` continues to serve EDIT_REVISION traffic via
+// `book_assembly_*` tables until FE-01 atomically switches FE clients.
+import { EditAssemblyDraft } from './edit-assembly/entities/edit-assembly-draft.entity';
+import { EditAssemblyVersion } from './edit-assembly/entities/edit-assembly-version.entity';
+import { EditAssemblyVersionProject } from './edit-assembly/entities/edit-assembly-version-project.entity';
+import { EditProjectLineage } from './edit-assembly/entities/edit-project-lineage.entity';
+import { EditAssemblyModule } from './edit-assembly/edit-assembly.module';
+// Wave A3 / DB-01 + BE-01 — standalone CHANGE_REVISION Assembly entities.
+// Same Q3=B duplicate / root-registration footgun as the MAIN and EDIT
+// entities above: `forFeature` in `ChangeAssemblyModule` provides the
+// repo injection token, but the metadata MUST also be listed in the
+// root `entities[]` list below or TypeORM throws
+// `EntityMetadataNotFoundError` at boot. BE-01 (cloned
+// `EditAssemblyService` adapted for CHANGE_REVISION) ships alongside
+// this registration; the legacy `BookAssemblyService` continues to
+// serve CHANGE_REVISION traffic via `book_assembly_*` tables until
+// FE-01 atomically switches FE clients.
+import { ChangeAssemblyDraft } from './change-assembly/entities/change-assembly-draft.entity';
+import { ChangeAssemblyVersion } from './change-assembly/entities/change-assembly-version.entity';
+import { ChangeAssemblyVersionProject } from './change-assembly/entities/change-assembly-version-project.entity';
+import { ChangeProjectLineage } from './change-assembly/entities/change-project-lineage.entity';
+import { ChangeAssemblyModule } from './change-assembly/change-assembly.module';
+// wave-supplement-convergence-milestone-5 / DB-01 — segregated SPG
+// lineage table (CTO M4 decision Option B). Same root-registration
+// footgun as the three entities above; forgetting this line triggers
+// `EntityMetadataNotFoundError` at boot when BE-01 first requests the
+// repository.
+import { SupplementProjectLineage } from './supplement-assembly/entities/supplement-project-lineage.entity';
 // SUPP_STANDALONE_BE_04 — wires the standalone Supplement Assembly
 // subsystem (Wave 3 of 6). Imported AFTER `BookAssemblyModule` for
 // thematic locality; no cyclical dependency between the two (Q10=B
@@ -372,10 +424,11 @@ import { NationalStrategyMilestone } from './strategic-mapping/entities/national
         AttachmentProjectGroup,
         AttachmentRevisedProjectGroup,
         AttachmentSupplementProjectGroup,
-        BookAssemblyDraft,
-        BookAssemblyVersion,
+        // CLEANUP wave BE-02 — `BookAssemblyDraft`, `BookAssemblyVersion`,
+        // and `BookProjectLineage` removed (legacy `book_assembly_*`
+        // tables targeted by upcoming CLEANUP DB-01). `DeprecationAuditLog`
+        // preserved per CLAUDE.md §20.10.3.
         DeprecationAuditLog,
-        BookProjectLineage,
         // SUPP_STANDALONE_DB_01 — owned by `SupplementAssemblyModule`
         // (created by BE_04); root registration here is required for
         // metadata resolution. §15 / §18.2.1 — no FK into book_assembly_*
@@ -383,6 +436,34 @@ import { NationalStrategyMilestone } from './strategic-mapping/entities/national
         SupplementAssemblyDraft,
         SupplementAssemblyVersion,
         SupplementAssemblyVersionProject,
+        // wave-supplement-convergence-milestone-5 / DB-01 — see import note.
+        SupplementProjectLineage,
+        // Wave A1 / DB-01 — standalone MAIN_PLAN Assembly entities.
+        // Owned by `MainAssemblyModule` (skeleton only — BE-01 lands
+        // service + controller later). Root registration here is
+        // required for metadata resolution. NO FK into `book_assembly_*`
+        // tables (Q3=B standalone).
+        MainAssemblyDraft,
+        MainAssemblyVersion,
+        MainAssemblyVersionProject,
+        MainProjectLineage,
+        // Wave A2 / DB-01 + BE-01 — standalone EDIT_REVISION Assembly
+        // entities. Owned by `EditAssemblyModule`. Root registration
+        // here is required for metadata resolution. NO FK into
+        // `book_assembly_*` / `main_assembly_*` tables (Q3=B standalone).
+        EditAssemblyDraft,
+        EditAssemblyVersion,
+        EditAssemblyVersionProject,
+        EditProjectLineage,
+        // Wave A3 / DB-01 + BE-01 — standalone CHANGE_REVISION Assembly
+        // entities. Owned by `ChangeAssemblyModule`. Root registration
+        // here is required for metadata resolution. NO FK into
+        // `book_assembly_*` / `main_assembly_*` / `edit_assembly_*`
+        // tables (Q3=B standalone).
+        ChangeAssemblyDraft,
+        ChangeAssemblyVersion,
+        ChangeAssemblyVersionProject,
+        ChangeProjectLineage,
         DevelopmentIssue,
         LineUserBinding,
         // Wave 91 — Wave 21/22 notification entities (see import note).
@@ -522,6 +603,30 @@ import { NationalStrategyMilestone } from './strategic-mapping/entities/national
     // earlier in this array) because the service injects
     // `SupplementPdfService` to generate Part 3.
     SupplementAssemblyModule,
+    // Wave A1 / DB-01 — standalone MAIN_PLAN Assembly subsystem (Wave
+    // A1 of 3 in OPTION-A-FULL-SPLIT). Skeleton-only module — BE-01
+    // (cloned `MainAssemblyService` + controller) is deferred. Imported
+    // here so `forFeature` repo tokens are available the moment BE-01
+    // lands. Order is irrelevant; no cyclical dependency.
+    MainAssemblyModule,
+    // Wave A2 / BE-01 — standalone EDIT_REVISION Assembly subsystem
+    // (Wave A2 of 3 in OPTION-A-FULL-SPLIT). Imported AFTER
+    // `OrphanCleanupModule` (`merge()` cascade fires inside the
+    // finalize transaction) and AFTER `PdfModule` (Part 3 generation
+    // calls `PdfService.generateRevisionApprovedReportWithPageTracking`).
+    // Order vs `MainAssemblyModule` is irrelevant; no cyclical
+    // dependency.
+    EditAssemblyModule,
+    // Wave A3 / BE-01 — standalone CHANGE_REVISION Assembly subsystem
+    // (Wave A3 of 3 in OPTION-A-FULL-SPLIT). Mirror of `EditAssemblyModule`
+    // because CHANGE is also a `DevelopmentPlanRevision` rooted book.
+    // Imported AFTER `OrphanCleanupModule` (`merge()` cascade fires
+    // inside the finalize transaction) and AFTER `PdfModule` (Part 3
+    // generation calls
+    // `PdfService.generateRevisionApprovedReportWithPageTracking` — the
+    // same revision-style PDF entry point that EDIT uses). Order vs
+    // `EditAssemblyModule` is irrelevant; no cyclical dependency.
+    ChangeAssemblyModule,
     DevelopmentIssueModule,
     AiExecutiveChatModule,
     // SUPP_AGG_BE_01 — Unified Projects HTTP surface. Imported AFTER

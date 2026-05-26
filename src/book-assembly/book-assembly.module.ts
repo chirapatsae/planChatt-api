@@ -1,52 +1,37 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { BookAssemblyController } from './book-assembly.controller';
-import { BookAssemblyService } from './book-assembly.service';
 import { BookAssemblyFileService } from './book-assembly-file.service';
-
-import { BookAssemblyDraft } from './entities/book-assembly-draft.entity';
-import { BookAssemblyVersion } from './entities/book-assembly-version.entity';
 import { DeprecationAuditLog } from './entities/deprecation-audit-log.entity';
-import { BookProjectLineage } from './entities/book-project-lineage.entity';
 
-import { WorkHistory } from 'src/work-history/entities/work-history.entity';
-import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
-import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
-import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
-import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
-import { PlanPhase } from 'src/plan-phase/entities/plan-phase.entity';
-
-import { PdfModule } from 'src/pdf/pdf.module';
-import { UsersModule } from 'src/users/users.module';
-import { WebsocketModule } from 'src/websocket/websocket.module';
-import { BookLockModule } from 'src/common/book-lock/book-lock.module';
-import { OrphanCleanupModule } from 'src/orphan-cleanup/orphan-cleanup.module';
-
+/**
+ * Slim shared-infrastructure module (CLEANUP wave BE-02, 2026-05-26).
+ *
+ * After the OPTION-A-FULL-SPLIT CLEANUP wave deleted the legacy
+ * `BookAssemblyService` + `BookAssemblyController` + every legacy
+ * `book_assembly_*` entity / DTO / enum, this module now exposes ONLY
+ * the two shared-infrastructure pieces called out by CLAUDE.md §20.10.3
+ * (Q3=B file-service exemption + audit-log entity preservation):
+ *
+ *   1. `BookAssemblyFileService` — single source of truth for on-disk
+ *      path resolution. Imported by `MainAssemblyService`,
+ *      `EditAssemblyService`, `ChangeAssemblyService`, and (transitively)
+ *      `SupplementAssemblyService` via their respective module imports.
+ *
+ *   2. `DeprecationAuditLog` entity — registered in
+ *      `TypeOrmModule.forFeature` so the supplement-side audit writer
+ *      (`SupplementAssemblyService.validateSupplementDeprecationAuth`)
+ *      continues to bind a repo. Future-wave parity for the four
+ *      standalone services may grow audit-write coverage here.
+ *
+ * The module no longer declares any controller. The downstream
+ * `MainAssemblyModule`, `EditAssemblyModule`, and `ChangeAssemblyModule`
+ * continue to import `BookAssemblyModule` to consume the exported
+ * `BookAssemblyFileService` provider — that import chain is unchanged.
+ */
 @Module({
-  imports: [
-    TypeOrmModule.forFeature([
-      BookAssemblyDraft,
-      BookAssemblyVersion,
-      DeprecationAuditLog,
-      BookProjectLineage,
-      WorkHistory,
-      ProjectGroup,
-      RevisedProjectGroup,
-      DevelopmentPlan,
-      DevelopmentPlanRevision,
-      PlanPhase,
-    ]),
-    PdfModule,
-    UsersModule,
-    WebsocketModule,
-    BookLockModule,
-    // Wave 110 W110-BE-01 — Part 3 finalize invokes orphan-cleanup
-    // cascade (CLAUDE.md §18.2.1 PLAN finalize trigger surface).
-    OrphanCleanupModule,
-  ],
-  controllers: [BookAssemblyController],
-  providers: [BookAssemblyService, BookAssemblyFileService],
-  exports: [BookAssemblyService],
+  imports: [TypeOrmModule.forFeature([DeprecationAuditLog])],
+  providers: [BookAssemblyFileService],
+  exports: [BookAssemblyFileService],
 })
 export class BookAssemblyModule {}

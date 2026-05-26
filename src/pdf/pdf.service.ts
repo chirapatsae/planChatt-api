@@ -2659,9 +2659,13 @@ export class PdfService {
         }
       }
 
+      // wave-lineage-linear-chain-by-bookedAt / BE-01 — stamp
+      // `bookedAt = now()` alongside `isBooked = true` on the plan row
+      // so the §15 linear-chain-by-bookedAt predicate orders this plan's
+      // finalize moment correctly.
       await manager
         .getRepository(DevelopmentPlan)
-        .update({ id: developmentPlanId }, { isBooked: true });
+        .update({ id: developmentPlanId }, { isBooked: true, bookedAt: new Date() });
     });
 
     const user = await this.userRepo.findOne({ where: { id: options.createdById }, select: ['id', 'firstname', 'lastname'] });

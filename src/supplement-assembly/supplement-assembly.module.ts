@@ -29,10 +29,15 @@ import { SupplementAssemblyController } from './supplement-assembly.controller';
 import { SupplementAssemblyService } from './supplement-assembly.service';
 import { SupplementAssemblyFileService } from './supplement-assembly-file.service';
 
-// Own entities (3) — TEMPLATE.md §8.1.
+// Own entities (3 + 1) — TEMPLATE.md §8.1.
 import { SupplementAssemblyDraft } from './entities/supplement-assembly-draft.entity';
 import { SupplementAssemblyVersion } from './entities/supplement-assembly-version.entity';
 import { SupplementAssemblyVersionProject } from './entities/supplement-assembly-version-project.entity';
+// wave-supplement-convergence-milestone-5 / DB-01 — segregated SPG
+// lineage table (CTO M4 decision Option B). Registered here so BE-01
+// can `@InjectRepository(SupplementProjectLineage)` once it lands the
+// supplement-side `populateLineageForMerge()` mirror.
+import { SupplementProjectLineage } from './entities/supplement-project-lineage.entity';
 
 // Dependency entities — repositories injected by SupplementAssemblyService.
 import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entities/development-plan-supplement.entity';
@@ -50,10 +55,12 @@ import { OrphanCleanupModule } from 'src/orphan-cleanup/orphan-cleanup.module';
 @Module({
   imports: [
     TypeOrmModule.forFeature([
-      // Own entities (3)
+      // Own entities (3 + 1)
       SupplementAssemblyDraft,
       SupplementAssemblyVersion,
       SupplementAssemblyVersionProject,
+      // wave-supplement-convergence-milestone-5 / DB-01 — see import note.
+      SupplementProjectLineage,
       // Dependency entities (read by BE_02 service via @InjectRepository)
       DevelopmentPlanSupplement,
       SupplementProjectGroup,

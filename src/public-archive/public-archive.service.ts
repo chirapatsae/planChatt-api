@@ -6,21 +6,30 @@
  * document under พ.ร.บ. ข้อมูลข่าวสารฯ, so the assembled PDF + minimal
  * metadata are exposed without authentication.
  *
- * Differences from `BookAssemblyService.getAssemblyHistory`:
+ * Differences from `MainAssemblyService.getVersions` (and the equivalent
+ * EDIT / CHANGE / SUPPLEMENT counterparts):
  *   1. NO `loadAndValidateWorkHistory` call (no user context).
  *   2. Only returns versions where `status = COMPLETED` (drafts and
  *      deprecated versions are never exposed publicly).
  *   3. Strips PII from the payload — no creator user, no work-history.
  *      Only `bookName`, `versionNumber`, `mergedAt`, `totalPages` survive
  *      the transform.
- *   4. Returns supplements as a parallel timeline once SupplementAssembly
- *      surfaces a public-ready service (currently a stub returning []).
+ *
+ * CLEANUP wave BE-02 (2026-05-26): rewritten to read the per-subsystem
+ * `*_assembly_versions` tables that the OPTION-A-FULL-SPLIT standalone
+ * services now own. The legacy `book_assembly_versions` + `BookAssembly
+ * SourceType` + `BookAssemblyService` are deleted in this same wave.
+ *
+ *   - MAIN_PLAN  → `main_assembly_versions` (keyed by `developmentPlanId`)
+ *   - EDIT_REV   → `edit_assembly_versions` (keyed by `developmentPlanRevisionId`)
+ *   - CHANGE_REV → `change_assembly_versions` (keyed by `developmentPlanRevisionId`)
+ *   - SUPPLEMENT → `supplement_assembly_versions` (already standalone)
  *
  * Project-search:
- *   `searchProjects(q)` returns approved projects (PG + RPG) whose title
- *   contains `q`, joined back to a plan that has at least one COMPLETED
- *   book version. This answers the citizen-facing question "ตำบลเรามี
- *   โครงการสร้างถนนหน้าบ้านในปีไหน อยู่ในเล่มไหน?".
+ *   `searchProjects(q)` returns approved projects (PG + RPG + SPG) whose
+ *   title contains `q`, joined back to a plan that has at least one
+ *   COMPLETED main book version. This answers the citizen-facing
+ *   question "ตำบลเรามีโครงการสร้างถนนหน้าบ้านในปีไหน อยู่ในเล่มไหน?".
  *
  * Status table: §17.2 advisory — viewing the archive does not gate
  * any workflow transition; CLAUDE.md ownership rules are unaffected.
@@ -30,22 +39,39 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ILike, In, Repository } from 'typeorm';
 
-import { BookAssemblyVersion } from 'src/book-assembly/entities/book-assembly-version.entity';
-import {
-  BookAssemblySourceType,
-  BookAssemblyVersionStatus,
-} from 'src/book-assembly/enums/book-assembly.enums';
 import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
 import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entities/development-plan-supplement.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
-import { BookAssemblyService } from 'src/book-assembly/book-assembly.service';
+import { MainAssemblyVersion } from 'src/main-assembly/entities/main-assembly-version.entity';
+import { MainAssemblyVersionStatus } from 'src/main-assembly/enums/main-assembly.enums';
+import { MainAssemblyService } from 'src/main-assembly/main-assembly.service';
+import { EditAssemblyVersion } from 'src/edit-assembly/entities/edit-assembly-version.entity';
+import { EditAssemblyVersionStatus } from 'src/edit-assembly/enums/edit-assembly.enums';
+import { EditAssemblyService } from 'src/edit-assembly/edit-assembly.service';
+import { ChangeAssemblyVersion } from 'src/change-assembly/entities/change-assembly-version.entity';
+import { ChangeAssemblyVersionStatus } from 'src/change-assembly/enums/change-assembly.enums';
+import { ChangeAssemblyService } from 'src/change-assembly/change-assembly.service';
 import { SupplementAssemblyVersion } from 'src/supplement-assembly/entities/supplement-assembly-version.entity';
 import { SupplementAssemblyVersionStatus } from 'src/supplement-assembly/enums/supplement-assembly.enums';
 import { SupplementAssemblyService } from 'src/supplement-assembly/supplement-assembly.service';
 import { ReportFormat } from 'src/development-plan/types/report-format.enum';
+
+/* ── Public source-type discriminator ────────────────────────────── */
+
+/**
+ * Closed enum of book source types accepted by every public-archive
+ * route. CLEANUP wave BE-02 replaces the legacy `BookAssemblySourceType`
+ * import with a local string-literal union so this module no longer
+ * depends on `src/book-assembly/` for type information.
+ */
+export type PublicBookSourceType =
+  | 'main_plan'
+  | 'edit_revision'
+  | 'change_revision'
+  | 'supplement';
 
 /* ── Public DTO shapes (no PII) ──────────────────────────────────── */
 
@@ -65,8 +91,6 @@ export interface PublicRevisionDto {
 
 /**
  * Public-archive shape for a `DevelopmentPlanSupplement` book.
- * Wave public-archive-supplement BE-01.
- *
  * Mirrors `PublicRevisionDto` but is sourced from the parallel
  * `supplement_assembly_versions` table (see `docs/supplement-book-domain.md`
  * §9 — supplements deliberately do NOT share the BookAssembly enum).
@@ -89,12 +113,11 @@ export interface PublicPlanDto {
   editRevisions: PublicRevisionDto[];
   changeRevisions: PublicRevisionDto[];
   /**
-   * Publicly-eligible supplements under this plan (Wave
-   * public-archive-supplement BE-01). Always non-null; defaults to `[]`.
-   * A supplement appears here only when (a) parent plan is publicly
-   * published (existing `getPublishedPlanIds` gate), (b) the supplement
-   * has ≥1 COMPLETED `supplement_assembly_versions` row, and
-   * (c) `development_plan_supplement.deleted_at IS NULL`.
+   * Publicly-eligible supplements under this plan. Always non-null;
+   * defaults to `[]`. A supplement appears here only when (a) parent
+   * plan is publicly published (existing `getPublishedPlanIds` gate),
+   * (b) the supplement has ≥1 COMPLETED `supplement_assembly_versions`
+   * row, and (c) `development_plan_supplement.deleted_at IS NULL`.
    */
   supplements: PublicSupplementDto[];
   /** Engagement counters — always non-null, default 0 (CLAUDE.md §17.2 advisory). */
@@ -106,15 +129,7 @@ export interface PublicProjectSearchHit {
   projectId: string;
   projectTitle: string;
   projectYear: number;
-  /**
-   * Which book the project belongs to. Widened to `'supplement'` for
-   * `SupplementProjectGroup` hits (Wave public-archive-supplement BE-01).
-   */
-  sourceType:
-    | 'main_plan'
-    | 'edit_revision'
-    | 'change_revision'
-    | 'supplement';
+  sourceType: PublicBookSourceType;
   sourceId: string;
   planId: string;
   planName: string;
@@ -145,19 +160,6 @@ export interface PublicProjectSearchHit {
  *   - AI snapshot rows (§17 — read-side authorization is owner / staff)
  *   - Internal flags: isDraft, isBooked, bookedAt,
  *     deletedAt, createdAt, updatedAt
- *
- * `pageNumber` is now ALSO exposed in the `book` section because the
- * assembled PDF book is itself public per §16 / §18 — surfacing the
- * page index that a citizen would look up in the same PDF is no
- * broader than the existing public surface.
- *
- * Budget WAS previously deferred but is now exposed as a SUMMARY ONLY
- * (total amount + per-year breakdown). Budget rows are already
- * published verbatim in the assembled PDF books (which are themselves
- * public per §16 / §18), so a per-year summary is no broader than the
- * existing public surface. We deliberately do NOT expose per-row
- * `id`, `createdAt`, or any owning-FK metadata — only `{year, amount}`
- * pairs and the total.
  */
 export interface PublicProjectDetailDto {
   projectId: string;
@@ -181,12 +183,6 @@ export interface PublicProjectDetailDto {
     endLat: number | null;
     endLng: number | null;
   };
-  /**
-   * Budget summary (year + amount only — no per-row id, no FK
-   * metadata). Same data is already in the published PDF books.
-   * `totalAmount` is the sum across all years; `perYear` is sorted
-   * ascending by year.
-   */
   budget: {
     totalAmount: number;
     perYear: Array<{ year: number; amount: number }>;
@@ -207,16 +203,7 @@ export interface PublicProjectDetailDto {
     endYear: number;
   };
   book: {
-    /**
-     * `'supplement'` indicates a `DevelopmentPlanSupplement` book,
-     * served by the parallel `supplement_assembly_versions` table
-     * (Wave public-archive-supplement BE-01).
-     */
-    sourceType:
-      | 'main_plan'
-      | 'edit_revision'
-      | 'change_revision'
-      | 'supplement';
+    sourceType: PublicBookSourceType;
     sourceId: string;
     bookName: string;
     latestVersionNumber: number;
@@ -249,8 +236,14 @@ export class PublicArchiveService {
   private readonly logger = new Logger(PublicArchiveService.name);
 
   constructor(
-    @InjectRepository(BookAssemblyVersion)
-    private readonly versionRepo: Repository<BookAssemblyVersion>,
+    @InjectRepository(MainAssemblyVersion)
+    private readonly mainVersionRepo: Repository<MainAssemblyVersion>,
+    @InjectRepository(EditAssemblyVersion)
+    private readonly editVersionRepo: Repository<EditAssemblyVersion>,
+    @InjectRepository(ChangeAssemblyVersion)
+    private readonly changeVersionRepo: Repository<ChangeAssemblyVersion>,
+    @InjectRepository(SupplementAssemblyVersion)
+    private readonly supplementVersionRepo: Repository<SupplementAssemblyVersion>,
     @InjectRepository(DevelopmentPlan)
     private readonly devPlanRepo: Repository<DevelopmentPlan>,
     @InjectRepository(DevelopmentPlanRevision)
@@ -263,9 +256,9 @@ export class PublicArchiveService {
     private readonly revisedProjectGroupRepo: Repository<RevisedProjectGroup>,
     @InjectRepository(SupplementProjectGroup)
     private readonly supplementProjectGroupRepo: Repository<SupplementProjectGroup>,
-    @InjectRepository(SupplementAssemblyVersion)
-    private readonly supplementVersionRepo: Repository<SupplementAssemblyVersion>,
-    private readonly bookAssemblyService: BookAssemblyService,
+    private readonly mainAssemblyService: MainAssemblyService,
+    private readonly editAssemblyService: EditAssemblyService,
+    private readonly changeAssemblyService: ChangeAssemblyService,
     private readonly supplementAssemblyService: SupplementAssemblyService,
   ) {}
 
@@ -273,99 +266,38 @@ export class PublicArchiveService {
    * Shared eligibility predicate for the public surface.
    *
    * A DevelopmentPlan is "publicly published" when it has at least one
-   * `BookAssemblyVersion` with `sourceType=MAIN_PLAN` and
-   * `status=COMPLETED`. This Set is the gate used by BOTH
-   * `searchProjects` and `getProjectDetail` — every public-facing
-   * project lookup MUST filter through it so anonymous callers can
-   * never reach a project whose plan has no public assembled copy.
+   * `main_assembly_versions` row with `status=COMPLETED`. This Set is
+   * the gate used by BOTH `searchProjects` and `getProjectDetail` —
+   * every public-facing project lookup MUST filter through it so
+   * anonymous callers can never reach a project whose plan has no
+   * public assembled main book.
    *
    * Refreshed on every call (no caching) — a plan that was de-published
-   * mid-session MUST disappear immediately. Cheap query (small table,
-   * indexed on (sourceType, status)).
-   */
-  /**
-   * Public accessor for the same eligibility set. Used by
-   * `PublicEngagementService` so the like / view endpoints share the
-   * exact same publish gate (no drift). Delegates to the private
-   * implementation to keep a single source of truth.
+   * mid-session MUST disappear immediately.
    */
   async getPublishedPlanIdsPublic(): Promise<Set<string>> {
     return this.getPublishedPlanIds();
   }
 
   private async getPublishedPlanIds(): Promise<Set<string>> {
-    const publishedMainVersions = await this.versionRepo.find({
-      where: {
-        sourceType: BookAssemblySourceType.MAIN_PLAN,
-        status: BookAssemblyVersionStatus.COMPLETED,
-      },
-      select: { sourceId: true },
+    const publishedMainVersions = await this.mainVersionRepo.find({
+      where: { status: MainAssemblyVersionStatus.COMPLETED },
+      select: { developmentPlanId: true },
     });
-    return new Set(publishedMainVersions.map((v) => v.sourceId));
+    return new Set(publishedMainVersions.map((v) => v.developmentPlanId));
   }
 
   /**
    * Build the path the FE will hand to its axios instance. The leading
    * `/v1` is NOT included because `VITE_API_BASE_URL` on the FE already
    * carries the version prefix.
-   *
-   * Accepts a `BookAssemblySourceType` (main/edit/change) OR the
-   * dedicated `'supplement'` discriminator. The controller's PDF route
-   * accepts both literal sets after Wave public-archive-supplement
-   * widened the closed enum.
    */
   private buildDownloadUrl(
-    sourceType: BookAssemblySourceType | 'supplement',
+    sourceType: PublicBookSourceType,
     sourceId: string,
     versionNumber: number,
   ): string {
     return `/public/plans/${sourceType}/${sourceId}/v${versionNumber}/pdf`;
-  }
-
-  /**
-   * Map a COMPLETED BookAssemblyVersion entity to the PII-stripped
-   * public shape. Returns null if the version is NOT completed (drafts
-   * and deprecated versions are never exposed publicly).
-   */
-  private toPublicVersion(v: BookAssemblyVersion): PublicVersionDto | null {
-    if (v.status !== BookAssemblyVersionStatus.COMPLETED) return null;
-    return {
-      versionNumber: v.versionNumber,
-      mergedAt: v.mergedAt instanceof Date ? v.mergedAt.toISOString() : String(v.mergedAt),
-      totalPages: v.totalPages,
-      downloadUrl: this.buildDownloadUrl(v.sourceType, v.sourceId, v.versionNumber),
-    };
-  }
-
-  /**
-   * Map a COMPLETED `SupplementAssemblyVersion` to the same public
-   * version shape as a regular BookAssembly version. The two tables are
-   * deliberately separate (see `docs/supplement-book-domain.md` §9), so
-   * we use the dedicated `'supplement'` discriminator when building the
-   * download URL.
-   *
-   * `totalPages` is not tracked on supplement versions today (no
-   * `total_pages` column on `supplement_assembly_versions`); we return
-   * `null` so the FE renders parity with the historical pre-totalPages
-   * BookAssembly shape.
-   */
-  private toPublicSupplementVersion(
-    v: SupplementAssemblyVersion,
-  ): PublicVersionDto | null {
-    if (v.status !== SupplementAssemblyVersionStatus.COMPLETED) return null;
-    return {
-      versionNumber: v.versionNumber,
-      mergedAt:
-        v.mergedAt instanceof Date
-          ? v.mergedAt.toISOString()
-          : String(v.mergedAt),
-      totalPages: null,
-      downloadUrl: this.buildDownloadUrl(
-        'supplement',
-        v.developmentPlanSupplementId,
-        v.versionNumber,
-      ),
-    };
   }
 
   /* ── #1 List plans (with optional filters) ───────────────────── */
@@ -376,11 +308,8 @@ export class PublicArchiveService {
    *   - `year` — single fiscal year that must fall within
    *     `[startYear, endYear]`
    *   - `type` — book type discriminator: 'all' | 'main' | 'edit' |
-   *     'change'. Plans without a matching version are dropped when
-   *     `type` is anything other than 'all'.
-   *
-   * The shape mirrors `BookAssemblyService.getAssemblyHistory` so the
-   * FE can reuse most of its rendering primitives — minus the PII.
+   *     'change' | 'supplement'. Plans without a matching version are
+   *     dropped when `type` is anything other than 'all'.
    */
   async listPlans(filters: {
     q?: string;
@@ -406,9 +335,6 @@ export class PublicArchiveService {
     const planIds = yearFiltered.map((p) => p.id);
 
     // Fetch revisions, supplements, and main-plan versions in parallel.
-    // Supplements live in their OWN table per
-    // `docs/supplement-book-domain.md` §9 — DO NOT union with
-    // `book_assembly_versions`.
     const [revisions, supplements, mainVersions] = await Promise.all([
       this.devPlanRevisionRepo.find({
         where: { developmentPlan: { id: In(planIds) } },
@@ -421,34 +347,38 @@ export class PublicArchiveService {
         // `deletedAt IS NULL` is implicit (TypeORM soft-delete column).
         order: { supplementNumber: 'ASC' },
       }),
-      this.versionRepo.find({
+      this.mainVersionRepo.find({
         where: {
-          sourceType: BookAssemblySourceType.MAIN_PLAN,
-          sourceId: In(planIds),
-          status: BookAssemblyVersionStatus.COMPLETED,
+          developmentPlanId: In(planIds),
+          status: MainAssemblyVersionStatus.COMPLETED,
         },
         order: { versionNumber: 'DESC' },
       }),
     ]);
 
+    // EDIT + CHANGE child versions — keyed by developmentPlanRevisionId.
+    // Standalone subsystems live in dedicated tables; fetch both in
+    // parallel and key by `developmentPlanRevisionId` on the merged map.
     const revisionIds = revisions.map((r) => r.id);
-    let childVersions: BookAssemblyVersion[] = [];
+    let editVersions: EditAssemblyVersion[] = [];
+    let changeVersions: ChangeAssemblyVersion[] = [];
     if (revisionIds.length > 0) {
-      childVersions = await this.versionRepo.find({
-        where: [
-          {
-            sourceType: BookAssemblySourceType.EDIT_REVISION,
-            sourceId: In(revisionIds),
-            status: BookAssemblyVersionStatus.COMPLETED,
+      [editVersions, changeVersions] = await Promise.all([
+        this.editVersionRepo.find({
+          where: {
+            developmentPlanRevisionId: In(revisionIds),
+            status: EditAssemblyVersionStatus.COMPLETED,
           },
-          {
-            sourceType: BookAssemblySourceType.CHANGE_REVISION,
-            sourceId: In(revisionIds),
-            status: BookAssemblyVersionStatus.COMPLETED,
+          order: { versionNumber: 'DESC' },
+        }),
+        this.changeVersionRepo.find({
+          where: {
+            developmentPlanRevisionId: In(revisionIds),
+            status: ChangeAssemblyVersionStatus.COMPLETED,
           },
-        ],
-        order: { versionNumber: 'DESC' },
-      });
+          order: { versionNumber: 'DESC' },
+        }),
+      ]);
     }
 
     // Supplement versions live in a parallel table — load only
@@ -465,16 +395,25 @@ export class PublicArchiveService {
       });
     }
 
-    // Index by (sourceType:sourceId).
-    const versionMap = new Map<string, BookAssemblyVersion[]>();
-    for (const v of [...mainVersions, ...childVersions]) {
-      const key = `${v.sourceType}:${v.sourceId}`;
-      if (!versionMap.has(key)) versionMap.set(key, []);
-      versionMap.get(key)!.push(v);
+    // Index per-subsystem version arrays for O(1) lookup at DTO build time.
+    const mainVersionMap = new Map<string, MainAssemblyVersion[]>();
+    for (const v of mainVersions) {
+      const arr = mainVersionMap.get(v.developmentPlanId) ?? [];
+      arr.push(v);
+      mainVersionMap.set(v.developmentPlanId, arr);
     }
-
-    // Separate map for supplement versions — keyed by supplementId only
-    // (no BookAssembly sourceType key collision risk).
+    const editVersionMap = new Map<string, EditAssemblyVersion[]>();
+    for (const v of editVersions) {
+      const arr = editVersionMap.get(v.developmentPlanRevisionId) ?? [];
+      arr.push(v);
+      editVersionMap.set(v.developmentPlanRevisionId, arr);
+    }
+    const changeVersionMap = new Map<string, ChangeAssemblyVersion[]>();
+    for (const v of changeVersions) {
+      const arr = changeVersionMap.get(v.developmentPlanRevisionId) ?? [];
+      arr.push(v);
+      changeVersionMap.set(v.developmentPlanRevisionId, arr);
+    }
     const supplementVersionMap = new Map<string, SupplementAssemblyVersion[]>();
     for (const sv of supplementVersions) {
       const arr = supplementVersionMap.get(sv.developmentPlanSupplementId) ?? [];
@@ -482,7 +421,7 @@ export class PublicArchiveService {
       supplementVersionMap.set(sv.developmentPlanSupplementId, arr);
     }
 
-    // Revisions grouped by plan + by type.
+    // Revisions grouped by plan.
     const revByPlan = new Map<string, DevelopmentPlanRevision[]>();
     for (const r of revisions) {
       const pid = r.developmentPlan?.id;
@@ -500,13 +439,76 @@ export class PublicArchiveService {
       supplementsByPlan.get(pid)!.push(s);
     }
 
+    const toPublicMainVersion = (v: MainAssemblyVersion): PublicVersionDto | null => {
+      if (v.status !== MainAssemblyVersionStatus.COMPLETED) return null;
+      return {
+        versionNumber: v.versionNumber,
+        mergedAt:
+          v.mergedAt instanceof Date ? v.mergedAt.toISOString() : String(v.mergedAt),
+        totalPages: v.totalPages,
+        downloadUrl: this.buildDownloadUrl('main_plan', v.developmentPlanId, v.versionNumber),
+      };
+    };
+
+    const toPublicEditVersion = (v: EditAssemblyVersion): PublicVersionDto | null => {
+      if (v.status !== EditAssemblyVersionStatus.COMPLETED) return null;
+      return {
+        versionNumber: v.versionNumber,
+        mergedAt:
+          v.mergedAt instanceof Date ? v.mergedAt.toISOString() : String(v.mergedAt),
+        totalPages: v.totalPages,
+        downloadUrl: this.buildDownloadUrl(
+          'edit_revision',
+          v.developmentPlanRevisionId,
+          v.versionNumber,
+        ),
+      };
+    };
+
+    const toPublicChangeVersion = (v: ChangeAssemblyVersion): PublicVersionDto | null => {
+      if (v.status !== ChangeAssemblyVersionStatus.COMPLETED) return null;
+      return {
+        versionNumber: v.versionNumber,
+        mergedAt:
+          v.mergedAt instanceof Date ? v.mergedAt.toISOString() : String(v.mergedAt),
+        totalPages: v.totalPages,
+        downloadUrl: this.buildDownloadUrl(
+          'change_revision',
+          v.developmentPlanRevisionId,
+          v.versionNumber,
+        ),
+      };
+    };
+
+    const toPublicSupplementVersion = (
+      v: SupplementAssemblyVersion,
+    ): PublicVersionDto | null => {
+      if (v.status !== SupplementAssemblyVersionStatus.COMPLETED) return null;
+      return {
+        versionNumber: v.versionNumber,
+        mergedAt:
+          v.mergedAt instanceof Date
+            ? v.mergedAt.toISOString()
+            : String(v.mergedAt),
+        // Supplement versions do not track `total_pages` today (no
+        // column on `supplement_assembly_versions`); null preserves
+        // parity with the historical pre-totalPages BookAssembly shape.
+        totalPages: null,
+        downloadUrl: this.buildDownloadUrl(
+          'supplement',
+          v.developmentPlanSupplementId,
+          v.versionNumber,
+        ),
+      };
+    };
+
     const buildSupplementDtos = (
       planSupplements: DevelopmentPlanSupplement[],
     ): PublicSupplementDto[] => {
       return planSupplements
         .map((s) => {
           const versions = (supplementVersionMap.get(s.id) ?? [])
-            .map((v) => this.toPublicSupplementVersion(v))
+            .map((v) => toPublicSupplementVersion(v))
             .filter((v): v is PublicVersionDto => v !== null);
           return {
             supplementId: s.id,
@@ -517,43 +519,50 @@ export class PublicArchiveService {
         .filter((s) => s.versions.length > 0); // only emit supplements that have a published version
     };
 
-    const buildRevisionDtos = (
+    const buildEditRevisionDtos = (
       planRevisions: DevelopmentPlanRevision[],
-      typeName: 'แก้ไข' | 'เปลี่ยนแปลง',
-      sourceType: BookAssemblySourceType,
     ): PublicRevisionDto[] => {
       return planRevisions
-        .filter((r) => r.revisionType?.name === typeName)
+        .filter((r) => r.revisionType?.name === 'แก้ไข')
         .map((r) => {
-          const versions = (versionMap.get(`${sourceType}:${r.id}`) ?? [])
-            .map((v) => this.toPublicVersion(v))
+          const versions = (editVersionMap.get(r.id) ?? [])
+            .map((v) => toPublicEditVersion(v))
             .filter((v): v is PublicVersionDto => v !== null);
           return {
             revisionId: r.id,
-            revisionName: `${typeName} ครั้งที่ ${r.revisionNumber}`,
+            revisionName: `แก้ไข ครั้งที่ ${r.revisionNumber}`,
             versions,
           };
         })
-        .filter((r) => r.versions.length > 0); // only emit revisions that have a published version
+        .filter((r) => r.versions.length > 0);
+    };
+
+    const buildChangeRevisionDtos = (
+      planRevisions: DevelopmentPlanRevision[],
+    ): PublicRevisionDto[] => {
+      return planRevisions
+        .filter((r) => r.revisionType?.name === 'เปลี่ยนแปลง')
+        .map((r) => {
+          const versions = (changeVersionMap.get(r.id) ?? [])
+            .map((v) => toPublicChangeVersion(v))
+            .filter((v): v is PublicVersionDto => v !== null);
+          return {
+            revisionId: r.id,
+            revisionName: `เปลี่ยนแปลง ครั้งที่ ${r.revisionNumber}`,
+            versions,
+          };
+        })
+        .filter((r) => r.versions.length > 0);
     };
 
     const result: PublicPlanDto[] = yearFiltered.map((plan) => {
-      const mainKey = `${BookAssemblySourceType.MAIN_PLAN}:${plan.id}`;
-      const mainVersionDtos = (versionMap.get(mainKey) ?? [])
-        .map((v) => this.toPublicVersion(v))
+      const mainVersionDtos = (mainVersionMap.get(plan.id) ?? [])
+        .map((v) => toPublicMainVersion(v))
         .filter((v): v is PublicVersionDto => v !== null);
 
       const planRevisions = revByPlan.get(plan.id) ?? [];
-      const editRevisions = buildRevisionDtos(
-        planRevisions,
-        'แก้ไข',
-        BookAssemblySourceType.EDIT_REVISION,
-      );
-      const changeRevisions = buildRevisionDtos(
-        planRevisions,
-        'เปลี่ยนแปลง',
-        BookAssemblySourceType.CHANGE_REVISION,
-      );
+      const editRevisions = buildEditRevisionDtos(planRevisions);
+      const changeRevisions = buildChangeRevisionDtos(planRevisions);
       const planSupplements = supplementsByPlan.get(plan.id) ?? [];
       const supplementDtos = buildSupplementDtos(planSupplements);
 
@@ -566,9 +575,6 @@ export class PublicArchiveService {
         editRevisions,
         changeRevisions,
         supplements: supplementDtos,
-        // Engagement counters off the denormalized columns (CLAUDE.md
-        // §17.2 advisory). Both default to 0 in the DB so the cast is
-        // defensive only.
         viewCount: Number(plan.viewCount ?? 0),
         downloadCount: Number(plan.downloadCount ?? 0),
       };
@@ -598,81 +604,98 @@ export class PublicArchiveService {
    * so an anonymous caller cannot stumble onto an unpublished file by
    * URL guess.
    *
-   * Supports the BookAssembly source types (main/edit/change) AND the
-   * dedicated `'supplement'` discriminator (Wave public-archive-
-   * supplement BE-01). Supplement assembly lives in a parallel
-   * subsystem (`docs/supplement-book-domain.md` §9) so we route through
-   * `SupplementAssemblyService.getMergedAbsolutePath` rather than
-   * `BookAssemblyService.getMergedPdfPath`. Both return absolute paths
-   * resolvable from the storage root.
+   * Dispatches by `sourceType` to the correct standalone assembly
+   * service. CLEANUP wave BE-02 — all four branches now route through
+   * the standalone subsystems; the legacy `BookAssemblyService.
+   * getMergedPdfPath` has been deleted.
    */
   async resolvePublicPdfPath(
-    sourceType: BookAssemblySourceType | 'supplement',
+    sourceType: PublicBookSourceType,
     sourceId: string,
     versionNumber: number,
   ): Promise<string> {
-    if (sourceType === 'supplement') {
-      // Eligibility gates: supplement must (a) exist, (b) be
-      // non-soft-deleted, (c) have a COMPLETED version at the requested
-      // number, AND (d) parent plan must be publicly published. All
-      // failures collapse to uniform 404.
-      const publishedPlanIds = await this.getPublishedPlanIds();
-      if (publishedPlanIds.size === 0) {
+    const publishedPlanIds = await this.getPublishedPlanIds();
+    if (publishedPlanIds.size === 0) {
+      throw new NotFoundException('ไม่พบเล่มที่ระบุ');
+    }
+
+    if (sourceType === 'main_plan') {
+      // Eligibility: plan must be in the published set (which itself
+      // requires a COMPLETED main version), AND the requested version
+      // must exist and be COMPLETED.
+      if (!publishedPlanIds.has(sourceId)) {
         throw new NotFoundException('ไม่พบเล่มที่ระบุ');
       }
-      const supplement = await this.devPlanSupplementRepo.findOne({
+      const version = await this.mainVersionRepo.findOne({
+        where: { developmentPlanId: sourceId, versionNumber },
+      });
+      if (!version || version.status !== MainAssemblyVersionStatus.COMPLETED) {
+        throw new NotFoundException('ไม่พบเล่มที่ระบุ');
+      }
+      return this.mainAssemblyService.getMergedPdfPath(sourceId, versionNumber);
+    }
+
+    if (sourceType === 'edit_revision' || sourceType === 'change_revision') {
+      // Parent revision must exist AND its parent plan must be publicly
+      // published.
+      const revision = await this.devPlanRevisionRepo.findOne({
         where: { id: sourceId },
         relations: ['developmentPlan'],
       });
-      if (!supplement || !supplement.developmentPlan) {
+      if (!revision || !revision.developmentPlan) {
         throw new NotFoundException('ไม่พบเล่มที่ระบุ');
       }
-      if (!publishedPlanIds.has(supplement.developmentPlan.id)) {
+      if (!publishedPlanIds.has(revision.developmentPlan.id)) {
         throw new NotFoundException('ไม่พบเล่มที่ระบุ');
       }
-      const version = await this.supplementVersionRepo.findOne({
-        where: {
-          developmentPlanSupplementId: sourceId,
-          versionNumber,
-        },
+
+      if (sourceType === 'edit_revision') {
+        const version = await this.editVersionRepo.findOne({
+          where: { developmentPlanRevisionId: sourceId, versionNumber },
+        });
+        if (!version || version.status !== EditAssemblyVersionStatus.COMPLETED) {
+          throw new NotFoundException('ไม่พบเล่มที่ระบุ');
+        }
+        return this.editAssemblyService.getMergedPdfPath(sourceId, versionNumber);
+      }
+
+      // change_revision
+      const version = await this.changeVersionRepo.findOne({
+        where: { developmentPlanRevisionId: sourceId, versionNumber },
       });
-      if (!version) {
+      if (!version || version.status !== ChangeAssemblyVersionStatus.COMPLETED) {
         throw new NotFoundException('ไม่พบเล่มที่ระบุ');
       }
-      if (version.status !== SupplementAssemblyVersionStatus.COMPLETED) {
-        throw new NotFoundException('ไม่พบเล่มที่ระบุ');
-      }
-      return this.supplementAssemblyService.getMergedAbsolutePath(
-        sourceId,
-        versionNumber,
-      );
+      return this.changeAssemblyService.getMergedPdfPath(sourceId, versionNumber);
     }
 
-    const version = await this.versionRepo.findOne({
-      where: { sourceType, sourceId, versionNumber },
+    // supplement
+    const supplement = await this.devPlanSupplementRepo.findOne({
+      where: { id: sourceId },
+      relations: ['developmentPlan'],
     });
-    if (!version) {
+    if (!supplement || !supplement.developmentPlan) {
       throw new NotFoundException('ไม่พบเล่มที่ระบุ');
     }
-    if (version.status !== BookAssemblyVersionStatus.COMPLETED) {
-      // 404 (not 403) — do not reveal that the version exists but is
-      // private. Anonymous callers see "not found" uniformly.
+    if (!publishedPlanIds.has(supplement.developmentPlan.id)) {
       throw new NotFoundException('ไม่พบเล่มที่ระบุ');
     }
-    return this.bookAssemblyService.getMergedPdfPath(sourceType, sourceId, versionNumber);
+    const version = await this.supplementVersionRepo.findOne({
+      where: { developmentPlanSupplementId: sourceId, versionNumber },
+    });
+    if (!version || version.status !== SupplementAssemblyVersionStatus.COMPLETED) {
+      throw new NotFoundException('ไม่พบเล่มที่ระบุ');
+    }
+    return this.supplementAssemblyService.getMergedAbsolutePath(sourceId, versionNumber);
   }
 
   /* ── #3 Project search ──────────────────────────────────────── */
 
   /**
    * Find approved projects whose title contains `q`, scoped to plans
-   * that have at least one COMPLETED published book. Returns up to
-   * `limit` results combined across PG + RPG, ordered by mergedAt of
-   * the parent book (newest first).
-   *
-   * Only approved projects are returned to avoid surfacing in-flight
-   * drafts via title search. Approved status check is via the latest
-   * `TrackingStatus` row.
+   * that have at least one COMPLETED published main book. Returns up
+   * to `limit` results combined across PG + RPG + SPG, ordered by
+   * createdAt (newest first).
    */
   async searchProjects(
     q: string,
@@ -681,10 +704,6 @@ export class PublicArchiveService {
     const trimmed = q?.trim();
     if (!trimmed || trimmed.length < 2) return [];
 
-    // Pre-fetch plans that have at least one published main book to
-    // avoid surfacing projects whose plan has no public assembled copy.
-    // Delegates to the shared `getPublishedPlanIds` helper so the
-    // eligibility predicate stays consistent with `getProjectDetail`.
     const publishedPlanIds = await this.getPublishedPlanIds();
     if (publishedPlanIds.size === 0) return [];
 
@@ -751,9 +770,6 @@ export class PublicArchiveService {
       });
 
     // SPG search — joined via developmentPlanSupplement → developmentPlan.
-    // The supplement subsystem is parallel to BookAssembly
-    // (`docs/supplement-book-domain.md` §9), but the same
-    // publish-plan eligibility gate applies (§10 of the explainer).
     const spgRows = await this.supplementProjectGroupRepo
       .createQueryBuilder('spg')
       .leftJoinAndSelect('spg.developmentPlanSupplement', 'sup')
@@ -796,30 +812,18 @@ export class PublicArchiveService {
 
   /**
    * Returns a PII-redacted detail DTO for a single approved project
-   * (PG or RPG) whose parent plan has at least one COMPLETED published
-   * book. Used by the public-archive detail modal + permalink page.
+   * (PG / RPG / SPG) whose parent plan has at least one COMPLETED
+   * published book. Used by the public-archive detail modal +
+   * permalink page.
    *
-   * Uniform 404 contract — every ineligibility (not found, soft-deleted,
-   * not approved, plan not publicly published, sourceType / id mismatch)
-   * returns the SAME `NotFoundException('ไม่พบโครงการที่ระบุ')`. This
-   * prevents enumeration of internal projects and PDPA leakage.
-   *
-   * Branches on:
-   *   - `sourceType` → PG vs RPG repo
-   *   - parent plan's `reportFormat` → STRATEGY_BASED vs ISSUE_BASED
-   *     classification fields (§16.5)
+   * Uniform 404 contract — every ineligibility returns the SAME
+   * `NotFoundException('ไม่พบโครงการที่ระบุ')`. This prevents
+   * enumeration of internal projects and PDPA leakage.
    */
   async getProjectDetail(
-    sourceType:
-      | 'main_plan'
-      | 'edit_revision'
-      | 'change_revision'
-      | 'supplement',
+    sourceType: PublicBookSourceType,
     projectId: string,
   ): Promise<PublicProjectDetailDto> {
-    // Cheap UUID shape gate. Defensive — Express already strips most
-    // junk via param parsing but a malformed string would otherwise
-    // raise a 500 from Postgres' uuid cast.
     if (!projectId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(projectId)) {
       throw new NotFoundException('ไม่พบโครงการที่ระบุ');
     }
@@ -867,17 +871,14 @@ export class PublicArchiveService {
       throw new NotFoundException('ไม่พบโครงการที่ระบุ');
     }
 
-    const latestVersion = await this.versionRepo.findOne({
+    const latestVersion = await this.mainVersionRepo.findOne({
       where: {
-        sourceType: BookAssemblySourceType.MAIN_PLAN,
-        sourceId: plan.id,
-        status: BookAssemblyVersionStatus.COMPLETED,
+        developmentPlanId: plan.id,
+        status: MainAssemblyVersionStatus.COMPLETED,
       },
       order: { versionNumber: 'DESC' },
     });
     if (!latestVersion) {
-      // Defensive: predicate already required at least one, but the
-      // plan may have just been de-published in a race. Uniform 404.
       throw new NotFoundException('ไม่พบโครงการที่ระบุ');
     }
 
@@ -954,9 +955,6 @@ export class PublicArchiveService {
       throw new NotFoundException('ไม่พบโครงการที่ระบุ');
     }
 
-    // Enforce sourceType ↔ revisionType pairing. Mismatched calls
-    // (main_plan param against an RPG id, change_revision against an
-    // edit RPG, …) get a uniform 404.
     const revTypeName = rev.revisionType?.name;
     const expectedTypeName: 'แก้ไข' | 'เปลี่ยนแปลง' =
       sourceType === 'change_revision' ? 'เปลี่ยนแปลง' : 'แก้ไข';
@@ -964,27 +962,35 @@ export class PublicArchiveService {
       throw new NotFoundException('ไม่พบโครงการที่ระบุ');
     }
 
-    const bookSourceType =
-      sourceType === 'change_revision'
-        ? BookAssemblySourceType.CHANGE_REVISION
-        : BookAssemblySourceType.EDIT_REVISION;
-    const latestVersion = await this.versionRepo.findOne({
-      where: {
-        sourceType: bookSourceType,
-        sourceId: rev.id,
-        status: BookAssemblyVersionStatus.COMPLETED,
-      },
-      order: { versionNumber: 'DESC' },
-    });
-    if (!latestVersion) {
-      // The revision book itself may have no published version even
-      // though the parent plan is published. Uniform 404 — the public
-      // surface only shows projects whose own book is downloadable.
-      throw new NotFoundException('ไม่พบโครงการที่ระบุ');
+    let latestVersionNumber: number;
+    if (sourceType === 'edit_revision') {
+      const version = await this.editVersionRepo.findOne({
+        where: {
+          developmentPlanRevisionId: rev.id,
+          status: EditAssemblyVersionStatus.COMPLETED,
+        },
+        order: { versionNumber: 'DESC' },
+      });
+      if (!version) {
+        throw new NotFoundException('ไม่พบโครงการที่ระบุ');
+      }
+      latestVersionNumber = version.versionNumber;
+    } else {
+      const version = await this.changeVersionRepo.findOne({
+        where: {
+          developmentPlanRevisionId: rev.id,
+          status: ChangeAssemblyVersionStatus.COMPLETED,
+        },
+        order: { versionNumber: 'DESC' },
+      });
+      if (!version) {
+        throw new NotFoundException('ไม่พบโครงการที่ระบุ');
+      }
+      latestVersionNumber = version.versionNumber;
     }
 
     this.logger.log(
-      `[public] detail ${sourceType} id=${rpg.id} rev=${rev.id} v${latestVersion.versionNumber}`,
+      `[public] detail ${sourceType} id=${rpg.id} rev=${rev.id} v${latestVersionNumber}`,
     );
 
     return this.assembleDetail({
@@ -1011,7 +1017,7 @@ export class PublicArchiveService {
         sourceType,
         sourceId: rev.id,
         bookName: `${revTypeName} ครั้งที่ ${rev.revisionNumber}`,
-        latestVersionNumber: latestVersion.versionNumber,
+        latestVersionNumber,
         pageNumber: rpg.pageNumber,
       },
       engagement: {
@@ -1026,10 +1032,6 @@ export class PublicArchiveService {
     projectId: string,
     publishedPlanIds: Set<string>,
   ): Promise<PublicProjectDetailDto> {
-    // SPG mirrors PG's relation shape (per
-    // `docs/supplement-book-domain.md` §6 field parity table). The same
-    // `assembleDetail` helper is reused field-by-field — no entity
-    // spread, so a future column drift on SPG cannot leak through.
     const spg = await this.supplementProjectGroupRepo
       .createQueryBuilder('spg')
       .leftJoinAndSelect('spg.developmentPlanSupplement', 'sup')
@@ -1057,10 +1059,6 @@ export class PublicArchiveService {
     }
 
     const sup = spg.developmentPlanSupplement;
-    // Defensive: a soft-deleted parent supplement collapses to 404 so
-    // anonymous callers can never reach an SPG whose book has been
-    // cancelled (CLAUDE.md §18 orphan-cleanup cascade soft-deletes
-    // SPGs alongside the book; this guard handles the inverse race).
     if (sup.deletedAt) {
       throw new NotFoundException('ไม่พบโครงการที่ระบุ');
     }
@@ -1077,9 +1075,6 @@ export class PublicArchiveService {
       order: { versionNumber: 'DESC' },
     });
     if (!latestVersion) {
-      // Parent plan is published but this specific supplement book has
-      // no COMPLETED version yet. Uniform 404 — the public surface only
-      // shows projects whose own book is downloadable.
       throw new NotFoundException('ไม่พบโครงการที่ระบุ');
     }
 
@@ -1104,9 +1099,6 @@ export class PublicArchiveService {
       planClassificationName: spg.plan?.name ?? null,
       developmentIssueName: spg.developmentIssue?.name ?? null,
       responsibleAgencyName: spg.responsibleAgency?.name ?? null,
-      // SPG is agency-only origin per workflow-add-project-supplement.md
-      // (Q1+Q2) — `originAgencyId` is effectively unused. Surfacing the
-      // name if it were ever populated keeps the FE branch consistent.
       originAgencyName: spg.originAgencyId?.name ?? null,
       budgets: spg.budgets ?? [],
       parentPlan: plan,
@@ -1131,9 +1123,7 @@ export class PublicArchiveService {
    * leak through accidentally (PDPA + §17 audit-trail integrity).
    *
    * Branches on parent plan's `reportFormat` per §16.5 to keep the
-   * classification shape mutually exclusive. If the source row has a
-   * shape that does not match `reportFormat` (legacy bug), the
-   * populated half is emitted as-is — see BE-01 §11 risk note.
+   * classification shape mutually exclusive.
    */
   private assembleDetail(input: {
     projectId: string;
@@ -1152,24 +1142,11 @@ export class PublicArchiveService {
     planClassificationName: string | null;
     developmentIssueName: string | null;
     responsibleAgencyName: string | null;
-    /**
-     * Originating LAO name for LAO-coordinated projects. Null for
-     * agency-origin projects (FE suppresses the line). CLAUDE.md §5.2.
-     */
     originAgencyName: string | null;
-    /**
-     * Raw Budget rows from the project. The assembler keeps ONLY
-     * `{year, amount}` pairs — every other column (id, FK metadata,
-     * createdAt) is discarded so a future entity drift cannot leak.
-     */
     budgets: Array<{ year: number; quantity: number | string }>;
     parentPlan: DevelopmentPlan;
     book: {
-      sourceType:
-        | 'main_plan'
-        | 'edit_revision'
-        | 'change_revision'
-        | 'supplement';
+      sourceType: PublicBookSourceType;
       sourceId: string;
       bookName: string;
       latestVersionNumber: number;
@@ -1214,9 +1191,6 @@ export class PublicArchiveService {
         endLng: input.endLng !== null ? Number(input.endLng) : null,
       },
       budget: (() => {
-        // Aggregate raw rows → {year, amount} per year (sum across
-        // duplicates, defensive). decimal columns arrive as strings
-        // from pg, hence `Number()` here.
         const perYearMap = new Map<number, number>();
         for (const row of input.budgets) {
           const amount = Number(row.quantity);
@@ -1243,13 +1217,7 @@ export class PublicArchiveService {
         bookName: input.book.bookName,
         latestVersionNumber: input.book.latestVersionNumber,
         downloadUrl: this.buildDownloadUrl(
-          input.book.sourceType === 'main_plan'
-            ? BookAssemblySourceType.MAIN_PLAN
-            : input.book.sourceType === 'change_revision'
-              ? BookAssemblySourceType.CHANGE_REVISION
-              : input.book.sourceType === 'edit_revision'
-                ? BookAssemblySourceType.EDIT_REVISION
-                : 'supplement',
+          input.book.sourceType,
           input.book.sourceId,
           input.book.latestVersionNumber,
         ),

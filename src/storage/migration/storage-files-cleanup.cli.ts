@@ -85,11 +85,23 @@ const DELETE_ORDER: TableEntry[] = [
   { index: 10, table: 'pdf_supplement_approved_documents' },
 
   // ── Tier A: assembly artifacts ────────────────────────────────────────
+  //
+  // Legacy `book_assembly_*` + `book_project_lineage` tables were
+  // dropped by migration `1782000000000-DropLegacyBookAssemblyTables.ts`
+  // as part of OPTION-A-FULL-SPLIT / CLEANUP (CLAUDE.md §20.10).
+  // Their entries remain in the delete order with `optional: true` so
+  // this CLI continues to work against pre-CLEANUP databases (legacy
+  // tables present) AND post-CLEANUP databases (legacy tables dropped
+  // — the `42P01 undefined_table` swallow path applies). The
+  // `deprecation_audit_logs` table is INTENTIONALLY NOT marked
+  // optional — that table survived the CLEANUP wave and is still
+  // bound by the surviving `DeprecationAuditLog` entity (see
+  // `backend/src/book-assembly/entities/deprecation-audit-log.entity.ts`).
   { index: 11, table: 'book_assembly_version_projects', optional: true },
-  { index: 12, table: 'book_project_lineage' },
+  { index: 12, table: 'book_project_lineage', optional: true },
   { index: 13, table: 'deprecation_audit_logs' },
-  { index: 14, table: 'book_assembly_drafts' },
-  { index: 15, table: 'book_assembly_versions' },
+  { index: 14, table: 'book_assembly_drafts', optional: true },
+  { index: 15, table: 'book_assembly_versions', optional: true },
   { index: 16, table: 'supplement_assembly_version_projects' },
   { index: 17, table: 'supplement_assembly_versions' },
   { index: 18, table: 'supplement_assembly_drafts' },

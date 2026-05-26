@@ -198,4 +198,30 @@ export interface EnrichedUnifiedProject extends UnifiedProject {
    * (`citizenId`, `email`, `phone`, `profileImageUrl`) remain excluded.
    */
   createdBy: EnrichedCreator;
+
+  /**
+   * Per-row booked-state flag — §20 parity with PG/RPG.
+   *
+   * Sources:
+   *   - main      → `ProjectGroup.isBooked`
+   *   - revised   → `RevisedProjectGroup.isBooked`
+   *   - supplement→ `SupplementProjectGroup.isBooked` (Wave wave-
+   *                 supplement-convergence-milestone-2-spg-booked-
+   *                 fields / DB-01 + BE-01, 2026-05-25 — replaces the
+   *                 legacy Wave-A-lite "always-booked-when-persisted"
+   *                 shortcut so SPG matches the PG/RPG semantic of
+   *                 "only true after the row is finalized into its
+   *                 published book").
+   *
+   * Read-side metadata only — no workflow gate per §17.2.
+   */
+  isBooked: boolean;
+
+  /**
+   * ISO timestamp of the moment the row was finalized into its book.
+   * `null` while the row is still in flight (not yet booked). Mirrors
+   * `ProjectGroup.bookedAt` / `RevisedProjectGroup.bookedAt` semantics
+   * and is set by the same merge() path that flips `isBooked = true`.
+   */
+  bookedAt: string | null;
 }

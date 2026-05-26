@@ -3,14 +3,19 @@ import {
   CreateDateColumn,
   Entity,
   Index,
+  JoinColumn,
+  ManyToOne,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import {
+  SupplementAssemblyCorrectionMode,
   SupplementAssemblyDraftStatus,
   SupplementAssemblyPartSource,
   SupplementAssemblyPartUploadStatus,
 } from '../enums/supplement-assembly.enums';
+import { SupplementAssemblyVersion } from './supplement-assembly-version.entity';
 
 /**
  * SupplementAssemblyDraft — SUPP_STANDALONE_DB_01.
@@ -54,6 +59,37 @@ export class SupplementAssemblyDraft {
     type: 'uuid',
   })
   developmentPlanSupplementId: string;
+
+  // wave-supplement-correction-workflow / DB-01 — correction-lineage
+  // columns. Mirror main-plan precedent at `book-assembly-draft.entity.ts`
+  // lines 36-51. All NULL-able so pre-existing Wave-A draft rows stay
+  // unaffected (legacy active drafts are not correction drafts).
+  //
+  // BE-01 sets `targetVersion` to the in-progress integer version this
+  // draft will become on merge (typically `latestVersion.versionNumber +
+  // 1`). `previousVersionId` references the version being corrected,
+  // and `correctionMode` / `correctionReason` describe HOW the
+  // correction is being performed. The relation `previousVersion` is
+  // registered at the TypeORM level only; the underlying FK is enforced
+  // by the migration with `ON DELETE RESTRICT` to preserve audit.
+
+  @Column({ name: 'target_version', type: 'int', nullable: true })
+  targetVersion: number | null;
+
+  @Column({ name: 'previous_version_id', type: 'uuid', nullable: true })
+  previousVersionId: string | null;
+
+  @Column({
+    name: 'correction_mode',
+    type: 'enum',
+    enum: SupplementAssemblyCorrectionMode,
+    enumName: 'supplement_assembly_correction_mode',
+    nullable: true,
+  })
+  correctionMode: SupplementAssemblyCorrectionMode | null;
+
+  @Column({ name: 'correction_reason', type: 'text', nullable: true })
+  correctionReason: string | null;
 
   @Column({
     name: 'assembly_status',
@@ -154,10 +190,28 @@ export class SupplementAssemblyDraft {
   })
   part3GeneratedAt: Date | null;
 
-  // Creator (bare uuid — no FK at TypeORM level; see class doc).
+  // Creator — `created_by_id` is the canonical column. As of
+  // wave-supplement-assembly-metadata-parity / BE-01 we also expose a
+  // `@ManyToOne(WorkHistory)` relation on the same column so the draft
+  // DTO can surface `createdBy.user.{prefix,firstName,lastName}` to the
+  // FE. The class-doc note about "bare UUID, no FK at TypeORM level" is
+  // superseded by this relation; the underlying SQL column is unchanged
+  // and there is NO schema drift. Mirrors main-plan precedent.
 
   @Column({ name: 'created_by_id', type: 'uuid' })
   createdById: string;
+
+  @ManyToOne(() => WorkHistory)
+  @JoinColumn({ name: 'created_by_id' })
+  createdBy: WorkHistory;
+
+  // wave-supplement-correction-workflow / DB-01 — read-side relation for
+  // the version being corrected. Reuses `previous_version_id` declared
+  // above; no schema drift. Mirrors main-plan precedent at
+  // `book-assembly-draft.entity.ts` lines 158-160.
+  @ManyToOne(() => SupplementAssemblyVersion, { nullable: true })
+  @JoinColumn({ name: 'previous_version_id' })
+  previousVersion: SupplementAssemblyVersion | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

@@ -36,6 +36,17 @@ export class DevelopmentPlan {
   isBooked: boolean;
 
   /**
+   * CLAUDE.md §15.2 / §15.3 Book Lineage Immutability — finalize-moment
+   * timestamp used by the cross-category linear-chain ordering
+   * (wave-lineage-linear-chain-by-bookedAt). NULL while the plan is a
+   * draft (`isBooked = false`); set at the moment `isBooked` flips to
+   * `true` (BE-01 wires the write). Backfilled per DB-01 migration from
+   * `book_assembly_versions.merged_at` (fallback `create_at`).
+   */
+  @Column({ name: 'booked_at', type: 'timestamptz', nullable: true })
+  bookedAt: Date | null;
+
+  /**
    * CLAUDE.md §16.3 / §16.4 — Multi-Format Reporting
    *
    * Single source of truth for the plan's classification vocabulary.

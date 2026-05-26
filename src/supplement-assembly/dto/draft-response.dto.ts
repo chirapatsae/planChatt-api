@@ -41,4 +41,18 @@ export interface SupplementAssemblyDraftDto {
   createdById: string;
   createdAt: string;
   updatedAt: string;
+
+  /**
+   * wave-supplement-assembly-metadata-parity / BE-01 — nested creator
+   * projection. Populated when the read path eager-loads
+   * `['createdBy', 'createdBy.user']`. Mirrors main-plan precedent.
+   */
+  createdBy?: {
+    id: string;
+    user?: {
+      prefix?: string;
+      firstName?: string;
+      lastName?: string;
+    };
+  };
 }

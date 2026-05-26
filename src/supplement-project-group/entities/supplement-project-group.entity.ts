@@ -76,6 +76,23 @@ export class SupplementProjectGroup {
   @Column({ name: 'is_latest', default: true })
   isLatest: boolean;
 
+  /**
+   * CLAUDE.md §20 parity with PG / RPG — Wave wave-supplement-
+   * convergence-milestone-2-spg-booked-fields / DB-01 (2026-05-25).
+   *
+   * Lifted from the Wave-A-lite shortcut documented in
+   * `ai-executive-chat/tools/tool-registry.ts:128` (SPG was
+   * "always-booked-when-persisted"). Now matches PG entity lines 69-73
+   * and RPG entity lines 91-95 byte-for-byte.
+   *
+   * Read-side metadata only — no workflow gate per §17.2.
+   */
+  @Column({ default: false })
+  isBooked: boolean;
+
+  @Column({ type: 'timestamp', nullable: true })
+  bookedAt: Date | null;
+
   @Column({ type: 'int', nullable: true })
   pageNumber: number | null;
 

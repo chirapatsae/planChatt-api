@@ -642,10 +642,14 @@ export class DevelopmentPlanRevisionService {
         }
 
         // Ensure DevelopmentPlanRevision is marked as booked
+        // wave-lineage-linear-chain-by-bookedAt / BE-01 — stamp
+        // `bookedAt = now()` alongside `isBooked = true` so the §15
+        // linear-chain-by-bookedAt predicate orders this revision
+        // correctly in the cross-category lock timeline.
         if (!revision.isBooked) {
           await manager.getRepository(DevelopmentPlanRevision).update(
             { id: developmentPlanRevisionId },
-            { isBooked: true },
+            { isBooked: true, bookedAt: new Date() },
           );
         }
       });
@@ -861,10 +865,13 @@ export class DevelopmentPlanRevisionService {
         }
 
         // Ensure DevelopmentPlanRevision is marked as booked
+        // wave-lineage-linear-chain-by-bookedAt / BE-01 — stamp
+        // `bookedAt = now()` alongside `isBooked = true` (change-revision
+        // finalize path; mirrors the edit-revision branch above).
         if (!revision.isBooked) {
           await manager.getRepository(DevelopmentPlanRevision).update(
             { id: developmentPlanRevisionId },
-            { isBooked: true },
+            { isBooked: true, bookedAt: new Date() },
           );
         }
       });
@@ -938,9 +945,15 @@ export class DevelopmentPlanRevisionService {
       }
 
       // Set DevelopmentPlanRevision.isBooked = false
+      // wave-lineage-linear-chain-by-bookedAt / BE-01 — also clear
+      // `bookedAt` so the §15 linear-chain predicate stops treating
+      // this rolled-back revision as a chain member. Mirrors the
+      // RPG-level clear at line 943 above. Without this clear, an
+      // older sibling would still see this row as a strictly-newer
+      // booked chain entry and remain locked despite the rollback.
       await this.revisionRepository.update(
         { id: developmentPlanRevisionId },
-        { isBooked: false },
+        { isBooked: false, bookedAt: null },
       );
 
       this.logger.log(

@@ -35,6 +35,8 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Logger,
   Param,
   ParseIntPipe,
@@ -54,6 +56,8 @@ import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 import { SupplementAssemblyService } from './supplement-assembly.service';
 import { SupplementAssemblyFileService } from './supplement-assembly-file.service';
+import { CorrectSupplementBookDto } from './dto/correct-supplement-book.dto';
+import { CancelSupplementBookDto } from './dto/cancel-supplement-book.dto';
 
 /**
  * Multer configuration — memory storage (PDF processing inside service),
@@ -128,38 +132,57 @@ export class SupplementAssemblyController {
   }
 
   // ===================================================================
-  // Display State / Readiness — Wave B placeholders
+  // Display State / Readiness
   // ===================================================================
 
   /**
-   * TODO(Wave B): wire to `SupplementAssemblyService.getBookDisplayState`
-   * once the service surface exists. Returns a minimal envelope so the
-   * FE book-state hook can render a default state.
+   * Display-state envelope for the supplement assembly dashboard.
+   *
+   * Wave-A stub replaced by a real implementation in
+   * `SupplementAssemblyService.getBookDisplayState`. Returns the same
+   * shape as the main-plan / revision `BookDisplayStateDto` (parallel
+   * `SupplementBookDisplayStateDto` minted per Q10=B standalone
+   * constraint — see DTO file header). The FE adapter at
+   * `frontend/src/services/bookAssemblyService.ts:684-707` consumes
+   * `state` to drive the `จัดการ` overflow menu visibility on the
+   * version card.
    */
   @Get(':supplementId/book-state')
   async getBookDisplayState(
     @Param('supplementId') supplementId: string,
-    @Req() _req: Request & { user: JwtPayloadUser },
-  ): Promise<{ supplementId: string; state: string }> {
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
     if (!supplementId) {
       throw new BadRequestException('supplementId จำเป็นต้องระบุ');
     }
-    return { supplementId, state: 'unknown' };
+    const userId = req.user?.userId;
+    return this.supplementAssemblyService.getBookDisplayState(
+      supplementId,
+      userId,
+    );
   }
 
   /**
-   * TODO(Wave B): wire to `SupplementAssemblyService.getReadiness` once
-   * the service surface exists. Returns a default-not-ready envelope.
+   * Readiness envelope for the supplement assembly gate (wave-
+   * supplement-assembly-button-gate / BE-01).
+   *
+   * Wave-B stub replaced 2026-05-24 by a real implementation in
+   * `SupplementAssemblyService.getReadiness`. Returns the same shape
+   * as the main-plan / revision `RevisionReadinessDto` so the shared
+   * FE `BookAssemblyDashboard` / `DraftPanel` components can drive the
+   * Part 3 lock + "รวมเล่ม" enable gate. See task file:
+   *   docs/tasks/wave-supplement-assembly-button-gate/BE-01.md
    */
   @Get(':supplementId/readiness')
   async getReadiness(
     @Param('supplementId') supplementId: string,
-    @Req() _req: Request & { user: JwtPayloadUser },
-  ): Promise<{ supplementId: string; ready: boolean }> {
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
     if (!supplementId) {
       throw new BadRequestException('supplementId จำเป็นต้องระบุ');
     }
-    return { supplementId, ready: false };
+    const userId = req.user?.userId;
+    return this.supplementAssemblyService.getReadiness(supplementId, userId);
   }
 
   // ===================================================================
@@ -558,5 +581,84 @@ export class SupplementAssemblyController {
       `Cancel supplement-assembly for ${supplementId} by user ${userId}`,
     );
     return this.supplementAssemblyService.cancel(supplementId, userId);
+  }
+
+  // ===================================================================
+  // Correct (wave-supplement-correction-workflow / BE-01)
+  // ===================================================================
+  //
+  // Mirrors `BookAssemblyController.correct` shape but uses the
+  // dedicated `CorrectSupplementBookDto` (Q3=B isolation — controller
+  // MUST NOT import from `book-assembly`). Service-level role gate
+  // enforces admin + super-admin (§4.1 / §18.3); citizenId suffix
+  // verification adds a second integrity gate per the deprecation
+  // auth pattern.
+
+  @Post(':supplementId/correct')
+  async correct(
+    @Param('supplementId') supplementId: string,
+    @Body() dto: CorrectSupplementBookDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    if (!supplementId) {
+      throw new BadRequestException('supplementId จำเป็นต้องระบุ');
+    }
+    const userId = req.user?.userId;
+    this.logger.log(
+      `Correct supplement-assembly for ${supplementId} by user ${userId} mode=${dto?.correctionMode}`,
+    );
+    return this.supplementAssemblyService.correct(supplementId, dto, userId);
+  }
+
+  // ===================================================================
+  // Cancel Published Version
+  // (wave-supplement-convergence-milestone-1-parity-contract / BE-01)
+  // ===================================================================
+  //
+  // Mirrors `BookAssemblyController.cancel` shape but operates on a
+  // PUBLISHED version (status=COMPLETED) of the supplement instead of
+  // a draft. Closes the FE bug where the cancel button on the
+  // `published_latest` state previously routed to the draft-cancel
+  // endpoint and 404'd because no draft existed.
+  //
+  // Distinction from `POST /:supplementId/cancel` above:
+  //   - `/cancel` (draft-cancel) — admin escape Q4=C; flips active
+  //     draft to CANCELED status; does NOT touch any published
+  //     version. Left unchanged.
+  //   - `/versions/:versionId/cancel` (THIS endpoint) — deprecates a
+  //     published COMPLETED version + resets supplement booking; §15
+  //     sibling unlock side-effect via `bookedAt = null` clear.
+  //
+  // Service-level role gate enforces admin + super-admin (§4.1 /
+  // §18.3); citizenIdSuffix verification adds a second integrity gate
+  // per the deprecation auth pattern. Body validation (confirmed,
+  // citizenIdSuffix shape, reason length) is enforced by class-
+  // validator on `CancelSupplementBookDto`.
+
+  @Post(':supplementId/versions/:versionId/cancel')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async cancelPublishedVersion(
+    @Param('supplementId') supplementId: string,
+    @Param('versionId') versionId: string,
+    @Body() dto: CancelSupplementBookDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ): Promise<void> {
+    if (!supplementId) {
+      throw new BadRequestException('supplementId จำเป็นต้องระบุ');
+    }
+    if (!versionId) {
+      throw new BadRequestException('versionId จำเป็นต้องระบุ');
+    }
+    const userId = req.user?.userId;
+    this.logger.log(
+      `Cancel supplement-assembly published version ` +
+        `supplement=${supplementId} version=${versionId} by user=${userId}`,
+    );
+    await this.supplementAssemblyService.cancelPublishedVersion(
+      supplementId,
+      versionId,
+      dto,
+      userId,
+    );
   }
 }

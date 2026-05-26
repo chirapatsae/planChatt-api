@@ -867,8 +867,17 @@ export class DevelopmentPlanService {
       });
 
       // Ensure DevelopmentPlan is marked as booked
+      // wave-lineage-linear-chain-by-bookedAt / BE-01 — stamp
+      // `bookedAt = now()` alongside `isBooked = true` so the §15
+      // linear-chain-by-bookedAt predicate orders this plan's finalize
+      // moment correctly. Plan-level lock predicate is unchanged (any
+      // child locks), but `bookedAt` is required for child predicates
+      // that compare against ancestor timing.
       if (!plan.isBooked) {
-        await this.developmentPlanRepository.update({ id: developmentPlanId }, { isBooked: true });
+        await this.developmentPlanRepository.update(
+          { id: developmentPlanId },
+          { isBooked: true, bookedAt: new Date() },
+        );
       }
 
       // Set all PlanPhase for this DevelopmentPlan to isMerged = true
@@ -1162,24 +1171,23 @@ export class DevelopmentPlanService {
    * attached to each plan. For read endpoints this is strictly cheaper
    * than issuing a per-row subquery — no N+1 and no batched round-trip.
    *
-   * The plan row itself is flagged `hasNewerRevision = true` as soon as
-   * it has ANY non-soft-deleted revision or supplement child (the
-   * `where: { deletedAt: IsNull() }` filters applied upstream already
-   * exclude soft-deleted children from the in-memory arrays).
+   * Post-wave-lineage-linear-chain-by-bookedAt rewrite:
    *
-   * For each revision and each supplement row, the flag is set to
-   * `true` iff ANY other non-soft-deleted child of the same plan has a
-   * strictly-newer `createdAt`, across BOTH `developmentPlanRevision`
-   * and `developmentPlanSupplements` collections — OQ-2=(B) global
-   * lineage. Same-millisecond ties do NOT lock each other; they both
-   * still lock their parent plan (already covered by the plan-level
-   * predicate above).
+   * - The plan row itself is flagged `hasNewerRevision = true` as soon as
+   *   it has ANY non-soft-deleted revision or supplement child (draft or
+   *   booked, any category). §15.3 plan-blocked-operation semantics are
+   *   preserved.
    *
-   * Note: `DevelopmentPlan` stores its own timestamp as `createAt`
-   * (sic — historical column name), while `DevelopmentPlanRevision`
-   * and `DevelopmentPlanSupplement` use `createdAt`. Only the child
-   * timestamps are compared here; the plan's own `createAt` is never
-   * part of the global lineage ordering.
+   * - For each revision and supplement row, the flag is set to `true`
+   *   iff a strictly-newer-booked sibling (cross-category) exists in the
+   *   same plan. Ordering is by `bookedAt` — NOT `createdAt` — so the
+   *   lock chain reflects the actual published book timeline. Drafts
+   *   (`bookedAt === null`) are not in the chain: a draft self always
+   *   reports `false`, and a draft sibling never contributes to the
+   *   newer-booked set.
+   *
+   * - Equal-bookedAt peers do NOT lock each other (strict `<`
+   *   comparison against the merged max).
    */
   private decorateBookLockFlags(plans: DevelopmentPlan[]): void {
     if (!plans || plans.length === 0) return;
@@ -1194,9 +1202,9 @@ export class DevelopmentPlanService {
           (s) => !s.deletedAt,
         );
 
-      // W116-BE-01 — Plan-level lock is UNCHANGED: a plan is locked as
-      // soon as it has ANY non-soft-deleted child (revision OR
-      // supplement, ANY revisionType). §15.4 plan blocked-operation
+      // Plan-level lock is UNCHANGED: a plan is locked as soon as it
+      // has ANY non-soft-deleted child (revision OR supplement, draft
+      // or booked, any category). §15.3 plan blocked-operation
       // semantics are preserved.
       const planHasAnyChild = revisions.length > 0 || supplements.length > 0;
       // `hasNewerRevision` is declared as a plain field on the entity
@@ -1206,52 +1214,51 @@ export class DevelopmentPlanService {
       // it in the JSON response.
       plan.hasNewerRevision = planHasAnyChild;
 
-      if (!planHasAnyChild) continue;
+      if (!planHasAnyChild) {
+        // Even without children, defensively clear sibling flags so
+        // stale values from a re-used entity instance never leak out.
+        for (const r of revisions) r.hasNewerRevision = false;
+        for (const s of supplements) s.hasNewerRevision = false;
+        continue;
+      }
 
-      // W116-BE-02 — All child categories under a plan are PARALLEL
-      // siblings. Revision-vs-revision lock = same revisionType only.
-      // Supplement-vs-supplement lock = same-category timeline only.
-      // Revision↔supplement = NO cross-category lock either direction.
-      // Mirrors `BookLockService.hasStrictlyNewerSibling` exactly so
+      // Linear-chain-by-bookedAt — build ONE merged set of BOOKED
+      // siblings across revisions and supplements, then derive the
+      // max booked timestamp per plan. Drafts (`bookedAt === null`)
+      // contribute neither as comparators nor as candidates for the
+      // newer-than test. Mirrors
+      // `BookLockService.hasStrictlyNewerBookedSibling` exactly so
       // service-side guards and read-side flags agree.
-
-      // Bucket revisions by revisionType.id (parallel timelines per
-      // type). `__no_type__` defends a (theoretically impossible)
-      // missing FK by collapsing into a shared bucket.
-      const revisionsByType: Map<string, DevelopmentPlanRevision[]> = new Map();
+      const bookedTimestamps: number[] = [];
       for (const r of revisions) {
-        const key = r.revisionType?.id ?? '__no_type__';
-        const bucket = revisionsByType.get(key);
-        if (bucket) bucket.push(r);
-        else revisionsByType.set(key, [r]);
+        if (r.bookedAt) bookedTimestamps.push(new Date(r.bookedAt).getTime());
       }
-
-      for (const [, bucket] of revisionsByType) {
-        const maxSameTypeTs = Math.max(
-          ...bucket.map((r) => new Date(r.createdAt).getTime()),
-        );
-        for (const revision of bucket) {
-          const ts = new Date(revision.createdAt).getTime();
-          // Locked iff a strictly-newer SAME-TYPE revision exists in
-          // the same bucket. Supplements are now parallel siblings and
-          // never lock revisions.
-          revision.hasNewerRevision = ts < maxSameTypeTs;
-        }
+      for (const s of supplements) {
+        if (s.bookedAt) bookedTimestamps.push(new Date(s.bookedAt).getTime());
       }
-
-      // Supplement-vs-supplement timeline — newer supplement under the
-      // same plan locks older supplement. Revisions never lock
-      // supplements anymore (parallel siblings).
-      const supplementTimestamps: number[] = supplements.map((s) =>
-        new Date(s.createdAt).getTime(),
-      );
-      const maxSupplementTs =
-        supplementTimestamps.length > 0
-          ? Math.max(...supplementTimestamps)
+      const maxBookedTs =
+        bookedTimestamps.length > 0
+          ? Math.max(...bookedTimestamps)
           : -Infinity;
+
+      for (const revision of revisions) {
+        if (!revision.bookedAt) {
+          // Drafts are not in the §15 lock chain — they are governed by
+          // other gates (`isOpen`, plan-phase scope).
+          revision.hasNewerRevision = false;
+          continue;
+        }
+        const ts = new Date(revision.bookedAt).getTime();
+        revision.hasNewerRevision = ts < maxBookedTs;
+      }
+
       for (const supplement of supplements) {
-        const ts = new Date(supplement.createdAt).getTime();
-        supplement.hasNewerRevision = ts < maxSupplementTs;
+        if (!supplement.bookedAt) {
+          supplement.hasNewerRevision = false;
+          continue;
+        }
+        const ts = new Date(supplement.bookedAt).getTime();
+        supplement.hasNewerRevision = ts < maxBookedTs;
       }
     }
   }

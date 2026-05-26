@@ -90,6 +90,14 @@ interface RowEnrichment {
   createdByWorkHistoryId: string;
   createdBy: EnrichedCreator;
   hasDescendant: boolean;
+  /**
+   * Per-row booked-state — Wave wave-supplement-convergence-milestone-
+   * 2-spg-booked-fields / FE-01 (2026-05-25). §20 parity with PG/RPG
+   * for SPG (whose entity gained these columns in DB-01). Forwarded
+   * verbatim from the owning entity row.
+   */
+  isBooked: boolean;
+  bookedAt: string | null;
 }
 
 @Injectable()
@@ -253,6 +261,8 @@ export class UnifiedProjectEnricherService {
         createdAt: enrichment.createdAt,
         createdByWorkHistoryId: enrichment.createdByWorkHistoryId,
         createdBy: enrichment.createdBy,
+        isBooked: enrichment.isBooked,
+        bookedAt: enrichment.bookedAt,
       });
     }
     return out;
@@ -304,6 +314,8 @@ export class UnifiedProjectEnricherService {
       createdByWorkHistoryId: pg.createdBy.id,
       createdBy: mapCreator(pg.createdBy as any),
       hasDescendant,
+      isBooked: Boolean(pg.isBooked),
+      bookedAt: toNullableIsoString(pg.bookedAt),
     };
   }
 
@@ -336,6 +348,8 @@ export class UnifiedProjectEnricherService {
       createdByWorkHistoryId: rpg.createdBy.id,
       createdBy: mapCreator(rpg.createdBy as any),
       hasDescendant,
+      isBooked: Boolean(rpg.isBooked),
+      bookedAt: toNullableIsoString(rpg.bookedAt),
     };
   }
 
@@ -367,6 +381,13 @@ export class UnifiedProjectEnricherService {
       createdByWorkHistoryId: spg.createdBy.id,
       createdBy: mapCreator(spg.createdBy as any),
       hasDescendant,
+      // §20 parity — Wave wave-supplement-convergence-milestone-2-spg-
+      // booked-fields. Reads directly from the SPG row (DB-01 added
+      // these columns; BE-01 wires them at merge() / reset). Replaces
+      // the legacy `dps.isBooked` inheritance which conflated the
+      // SUPPLEMENT-ROUND booked state with the per-SPG booked state.
+      isBooked: Boolean(spg.isBooked),
+      bookedAt: toNullableIsoString(spg.bookedAt),
     };
   }
 }
@@ -388,6 +409,25 @@ function toIsoString(value: Date | string | null | undefined): string {
     return Number.isFinite(t) ? new Date(t).toISOString() : '';
   }
   return '';
+}
+
+/**
+ * Nullable variant of `toIsoString`. Null / undefined / unparseable
+ * input → `null` (NOT empty string). Used for `bookedAt` where `null`
+ * is the meaningful "not yet booked" sentinel — collapsing it to an
+ * empty string would cause the FE `BookedBadge` to render a stale
+ * dash instead of suppressing the date row.
+ */
+function toNullableIsoString(value: Date | string | null | undefined): string | null {
+  if (value == null) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  }
+  if (typeof value === 'string') {
+    const t = new Date(value).getTime();
+    return Number.isFinite(t) ? new Date(t).toISOString() : null;
+  }
+  return null;
 }
 
 // -----------------------------------------------------------------------

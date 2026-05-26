@@ -1,8 +1,28 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { BookAssemblySourceType } from './enums/book-assembly.enums';
 import { StoragePathService } from 'src/storage/storage-path.service';
+
+/**
+ * CLEANUP wave BE-02 (2026-05-26) — surviving shared-infrastructure service
+ * per CLAUDE.md §20.10.3 (file-service exemption). Consumed by every
+ * standalone assembly subsystem (MainAssemblyService, EditAssemblyService,
+ * ChangeAssemblyService, SupplementAssemblyService) via the
+ * `BookAssemblyLocation` discriminated-union type and the path-resolution
+ * helpers exported below. The legacy `BookAssemblyService` /
+ * `BookAssemblyController` / `book_assembly_*` entities + DTOs have been
+ * deleted in this same wave; only the file-service + the
+ * `DeprecationAuditLog` entity remain in `src/book-assembly/`.
+ *
+ * Removed in this wave:
+ *   - `import { BookAssemblySourceType } from './enums/book-assembly.enums'`
+ *     (the enum file is being deleted)
+ *   - the trailing `sourceTypeToLocationKind(sourceType)` helper, which had
+ *     zero external callers and only existed to bridge the legacy
+ *     `BookAssemblySourceType` enum to the discriminated-union kind. The
+ *     standalone services construct `BookAssemblyLocation` literals
+ *     directly with their own typed `kind` strings.
+ */
 
 /**
  * Handles all file-system operations for the book assembly module.
@@ -333,23 +353,5 @@ export class BookAssemblyFileService {
     }
     const type = location.kind === 'EDIT_REVISION' ? 'edit' : 'change';
     return `main-plan-${location.planId}/${type}/${type}-${location.revisionNumber}-${location.revisionId}`;
-  }
-}
-
-/**
- * Map `BookAssemblySourceType` to a `BookAssemblyLocation` kind. Caller
- * is responsible for supplying the additional fields (`planId`,
- * `revisionNumber`, `revisionId`).
- */
-export function sourceTypeToLocationKind(
-  sourceType: BookAssemblySourceType,
-): BookAssemblyLocation['kind'] {
-  switch (sourceType) {
-    case BookAssemblySourceType.MAIN_PLAN:
-      return 'MAIN_PLAN';
-    case BookAssemblySourceType.EDIT_REVISION:
-      return 'EDIT_REVISION';
-    case BookAssemblySourceType.CHANGE_REVISION:
-      return 'CHANGE_REVISION';
   }
 }
