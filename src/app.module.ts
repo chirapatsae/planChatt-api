@@ -336,6 +336,25 @@ import { ProvinceStrategySdg } from './strategic-mapping/entities/province-strat
 // PlanMilestone / PlanProvinceStrategy — orphan plan-mapping
 // junctions (4 tables, all 0 rows, no UI consumer).
 import { NationalStrategyMilestone } from './strategic-mapping/entities/national-strategy-milestone.entity';
+// Wave wave-backup-login-thaid-fallback / DB-01 — ThaiD-fallback backup
+// login subsystem. Five entities live under `backend/src/backup-login/`
+// and MUST all be listed in BOTH the root `entities[]` list (TypeORM
+// metadata resolution) AND in `BackupLoginModule` via
+// `TypeOrmModule.forFeature([...])` (repo injection token). BE-01 will
+// create the module; DB-01 only ships entities + root registration.
+// The append-only triggers on `backup_login_audit_logs` are NOT created
+// by `synchronize:true` — see
+// `backend/src/backup-login/sql/backup-login-audit-log.triggers.sql`
+// for the psql-runnable script applied post-restart.
+import { BackupCredential } from './backup-login/entities/backup-credential.entity';
+import { TotpEnrollment } from './backup-login/entities/totp-enrollment.entity';
+import { PasswordHistory } from './backup-login/entities/password-history.entity';
+import { BackupLoginAuditLog } from './backup-login/entities/backup-login-audit-log.entity';
+import { BackupLoginKillSwitchConfig } from './backup-login/entities/backup-login-kill-switch-config.entity';
+// Wave wave-backup-login-thaid-fallback / BE-01 — backup-login module
+// wiring (services + controller + crons + boot hook). Imported AFTER
+// `AuthModule` so the JWT secret/strategy is already registered.
+import { BackupLoginModule } from './backup-login/backup-login.module';
 
 
 @Module({
@@ -511,6 +530,18 @@ import { NationalStrategyMilestone } from './strategic-mapping/entities/national
         EngagementLike,
         EngagementViewEvent,
         EngagementDownloadEvent,
+        // Wave wave-backup-login-thaid-fallback / DB-01 — five entities
+        // backing the ThaiD-fallback backup login (BackupCredential,
+        // TotpEnrollment, PasswordHistory, BackupLoginAuditLog,
+        // BackupLoginKillSwitchConfig). To be owned by `BackupLoginModule`
+        // via `forFeature` once BE-01 lands; root registration here is
+        // mandatory or TypeORM throws `EntityMetadataNotFoundError` at
+        // boot (Wave 41 footgun; CLAUDE.md §8.1).
+        BackupCredential,
+        TotpEnrollment,
+        PasswordHistory,
+        BackupLoginAuditLog,
+        BackupLoginKillSwitchConfig,
       ],
       synchronize: true,
       extra: {
@@ -666,6 +697,11 @@ import { NationalStrategyMilestone } from './strategic-mapping/entities/national
     // (BE-04/05/06) will mount the service + controller routes.
     StrategicMappingModule,
     ProjectAlignmentMappingModule,
+    // Wave wave-backup-login-thaid-fallback / BE-01 — backup-login
+    // subsystem. Imported AFTER `AuthModule` so JWT registration is
+    // already in place; the module owns its own JwtModule.register
+    // for sign + verify of mfaChallengeToken / final session JWT.
+    BackupLoginModule,
   ],
   controllers: [AppController],
   providers: [AppService],

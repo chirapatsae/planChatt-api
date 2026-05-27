@@ -1,0 +1,46 @@
+# SECURITY-01 §7.2 — top-1000 dictionary blacklist (seed).
+#
+# Lines starting with `#` are comments. Comparison is case-INSENSITIVE
+# (PasswordPolicyService lowercases candidates before lookup). Entries
+# below are common passwords + Thai-keyboard-mapped variants. Extend
+# with the full top-1000 list as a follow-up; the policy works without
+# this file (complexity + length + history + username-similarity still
+# apply).
+password
+password1
+password123
+password!
+123456
+123456789
+qwerty
+qwerty123
+abc123
+iloveyou
+welcome
+welcome1
+welcome123
+admin
+admin123
+administrator
+letmein
+monkey
+dragon
+master
+secret
+changeme
+changeme123
+default
+default1
+default123
+P@ssw0rd
+Passw0rd!
+Password1!
+Password123!
+Pao@1234!-1
+projectbank
+projectbank1
+projectbank123
+korat
+koratpao
+nakhonratchasima
+thaid

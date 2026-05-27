@@ -127,6 +127,34 @@ export class User {
   @Column({ name: 'last_seen_at', type: 'timestamptz', nullable: true })
   lastSeenAt: Date | null;
 
+  /**
+   * Wave wave-backup-login-thaid-fallback (DB-01) — session-version
+   * anchor per SECURITY-01 §7.8. Bumped (incremented) on:
+   *   1. backup password change
+   *   2. super-admin backup password reset
+   *   3. super-admin backup credential revoke
+   *   4. super-admin TOTP reset
+   *   5. account auto-freeze (10 fails / 24h)
+   *
+   * Every issued JWT (ThaiD + backup) embeds the value at issuance
+   * time. `JwtAuthGuard` compares the JWT's `sessionVersion` claim
+   * against this column; mismatch → 401 `SESSION_INVALIDATED`.
+   *
+   * Default 0 — pre-wave sessions with no `sessionVersion` claim
+   * MUST be treated as `0` by `JwtStrategy` for backward
+   * compatibility (one-time migration window).
+   *
+   * §17.3 — this is a metadata column on `User`, NOT a workflow
+   * audit. It does NOT gate any workflow transition.
+   */
+  @Column({
+    name: 'session_version',
+    type: 'int',
+    default: 0,
+    nullable: false,
+  })
+  sessionVersion: number;
+
   @DeleteDateColumn({ nullable: true, name: 'delete_at' })
   @Exclude()
   deletedAt?: Date;

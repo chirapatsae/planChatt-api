@@ -117,10 +117,24 @@ export class AuthService {
         ? divisionNameFromDto
         : latestWH.governmentAgencies?.name;
 
+      // Wave wave-backup-login-thaid-fallback / BE-01 (SECURITY-01 §7.7
+      // + §7.8). The ThaiD-issued JWT now carries:
+      //   - `loginMethod: 'thaid'` so the new `JwtStrategy.validate`
+      //     and guards can discriminate from backup-login sessions.
+      //   - `mfaVerified: true` because ThaiD is treated as inherently
+      //     MFA-verified (NDID + government identity).
+      //   - `sessionVersion` so any backup-side credential change
+      //     (password change / reset / revoke / TOTP reset / freeze)
+      //     can invalidate this token via the JwtAuthGuard session-
+      //     version check.
+      const sessionVersion = user.sessionVersion ?? 0;
       const payload = {
         sub: user.id,
         role: latestWH.role?.name ?? null,
         workStatus: latestWH.workStatus?.name ?? null,
+        loginMethod: 'thaid',
+        mfaVerified: true,
+        sessionVersion,
       };
 
       const accessToken = this.jwtService.sign(payload, {
