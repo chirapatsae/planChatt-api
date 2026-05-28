@@ -107,6 +107,36 @@ export class EquipmentProjectGroupController {
     );
   }
 
+  /**
+   * Wave Equipment Sidebar Counts — BE-01 (2026-05-28).
+   *
+   * Owner-scoped per-status count envelope powering the 4 sidebar
+   * badges under "การจัดการครุภัณฑ์".
+   *
+   * Response (FROZEN):
+   *   `{ ready, pending, verified, returnedForRevision, pullBack }`
+   *
+   * Authority:
+   *   - agency-classified callers — live counts (§4 owner-scope)
+   *   - LAO / non-agency callers — all-zero envelope at HTTP 200
+   *     (NOT 403). `AgencyOnlyGuard` is INTENTIONALLY NOT mounted —
+   *     the classification gate lives inside the service so the
+   *     sidebar fetch never errors for LAO users. Mirrors
+   *     `SPG.findMineCounts` precedent.
+   *   - §17.11 no role bypass — super-admin LAO also gets zeros.
+   *
+   * §17.2 advisory-only — counts MUST NOT gate any workflow.
+   * §17.3 audit separation — READ-ONLY; no `TrackingStatus` writes.
+   *
+   * MUST be declared above `@Get(':id')` to win route resolution.
+   */
+  @Get('counts-by-status')
+  async getCountsByStatus(
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    return this.service.getCountsByStatus(req.user.userId);
+  }
+
   @Get(':id')
   async findOne(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.service.findOne(id);

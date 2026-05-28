@@ -13,6 +13,7 @@ import { EquipmentProjectGroup } from './entities/equipment-project-group.entity
 import { CreateEquipmentProjectGroupDto } from './dto/create-equipment-project-group.dto';
 import { UpdateEquipmentProjectGroupDto } from './dto/update-equipment-project-group.dto';
 import { ListEquipmentProjectGroupsQueryDto } from './dto/list-equipment-project-groups-query.dto';
+import { EquipmentCountsByStatusDto } from './dto/equipment-counts-by-status.dto';
 
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { WorkHistoryLookupService } from 'src/work-history/work-history-lookup.service';
@@ -577,6 +578,146 @@ export class EquipmentProjectGroupService {
       total,
       page,
       limit,
+    };
+  }
+
+  /**
+   * Wave Equipment Sidebar Counts — BE-01 (2026-05-28).
+   *
+   * Owner-scoped count envelope powering the 4 sidebar badges at
+   * `/project/equipment/{ready-to-send,verify,edit,pullback}`.
+   *
+   * Response shape (FROZEN):
+   *   `{ ready, pending, verified, returnedForRevision, pullBack }`
+   *
+   * Authority:
+   *   - agency-classified callers — live `COUNT(*) FILTER` aggregation
+   *     over the caller's owned equipment rows (`createdBy.id =
+   *     currentWorkHistory.id`, `deleted_at IS NULL`, latest tracking
+   *     row resolves to one of the 5 named statuses).
+   *   - LAO / non-agency callers — receive all-zero envelope at HTTP
+   *     200 (NOT 403). Mirrors `SPG.findMineCounts` defensive zero;
+   *     equipment is agency-only by §5.3 construction so LAO counts
+   *     are vacuous. Skips the DB query entirely.
+   *   - §17.11 — no role bypass. super-admin LAO ALSO receives zeros;
+   *     classification (§1) is the only gate.
+   *   - §2 `workStatus = approved` still applies via
+   *     `WorkHistoryLookupService.assertWorkStatusApproved`.
+   *
+   * Compliance:
+   *   - §17.2 advisory-only — output MUST NOT gate any workflow.
+   *   - §17.3 audit separation — READ-ONLY. NO `TrackingStatus` writes.
+   *   - §12 — no transition; this is a pure read.
+   *
+   * Implementation: ONE SQL round-trip via Postgres
+   * `COUNT(*) FILTER (WHERE …)`. JOIN topology mirrors `findAll`'s
+   * `status` filter EXISTS-clause and `SPG.findMineCounts` exactly,
+   * so badge count and page list cannot drift.
+   *
+   * Statuses outside the 5 envelope keys (`Pending_Approval`,
+   * `Approved`, `Rejected`) are SILENTLY DROPPED — no consuming
+   * surface per the wave scope.
+   *
+   * Sibling pattern: `SPG.findMineCounts` at
+   * `supplement-project-group.service.ts:533`.
+   */
+  async getCountsByStatus(
+    userId: string,
+  ): Promise<EquipmentCountsByStatusDto> {
+    // 1-3. Resolve WorkHistory + §2 workStatus gate. Mirrors
+    //      `findAll(mineOnly=true)`. Uses the default manager because
+    //      this is a read-only round-trip (no enclosing transaction).
+    const workHistory = await this.workHistoryLookup.getCurrent(
+      this.equipmentRepo.manager,
+      userId,
+    );
+    this.workHistoryLookup.assertWorkStatusApproved(workHistory);
+
+    // 4. §1 / §5.3 classification gate — LAO callers (and any non-agency
+    //    work history) get the zero envelope IMMEDIATELY. No DB hit.
+    //    This is the deliberate divergence from the write surfaces in
+    //    this service: write paths throw `403 EQUIPMENT_AGENCY_ONLY`,
+    //    read counts return zeros so the sidebar fetch never errors
+    //    (matches `SPG.findMineCounts` and the FE `fallbackZero`
+    //    contract documented in BE-01 task §README → LAO short-circuit).
+    if (!isAgencyWorkHistory(workHistory)) {
+      return {
+        ready: 0,
+        pending: 0,
+        verified: 0,
+        returnedForRevision: 0,
+        pullBack: 0,
+      };
+    }
+
+    // 5. ONE round-trip — Postgres FILTER aggregation. JOIN topology
+    //    mirrors `findAll` and `SPG.findMineCounts`:
+    //      - INNER JOIN `equipment.trackingStatus` ON `is_latest = true`
+    //      - INNER JOIN `latestTracking.statusId` ON status PK
+    //      - WHERE `createdBy.id = :workHistoryId`
+    //      - WHERE `equipment.deleted_at IS NULL` (TypeORM applies the
+    //        soft-delete filter automatically; explicit `IS NULL` kept
+    //        for parity with `findAll`)
+    //
+    //    Lowercase SQL aliases — Postgres folds unquoted identifiers to
+    //    lowercase. Map to camelCase response keys explicitly below.
+    const row = await this.equipmentRepo
+      .createQueryBuilder('equipment')
+      .innerJoin('equipment.createdBy', 'createdBy')
+      .innerJoin(
+        'equipment.trackingStatus',
+        'latestTracking',
+        'latestTracking.isLatest = :isLatest',
+        { isLatest: true },
+      )
+      .innerJoin('latestTracking.statusId', 'latestStatus')
+      .where('createdBy.id = :workHistoryId', {
+        workHistoryId: workHistory.id,
+      })
+      .andWhere('equipment.deleted_at IS NULL')
+      .select(
+        `COUNT(*) FILTER (WHERE "latestStatus"."name" = 'Ready')`,
+        'ready_count',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE "latestStatus"."name" = 'Pending')`,
+        'pending_count',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE "latestStatus"."name" = 'Verified')`,
+        'verified_count',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE "latestStatus"."name" = 'Returned_For_Revision')`,
+        'returned_for_revision_count',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE "latestStatus"."name" = 'Pull_Back')`,
+        'pull_back_count',
+      )
+      .getRawOne<{
+        ready_count: string | number | null;
+        pending_count: string | number | null;
+        verified_count: string | number | null;
+        returned_for_revision_count: string | number | null;
+        pull_back_count: string | number | null;
+      }>();
+
+    // `pg` driver returns COUNT as string; coerce defensively. FILTER
+    // aggregates always return 0 on an empty set so `null` is
+    // unreachable in practice — guarded anyway.
+    const toInt = (v: string | number | null | undefined): number => {
+      if (v === null || v === undefined) return 0;
+      const n = typeof v === 'number' ? v : parseInt(v, 10);
+      return Number.isFinite(n) ? n : 0;
+    };
+
+    return {
+      ready: toInt(row?.ready_count),
+      pending: toInt(row?.pending_count),
+      verified: toInt(row?.verified_count),
+      returnedForRevision: toInt(row?.returned_for_revision_count),
+      pullBack: toInt(row?.pull_back_count),
     };
   }
 
