@@ -42,6 +42,15 @@ import { RolesGuard } from 'src/auth/roles.guard';
 // (strategy, tactic, plan) triple.
 import { ProjectAlignmentMappingModule } from 'src/project-alignment-mapping/project-alignment-mapping.module';
 
+// Wave Print ผ.03 — BE-01 (2026-05-28). Por03PdfService reads from
+// `EquipmentProjectGroup`; we register the entity here for repo
+// injection. `AgencyOnlyGuard` is provided locally so the controller
+// `@UseGuards(AgencyOnlyGuard)` decorator can resolve it without
+// depending on the equipment-project-group module's provider list.
+import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
+import { Por03PdfService } from './por03-pdf.service';
+import { AgencyOnlyGuard } from 'src/common/guards/agency-only.guard';
+
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -65,6 +74,10 @@ import { ProjectAlignmentMappingModule } from 'src/project-alignment-mapping/pro
       // inside the finalize transaction.
       DevelopmentPlanSupplement,
       SupplementProjectGroup,
+      // Wave Print ผ.03 — BE-01 (2026-05-28). EquipmentProjectGroup
+      // repo is injected into `Por03PdfService` for the read-only print
+      // path. Entity already in app.module.ts root registration.
+      EquipmentProjectGroup,
       User,
       // SUPP_PRINT post-SEC_01 hotfix — `WorkStatusApprovedGuard`
       // injects `Repository<WorkHistory>` per `work-status-approved.guard.ts`.
@@ -89,7 +102,15 @@ import { ProjectAlignmentMappingModule } from 'src/project-alignment-mapping/pro
     ProjectAlignmentMappingModule,
   ],
   controllers: [PdfController],
-  providers: [PdfService, SupplementPdfService, RolesGuard],
-  exports: [PdfService, SupplementPdfService],
+  providers: [
+    PdfService,
+    SupplementPdfService,
+    RolesGuard,
+    // Wave Print ผ.03 — BE-01 (2026-05-28). User-side equipment print
+    // generator + agency-only controller guard.
+    Por03PdfService,
+    AgencyOnlyGuard,
+  ],
+  exports: [PdfService, SupplementPdfService, Por03PdfService],
 })
 export class PdfModule {}

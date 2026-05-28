@@ -18,6 +18,13 @@ import { Response, Request } from 'express';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 
+// Wave Print ผ.03 — BE-01 (2026-05-28). User-side equipment print
+// endpoint + DTO + generator service. Q4 LOCKED: sibling endpoint
+// `POST /v1/pdf/generate-por03`.
+import { Por03PdfService } from './por03-pdf.service';
+import { GeneratePor03Dto } from './dto/generate-por03.dto';
+import { AgencyOnlyGuard } from 'src/common/guards/agency-only.guard';
+
 // SUPP_PRINT_BE_03 — supplement-PDF endpoints.
 import { SupplementPdfService } from './supplement-pdf.service';
 import { Roles } from 'src/auth/roles.decorator';
@@ -71,6 +78,8 @@ export class PdfController {
     private readonly workHistoryLookup: WorkHistoryLookupService,
     private readonly supplementScopeService: SupplementScopeService,
     @InjectDataSource() private readonly dataSource: DataSource,
+    // Wave Print ผ.03 — BE-01 (2026-05-28).
+    private readonly por03PdfService: Por03PdfService,
   ) {}
 
   // ===================================================================
@@ -173,6 +182,65 @@ export class PdfController {
       'Content-Disposition': 'attachment; filename=custom-project-report.pdf',
     });
 
+    res.end(pdfBuffer);
+  }
+
+  // ============================================
+  // Wave Print ผ.03 — BE-01 (2026-05-28)
+  //
+  // User-side equipment print endpoint.
+  //
+  // Q1 LOCKED — cover layout font + centering byte-for-byte from ผ.02
+  //              (`report-summary.part.ts:18-37` + stamp pattern at
+  //              `report-project-detail.part.ts:612`).
+  // Q2 LOCKED — STRATEGY_BASED only. Per-row re-assertion in
+  //              `Por03PdfService.generate` throws
+  //              `400 EQUIPMENT_PRINT_REQUIRES_STRATEGY_SHAPE`.
+  // Q3 LOCKED — landscape A4 (rendered by part files).
+  // Q4 LOCKED — sibling endpoint `POST /v1/pdf/generate-por03`,
+  //              body `{ equipmentIds: string[] }`,
+  //              response `200 application/pdf`.
+  // Q5 LOCKED — SKIP audit logging. Mirrors ผ.02 endpoint at
+  //              `pdf.controller.ts:148-177` which has zero audit calls.
+  //              NO TrackingStatus, NO AI snapshot, NO workflow mutation.
+  // Q6 LOCKED — cooldown `(workHistoryId, 'print-por03')`, 10s window,
+  //              2xx arms / 5xx no-arm, 429 PRINT_COOLDOWN_ACTIVE.
+  //              Implemented inside `Por03PdfService`.
+  //
+  // Defense-in-depth (§5.3):
+  //   - Controller-level: JwtAuthGuard (class) + AgencyOnlyGuard
+  //     (LAO callers rejected with `403 EQUIPMENT_AGENCY_ONLY`).
+  //     BE-02 may swap `AgencyOnlyGuard` for a dedicated
+  //     `PrintPor03Guard` that adds workStatus-approved gating; the
+  //     service layer re-asserts both checks regardless, so swapping
+  //     guards is safe.
+  //   - Service-level: `Por03PdfService.generate` re-asserts
+  //     `isAgencyWorkHistory(callerWh)`, per-row owner check, and
+  //     per-row STRATEGY_BASED shape check.
+  //
+  // §17.11 — NO super-admin bypass. The agency-only check ignores role.
+  // ============================================
+  @Post('generate-por03')
+  @UseGuards(AgencyOnlyGuard)
+  async generatePor03Pdf(
+    @Body() body: GeneratePor03Dto,
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Res() res: Response,
+  ) {
+    const userId = req.user?.userId;
+    if (!userId) {
+      throw new UnauthorizedException('UNAUTHENTICATED');
+    }
+
+    const pdfBuffer = await this.por03PdfService.generate(
+      userId,
+      body.equipmentIds,
+    );
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': 'attachment; filename="por03-equipment.pdf"',
+    });
     res.end(pdfBuffer);
   }
 

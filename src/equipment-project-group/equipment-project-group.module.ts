@@ -22,6 +22,11 @@ import { ProjectClassificationModule } from 'src/common/project-classification/p
 import { WorkHistoryModule } from 'src/work-history/work-history.module';
 import { WorkStatusApprovedGuard } from 'src/auth/work-status-approved.guard';
 import { AgencyOnlyGuard } from 'src/common/guards/agency-only.guard';
+// Wave Print ผ.03 — BE-02 (2026-05-28). Layer-1 controller guard for
+// the user-side print endpoint `POST /v1/pdf/generate-por03`. Registered
+// + exported here so BE-01 (PdfModule) can `@UseGuards()` it without
+// duplicating the `WorkHistory` repo wiring.
+import { PrintPor03AgencyGuard } from './guards/print-por03-agency.guard';
 // Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28). Service depends on
 // `PreSubmitSnapshotService` to fire the §17.4 `no-ai-baseline` row at
 // equipment publish (Ready → Pending). AiModule exports it.
@@ -86,7 +91,17 @@ import { AiModule } from 'src/ai/ai.module';
     EquipmentProjectGroupService,
     WorkStatusApprovedGuard,
     AgencyOnlyGuard,
+    // Wave Print ผ.03 BE-02 — exported so BE-01's PdfModule (or any
+    // downstream consumer that imports `EquipmentProjectGroupModule`)
+    // can mount the guard via `@UseGuards(PrintPor03AgencyGuard)`
+    // without re-declaring the `WorkHistory` repo dependency.
+    PrintPor03AgencyGuard,
   ],
-  exports: [TypeOrmModule, EquipmentProjectGroupService],
+  exports: [
+    TypeOrmModule,
+    EquipmentProjectGroupService,
+    // Wave Print ผ.03 BE-02 — re-export so consumers see the provider.
+    PrintPor03AgencyGuard,
+  ],
 })
 export class EquipmentProjectGroupModule {}
