@@ -30,6 +30,17 @@ import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-
 // because SPG is the ROOT of its lineage (no upstream parent to unlock).
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
 import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entities/development-plan-supplement.entity';
+// Wave Equipment ผ.03 Phase 2 — BE-04b (2026-05-28). Equipment items
+// are a 4th project kind (alongside PG / RPG / SPG) and run the full
+// status machine (Ready → Pending → Verified → Pending_Approval →
+// Approved + Pull_Back + Returned_For_Revision + Rejected). They mirror
+// PG behavior — main-plan-scoped (DevelopmentPlan), amphoe-based staff
+// responsibility, no §14 lineage (R3=NO locked decision). Authority
+// constraints from §4 (WorkHistory ownership), §8 (plan activation),
+// §4.2 (same-organization Ready → Pending), §7 (responsibleAgency
+// clear is a NO-OP — equipment is agency-only by construction so
+// there is no LAO-origin scenario).
+import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 import { handleException } from 'src/util/handleException';
 import { AnnouncementsService } from 'src/announcements/announcements.service';
 import { Role } from 'src/roles/entities/role.entity';
@@ -105,6 +116,14 @@ export class TrackingStatusService {
     // the transactional callback.
     @InjectRepository(SupplementProjectGroup)
     private readonly supplementProjectGroupRepo: Repository<SupplementProjectGroup>,
+    // Wave Equipment ผ.03 Phase 2 — BE-04b (2026-05-28). Injected so the
+    // tracking-status service can resolve and mutate equipment rows
+    // inside the same transaction as the TrackingStatus write. Most
+    // reads/writes go through `manager.findOne` / `manager.delete`
+    // inside transactional callbacks; the repo itself is kept for
+    // forward compatibility and explicit metadata registration.
+    @InjectRepository(EquipmentProjectGroup)
+    private readonly equipmentProjectGroupRepo: Repository<EquipmentProjectGroup>,
     @InjectRepository(Status)
     private readonly statusRepo: Repository<Status>,
     @InjectRepository(WorkHistory)
@@ -3391,6 +3410,585 @@ export class TrackingStatusService {
         // remains a leaf-of-lineage from §14's perspective and natural
         // rollback semantics (latest TrackingStatus hard-delete + previous
         // restored to isLatest=true) are correct.
+
+        return {
+          message: `ย้อนสถานะสำเร็จ (กลับไปเป็น "${previousTracking.statusId.name}")`,
+          status: 'success',
+        };
+      });
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  // ===========================================================================
+  // Wave Equipment ผ.03 Phase 2 — BE-04b (2026-05-28).
+  // EquipmentProjectGroup (equipment) transition + rollback support.
+  //
+  // Equipment items are a 4th project kind alongside PG / RPG / SPG and run
+  // the full canonical status machine (Ready → Pending → Verified →
+  // Pending_Approval → Approved + Pull_Back + Returned_For_Revision +
+  // Rejected). Equipment mirrors PG (NOT RPG/SPG) for the responsibility
+  // axis because:
+  //   - Equipment is main-plan-scoped (parent = DevelopmentPlan, not a
+  //     DevelopmentPlanRevision / DevelopmentPlanSupplement).
+  //   - Staff responsibility is amphoe-based via
+  //     `WorkHistoryAmphoeResponsibility` (Q3 amphoe-mirror, NOT
+  //     `WorkHistoryGovernmentAgencyResponsibility`).
+  //   - §8 plan activation (`isLatest=true`, `isBooked=false`, matching
+  //     open PlanPhase) applies verbatim — agency PlanPhase since
+  //     equipment is agency-only by construction (BE-04 enforces).
+  //
+  // STRUCTURAL DIFFERENCES from PG:
+  //   1. §14 lineage descendant guard is VACUOUS — equipment has no
+  //      `prev_project_id` / `prev_project_type` columns (R3=NO locked
+  //      decision). The §14.6 rollback hard-delete of the equipment row
+  //      itself is INTENTIONALLY NOT applied; equipment is the root of
+  //      its own (currently single-tier) lineage with no upstream parent
+  //      to unlock. Natural rollback semantics (hard-delete latest
+  //      TrackingStatus + restore previous to isLatest=true) are
+  //      preserved. Phase 3 may add lineage additively.
+  //   2. `clearResponsibleAgency` is inapplicable — equipment is
+  //      agency-only by construction (BE-04 enforces at create via
+  //      Layer-1 `AgencyOnlyGuard` + Layer-2 service check), so
+  //      §7.2/§7.3 LAO-origin clearing is unreachable. The flag is
+  //      silently ignored to preserve backward compatibility with
+  //      shared client code (mirrors the SPG ignore at line 3351).
+  //   3. Notification dispatch uses `projectKind: 'project-group'`
+  //      (PG kind) for now — extending the `projectKind` union to
+  //      include `'equipment-project-group'` requires widening 7
+  //      notification files (sub-blocker flagged in the BE-04b report).
+  //      Equipment notifications therefore reuse the PG email/LINE
+  //      templates + deep links (`/agency/admin/pending`,
+  //      `/project/edit/:id`, `/project`) — semantically equivalent for
+  //      Phase 2 since equipment items live in the same staff queues.
+  // ===========================================================================
+
+  async createByEquipmentProjectGroup(
+    dto: CreateTrackingStatusDto,
+    userId: string,
+  ): Promise<TrackingStatus> {
+    try {
+      // Accept the equipment id via explicit `equipmentProjectGroupId` OR
+      // the legacy `projectId` mirror. Prefer explicit when both present.
+      const equipmentId = dto.equipmentProjectGroupId ?? dto.projectId;
+      if (!equipmentId) {
+        throw new BadRequestException(
+          'ต้องระบุ equipmentProjectGroupId หรือ projectId',
+        );
+      }
+
+      type TxResult = {
+        saved: TrackingStatus;
+        fromStatus: string;
+        toStatus: string;
+        project: {
+          id: string;
+          title: string;
+          amphoeId: string | null;
+          createdByWorkHistoryId: string | null;
+          planName: string | null;
+        };
+        actorUserId: string | null;
+        actorWorkHistoryId: string | null;
+      };
+
+      const txResult = await this.dataSource.transaction<TxResult>(async (manager) => {
+        // 1-3. WorkHistory + workStatus.
+        const workHistory = await manager.findOne(WorkHistory, {
+          where: { user: { id: userId }, isCurrent: true },
+          relations: ['user', 'role', 'workStatus', 'amphoe', 'localAdministrativeOrganization'],
+        });
+        if (!workHistory) {
+          throw new NotFoundException(`WorkHistory for user ${userId} not found`);
+        }
+        if (workHistory.workStatus?.name !== 'approved') {
+          throw new UnauthorizedException(
+            'คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)',
+          );
+        }
+
+        // 4. Load target equipment with the relations needed for scope +
+        //    ownership checks. `responsibleAgency` is included for
+        //    symmetry with PG (read-only here; not cleared on rollback).
+        const equipment = await manager.findOne(EquipmentProjectGroup, {
+          where: { id: equipmentId },
+          relations: [
+            'createdBy',
+            'developmentPlan',
+            'amphoe',
+            'responsibleAgency',
+          ],
+        });
+        if (!equipment) {
+          throw new NotFoundException(
+            `EquipmentProjectGroup with ID ${equipmentId} not found`,
+          );
+        }
+
+        // Resolve target Status.
+        const status = await manager.findOne(Status, {
+          where: { id: dto.statusId },
+        });
+        if (!status) {
+          throw new NotFoundException(`Status with ID ${dto.statusId} not found`);
+        }
+
+        // --- RBAC & Ownership Check (mirror of PG.create) ---
+        const allowedRoles = ['staff', 'admin', 'super-admin'];
+        const userRole = workHistory.role?.name;
+
+        if (!allowedRoles.includes(userRole)) {
+          if (userRole === 'user') {
+            const currentTracking = await manager.findOne(TrackingStatus, {
+              where: { equipmentProjectGroupId: { id: equipment.id }, isLatest: true },
+              relations: ['statusId'],
+            });
+            const currentStatusName: string = currentTracking?.statusId?.name ?? '';
+
+            if (status.name === 'Pull_Back') {
+              // §4 ownership: createdBy.id === workHistory.id.
+              if (equipment.createdBy?.id !== workHistory.id) {
+                throw new ForbiddenException(
+                  'คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะรายการครุภัณฑ์นี้',
+                );
+              }
+              // Pull_Back allowed only from Pending or Verified.
+              if (currentStatusName !== 'Pending' && currentStatusName !== 'Verified') {
+                throw new BadRequestException(
+                  `ไม่สามารถดึงกลับได้จากสถานะ "${currentStatusName}"`,
+                );
+              }
+              // §8 scope: DevelopmentPlan must still be active + matching
+              // PlanPhase open. Equipment is agency-only → check AGENCY phase.
+              const dp = equipment.developmentPlan;
+              if (!dp?.isLatest) {
+                throw new BadRequestException('แผนพัฒนาฯ ไม่ใช่แผนปัจจุบัน');
+              }
+              if (dp?.isBooked) {
+                throw new BadRequestException('แผนพัฒนาฯ ถูกรวมเล่มแล้ว');
+              }
+              const openPhase = await manager.findOne(PlanPhase, {
+                where: {
+                  developmentPlan: { id: dp.id },
+                  phaseType: PhaseType.AGENCY,
+                  isOpen: true,
+                },
+              });
+              if (!openPhase) {
+                throw new BadRequestException(
+                  'ระยะเวลายื่นโครงการ (AGENCY) ปิดแล้ว ไม่สามารถดึงกลับได้',
+                );
+              }
+            } else if (status.name === 'Pending') {
+              // User submission / resubmission to Pending.
+              // Allowed sources: Ready, Pull_Back, Returned_For_Revision.
+              const allowedSources = ['Ready', 'Pull_Back', 'Returned_For_Revision'];
+              if (!allowedSources.includes(currentStatusName)) {
+                throw new BadRequestException(
+                  `ไม่สามารถส่งรายการครุภัณฑ์ได้จากสถานะ "${currentStatusName}" ` +
+                  `(ต้องอยู่ในสถานะ Ready, Pull_Back หรือ Returned_For_Revision)`,
+                );
+              }
+
+              if (currentStatusName === 'Ready') {
+                // §4.2 — Ready → Pending: same-organization scope. Equipment
+                // is agency-only by construction (BE-04 Layer-1 + Layer-2
+                // gate), so both creator and requester MUST be classified
+                // as `agency`. We still defensively check creator
+                // classification so a stale row whose creator's
+                // WorkHistory drifted (e.g. moved off agency) cannot be
+                // submitted by a different agency user.
+                const projectCreatorWh = await manager.findOne(WorkHistory, {
+                  where: { id: equipment.createdBy?.id },
+                  relations: ['amphoe', 'localAdministrativeOrganization'],
+                });
+                if (!projectCreatorWh) {
+                  throw new BadRequestException(
+                    'ไม่พบข้อมูล WorkHistory ของผู้สร้างรายการครุภัณฑ์',
+                  );
+                }
+                const isProjectAgency =
+                  projectCreatorWh.amphoe?.id === '3001' &&
+                  projectCreatorWh.localAdministrativeOrganization?.id === '3001027';
+                const isRequesterAgency =
+                  workHistory.amphoe?.id === '3001' &&
+                  workHistory.localAdministrativeOrganization?.id === '3001027';
+
+                if (!isProjectAgency) {
+                  // Defensive — should never happen given BE-04 agency-only
+                  // create gate, but reject loudly so the bug surfaces.
+                  throw new ForbiddenException(
+                    'รายการครุภัณฑ์นี้ไม่ใช่ของ Agency ไม่สามารถส่งได้',
+                  );
+                }
+                if (!isRequesterAgency) {
+                  throw new ForbiddenException(
+                    'คุณไม่มีสิทธิ์ส่งรายการครุภัณฑ์นี้ (ต้องเป็นผู้ใช้ประเภท Agency)',
+                  );
+                }
+              } else {
+                // Pull_Back → Pending or Returned_For_Revision → Pending:
+                // Strict ownership required (§4 + PERMISSION MODEL).
+                if (equipment.createdBy?.id !== workHistory.id) {
+                  throw new ForbiddenException(
+                    'คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะรายการครุภัณฑ์นี้',
+                  );
+                }
+              }
+
+              // §8 scope re-validation on every submission (RESUBMISSION
+              // CONSTRAINT). Equipment → AGENCY phase.
+              const dp = equipment.developmentPlan;
+              if (!dp?.isLatest) {
+                throw new BadRequestException('แผนพัฒนาฯ ไม่ใช่แผนปัจจุบัน');
+              }
+              if (dp?.isBooked) {
+                throw new BadRequestException('แผนพัฒนาฯ ถูกรวมเล่มแล้ว');
+              }
+              const openPhase = await manager.findOne(PlanPhase, {
+                where: {
+                  developmentPlan: { id: dp.id },
+                  phaseType: PhaseType.AGENCY,
+                  isOpen: true,
+                },
+              });
+              if (!openPhase) {
+                throw new BadRequestException(
+                  'ระยะเวลายื่นโครงการ (AGENCY) ปิดแล้ว ไม่สามารถส่งรายการครุภัณฑ์ได้',
+                );
+              }
+            } else {
+              throw new ForbiddenException(
+                'คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะรายการครุภัณฑ์นี้ ' +
+                '(อนุญาตเฉพาะ Pull_Back และ Pending เท่านั้น)',
+              );
+            }
+          } else {
+            throw new ForbiddenException(
+              'คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะรายการครุภัณฑ์',
+            );
+          }
+        } else {
+          // ----- Staff / Admin / Super-Admin branch ---------------------
+          // Ownership is NOT required for staff-controlled transitions
+          // (§4.1). Validate plan scope + amphoe responsibility + strict
+          // staff transition map.
+          const dp = equipment.developmentPlan;
+          if (!dp?.isLatest) {
+            throw new ForbiddenException(
+              'แผนพัฒนาฯ ที่เชื่อมโยงกับรายการครุภัณฑ์นี้ไม่ใช่แผนปัจจุบัน ไม่สามารถดำเนินการได้',
+            );
+          }
+          if (dp?.isBooked) {
+            throw new ForbiddenException(
+              'แผนพัฒนาฯ ที่เชื่อมโยงกับรายการครุภัณฑ์นี้ถูกรวมเล่มแล้ว ไม่สามารถดำเนินการได้',
+            );
+          }
+
+          // Amphoe responsibility check (mirrors PG path). Admin /
+          // super-admin bypass.
+          if (userRole === 'staff') {
+            const projectAmphoeId = equipment.amphoe?.id;
+            if (!projectAmphoeId) {
+              throw new BadRequestException(
+                'รายการครุภัณฑ์นี้ไม่มีข้อมูลอำเภอ ไม่สามารถตรวจสอบสิทธิ์ได้',
+              );
+            }
+            const hasResponsibility = await manager.findOne(WorkHistoryAmphoeResponsibility, {
+              where: {
+                workHistory: { id: workHistory.id },
+                amphoe: { id: projectAmphoeId },
+              },
+            });
+            if (!hasResponsibility) {
+              throw new ForbiddenException(
+                'คุณไม่มีสิทธิ์ดำเนินการกับรายการครุภัณฑ์นี้ (ไม่ได้รับผิดชอบอำเภอของรายการ)',
+              );
+            }
+          }
+
+          const staffCurrentTracking = await manager.findOne(TrackingStatus, {
+            where: { equipmentProjectGroupId: { id: equipment.id }, isLatest: true },
+            relations: ['statusId'],
+          });
+          if (!staffCurrentTracking) {
+            throw new InternalServerErrorException(
+              'ไม่พบสถานะปัจจุบันของรายการครุภัณฑ์ ข้อมูลสถานะอาจไม่สมบูรณ์',
+            );
+          }
+          const staffCurrentStatusName = staffCurrentTracking.statusId?.name;
+          if (!staffCurrentStatusName) {
+            throw new InternalServerErrorException(
+              'ไม่สามารถอ่านชื่อสถานะปัจจุบันของรายการครุภัณฑ์ได้',
+            );
+          }
+
+          // Same strict staff transition map as PG.create (including
+          // Rejected as a valid exit destination per W67/W68 — equipment
+          // can also be rejected as "เกินศักยภาพ").
+          const staffAllowedTransitions: Record<string, string[]> = {
+            Pending: ['Verified', 'Returned_For_Revision', 'Rejected'],
+            Verified: ['Pending_Approval', 'Returned_For_Revision', 'Rejected'],
+            Pending_Approval: ['Approved', 'Rejected'],
+          };
+          const allowedDestinations = staffAllowedTransitions[staffCurrentStatusName];
+          if (!allowedDestinations || !allowedDestinations.includes(status.name)) {
+            throw new ForbiddenException(
+              `ไม่อนุญาตให้เปลี่ยนสถานะจาก "${staffCurrentStatusName}" เป็น "${status.name}" ` +
+              `(เส้นทางที่อนุญาต: ${staffCurrentStatusName} → ${allowedDestinations?.join(', ') ?? 'ไม่มี'})`,
+            );
+          }
+        }
+
+        // Capture fromStatus BEFORE the isLatest flip for post-commit emit.
+        const emitFromTracking = await manager.findOne(TrackingStatus, {
+          where: { equipmentProjectGroupId: { id: equipment.id }, isLatest: true },
+          relations: ['statusId'],
+        });
+        const emitFromStatus = emitFromTracking?.statusId?.name ?? '';
+
+        // §12 Audit — flip prior latest, insert new row.
+        await manager.update(
+          TrackingStatus,
+          { equipmentProjectGroupId: { id: equipment.id } },
+          { isLatest: false },
+        );
+
+        const staffLeadRoles = ['staff', 'admin', 'super-admin'];
+        const resolvedStaffRemark = staffLeadRoles.includes(workHistory.role?.name)
+          ? (dto.staffRemark ?? null)
+          : null;
+
+        const tracking = manager.create(TrackingStatus, {
+          createdBy: workHistory,
+          equipmentProjectGroupId: equipment,
+          comment: dto.comment,
+          staffRemark: resolvedStaffRemark,
+          statusId: status,
+          isLatest: true,
+        });
+        const savedTracking = await manager.save(TrackingStatus, tracking);
+
+        if (dto.comments?.length) {
+          const commentEntities = dto.comments.map((c) =>
+            manager.create(Comment, {
+              step: c.step,
+              detail: c.detail,
+              trackingStatusId: savedTracking,
+            }),
+          );
+          await manager.save(Comment, commentEntities);
+        }
+
+        if (status.name === 'Pull_Back') {
+          try {
+            const staffRole = await manager.findOne(Role, { where: { name: 'staff' } });
+            if (staffRole) {
+              await this.announcementsService.create(
+                {
+                  title: 'มีการขอดึงกลับรายการครุภัณฑ์',
+                  description:
+                    `รายการครุภัณฑ์ "${equipment.equipmentName}" ขอดึงกลับโดย ` +
+                    `${workHistory.user?.firstname} ${workHistory.user?.lastname}`,
+                  type: NotificationType.PROJECT,
+                  status: AnnouncementStatus.PUBLISHED,
+                  roleIds: [staffRole.id],
+                },
+                userId,
+              );
+            }
+          } catch (err) {
+            this.logger.error('Failed to send equipment pull back announcement', err);
+          }
+        }
+
+        return {
+          saved: savedTracking,
+          fromStatus: emitFromStatus,
+          toStatus: status.name,
+          project: {
+            id: equipment.id,
+            title: equipment.equipmentName ?? '',
+            amphoeId: equipment.amphoe?.id ?? null,
+            createdByWorkHistoryId: equipment.createdBy?.id ?? null,
+            planName: equipment.developmentPlan?.name ?? null,
+          },
+          actorUserId: workHistory.user?.id ?? null,
+          actorWorkHistoryId: workHistory.id ?? null,
+        };
+      });
+
+      // POST-COMMIT notification dispatch (best-effort; never cascades).
+      // BE-04b — `projectKind: 'project-group'` placeholder. Extending the
+      // notification union with `'equipment-project-group'` is a sub-blocker
+      // (7 files touched); deferred to a follow-up. The PG deep links
+      // (`/agency/admin/pending`, `/project/edit/:id`, `/project`) are
+      // semantically correct for equipment because equipment items live in
+      // the same staff review queues for Phase 2.
+      const eventTypes = this.resolveNotificationEventTypes(
+        txResult.fromStatus,
+        txResult.toStatus,
+      );
+      for (const eventType of eventTypes) {
+        await this.dispatchPhaseOneNotification({
+          eventType,
+          fromStatus: txResult.fromStatus,
+          toStatus: txResult.toStatus,
+          projectId: txResult.project.id,
+          projectKind: 'project-group',
+          projectTitle: txResult.project.title,
+          projectAmphoeId: txResult.project.amphoeId,
+          createdByWorkHistoryId: txResult.project.createdByWorkHistoryId,
+          reason: dto.comment ?? dto.staffRemark ?? null,
+          planName: txResult.project.planName,
+          actorUserId: txResult.actorUserId,
+          actorWorkHistoryId: txResult.actorWorkHistoryId,
+        });
+      }
+
+      return txResult.saved;
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * Wave Equipment ผ.03 Phase 2 — BE-04b (2026-05-28).
+   * Staff-led rollback for EquipmentProjectGroup.
+   *
+   * Mirrors `rollbackStatus` (PG) — amphoe-based responsibility, plan
+   * scope binding — with TWO deletions:
+   *   1. §14 descendant guard is VACUOUS — equipment has no
+   *      `prev_project_id` (R3=NO locked decision). No call to
+   *      `LineageLockService.assertDeletable`.
+   *   2. §14.6 ghost-descendant hard-delete of the equipment row is
+   *      INTENTIONALLY NOT applied. Equipment is the root of its own
+   *      lineage with no upstream parent to unlock. Hard-deleting the
+   *      equipment row would gratuitously destroy the item + its
+   *      budgets + its full tracking history (cascade FKs) and would
+   *      not benefit any §14 unlock. Natural rollback semantics
+   *      (hard-delete current latest TrackingStatus + restore previous
+   *      to isLatest=true) are preserved.
+   *
+   * `clearResponsibleAgency` is inapplicable — equipment is agency-only
+   * by construction (BE-04 enforces). The flag is silently ignored to
+   * preserve backward compatibility with shared client code (matches
+   * the SPG pattern at line 3351).
+   */
+  async rollbackEquipmentProjectGroupStatus(
+    equipmentProjectGroupId: string,
+    userId: string,
+    _clearResponsibleAgency?: boolean,
+  ): Promise<{ message: string; status: string }> {
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        // 1-2. WorkHistory + workStatus.
+        const workHistory = await manager.findOne(WorkHistory, {
+          where: { user: { id: userId }, isCurrent: true },
+          relations: ['role', 'workStatus', 'amphoe', 'localAdministrativeOrganization'],
+        });
+        if (!workHistory) {
+          throw new NotFoundException(`WorkHistory for user ${userId} not found`);
+        }
+        if (workHistory.workStatus?.name !== 'approved') {
+          throw new UnauthorizedException(
+            'คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)',
+          );
+        }
+
+        // 3. RBAC — staff-lead only.
+        const allowedRoles = ['staff', 'admin', 'super-admin'];
+        const userRole = workHistory.role?.name;
+        if (!allowedRoles.includes(userRole)) {
+          throw new ForbiddenException(
+            'เฉพาะเจ้าหน้าที่ (staff/admin/super-admin) เท่านั้นที่สามารถดึงกลับรายการครุภัณฑ์ได้',
+          );
+        }
+
+        // 4. Load equipment with relations needed for scope + responsibility checks.
+        const equipment = await manager.findOne(EquipmentProjectGroup, {
+          where: { id: equipmentProjectGroupId },
+          relations: ['createdBy', 'developmentPlan', 'amphoe', 'responsibleAgency'],
+        });
+        if (!equipment) {
+          throw new NotFoundException(
+            `EquipmentProjectGroup with ID ${equipmentProjectGroupId} not found`,
+          );
+        }
+
+        // 5. Amphoe responsibility check for staff (mirrors PG rollback).
+        //    Admin and super-admin bypass.
+        if (userRole === 'staff') {
+          const projectAmphoeId = equipment.amphoe?.id;
+          if (!projectAmphoeId) {
+            throw new BadRequestException(
+              'รายการครุภัณฑ์นี้ไม่มีข้อมูลอำเภอ ไม่สามารถตรวจสอบสิทธิ์ได้',
+            );
+          }
+          const hasResponsibility = await manager.findOne(WorkHistoryAmphoeResponsibility, {
+            where: {
+              workHistory: { id: workHistory.id },
+              amphoe: { id: projectAmphoeId },
+            },
+          });
+          if (!hasResponsibility) {
+            throw new ForbiddenException(
+              'คุณไม่มีสิทธิ์ดึงกลับรายการครุภัณฑ์นี้ (ไม่ได้รับผิดชอบอำเภอของรายการ)',
+            );
+          }
+        }
+
+        // 6. Plan scope validation.
+        const dp = equipment.developmentPlan;
+        if (!dp?.isLatest) {
+          throw new BadRequestException('แผนพัฒนาฯ ไม่ใช่แผนปัจจุบัน');
+        }
+        if (dp?.isBooked) {
+          throw new BadRequestException('แผนพัฒนาฯ ถูกรวมเล่มแล้ว');
+        }
+
+        // 6.5 §14 descendant guard — VACUOUS for equipment (R3=NO). No
+        //     `prev_project_id` edge can point at an equipment row, so
+        //     the guard would always pass. Skipped intentionally.
+
+        // 7. Status constraint — cannot rollback from Pull_Back or Ready.
+        const currentTracking = await manager.findOne(TrackingStatus, {
+          where: { equipmentProjectGroupId: { id: equipmentProjectGroupId }, isLatest: true },
+          relations: ['statusId'],
+        });
+        if (!currentTracking) {
+          throw new NotFoundException('ไม่พบสถานะปัจจุบันของรายการครุภัณฑ์');
+        }
+        const currentStatusName = currentTracking.statusId?.name;
+        const disallowedStatuses = ['Pull_Back', 'Ready'];
+        if (disallowedStatuses.includes(currentStatusName)) {
+          throw new BadRequestException(
+            `ไม่สามารถดึงกลับได้จากสถานะ "${currentStatusName}"`,
+          );
+        }
+
+        // 8. clearResponsibleAgency inapplicable — equipment is agency-only.
+        //    Silently ignore (mirrors SPG behavior at line 3351).
+        void _clearResponsibleAgency;
+
+        // 9. Find previous status (most recent non-latest).
+        const previousTracking = await manager.findOne(TrackingStatus, {
+          where: { equipmentProjectGroupId: { id: equipmentProjectGroupId }, isLatest: false },
+          relations: ['statusId'],
+          order: { createAt: 'DESC' },
+        });
+        if (!previousTracking?.statusId) {
+          throw new BadRequestException('ไม่พบสถานะก่อนหน้า ไม่สามารถย้อนกลับได้');
+        }
+
+        // 10. True rollback — hard-delete current latest, restore previous.
+        await manager.delete(TrackingStatus, { id: currentTracking.id });
+        await manager.update(TrackingStatus, { id: previousTracking.id }, { isLatest: true });
+
+        // §14.6 hard-delete of the equipment row is INTENTIONALLY NOT
+        // applied — equipment is the root of its own lineage (no
+        // upstream parent to unlock). See class header comment.
 
         return {
           message: `ย้อนสถานะสำเร็จ (กลับไปเป็น "${previousTracking.statusId.name}")`,

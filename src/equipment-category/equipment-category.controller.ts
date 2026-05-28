@@ -71,6 +71,44 @@ export class EquipmentCategoryController {
     return this.service.findScopedCategories(query.tacticId, query.planId);
   }
 
+  /**
+   * Wave Equipment ผ.03 Phase 2 (FE-05 follow-up) — 2026-05-28.
+   *
+   * Returns the raw `(category, plan)` junction rows for a given
+   * `tacticId`. Powers the simplified Step-1 wizard UX where the admin
+   * picks Strategy → Tactic → Category (no explicit Plan dropdown) —
+   * the FE then derives `planId` from this junction:
+   *   - If a chosen category maps to a single plan under the tactic →
+   *     auto-set planId silently.
+   *   - If it maps to multiple plans (only 1 such combo exists in the
+   *     current seed: ครุภัณฑ์ยานพาหนะฯ × tactic 5.2 → PLAN001 +
+   *     PLAN009) → FE reveals a small inline plan picker.
+   *
+   * JWT-only (matches the rest of the lookup surface — wizard
+   * consumers don't need admin gate).
+   */
+  @Get('scopes-by-tactic')
+  @UseGuards(JwtAuthGuard)
+  async findScopesByTactic(@Query('tacticId') tacticId: string) {
+    return this.service.findScopesByTactic(tacticId);
+  }
+
+  /**
+   * Return the FULL `(category, tactic, plan)` junction.
+   *
+   * Consumed by the AddEquipment Step-1 wizard (2026-05-28 v3 redesign)
+   * which pivots Category → Tactic → Plan. Single fetch on page mount;
+   * the FE derives each dropdown's options client-side from this rows.
+   *
+   * JWT-only — same gate as `scopes-by-tactic` (any authenticated
+   * caller may read; admin gate is on the writes only).
+   */
+  @Get('scopes-all')
+  @UseGuards(JwtAuthGuard)
+  async findAllScopes() {
+    return this.service.findAllScopes();
+  }
+
   // -------------------------------------------------------------
   //  Admin writes (admin + super-admin + workStatus=approved)
   // -------------------------------------------------------------

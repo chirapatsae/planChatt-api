@@ -8,6 +8,8 @@ import { AiPreSubmitSnapshot } from './entities/ai-pre-submit-snapshot.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
+// Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28).
+import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { CreatePreSubmitSnapshotDto } from './dto/pre-submit-snapshot.dto';
 
@@ -138,6 +140,10 @@ describe('PreSubmitSnapshotService', () => {
   const supplementRepoMock = {
     findOne: jest.fn(async () => null),
   };
+  // Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28).
+  const equipmentRepoMock = {
+    findOne: jest.fn(async () => null),
+  };
   const workHistoryRepoMock = {
     findOne: jest.fn(async () => callerWorkHistory),
   };
@@ -160,6 +166,8 @@ describe('PreSubmitSnapshotService', () => {
         { provide: getRepositoryToken(ProjectGroup), useValue: projectRepoMock },
         { provide: getRepositoryToken(RevisedProjectGroup), useValue: revisedRepoMock },
         { provide: getRepositoryToken(SupplementProjectGroup), useValue: supplementRepoMock },
+        // Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28).
+        { provide: getRepositoryToken(EquipmentProjectGroup), useValue: equipmentRepoMock },
         { provide: getRepositoryToken(WorkHistory), useValue: workHistoryRepoMock },
         { provide: DataSource, useValue: dataSourceMock },
       ],

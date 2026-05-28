@@ -43,7 +43,12 @@ export type AiStalenessPolicy = 'strict' | 'snapshot-only' | 'warning-only';
 export type AiResultTargetKind =
   | 'project-group'
   | 'revised-project-group'
-  | 'supplement-project-group';
+  | 'supplement-project-group'
+  // Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28). Added so the §17.4
+  // `no-ai-baseline` snapshot can fire for equipment publish without a
+  // parallel `ai_*` table. Same audit-by-UUID-no-FK semantics as the
+  // other three values (§17.3).
+  | 'equipment-project-group';
 
 /**
  * Canonical AI score envelope consumed by UI surfaces.

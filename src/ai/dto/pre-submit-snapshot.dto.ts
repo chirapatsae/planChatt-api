@@ -93,6 +93,14 @@ export class ProjectHashInputDto {
   @IsOptional() amphoeId?: number | string | null;
   @IsOptional() localOrganizationId?: number | string | null;
   @IsArray() @IsOptional() budgets?: Array<{ year: number; quantity: number }>;
+
+  /**
+   * Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28). Equipment-only
+   * discriminator forwarded to `computeSmartApproveContentHash`. The
+   * canonicalizer omits the field when null/undefined, preserving hash
+   * output for every non-equipment caller.
+   */
+  @IsString() @IsOptional() equipmentCategoryId?: string | null;
 }
 
 export class ClassificationHashInputDto {
@@ -108,11 +116,18 @@ export class ClassificationHashInputDto {
 
 export class CreatePreSubmitSnapshotDto {
   @IsString()
-  @IsIn(['project-group', 'revised-project-group', 'supplement-project-group'])
+  @IsIn([
+    'project-group',
+    'revised-project-group',
+    'supplement-project-group',
+    // Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28).
+    'equipment-project-group',
+  ])
   targetKind:
     | 'project-group'
     | 'revised-project-group'
-    | 'supplement-project-group';
+    | 'supplement-project-group'
+    | 'equipment-project-group';
 
   @IsUUID()
   targetId: string;

@@ -240,6 +240,31 @@ export class BootstrapMigrationsService implements OnApplicationBootstrap {
         DROP COLUMN IF EXISTS "staleness_policy";
       `,
     },
+    // Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28).
+    //
+    // Widen the shared `ai_target_kind` enum to accept the new
+    // `'equipment-project-group'` value used by §17.4 baseline writes
+    // from `EquipmentProjectGroupService.create` and the owner / staff
+    // read paths in `PreSubmitSnapshotService`.
+    //
+    // Mirrors migration `1781000000000-EquipmentAiWidenTargetKind.ts`
+    // for dev boxes that run `synchronize: true` without the migration
+    // runner (TypeORM does NOT mutate enum values on synchronize per
+    // user-memory `project_typeorm_synchronize.md`).
+    //
+    // `ALTER TYPE ... ADD VALUE` cannot run inside a transaction block.
+    // `dataSource.query(...)` issues the statement on the default
+    // connection without an explicit BEGIN, so it lands successfully
+    // here. `IF NOT EXISTS` makes the statement an unconditional no-op
+    // on subsequent boots.
+    //
+    // §17.3 audit separation preserved — no FK introduced. §17.11 no
+    // role exemption — schema-level integrity, unreachable from any
+    // request context.
+    {
+      name: 'ai_target_kind ADD VALUE equipment-project-group (BE-06)',
+      sql: `ALTER TYPE "ai_target_kind" ADD VALUE IF NOT EXISTS 'equipment-project-group';`,
+    },
   ];
 
   async onApplicationBootstrap(): Promise<void> {

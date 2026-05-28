@@ -260,6 +260,12 @@ export class AiExecutiveMessage {
    * Wave 46 HOTFIX — nullable; paired coherently with `targetId`.
    * See §17.3 doc above on `targetId` for the full rationale.
    */
+  // Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28). MUST stay in
+  // lockstep with `AbstractAiResult.target_kind` + `AiStaffReviewRun.
+  // target_kind` enum lists — all three declarations point at the SAME
+  // PG type `ai_target_kind`. Missing the 4th value here triggers
+  // TypeORM's enum-rename loop on every BE boot ("cannot drop type
+  // ai_target_kind_old because other objects depend on it").
   @Column({
     name: 'target_kind',
     type: 'enum',
@@ -267,6 +273,7 @@ export class AiExecutiveMessage {
       'project-group',
       'revised-project-group',
       'supplement-project-group',
+      'equipment-project-group',
     ] as AiResultTargetKind[],
     enumName: 'ai_target_kind',
     nullable: true,

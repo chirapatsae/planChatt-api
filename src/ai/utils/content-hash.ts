@@ -43,6 +43,15 @@ export interface ContentHashProjectInput {
   amphoeId?: number | string | null;
   localOrganizationId?: number | string | null;
   budgets?: Array<{ year: number; quantity: number } | null | undefined>;
+  /**
+   * Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28). Equipment-only
+   * discriminator. Included in the canonical hash so that an equipment
+   * row's category is a deterministic part of `(target_kind, target_id,
+   * content_hash)`. The slot is `undefined` for every PG / RPG / SPG
+   * call site and therefore produces the same hash as before — see the
+   * canonicalizer below for the "omit when nullish" behavior.
+   */
+  equipmentCategoryId?: string | null;
 }
 
 export interface ContentHashClassificationInput {
@@ -148,6 +157,17 @@ function canonicalizeProject(
   // §16.5 classification-shape invariant — indicator only for STRATEGY_BASED.
   if (reportFormat === 'STRATEGY_BASED') {
     base.indicator = normalizeString(p.indicator);
+  }
+
+  // Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28). Equipment-only
+  // discriminator. The key is OMITTED entirely when the caller does not
+  // supply a category id (every existing PG / RPG / SPG call site). This
+  // preserves existing hash output byte-for-byte for non-equipment
+  // targets — critical for Wave 10 same-hash idempotency on already-
+  // persisted snapshot rows.
+  const equipmentCategoryId = normalizeId(p.equipmentCategoryId);
+  if (equipmentCategoryId !== null) {
+    base.equipmentCategoryId = equipmentCategoryId;
   }
 
   return base;

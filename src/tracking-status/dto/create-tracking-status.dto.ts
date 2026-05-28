@@ -25,11 +25,17 @@ export class CreateTrackingStatusDto {
    * at tracking-status.service.ts:2547) but the DTO validator rejected
    * SPG payloads with "projectId should not be empty".
    *
-   * After fix: `projectId` is required ONLY when `supplementProjectGroupId`
-   * is absent. PG / RPG endpoints (which never send
-   * `supplementProjectGroupId`) keep their existing validation contract.
+   * After fix: `projectId` is required ONLY when neither
+   * `supplementProjectGroupId` nor `equipmentProjectGroupId` is supplied.
+   * PG / RPG endpoints (which never send either alternative FK) keep
+   * their existing validation contract.
+   *
+   * Wave Equipment ผ.03 Phase 2 BE-04b (2026-05-28) — `equipmentProjectGroupId`
+   * added to the disjunction so the equipment endpoint
+   * (`POST /tracking-status/create-by-equipment-project-group`) may
+   * carry the equipment id without supplying `projectId`.
    */
-  @ValidateIf((o) => !o.supplementProjectGroupId)
+  @ValidateIf((o) => !o.supplementProjectGroupId && !o.equipmentProjectGroupId)
   @IsUUID()
   @IsNotEmpty()
   projectId?: string;
@@ -43,11 +49,26 @@ export class CreateTrackingStatusDto {
    * the RPG id off `projectId`). The service prefers
    * `supplementProjectGroupId` when present and falls back to `projectId`.
    *
-   * Other endpoints (PG / RPG paths) MUST ignore this field.
+   * Other endpoints (PG / RPG / equipment paths) MUST ignore this field.
    */
   @IsOptional()
   @IsUUID()
   supplementProjectGroupId?: string;
+
+  /**
+   * Wave Equipment ผ.03 Phase 2 BE-04b (2026-05-28) — Optional explicit
+   * EquipmentProjectGroup id.
+   *
+   * The equipment endpoint (`POST /tracking-status/create-by-equipment-project-group`)
+   * accepts the equipment id via either `equipmentProjectGroupId`
+   * (preferred, explicit) OR `projectId` (legacy mirror of the PG / RPG
+   * shape). The service prefers `equipmentProjectGroupId` when present.
+   *
+   * Other endpoints (PG / RPG / SPG paths) MUST ignore this field.
+   */
+  @IsOptional()
+  @IsUUID()
+  equipmentProjectGroupId?: string;
 
   @IsUUID()
   @IsNotEmpty()

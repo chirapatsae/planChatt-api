@@ -67,6 +67,15 @@ export class AiStaffReviewRun {
 
   /**
    * Discriminator for `target_id`. Uses shared `ai_target_kind` enum.
+   *
+   * MUST stay in lockstep with `AbstractAiResult.target_kind` enum list —
+   * both declarations point at the SAME PG type `ai_target_kind`, and a
+   * mismatch causes TypeORM's `synchronize:true` to attempt a futile
+   * enum-rename cycle on every BE boot (verified 2026-05-28: missing
+   * `equipment-project-group` here triggers `cannot drop type
+   * ai_target_kind_old because other objects depend on it` since the
+   * RENAME-CREATE-SWITCH-DROP protocol leaves dependent columns mid-flight).
+   * Wave Equipment ผ.03 Phase 2 — BE-06.
    */
   @Column({
     name: 'target_kind',
@@ -75,6 +84,7 @@ export class AiStaffReviewRun {
       'project-group',
       'revised-project-group',
       'supplement-project-group',
+      'equipment-project-group',
     ] as AiResultTargetKind[],
     enumName: 'ai_target_kind',
   })

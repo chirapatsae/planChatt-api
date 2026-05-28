@@ -69,6 +69,30 @@ export class TrackingStatusController {
     );
   }
 
+  /**
+   * Wave Equipment ผ.03 Phase 2 — BE-04b (2026-05-28).
+   * Tracking-status write endpoint for EquipmentProjectGroup.
+   * Handles owner Pull_Back, owner resubmission, and staff workflow
+   * transitions (Pending → Verified, Verified → Pending_Approval,
+   * Pending_Approval → Approved, * → Returned_For_Revision, * → Rejected).
+   * Mirrors `create-by-supplement-project-group` shape; the equipment id
+   * may be supplied via either `equipmentProjectGroupId` (preferred) or
+   * `projectId` (legacy mirror).
+   */
+  @Post('create-by-equipment-project-group')
+  createByEquipmentProjectGroup(
+    @Body() dto: CreateTrackingStatusDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    this.logger.log(
+      'Request to create tracking status by equipment project group',
+    );
+    return this.trackingStatusService.createByEquipmentProjectGroup(
+      dto,
+      req.user.userId,
+    );
+  }
+
   @Post('bulk')
   createMany(
     @Body() dtos: CreateTrackingStatusDto[],
@@ -186,6 +210,31 @@ export class TrackingStatusController {
     );
     return this.trackingStatusService.rollbackSupplementProjectGroupStatus(
       supplementProjectGroupId,
+      req.user.userId,
+      body?.clearResponsibleAgency,
+    );
+  }
+
+  /**
+   * Wave Equipment ผ.03 Phase 2 — BE-04b (2026-05-28).
+   * Staff-led rollback for EquipmentProjectGroup. Mirrors the PG
+   * rollback endpoint; amphoe-based responsibility is enforced inside
+   * the service. The `clearResponsibleAgency` flag is silently ignored
+   * (equipment is agency-only by construction; §7.2/§7.3 LAO-origin
+   * clearing is unreachable).
+   */
+  @Post('rollback/equipment-project-group/:equipmentProjectGroupId')
+  rollbackStatusEquipmentProjectGroup(
+    @Param('equipmentProjectGroupId', ParseUUIDPipe)
+    equipmentProjectGroupId: string,
+    @Body() body: { clearResponsibleAgency?: boolean },
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    this.logger.log(
+      `Request to pull back equipment project group: ${equipmentProjectGroupId}`,
+    );
+    return this.trackingStatusService.rollbackEquipmentProjectGroupStatus(
+      equipmentProjectGroupId,
       req.user.userId,
       body?.clearResponsibleAgency,
     );

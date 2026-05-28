@@ -366,6 +366,18 @@ import { BackupLoginModule } from './backup-login/backup-login.module';
 import { EquipmentCategory } from './equipment-category/entities/equipment-category.entity';
 import { EquipmentCategoryScope } from './equipment-category/entities/equipment-category-scope.entity';
 import { EquipmentCategoryModule } from './equipment-category/equipment-category.module';
+// Wave Equipment ผ.03, Phase 2 — DB-02 (2026-05-28). Equipment project
+// entity (sibling of PG / RPG / SPG) + tracking_status fourth FK
+// (`equipment_project_group_id`). Same Wave 41 dual-registration
+// footgun as every other entity above: `forFeature` in
+// `EquipmentProjectGroupModule` provides the repo injection token, but
+// the metadata MUST also be listed in the root `entities[]` list below
+// or TypeORM throws `EntityMetadataNotFoundError` at boot. Budget
+// polymorphism extension on the existing `Budget` entity does NOT
+// require a new root registration. Service/controller deferred to
+// BE-04.
+import { EquipmentProjectGroup } from './equipment-project-group/entities/equipment-project-group.entity';
+import { EquipmentProjectGroupModule } from './equipment-project-group/equipment-project-group.module';
 
 
 @Module({
@@ -560,6 +572,11 @@ import { EquipmentCategoryModule } from './equipment-category/equipment-category
         // 41 footgun; TEMPLATE.md §8.1).
         EquipmentCategory,
         EquipmentCategoryScope,
+        // Wave Equipment ผ.03, Phase 2 — DB-02 (see import note).
+        // Sibling of ProjectGroup / RevisedProjectGroup /
+        // SupplementProjectGroup; goes through the full §12 workflow
+        // via the new `equipment_project_group_id` FK on tracking_status.
+        EquipmentProjectGroup,
       ],
       synchronize: true,
       extra: {
@@ -725,6 +742,10 @@ import { EquipmentCategoryModule } from './equipment-category/equipment-category
     // no cyclical dependency. `forFeature` registration here unblocks
     // future BE-01 repository injection.
     EquipmentCategoryModule,
+    // Wave Equipment ผ.03, Phase 2 — DB-02 (see import note above).
+    // Entity-only skeleton; controller/service deferred to BE-04. Order
+    // irrelevant; no cyclical dependency.
+    EquipmentProjectGroupModule,
   ],
   controllers: [AppController],
   providers: [AppService],

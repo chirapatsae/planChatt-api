@@ -11,6 +11,7 @@ import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { IsOptional } from 'class-validator';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
+import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 
 @Entity('budget')
 export class Budget {
@@ -41,6 +42,23 @@ export class Budget {
   })
   @JoinColumn({ name: 'supplement_project_group_id' })
   supplementProjectGroupId?: SupplementProjectGroup;
+
+  /**
+   * Wave Equipment ผ.03, Phase 2 — DB-02 (2026-05-28).
+   * Fourth nullable FK extending the polymorphic budget pattern to
+   * equipment items. Exactly one of `projectGroupId` /
+   * `revisedProjectGroupId` / `supplementProjectGroupId` /
+   * `equipmentProjectGroupId` is expected to be set per row (not
+   * DB-enforced — same convention as the existing three FKs).
+   */
+  @IsOptional()
+  @ManyToOne(() => EquipmentProjectGroup, (equipmentProjectGroup) => equipmentProjectGroup.budgets, {
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+    nullable: true,
+  })
+  @JoinColumn({ name: 'equipment_project_group_id' })
+  equipmentProjectGroupId?: EquipmentProjectGroup;
 
   @Column()
   year: number;

@@ -14,6 +14,13 @@ import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-
 // hard-delete) inside the same transaction as the TrackingStatus write.
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
 import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entities/development-plan-supplement.entity';
+// Wave Equipment ผ.03 Phase 2 — BE-04b (2026-05-28). Register
+// EquipmentProjectGroup so workflow transitions (Ready → Pending →
+// Verified → … → Approved + Pull_Back + Returned_For_Revision + Rejected)
+// and staff-led rollback can resolve and mutate equipment rows inside
+// the same transaction as the TrackingStatus write. Mirrors PG (NOT
+// RPG/SPG) for amphoe-based responsibility + main-plan scope binding.
+import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 
 import { AnnouncementsModule } from 'src/announcements/announcements.module';
 import { WorkHistoryAmphoeResponsibility } from 'src/work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity';
@@ -50,6 +57,7 @@ import { ProjectClassificationModule } from 'src/common/project-classification/p
       RevisedProjectGroup,
       SupplementProjectGroup,
       DevelopmentPlanSupplement,
+      EquipmentProjectGroup,
       WorkHistoryAmphoeResponsibility,
       WorkHistoryGovernmentAgencyResponsibility,
     ]),

@@ -82,6 +82,133 @@ export class EquipmentCategoryService {
     return rows.map(this.toCategoryDto);
   }
 
+  /**
+   * Return raw `(category, plan)` junction rows for a given tactic.
+   * Powers the simplified Step-1 wizard: FE shows distinct categories
+   * (any plan), then derives `planId` from this junction once a
+   * category is picked. Single-plan combos auto-resolve; multi-plan
+   * combos (only 1 in current seed) reveal an inline plan picker.
+   */
+  async findScopesByTactic(tacticId: string): Promise<
+    Array<{
+      equipmentCategoryId: string;
+      equipmentCategory: EquipmentCategoryDto;
+      planId: string;
+      planName: string;
+    }>
+  > {
+    const rows = await this.scopeRepo
+      .createQueryBuilder('s')
+      .innerJoin(
+        EquipmentCategory,
+        'c',
+        'c.id = s.equipment_category_id AND c.deleted_at IS NULL',
+      )
+      .innerJoin('plans', 'p', 'p.id = s.plan_id')
+      .select([
+        's.id AS scope_id',
+        's.equipment_category_id AS equipment_category_id',
+        's.tactic_id AS tactic_id',
+        's.plan_id AS plan_id',
+        'c.id AS c_id',
+        'c.code AS c_code',
+        'c.name AS c_name',
+        'c.sort_order AS c_sort_order',
+        'c.created_at AS c_created_at',
+        'c.updated_at AS c_updated_at',
+        'c.deleted_at AS c_deleted_at',
+        'p.name AS plan_name',
+      ])
+      .where('s.tactic_id = :tacticId', { tacticId })
+      .orderBy('c.sort_order', 'ASC')
+      .addOrderBy('p.id', 'ASC')
+      .getRawMany();
+
+    return rows.map((r) => ({
+      equipmentCategoryId: r.equipment_category_id,
+      equipmentCategory: {
+        id: r.c_id,
+        code: Number(r.c_code),
+        name: r.c_name,
+        sortOrder: Number(r.c_sort_order),
+        createdAt: r.c_created_at,
+        updatedAt: r.c_updated_at,
+        deletedAt: r.c_deleted_at,
+      },
+      planId: r.plan_id,
+      planName: r.plan_name,
+    }));
+  }
+
+  /**
+   * Return the FULL scope junction joined with category + tactic +
+   * plan info. Powers the AddEquipment Step-1 wizard
+   * (2026-05-28 redesign) which pivots Category → Tactic → Plan:
+   * users start from the equipment type they want, then the wizard
+   * narrows the remaining Tactic / Plan dropdowns to combinations
+   * that actually have a junction row. Single-fetch model — the
+   * total junction is bounded (~hundreds of rows at most for the
+   * current 14 categories × 5 strategies × ~20 plans).
+   */
+  async findAllScopes(): Promise<
+    Array<{
+      equipmentCategoryId: string;
+      equipmentCategory: EquipmentCategoryDto;
+      tacticId: string;
+      tacticName: string;
+      tacticStrategyId: string;
+      planId: string;
+      planName: string;
+    }>
+  > {
+    const rows = await this.scopeRepo
+      .createQueryBuilder('s')
+      .innerJoin(
+        EquipmentCategory,
+        'c',
+        'c.id = s.equipment_category_id AND c.deleted_at IS NULL',
+      )
+      .innerJoin('tactics', 't', 't.id = s.tactic_id')
+      .innerJoin('plans', 'p', 'p.id = s.plan_id')
+      .select([
+        's.equipment_category_id AS equipment_category_id',
+        's.tactic_id AS tactic_id',
+        's.plan_id AS plan_id',
+        'c.id AS c_id',
+        'c.code AS c_code',
+        'c.name AS c_name',
+        'c.sort_order AS c_sort_order',
+        'c.created_at AS c_created_at',
+        'c.updated_at AS c_updated_at',
+        'c.deleted_at AS c_deleted_at',
+        't.name AS tactic_name',
+        't.strategy_id AS tactic_strategy_id',
+        'p.name AS plan_name',
+      ])
+      .orderBy('c.sort_order', 'ASC')
+      .addOrderBy('t.id', 'ASC')
+      .addOrderBy('p.id', 'ASC')
+      .getRawMany();
+
+    return rows.map((r) => ({
+      equipmentCategoryId: r.equipment_category_id,
+      equipmentCategory: {
+        id: r.c_id,
+        code: Number(r.c_code),
+        name: r.c_name,
+        sortOrder: Number(r.c_sort_order),
+        createdAt: r.c_created_at,
+        updatedAt: r.c_updated_at,
+        deletedAt: r.c_deleted_at,
+      },
+      tacticId: r.tactic_id,
+      tacticName: r.tactic_name,
+      tacticStrategyId: r.tactic_strategy_id,
+      planId: r.plan_id,
+      planName: r.plan_name,
+    }));
+  }
+
   // -------------------------------------------------------------
   //  Admin: category CRUD
   // -------------------------------------------------------------

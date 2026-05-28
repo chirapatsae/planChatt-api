@@ -3,6 +3,7 @@ import { Comment } from 'src/comments/entities/comment.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
+import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 import { Status } from 'src/status/entities/status.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import {
@@ -103,6 +104,26 @@ export class TrackingStatus {
   )
   @JoinColumn({ name: 'supplement_project_group_id' })
   supplementProjectGroupId: SupplementProjectGroup | null;
+
+  /**
+   * Wave Equipment ผ.03, Phase 2 — DB-02 (2026-05-28).
+   * Fourth nullable FK so equipment items can record §12 audit rows
+   * the same way PG / RPG / SPG do. Exactly one of the four target
+   * FKs is expected to be set per row; downstream code that branches
+   * on `if (ts.projectGroupId) … else if (ts.revisedProjectGroupId) …`
+   * MUST be extended for equipment (BE-04).
+   */
+  @ManyToOne(
+    () => EquipmentProjectGroup,
+    (equipmentProjectGroup) => equipmentProjectGroup.trackingStatus,
+    {
+      onDelete: 'CASCADE',
+      onUpdate: 'CASCADE',
+      nullable: true,
+    },
+  )
+  @JoinColumn({ name: 'equipment_project_group_id' })
+  equipmentProjectGroupId: EquipmentProjectGroup | null;
 
   @ManyToOne(() => Status, (status) => status.trackingStatus, {
     onDelete: 'CASCADE',

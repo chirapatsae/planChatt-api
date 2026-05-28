@@ -36,6 +36,11 @@ import { DevelopmentIssue } from 'src/development-issue/entities/development-iss
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
+// Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28). PreSubmitSnapshotService
+// loads the owner WorkHistory id from EquipmentProjectGroup for the new
+// `equipment-project-group` target kind; register here so the
+// `@InjectRepository(EquipmentProjectGroup)` resolution succeeds.
+import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { Budget } from 'src/budget/entities/budget.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
@@ -100,6 +105,7 @@ import { IssueCriteriaEvidenceCheckService } from './criteria/issue-criteria-evi
       ProjectGroup,
       RevisedProjectGroup,
       SupplementProjectGroup,
+      EquipmentProjectGroup,
       WorkHistory,
       Budget,
       TrackingStatus,

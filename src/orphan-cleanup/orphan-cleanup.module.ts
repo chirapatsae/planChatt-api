@@ -7,6 +7,7 @@ import { OrphanCleanupService } from './orphan-cleanup.service';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
+import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
 import { Status } from 'src/status/entities/status.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
@@ -35,6 +36,7 @@ import { LineageLockModule } from 'src/common/lineage-lock/lineage-lock.module';
       ProjectGroup,
       RevisedProjectGroup,
       SupplementProjectGroup,
+      EquipmentProjectGroup,
       TrackingStatus,
       Status,
       WorkHistory,

@@ -6,11 +6,14 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, IsNull, Repository } from 'typeorm';
+import { DataSource, EntityManager, IsNull, Repository } from 'typeorm';
 import { AiPreSubmitSnapshot } from './entities/ai-pre-submit-snapshot.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
+// Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28). Owner lookup branch
+// for the new `'equipment-project-group'` target kind.
+import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { CreatePreSubmitSnapshotDto } from './dto/pre-submit-snapshot.dto';
 import {
@@ -62,6 +65,9 @@ export class PreSubmitSnapshotService {
     private readonly revisedRepo: Repository<RevisedProjectGroup>,
     @InjectRepository(SupplementProjectGroup)
     private readonly supplementRepo: Repository<SupplementProjectGroup>,
+    // Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28).
+    @InjectRepository(EquipmentProjectGroup)
+    private readonly equipmentRepo: Repository<EquipmentProjectGroup>,
     @InjectRepository(WorkHistory)
     private readonly workHistoryRepo: Repository<WorkHistory>,
     private readonly dataSource: DataSource,
@@ -92,6 +98,23 @@ export class PreSubmitSnapshotService {
   async createSnapshot(
     userId: string,
     dto: CreatePreSubmitSnapshotDto,
+    /**
+     * Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28). Optional outer
+     * `EntityManager` used ONLY by the project-row owner lookup
+     * (`loadOwnerWorkHistoryId`). When the caller invokes this method
+     * from inside a transaction that just inserted the target row, the
+     * default-connection repositories cannot see the uncommitted row
+     * (READ COMMITTED isolation); passing the outer manager lets the
+     * owner lookup enrol in the caller's transaction and see its own
+     * write. The snapshot WRITE itself continues to open its own
+     * `dataSource.transaction(...)` so audit semantics (Wave 10
+     * idempotency + soft-delete history) are preserved unchanged.
+     *
+     * Backward-compatible: every existing caller (PG bulk-upload post-
+     * commit, SPG tracking-status trigger, FE owner submit endpoint)
+     * omits this argument and behaves identically to before.
+     */
+    outerManager?: EntityManager,
   ): Promise<AiPreSubmitSnapshot> {
     const workHistory = await this.loadApprovedWorkHistory(userId);
 
@@ -99,6 +122,7 @@ export class PreSubmitSnapshotService {
     const ownerWorkHistoryId = await this.loadOwnerWorkHistoryId(
       dto.targetKind,
       dto.targetId,
+      outerManager,
     );
     if (ownerWorkHistoryId !== workHistory.id) {
       throw new ForbiddenException(
@@ -302,7 +326,9 @@ export class PreSubmitSnapshotService {
     if (
       targetKind !== 'project-group' &&
       targetKind !== 'revised-project-group' &&
-      targetKind !== 'supplement-project-group'
+      targetKind !== 'supplement-project-group' &&
+      // Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28).
+      targetKind !== 'equipment-project-group'
     ) {
       throw new NotFoundException('ไม่พบข้อมูล snapshot');
     }
@@ -407,7 +433,9 @@ export class PreSubmitSnapshotService {
     if (
       targetKind !== 'project-group' &&
       targetKind !== 'revised-project-group' &&
-      targetKind !== 'supplement-project-group'
+      targetKind !== 'supplement-project-group' &&
+      // Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28).
+      targetKind !== 'equipment-project-group'
     ) {
       throw new NotFoundException('ไม่พบข้อมูล snapshot');
     }
@@ -514,12 +542,25 @@ export class PreSubmitSnapshotService {
   private async loadOwnerWorkHistoryId(
     targetKind: CreatePreSubmitSnapshotDto['targetKind'],
     targetId: string,
+    outerManager?: EntityManager,
   ): Promise<string> {
+    // Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28). When the caller
+    // supplies an outer EntityManager (i.e. the snapshot trigger fires
+    // INSIDE the same transaction that just inserted the target row),
+    // we MUST enrol the owner lookup in that transaction so READ
+    // COMMITTED isolation does not hide the uncommitted row. Falling
+    // back to the injected repos preserves the default behavior for
+    // every existing caller that omits the argument.
     if (targetKind === 'project-group') {
-      const row = await this.projectGroupRepo.findOne({
-        where: { id: targetId },
-        relations: ['createdBy'],
-      });
+      const row = outerManager
+        ? await outerManager.findOne(ProjectGroup, {
+            where: { id: targetId },
+            relations: ['createdBy'],
+          })
+        : await this.projectGroupRepo.findOne({
+            where: { id: targetId },
+            relations: ['createdBy'],
+          });
       if (!row) throw new NotFoundException('ไม่พบโครงการ');
       const id = row.createdBy?.id;
       if (!id) {
@@ -528,10 +569,15 @@ export class PreSubmitSnapshotService {
       return id;
     }
     if (targetKind === 'revised-project-group') {
-      const row = await this.revisedRepo.findOne({
-        where: { id: targetId },
-        relations: ['createdBy'],
-      });
+      const row = outerManager
+        ? await outerManager.findOne(RevisedProjectGroup, {
+            where: { id: targetId },
+            relations: ['createdBy'],
+          })
+        : await this.revisedRepo.findOne({
+            where: { id: targetId },
+            relations: ['createdBy'],
+          });
       if (!row) throw new NotFoundException('ไม่พบโครงการฉบับแก้ไข');
       const id = row.createdBy?.id;
       if (!id) {
@@ -539,15 +585,40 @@ export class PreSubmitSnapshotService {
       }
       return id;
     }
-    // supplement-project-group
-    const row = await this.supplementRepo.findOne({
-      where: { id: targetId },
-      relations: ['createdBy'],
-    });
-    if (!row) throw new NotFoundException('ไม่พบโครงการในเล่มเพิ่มเติม');
+    if (targetKind === 'supplement-project-group') {
+      const row = outerManager
+        ? await outerManager.findOne(SupplementProjectGroup, {
+            where: { id: targetId },
+            relations: ['createdBy'],
+          })
+        : await this.supplementRepo.findOne({
+            where: { id: targetId },
+            relations: ['createdBy'],
+          });
+      if (!row) throw new NotFoundException('ไม่พบโครงการในเล่มเพิ่มเติม');
+      const id = row.createdBy?.id;
+      if (!id) {
+        throw new ForbiddenException('โครงการนี้ไม่มีข้อมูลเจ้าของที่ถูกต้อง');
+      }
+      return id;
+    }
+    // Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28).
+    // equipment-project-group
+    const row = outerManager
+      ? await outerManager.findOne(EquipmentProjectGroup, {
+          where: { id: targetId },
+          relations: ['createdBy'],
+        })
+      : await this.equipmentRepo.findOne({
+          where: { id: targetId },
+          relations: ['createdBy'],
+        });
+    if (!row) throw new NotFoundException('ไม่พบรายการครุภัณฑ์');
     const id = row.createdBy?.id;
     if (!id) {
-      throw new ForbiddenException('โครงการนี้ไม่มีข้อมูลเจ้าของที่ถูกต้อง');
+      throw new ForbiddenException(
+        'รายการครุภัณฑ์นี้ไม่มีข้อมูลเจ้าของที่ถูกต้อง',
+      );
     }
     return id;
   }

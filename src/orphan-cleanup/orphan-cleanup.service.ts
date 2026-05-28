@@ -10,6 +10,7 @@ import { DataSource, EntityManager, IsNull, Repository } from 'typeorm';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
+import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
 import { Status } from 'src/status/entities/status.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
@@ -103,6 +104,8 @@ export class OrphanCleanupService {
     private readonly revisedProjectGroupRepo: Repository<RevisedProjectGroup>,
     @InjectRepository(SupplementProjectGroup)
     private readonly supplementProjectGroupRepo: Repository<SupplementProjectGroup>,
+    @InjectRepository(EquipmentProjectGroup)
+    private readonly equipmentProjectGroupRepo: Repository<EquipmentProjectGroup>,
     @InjectRepository(Status)
     private readonly statusRepo: Repository<Status>,
     @InjectRepository(TrackingStatus)
@@ -125,7 +128,7 @@ export class OrphanCleanupService {
     bookKind: OrphanCleanupBookKind,
     em: EntityManager,
     actorUserId: string,
-  ): Promise<{ pgCount: number; rpgCount: number }> {
+  ): Promise<{ pgCount: number; rpgCount: number; equipmentCount: number }> {
     const bookName = this.resolveBookName(book, bookKind);
     const reasonText = ORPHAN_CLEANUP_REASONS.BOOK_CANCELLED(
       BOOK_TYPE_LABELS[bookKind],
@@ -137,6 +140,7 @@ export class OrphanCleanupService {
 
     let pgCount = 0;
     let rpgCount = 0;
+    let equipmentCount = 0;
 
     if (bookKind === 'PLAN') {
       pgCount = await this.bulkResetProjectGroups({
@@ -147,6 +151,21 @@ export class OrphanCleanupService {
         readyStatusId,
         reasonText,
         // Event 1 — every non-soft-deleted PG is in scope.
+        statusFilter: 'all',
+      });
+
+      // Wave Equipment ผ.03 Phase 2 — BE-05.
+      // Equipment items live under MAIN_PLAN only (per Q2). Mirror the PG
+      // Phase A bulk-reset exactly: same scope, same reason, same audit
+      // shape. Lineage is vacuous (no prev_project_id columns per DB-02
+      // R3=NO), so no topological sort / lineage guard is needed.
+      equipmentCount = await this.bulkResetEquipmentProjectGroups({
+        em,
+        bookId: book.id,
+        bookName,
+        actorWorkHistoryId: actorWorkHistory.id,
+        readyStatusId,
+        reasonText,
         statusFilter: 'all',
       });
     }
@@ -178,10 +197,10 @@ export class OrphanCleanupService {
     }
 
     this.logger.log(
-      `[OrphanCleanup] cascadeOnBookCancel kind=${bookKind} book=${book.id} pg=${pgCount} rpg=${rpgCount}`,
+      `[OrphanCleanup] cascadeOnBookCancel kind=${bookKind} book=${book.id} pg=${pgCount} rpg=${rpgCount} equipment=${equipmentCount}`,
     );
 
-    return { pgCount, rpgCount };
+    return { pgCount, rpgCount, equipmentCount };
   }
 
   /**
@@ -194,13 +213,14 @@ export class OrphanCleanupService {
     bookKind: OrphanCleanupBookKind,
     em: EntityManager,
     actorUserId: string,
-  ): Promise<{ pgCount: number; rpgCount: number }> {
+  ): Promise<{ pgCount: number; rpgCount: number; equipmentCount: number }> {
     const bookName = this.resolveBookName(book, bookKind);
     const actorWorkHistory = await this.resolveActorWorkHistory(em, actorUserId);
     const readyStatusId = await this.resolveStatusId(em, STATUS_NAMES.READY);
 
     let pgCount = 0;
     let rpgCount = 0;
+    let equipmentCount = 0;
 
     if (bookKind === 'PLAN') {
       pgCount = await this.bulkResetProjectGroups({
@@ -211,6 +231,19 @@ export class OrphanCleanupService {
         readyStatusId,
         // For finalize, the reason text is per-row (status-driven). The
         // bulk helper resolves it from the prior status name.
+        reasonText: null,
+        statusFilter: 'finalize',
+      });
+
+      // Wave Equipment ผ.03 Phase 2 — BE-05.
+      // Mirror PG finalize: exclude {Ready, Approved, Rejected}; resolve
+      // reason per-row via §18.6.1 mapping.
+      equipmentCount = await this.bulkResetEquipmentProjectGroups({
+        em,
+        bookId: book.id,
+        bookName,
+        actorWorkHistoryId: actorWorkHistory.id,
+        readyStatusId,
         reasonText: null,
         statusFilter: 'finalize',
       });
@@ -239,10 +272,10 @@ export class OrphanCleanupService {
     }
 
     this.logger.log(
-      `[OrphanCleanup] cascadeOnBookFinalize kind=${bookKind} book=${book.id} pg=${pgCount} rpg=${rpgCount}`,
+      `[OrphanCleanup] cascadeOnBookFinalize kind=${bookKind} book=${book.id} pg=${pgCount} rpg=${rpgCount} equipment=${equipmentCount}`,
     );
 
-    return { pgCount, rpgCount };
+    return { pgCount, rpgCount, equipmentCount };
   }
 
   /**
@@ -257,11 +290,13 @@ export class OrphanCleanupService {
   ): Promise<{
     pgCount: number;
     rpgCount: number;
+    equipmentCount: number;
     pgWithLiveDescendant: 0;
     rpgWithLiveDescendant: number;
   }> {
     let pgCount = 0;
     let rpgCount = 0;
+    let equipmentCount = 0;
     let rpgWithLiveDescendant = 0;
 
     if (bookKind === 'PLAN') {
@@ -271,6 +306,14 @@ export class OrphanCleanupService {
         statusFilter: kind === 'cancel' ? 'all' : 'finalize',
       });
       pgCount = pgIds.length;
+
+      // Wave Equipment ผ.03 Phase 2 — BE-05. Equipment is MAIN_PLAN-scoped.
+      const equipmentIds = await this.materializeCandidateEquipmentIds({
+        em: this.dataSource.manager,
+        bookId,
+        statusFilter: kind === 'cancel' ? 'all' : 'finalize',
+      });
+      equipmentCount = equipmentIds.length;
     } else if (bookKind === 'REVISION') {
       const rpgIds = await this.materializeCandidateRpgIds({
         em: this.dataSource.manager,
@@ -301,6 +344,7 @@ export class OrphanCleanupService {
     return {
       pgCount,
       rpgCount,
+      equipmentCount,
       pgWithLiveDescendant: 0,
       rpgWithLiveDescendant,
     };
@@ -768,6 +812,211 @@ export class OrphanCleanupService {
     await em.save(TrackingStatus, tombstone);
     await em.softDelete(SupplementProjectGroup, { id: spgId });
     return true;
+  }
+
+  // ===================================================================
+  // Internals — Equipment bulk reset (Wave Equipment ผ.03 Phase 2 — BE-05)
+  //
+  // Mirror of `bulkResetProjectGroups` / `resetSingleProjectGroup` but
+  // bound to `EquipmentProjectGroup`. Equipment is MAIN_PLAN-only (Q2)
+  // so this is only ever invoked from the PLAN cancel/finalize branches.
+  // No lineage (R3=NO per DB-02) → no topological sort, no descendant
+  // guard. §7.3 second-context LAO-clearing of `responsibleAgency` is
+  // VACUOUS here per the 2026-05-28 "agency-only authoring" decision —
+  // equipment is always agency-origin so the §7.1 "MUST NEVER clear"
+  // invariant always wins. The classification check is still implemented
+  // defensively (matches the PG branch byte-for-spirit) so a future
+  // policy change that admits LAO-origin equipment lights up correctly.
+  // ===================================================================
+
+  private async bulkResetEquipmentProjectGroups(args: {
+    em: EntityManager;
+    bookId: string;
+    bookName: string;
+    actorWorkHistoryId: string;
+    readyStatusId: string;
+    reasonText: string | null; // null → resolve per-row from status (finalize)
+    statusFilter: 'all' | 'finalize';
+  }): Promise<number> {
+    const ids = await this.materializeCandidateEquipmentIds({
+      em: args.em,
+      bookId: args.bookId,
+      statusFilter: args.statusFilter,
+    });
+    if (ids.length === 0) return 0;
+
+    let resetCount = 0;
+    for (const equipmentId of ids) {
+      const wrote = await this.resetSingleEquipmentProjectGroup({
+        em: args.em,
+        equipmentId,
+        bookName: args.bookName,
+        actorWorkHistoryId: args.actorWorkHistoryId,
+        readyStatusId: args.readyStatusId,
+        reasonText: args.reasonText,
+      });
+      if (wrote) resetCount += 1;
+    }
+    return resetCount;
+  }
+
+  private async resetSingleEquipmentProjectGroup(args: {
+    em: EntityManager;
+    equipmentId: string;
+    bookName: string;
+    actorWorkHistoryId: string;
+    readyStatusId: string;
+    reasonText: string | null;
+  }): Promise<boolean> {
+    const { em, equipmentId, bookName, actorWorkHistoryId, readyStatusId } =
+      args;
+
+    // Pessimistic lock the equipment row only; outer-joined relations
+    // are read but not locked (mirrors PG reset rationale at line 459).
+    const equipment = await em
+      .createQueryBuilder(EquipmentProjectGroup, 'eq')
+      .leftJoinAndSelect('eq.createdBy', 'createdBy')
+      .leftJoinAndSelect('createdBy.amphoe', 'createdByAmphoe')
+      .leftJoinAndSelect(
+        'createdBy.localAdministrativeOrganization',
+        'createdByLao',
+      )
+      .leftJoinAndSelect('eq.responsibleAgency', 'responsibleAgency')
+      .where('eq.id = :equipmentId', { equipmentId })
+      .andWhere('eq.deletedAt IS NULL')
+      .setLock('pessimistic_write', undefined, ['eq'])
+      .getOne();
+    if (!equipment) return false;
+
+    const currentTracking = await em.findOne(TrackingStatus, {
+      where: {
+        equipmentProjectGroupId: { id: equipmentId },
+        isLatest: true,
+      },
+      relations: ['statusId'],
+    });
+    if (!currentTracking) return false;
+
+    const priorStatusName = currentTracking.statusId?.name ?? '';
+
+    let staffRemark = args.reasonText;
+    if (staffRemark === null) {
+      const reasonKind = resolveFinalizeReasonKind(priorStatusName);
+      if (reasonKind === 'NOT_AFFECTED') {
+        // Defensive — materializer already filters Approved/Rejected/Ready.
+        return false;
+      }
+      staffRemark =
+        reasonKind === 'OWNER_TIMEOUT'
+          ? ORPHAN_CLEANUP_REASONS.FINALIZE_OWNER_TIMEOUT(bookName)
+          : ORPHAN_CLEANUP_REASONS.FINALIZE_STAFF_TIMEOUT(bookName);
+    }
+
+    // Demote prior latest — §12 audit preservation. We do NOT delete.
+    await em.update(
+      TrackingStatus,
+      { id: currentTracking.id },
+      { isLatest: false },
+    );
+
+    // Insert NEW Ready row tagged on the equipment FK column.
+    const newTracking = em.create(TrackingStatus, {
+      statusId: { id: readyStatusId } as Status,
+      isLatest: true,
+      comment: undefined,
+      staffRemark,
+      projectGroupId: null,
+      revisedProjectGroupId: null,
+      supplementProjectGroupId: null,
+      equipmentProjectGroupId: { id: equipmentId } as EquipmentProjectGroup,
+      createdBy: { id: actorWorkHistoryId } as WorkHistory,
+    });
+    await em.save(TrackingStatus, newTracking);
+
+    // §7 / §18.11 — defensive parity with PG. Equipment is agency-only
+    // per the 2026-05-28 authoring decision, so this branch is expected
+    // to be unreachable (§7.1 "MUST NEVER clear" for agency-origin) and
+    // the guard short-circuits via `isLaoOrigin === false`. Kept to
+    // mirror PG so a future LAO admission lights up correctly. NO
+    // clearing fires for agency equipment per spec.
+    const isLaoOrigin = !this.isAgencyWorkHistory(equipment.createdBy ?? null);
+    const priorStatusIsAssigned =
+      priorStatusName === STATUS_NAMES.PENDING ||
+      priorStatusName === STATUS_NAMES.VERIFIED ||
+      priorStatusName === STATUS_NAMES.PENDING_APPROVAL;
+    if (
+      isLaoOrigin &&
+      priorStatusIsAssigned &&
+      equipment.responsibleAgency !== null
+    ) {
+      await em.update(
+        EquipmentProjectGroup,
+        { id: equipmentId },
+        { responsibleAgency: null as any },
+      );
+    }
+
+    // Buffer post-commit notification (§18.7). Reuse the same per-book
+    // buffer keyed on developmentPlanId; PG and equipment notifications
+    // co-fan-out from the host after commit.
+    const developmentPlanId = await this.resolveBookIdForEquipment(
+      em,
+      equipmentId,
+    );
+    if (developmentPlanId) {
+      const buffered =
+        this.pendingPgNotifications.get(developmentPlanId) ?? [];
+      buffered.push({
+        projectId: equipmentId,
+        projectTitle: equipment.equipmentName ?? '',
+        ownerWorkHistoryId: equipment.createdBy?.id ?? null,
+        bookName,
+        staffRemark,
+      });
+      this.pendingPgNotifications.set(developmentPlanId, buffered);
+    }
+
+    return true;
+  }
+
+  private async resolveBookIdForEquipment(
+    em: EntityManager,
+    equipmentId: string,
+  ): Promise<string | null> {
+    const row = await em
+      .createQueryBuilder(EquipmentProjectGroup, 'eq')
+      .select('dp.id', 'id')
+      .leftJoin('eq.developmentPlan', 'dp')
+      .where('eq.id = :equipmentId', { equipmentId })
+      .getRawOne<{ id: string }>();
+    return row?.id ?? null;
+  }
+
+  private async materializeCandidateEquipmentIds(args: {
+    em: EntityManager;
+    bookId: string;
+    statusFilter: 'all' | 'finalize';
+  }): Promise<string[]> {
+    const qb = args.em
+      .createQueryBuilder(EquipmentProjectGroup, 'eq')
+      .leftJoin('eq.developmentPlan', 'dp')
+      .innerJoin(
+        TrackingStatus,
+        'ts',
+        'ts.equipment_project_group_id = eq.id AND ts.is_latest = TRUE',
+      )
+      .innerJoin(Status, 'st', 'st.id = ts.status_id')
+      .where('eq.deletedAt IS NULL')
+      .andWhere('dp.id = :bookId', { bookId: args.bookId });
+
+    if (args.statusFilter === 'finalize') {
+      qb.andWhere('st.name NOT IN (:...nonTarget)', {
+        nonTarget: Array.from(FINALIZE_NON_TARGET_STATUSES),
+      });
+    }
+    qb.select('eq.id', 'id');
+    const rows = await qb.getRawMany<{ id: string }>();
+    return rows.map((r) => r.id);
   }
 
   // ===================================================================
