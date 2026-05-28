@@ -16,7 +16,7 @@ import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { RolesGuard } from 'src/auth/roles.guard';
 import { Roles } from 'src/auth/roles.decorator';
 import { WorkStatusApprovedGuard } from 'src/auth/work-status-approved.guard';
-import { SUPER_ADMIN_ONLY } from 'src/auth/role-groups';
+import { SUPER_ADMIN_ONLY, STAFF_LEAD } from 'src/auth/role-groups';
 import { BackupLoginService } from './backup-login.service';
 import { BackupLoginInitDto } from './dto/backup-login-init.dto';
 import { BackupLoginCompleteDto } from './dto/backup-login-complete.dto';
@@ -27,6 +27,7 @@ import { ResetCredentialDto } from './dto/reset-credential.dto';
 import { RevokeCredentialDto } from './dto/revoke-credential.dto';
 import { SetKillSwitchDto } from './dto/set-killswitch.dto';
 import { ListAttemptsDto } from './dto/list-attempts.dto';
+import { AttemptStatsQueryDto } from './dto/attempt-stats.dto';
 import { SelfEnrollCredentialDto } from './dto/self-enroll-credential.dto';
 import { RequirePasswordChangeNotPendingGuard } from './guards/require-password-change-not-pending.guard';
 import { BackupAttemptAuditService } from './backup-attempt-audit.service';
@@ -162,9 +163,10 @@ export class BackupLoginController {
     @Req() req: Request & { user: { userId: string } },
   ) {
     await this.backupLogin.selfEnrollPassword(req.user.userId, dto.password);
-    // SECURITY-01 §7.1 row 2 — `{ok: true}` (HTTP 200 — NOT 204 so
-    // FE can parse). FE then continues to /backup-totp/enroll-init
-    // with the caller's existing JWT.
+    // The service intentionally does NOT bump session_version on
+    // self-enroll (no prior backup session to invalidate; bumping
+    // would also kill the caller's ThaiD session mid-wizard). FE keeps
+    // using the existing JWT for Step 2 (/backup-totp/enroll-init).
     return { ok: true };
   }
 
@@ -234,15 +236,23 @@ export class BackupLoginController {
   @UseGuards(JwtAuthGuard, RequirePasswordChangeNotPendingGuard)
   async totpEnrollComplete(
     @Body() dto: TotpEnrollCompleteDto,
-    @Req() req: Request & { user: { userId: string } },
+    @Req()
+    req: Request & {
+      user: { userId: string; requireTotpEnrollment?: boolean };
+    },
   ) {
-    // Returns a fully-authenticated session token + the user payload
-    // so the FE can finish login without forcing a re-login through
-    // the modal. The session_version was bumped inside the service,
-    // so any enrollment-purpose token still in flight is rejected.
+    // Pass `requireTotpEnrollment` JWT claim down to the service so it
+    // can decide whether to bump session_version. Forced-flow callers
+    // (claim is true) need the bump to invalidate the transient
+    // enrollment token. Self-enroll callers from /profile (claim is
+    // false / undefined — they're using a ThaiD session JWT) MUST NOT
+    // be bumped — bumping invalidates their ThaiD session and 401s
+    // every subsequent request → axios force-logout.
+    const isForcedFlow = req.user.requireTotpEnrollment === true;
     const { accessToken, user } = await this.backupLogin.enrollTotpComplete(
       req.user.userId,
       dto.totpCode,
+      isForcedFlow,
     );
     return { ok: true, accessToken, user };
   }
@@ -258,7 +268,10 @@ export class BackupLoginController {
     WorkStatusApprovedGuard,
     RequirePasswordChangeNotPendingGuard,
   )
-  @Roles(...SUPER_ADMIN_ONLY)
+  // Wave 2026-05-27 — widened from SUPER_ADMIN_ONLY → STAFF_LEAD per
+  // user direction. Staff handle daily user-support credential ops;
+  // only kill-switch (GET+PATCH below) stays SUPER_ADMIN_ONLY.
+  @Roles(...STAFF_LEAD)
   async adminIssue(
     @Body() dto: IssueCredentialDto,
     @Req() req: Request & { user: { userId: string } },
@@ -273,7 +286,7 @@ export class BackupLoginController {
     WorkStatusApprovedGuard,
     RequirePasswordChangeNotPendingGuard,
   )
-  @Roles(...SUPER_ADMIN_ONLY)
+  @Roles(...STAFF_LEAD)
   async adminReset(
     @Param('userId', new ParseUUIDPipe()) targetUserId: string,
     @Body() dto: ResetCredentialDto,
@@ -293,7 +306,7 @@ export class BackupLoginController {
     WorkStatusApprovedGuard,
     RequirePasswordChangeNotPendingGuard,
   )
-  @Roles(...SUPER_ADMIN_ONLY)
+  @Roles(...STAFF_LEAD)
   async adminRevoke(
     @Param('userId', new ParseUUIDPipe()) targetUserId: string,
     @Body() dto: RevokeCredentialDto,
@@ -314,7 +327,7 @@ export class BackupLoginController {
     WorkStatusApprovedGuard,
     RequirePasswordChangeNotPendingGuard,
   )
-  @Roles(...SUPER_ADMIN_ONLY)
+  @Roles(...STAFF_LEAD)
   async adminUnfreeze(
     @Param('userId', new ParseUUIDPipe()) targetUserId: string,
     @Req() req: Request & { user: { userId: string } },
@@ -330,7 +343,7 @@ export class BackupLoginController {
     WorkStatusApprovedGuard,
     RequirePasswordChangeNotPendingGuard,
   )
-  @Roles(...SUPER_ADMIN_ONLY)
+  @Roles(...STAFF_LEAD)
   async adminResetTotp(
     @Param('userId', new ParseUUIDPipe()) targetUserId: string,
     @Req() req: Request & { user: { userId: string } },
@@ -386,7 +399,7 @@ export class BackupLoginController {
     WorkStatusApprovedGuard,
     RequirePasswordChangeNotPendingGuard,
   )
-  @Roles(...SUPER_ADMIN_ONLY)
+  @Roles(...STAFF_LEAD)
   async adminAuditLogs(@Query() query: ListAttemptsDto) {
     return this.audit.list({
       userId: query.userId,
@@ -396,5 +409,24 @@ export class BackupLoginController {
       page: query.page,
       limit: query.limit,
     });
+  }
+
+  /**
+   * Stats aggregation for the admin dashboard (Wave 2026-05-27).
+   *
+   * Returns KPIs + outcome / country / subnet breakdowns + daily
+   * time-series for the trailing `days` window (default 30, max 365).
+   * Same role gate as the attempts listing.
+   */
+  @Get('backup-login-attempts/stats')
+  @UseGuards(
+    JwtAuthGuard,
+    RolesGuard,
+    WorkStatusApprovedGuard,
+    RequirePasswordChangeNotPendingGuard,
+  )
+  @Roles(...STAFF_LEAD)
+  async adminAuditStats(@Query() query: AttemptStatsQueryDto) {
+    return this.audit.computeStats(query.days ?? 30);
   }
 }

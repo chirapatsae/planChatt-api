@@ -355,6 +355,17 @@ import { BackupLoginKillSwitchConfig } from './backup-login/entities/backup-logi
 // wiring (services + controller + crons + boot hook). Imported AFTER
 // `AuthModule` so the JWT secret/strategy is already registered.
 import { BackupLoginModule } from './backup-login/backup-login.module';
+// Wave Equipment ผ.03, Phase 1 — DB-01. Two reference tables backing
+// the future cascading-filter endpoint "(tacticId, planId) → valid
+// equipment categories". Same Wave 41 dual-registration footgun as
+// every other entity above: `forFeature` in `EquipmentCategoryModule`
+// provides the repo injection token, but the metadata MUST also be
+// listed in the root `entities[]` list below or TypeORM throws
+// `EntityMetadataNotFoundError` at boot. DB-01 ships entities +
+// module skeleton only; service / controller are deferred to BE-01.
+import { EquipmentCategory } from './equipment-category/entities/equipment-category.entity';
+import { EquipmentCategoryScope } from './equipment-category/entities/equipment-category-scope.entity';
+import { EquipmentCategoryModule } from './equipment-category/equipment-category.module';
 
 
 @Module({
@@ -542,6 +553,13 @@ import { BackupLoginModule } from './backup-login/backup-login.module';
         PasswordHistory,
         BackupLoginAuditLog,
         BackupLoginKillSwitchConfig,
+        // Wave Equipment ผ.03, Phase 1 — DB-01. Reference-data tables;
+        // no FK into project / plan / tracking / users (CLAUDE.md §10).
+        // Owned by `EquipmentCategoryModule` via `forFeature`; root
+        // registration here is required for metadata resolution (Wave
+        // 41 footgun; TEMPLATE.md §8.1).
+        EquipmentCategory,
+        EquipmentCategoryScope,
       ],
       synchronize: true,
       extra: {
@@ -702,6 +720,11 @@ import { BackupLoginModule } from './backup-login/backup-login.module';
     // already in place; the module owns its own JwtModule.register
     // for sign + verify of mfaChallengeToken / final session JWT.
     BackupLoginModule,
+    // Wave Equipment ผ.03, Phase 1 — DB-01. Module skeleton only
+    // (service + controller deferred to BE-01). Order is irrelevant;
+    // no cyclical dependency. `forFeature` registration here unblocks
+    // future BE-01 repository injection.
+    EquipmentCategoryModule,
   ],
   controllers: [AppController],
   providers: [AppService],

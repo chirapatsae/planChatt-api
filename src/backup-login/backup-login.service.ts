@@ -702,9 +702,18 @@ export class BackupLoginService {
           failedAttempts: 0,
         });
       }
-      // Bump session_version — invalidates any prior session for
-      // safety (mirrors admin /issue + /reset behavior).
-      await this.sessionVersion.bump(callerUserId, em);
+      // SECURITY note (2026-05-27): session_version is INTENTIONALLY
+      // NOT bumped on self-enroll. Self-enroll is a first-time
+      // credential creation — there is no prior backup session to
+      // invalidate (admin issue/reset/revoke paths bump because they
+      // affect an existing credential row). Bumping here would also
+      // invalidate the caller's ThaiD session (session_version is
+      // unified per SECURITY-01 §7.8), force-logging them out of
+      // /profile mid-flight between Step 1 (set password) and Step 2
+      // (enroll TOTP). The wizard would receive 401 SESSION_INVALIDATED
+      // on /totp-enroll/init and the axios interceptor would force-
+      // logout. No bump → ThaiD session stays valid throughout the
+      // wizard.
       // Audit success row inside the same transaction so a roll-back
       // of the credential write also rolls back the audit.
       await em.getRepository(BackupLoginAuditLog).insert({
@@ -918,6 +927,7 @@ export class BackupLoginService {
   async enrollTotpComplete(
     callerUserId: string,
     code: string,
+    isForcedFlow = false,
   ): Promise<{ accessToken: string; user: Record<string, unknown> | null }> {
     const ok = await this.totp.enrollComplete(callerUserId, code);
     if (!ok) {
@@ -931,12 +941,21 @@ export class BackupLoginService {
       'TOTP ของบัญชีคุณถูกเปิดใช้งานเรียบร้อย',
     );
 
-    // Now that TOTP is confirmed, mint a fully-authenticated backup
-    // session token (mfaVerified=true, no requirePasswordChange, no
-    // requireTotpEnrollment) + the user payload so the FE can finish
-    // login without forcing a re-login. Bumps session_version so any
-    // residual enrollment-purpose token is rejected on next request.
-    await this.sessionVersion.bump(callerUserId);
+    // Bump session_version ONLY for forced-flow callers (transient
+    // enrollment token from admin-issued one-time password path) —
+    // those carry `requireTotpEnrollment: true` and the bump
+    // invalidates the transient token after enrollment completes.
+    //
+    // Self-enroll callers from /profile use a ThaiD session JWT
+    // (claim is undefined). Bumping there invalidates the caller's
+    // own ThaiD session → 401 SESSION_INVALIDATED on the next
+    // request → axios interceptor force-logout → user kicked back
+    // to /login mid-wizard. Skip the bump for them. The new
+    // accessToken is still minted (returned to FE) but the existing
+    // ThaiD JWT remains valid.
+    if (isForcedFlow) {
+      await this.sessionVersion.bump(callerUserId);
+    }
     const wh = await this.loadCurrentWorkHistory(callerUserId);
     const roleName = wh?.role?.name ?? null;
     const workStatusName = wh?.workStatus?.name ?? null;
@@ -1014,7 +1033,17 @@ export class BackupLoginService {
       // Clear any TOTP enrollment from a prior life so the bootstrap-style
       // grace re-arms on first login under the reset/issue flow.
       await em.getRepository(TotpEnrollment).delete({ userId: targetUserId });
-      await this.sessionVersion.bump(targetUserId, em);
+      // SECURITY note (2026-05-27): session_version is INTENTIONALLY NOT
+      // bumped on admin issue. Target has no existing backup session to
+      // invalidate (issue = first-time credential creation; the `existing`
+      // branch only fires for re-issue over an ALREADY-revoked row, and
+      // revoke itself already bumped session_version). Bumping here would
+      // unnecessarily invalidate the target's THAID session — kicking
+      // them out of /project, /profile, etc. without consent.
+      //
+      // Bump is preserved on resetCredential / revokeCredential /
+      // unfreezeCredential / resetTotpByAdmin where there IS an existing
+      // backup session that MUST be invalidated for security reasons.
     });
 
     await this.lineNotifier.notifyEventToUser(

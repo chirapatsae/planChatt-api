@@ -130,6 +130,72 @@ export class BackupLoginAuditLog {
   @Column({ name: 'outcome', type: 'varchar', length: 64 })
   outcome: string;
 
+  /**
+   * ISO 3166-1 alpha-2 country code resolved from `ip_address` via
+   * geoip-lite at insert time (Wave 2026-05-27). Nullable for IPs that
+   * truly cannot be resolved and for legacy rows inserted before the
+   * column existed.
+   *
+   * Stored as plain code (e.g. `TH`, `US`); FE renders the flag + Thai
+   * name. Column is `varchar(8)` (not `varchar(2)`) so we can also
+   * store 3+ letter sentinels alongside genuine ISO codes:
+   *   - `LAN` — IP was private / loopback / link-local (admin testing
+   *     from inside the network); no geo lookup is possible by design.
+   *
+   * Used by:
+   *   - `/attempts/stats` `countryBreakdown` aggregation
+   *   - admin attempts table + detail modal forensic display
+   */
+  @Column({
+    name: 'geo_country',
+    type: 'varchar',
+    length: 8,
+    nullable: true,
+  })
+  geoCountry: string | null;
+
+  /**
+   * City name from the MaxMind GeoLite2 DB shipped with geoip-lite
+   * (Wave 2026-05-27). Capped at 64 chars (longest legitimate city
+   * name in the DB is well under this). Nullable when the lookup
+   * returns no city (sub-/24 precision varies by region) or for
+   * legacy rows.
+   */
+  @Column({
+    name: 'geo_city',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
+  geoCity: string | null;
+
+  /**
+   * Latitude (decimal degrees, WGS84) from the geoip-lite `ll[0]`
+   * field — used to render a Google Maps pin in the admin detail
+   * modal. Precision is intentionally city-scale (rarely better than
+   * a few km), NOT a tracking signal. Nullable for unresolvable IPs
+   * and legacy rows. Stored as numeric(9,6) to round-trip cleanly
+   * without float drift.
+   */
+  @Column({
+    name: 'geo_lat',
+    type: 'numeric',
+    precision: 9,
+    scale: 6,
+    nullable: true,
+  })
+  geoLat: string | null;
+
+  /** Longitude (decimal degrees, WGS84). See `geoLat`. */
+  @Column({
+    name: 'geo_lng',
+    type: 'numeric',
+    precision: 9,
+    scale: 6,
+    nullable: true,
+  })
+  geoLng: string | null;
+
   @CreateDateColumn({ name: 'attempted_at', type: 'timestamptz' })
   attemptedAt: Date;
 }
