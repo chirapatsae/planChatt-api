@@ -197,7 +197,58 @@ describe('BE-W44-02 / decision-framing system prompt (§17.2)', () => {
     // "ไม่มีงบประมาณ"), FORBIDDEN-string list (\`ไม่ระบุ\` is the
     // user-reported regression we are fixing), and anti-prose-translation
     // lock list extended with \`projects[i].budget\`. Net growth ~1.5 KB.
-    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT.length).toBeLessThanOrEqual(61440);
+    // W-AI-EXEC-CHAT-BOOK-COVERAGE-PROMPT-01 (2026-05-28): cap raised
+    // 61440 → 69632 to credit (a) rule #44 (anaphora resolution via
+    // \`<<<CTX_HINT>>>\` blocks emitted by BE-03 — teaches the LLM to
+    // resolve "เล่มนี้" / "เล่มนั้น" by scanning the most recent
+    // CTX_HINT for matching revisionId / supplementId, with explicit
+    // fallback to listDevelopmentPlanRevisions / listDevelopmentPlanSupplements
+    // re-enumeration when no CTX_HINT match exists), (b) rule #45
+    // (sub-book drill-down workflow chain: listActivePlans →
+    // listDevelopmentPlanRevisions / listDevelopmentPlanSupplements →
+    // listProjectsInRevisionBook / listProjectsInSupplementBook /
+    // getRevisionBookSummary / getSupplementBookSummary, with explicit
+    // routing preference for summary tools on count/status questions
+    // and list tools on detail questions), and (c) 4 catalog entries
+    // for the BE-01 sub-book narrow tools. Net growth ~6.5 KB; ~1.7 KB
+    // (~400-token) headroom preserved for future waves.
+    // W-AI-EXEC-CHAT-PRESENTATION-TONE-01 (2026-05-28): cap raised
+    // 69632 → 81920 to credit (a) rule #46 (presentation tone — forbid
+    // raw schema field-name leakage like "(revisionNumber 1)" /
+    // "(isOpen: false)" / "(supplement)" / "(type='edit')" in
+    // user-facing prose; require natural Thai phrasing across all
+    // response surfaces — book listings, project listings, summary
+    // tool output, drill-down chain results; documents isOpen boolean
+    // → "กำลังเปิดรับ" / "ปิดอยู่" translation; separates internal
+    // routing field-mentions from user-facing prose), and (b) rule #47
+    // (general plan listing → auto-expand sub-books inline; trigger
+    // phrase substring match on "มีเล่มแผนอะไรบ้าง" / "ตอนนี้มีแผน
+    // กี่เล่ม" / "แผนทั้งหมด" / etc.; mandates listActivePlans →
+    // parallel listDevelopmentPlanRevisions + listDevelopmentPlanSupplements
+    // per plan → render plan + sub-books inline; token-budget
+    // mitigations: > 5 plans only LATEST auto-expand, per-plan cap
+    // 10 revisions + 10 supplements, >100KB envelope abort to plan-
+    // only; empty-sub-book silence rule). No new catalog entries —
+    // rule #47 reuses the existing listDevelopmentPlanRevisions /
+    // listDevelopmentPlanSupplements BE-01 sub-book tools from
+    // W-AI-EXEC-CHAT-BOOK-COVERAGE. Net growth ~8.5 KB; ~3.7 KB
+    // (~900-token) headroom preserved for future waves.
+    // W-AI-EXEC-CHAT-ENTERPRISE-OUTPUT-TONE-01 (2026-05-29): cap raised
+    // 81920 → 94208 to credit (a) rule #47 strengthening clauses
+    // (W-ENTERPRISE-TONE-01 renderer-first verbatim emission;
+    // W-ENTERPRISE-TONE-02 hard bullet-on-new-line clause for manual
+    // composition fallback; W-ENTERPRISE-TONE-03 ❌ FORBIDDEN list of
+    // production-regression strings — "เล่มเพิ่มเติมไม่มีในแผนนี้",
+    // "ไม่มีเล่มเพิ่มเติม", " · ไม่มีกิจกรรมเปิด", "(supplement)",
+    // "(revisionNumber", "(isOpen:", etc.; W-ENTERPRISE-TONE-04
+    // 'none'-activity-suffix silence for manual composition fallback),
+    // and (b) NEW rule #48 (Enterprise Output Bar — 5-point cross-
+    // cutting tone contract: no schema leak, silence is canonical,
+    // server-rendered verbatim, Thai-only prose, composition
+    // precedence (Renderer > Specific Rule > Default Tone). Future
+    // presentation waves MUST defer to #48 instead of restating tone.
+    // Net growth ~10 KB; ~2 KB (~500-token) headroom preserved.
+    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT.length).toBeLessThanOrEqual(97280);
     // W59-BE-PROMPT-01 (2026-04-25): cap raised 16384 → 18432 to credit
     // rules #27f (D-B objective disclosure, 200-char truncation),
     // #27g (D-C location triple — amphoeName / laoName / geoCoordinates),
@@ -208,6 +259,16 @@ describe('BE-W44-02 / decision-framing system prompt (§17.2)', () => {
     // (verbose-mode opt-in for default project-bullet shape) and rule
     // #31 (book-completeness vs HEAD-only mode selector). Net growth
     // ~1.6 KB; ~600-token headroom preserved.
+    // HOTFIX (2026-05-29): cap raised 94208 → 97280 to credit
+    // W-ENTERPRISE-TONE-01-EXTENSION (concrete forbidden compose
+    // patterns inside Rule #47, hardening renderer-first verbatim
+    // emission against the production regression where LLM ignored
+    // \`renderedMarkdown\` and composed inline from raw envelope
+    // fields with " · " separator), and the Rule #47 Step 3 example
+    // clarification note distinguishing the design-time \`•\` marker
+    // from the runtime \`- \` CommonMark marker emitted by the
+    // \`getPlanCatalogOverview\` orchestrator. Net growth ~2.6 KB;
+    // ~400-byte headroom preserved.
   });
 
   it('W67-FIX-C — rule #39 render template includes per-project บรรจุในเล่ม + หน้า + linkedRelated matchType labels', () => {

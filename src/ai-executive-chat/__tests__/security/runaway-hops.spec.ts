@@ -54,6 +54,19 @@ describe('SEC-W44-01 / runaway-hops (§17.8)', () => {
     // Indirect guard: if a tool accepted limit=10000, each hop could
     // return a massive payload and amplify the attack. Every tool caps
     // its `limit` at ≤50.
+    //
+    // Wave AI-Exec-Chat-Book-Coverage BE-01 (2026-05-28) — Q2 LOCKED:
+    // the four sub-book drill-down listers are explicitly allowed up
+    // to `limit ≤ 200` because they expose `offset` for explicit
+    // pagination (the legacy ≤50 tools do not). Single-turn payload
+    // amplification is still bounded — `200 rows × 6 hops` is within
+    // the §17.9 4KB tool-result budget after projection trim. The
+    // §17.11 role gate (`assertExecutiveRole`) remains the primary
+    // authority barrier.
+    const SUB_BOOK_PAGINATED_TOOLS = new Set([
+      'listProjectsInRevisionBook',
+      'listProjectsInSupplementBook',
+    ]);
     for (const [name, spec] of Object.entries(EXECUTIVE_TOOL_REGISTRY)) {
       const limit = spec.paramsSchema.properties?.limit;
       if (limit?.type === 'integer') {
@@ -61,7 +74,8 @@ describe('SEC-W44-01 / runaway-hops (§17.8)', () => {
           name,
           max: expect.any(Number),
         });
-        expect(limit.maximum ?? 0).toBeLessThanOrEqual(50);
+        const cap = SUB_BOOK_PAGINATED_TOOLS.has(name) ? 200 : 50;
+        expect(limit.maximum ?? 0).toBeLessThanOrEqual(cap);
       }
     }
   });

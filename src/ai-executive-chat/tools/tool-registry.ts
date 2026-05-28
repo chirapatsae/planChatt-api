@@ -2006,6 +2006,438 @@ const listAgencies: ExecutiveToolSpec = {
   handlerPlaceholder: null,
 };
 
+// ──────────────────────────────────────────────────────────────────────
+// Wave AI-Exec-Chat-Book-Coverage BE-01 (2026-05-28): sub-book drill-down
+// read tools (4 new).
+//
+// Closes the gap surfaced in `docs/tasks/wave-ai-exec-chat-book-coverage/
+// README.md` Appendix A: `listProjectsInPlan` can scope to `revised` or
+// `supplement` but only ACROSS books — there was no per-DPR / per-DPS
+// drill-in, so the executive chat could not answer "ข้อมูลเล่มแก้ไขมีกี่
+// โครงการ" / "เล่มเพิ่มเติมครั้งที่ 1 มีโครงการอะไรบ้าง".
+//
+// Locked answers (Q1-Q5, 2026-05-28):
+//   Q1 — org-wide read; NO owner-scoping at the tool layer.
+//   Q2 — listers cap at 200 rows + `nextOffset`; summaries uncapped.
+//   Q3 — anaphora resolution is BE-02/BE-03 work; tools accept UUIDs cleanly.
+//   Q4 — narrow tools (4 separate), better §17.11 auditability.
+//   Q5 — minimal additive prompt rewrite (BE-02 work).
+//
+// §17.2 advisory-only — all four are pure read aggregators.
+// §17.3 audit separation — none persist any FK into project tables.
+// §17.9 schema-strict — `additionalProperties: false` on every nested
+//   object; return shape matches the declared `returnSchema`.
+// §17.11 no role exemption — handlers re-assert `assertExecutiveRole`.
+// §14.2 HEAD-of-lineage — listers default to HEAD-only; opt-out via
+//   `includeHistoricalVersions: true`. Summaries always HEAD-only.
+// Wave 54 no-raw-SQL gate — handlers use TypeORM QueryBuilder only.
+// ──────────────────────────────────────────────────────────────────────
+
+const subBookProjectItemSchema: ToolJsonSchema = {
+  type: 'object',
+  // `additionalProperties: false` is INTENTIONALLY OMITTED at this
+  // nested item level so the W58 nullable-via-required-only convention
+  // works: properties listed only in `required` (without a typed
+  // `properties` entry) pass through as nullable per the in-house
+  // validator's permissive "absent schema → ok" branch. With
+  // `additionalProperties: false` the validator would reject the
+  // bare keys.
+  //
+  // Nullable members (no typed `properties` entry):
+  //   - currentStatus (no live tracking row)
+  //   - statusTh (DB th_name lookup miss)
+  //   - executiveStatus (4-group rollup; null for workflow-internal
+  //     statuses Ready / Pull_Back / Returned_For_Revision)
+  //   - responsibleAgencyId (no FK assigned — LAO-origin pre-staff-pick)
+  //   - responsibleAgencyName (sibling)
+  //   - pageNumber (book not yet compiled)
+  required: [
+    'projectId',
+    'title',
+    'currentStatus',
+    'statusTh',
+    'executiveStatus',
+    'responsibleAgencyId',
+    'responsibleAgencyName',
+    'budget',
+    'pageNumber',
+    'createdAt',
+  ],
+  properties: {
+    projectId: uuidField,
+    title: { type: 'string' },
+    budget: { type: 'number', minimum: 0 },
+    createdAt: { type: 'string', format: 'date-time' },
+  },
+};
+
+const executiveStatusBreakdownSchema: ToolJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'pendingReviewCount',
+    'awaitingApprovalCount',
+    'approvedCount',
+    'rejectedCount',
+  ],
+  properties: {
+    pendingReviewCount: { type: 'integer', minimum: 0 },
+    awaitingApprovalCount: { type: 'integer', minimum: 0 },
+    approvedCount: { type: 'integer', minimum: 0 },
+    rejectedCount: { type: 'integer', minimum: 0 },
+  },
+};
+
+const revisionMetaSchema: ToolJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['revisionId', 'revisionNumber', 'revisionTypeName', 'isOpen', 'isBooked'],
+  properties: {
+    revisionId: uuidField,
+    // `minimum: 0` rather than 1 because the friendly-hint envelope
+    // returned on invalid/unknown revisionId carries a sentinel `0`
+    // alongside the nil UUID; live envelopes always carry the real
+    // `dpr.revisionNumber >= 1`.
+    revisionNumber: { type: 'integer', minimum: 0 },
+    revisionTypeName: { type: 'string' },
+    isOpen: { type: 'boolean' },
+    isBooked: { type: 'boolean' },
+  },
+};
+
+const supplementMetaSchema: ToolJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['supplementId', 'supplementNumber', 'isOpen', 'isBooked'],
+  properties: {
+    supplementId: uuidField,
+    // `minimum: 0` matches the revisionNumber sentinel convention above.
+    supplementNumber: { type: 'integer', minimum: 0 },
+    isOpen: { type: 'boolean' },
+    isBooked: { type: 'boolean' },
+  },
+};
+
+const listProjectsInRevisionBook: ExecutiveToolSpec = {
+  name: 'listProjectsInRevisionBook',
+  thaiLabel: 'รายการโครงการในเล่มแก้ไข/เปลี่ยนแปลง',
+  description:
+    'คืนรายการ RevisedProjectGroup ที่ผูกกับเล่มแก้ไข/เปลี่ยนแปลงที่ระบุ (revisionId UUID ของ DevelopmentPlanRevision). รองรับ pagination ผ่าน limit (default 50, max 200) + offset (default 0). HEAD-only filter โดย default ตาม §14.2 — ตั้ง includeHistoricalVersions=true เพื่อรวม historical revisions. รวม responsibleAgencyName / budget / status / pageNumber ในแต่ละ row. ใช้คู่กับ listDevelopmentPlanRevisions (drill-down: list revisions → drill into one). อ่านอย่างเดียว.',
+  paramsSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['revisionId'],
+    properties: {
+      // UUID validation owned by handler (mirrors listProjectsInPlan
+      // Wave 60c convention): schema accepts plain string so the
+      // handler can return a friendly hint envelope instead of
+      // surfacing AI_SCHEMA_DRIFT to the FE.
+      revisionId: { type: 'string' },
+      status: {
+        type: 'string',
+        enum: [
+          'Ready',
+          'Pending',
+          'Verified',
+          'Pending_Approval',
+          'Approved',
+          'Pull_Back',
+          'Returned_For_Revision',
+          'Rejected',
+        ],
+      },
+      limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+      offset: { type: 'integer', minimum: 0, default: 0 },
+      includeHistoricalVersions: { type: 'boolean', default: false },
+    },
+  },
+  returnSchema: {
+    type: 'object',
+    required: [
+      'items',
+      'totalCount',
+      'limit',
+      'offset',
+      'nextOffset',
+      'revisionMeta',
+      'asOf',
+    ],
+    properties: {
+      items: { type: 'array', items: subBookProjectItemSchema },
+      totalCount: { type: 'integer', minimum: 0 },
+      limit: { type: 'integer', minimum: 1, maximum: 200 },
+      offset: { type: 'integer', minimum: 0 },
+      // `nextOffset` is `integer | null` — null when no further rows.
+      // Encoded with no `type` so the in-house validator accepts both
+      // (validator line 43-44: absent type → ok for any value
+      // including null; numeric branch accepts integer). The pairing
+      // with `required` still asserts presence.
+      nextOffset: {
+        description: 'integer offset of the next page, or null when at end',
+      },
+      revisionMeta: revisionMetaSchema,
+      asOf: { type: 'string', format: 'date-time' },
+    },
+  },
+  handlerPlaceholder: null,
+};
+
+const listProjectsInSupplementBook: ExecutiveToolSpec = {
+  name: 'listProjectsInSupplementBook',
+  thaiLabel: 'รายการโครงการในเล่มเพิ่มเติม',
+  description:
+    'คืนรายการ SupplementProjectGroup ที่ผูกกับเล่มเพิ่มเติมที่ระบุ (supplementId UUID ของ DevelopmentPlanSupplement). รองรับ pagination ผ่าน limit (default 50, max 200) + offset (default 0). HEAD-only filter โดย default ตาม §14.2 (SPG กับ prev_project_type=\'supplement\') — ตั้ง includeHistoricalVersions=true เพื่อรวม historical. รวม responsibleAgencyName / budget / status / pageNumber ในแต่ละ row. ใช้คู่กับ listDevelopmentPlanSupplements (drill-down). อ่านอย่างเดียว.',
+  paramsSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['supplementId'],
+    properties: {
+      supplementId: { type: 'string' },
+      status: {
+        type: 'string',
+        enum: [
+          'Ready',
+          'Pending',
+          'Verified',
+          'Pending_Approval',
+          'Approved',
+          'Pull_Back',
+          'Returned_For_Revision',
+          'Rejected',
+        ],
+      },
+      limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+      offset: { type: 'integer', minimum: 0, default: 0 },
+      includeHistoricalVersions: { type: 'boolean', default: false },
+    },
+  },
+  returnSchema: {
+    type: 'object',
+    required: [
+      'items',
+      'totalCount',
+      'limit',
+      'offset',
+      'nextOffset',
+      'supplementMeta',
+      'asOf',
+    ],
+    properties: {
+      items: { type: 'array', items: subBookProjectItemSchema },
+      totalCount: { type: 'integer', minimum: 0 },
+      limit: { type: 'integer', minimum: 1, maximum: 200 },
+      offset: { type: 'integer', minimum: 0 },
+      // `nextOffset` — see listProjectsInRevisionBook for rationale
+      // (integer | null encoded with no `type` so in-house validator
+      // accepts both).
+      nextOffset: {
+        description: 'integer offset of the next page, or null when at end',
+      },
+      supplementMeta: supplementMetaSchema,
+      asOf: { type: 'string', format: 'date-time' },
+    },
+  },
+  handlerPlaceholder: null,
+};
+
+const getRevisionBookSummary: ExecutiveToolSpec = {
+  name: 'getRevisionBookSummary',
+  thaiLabel: 'สรุปภาพรวมเล่มแก้ไข/เปลี่ยนแปลง',
+  description:
+    'สรุปภาพรวมของเล่มแก้ไข/เปลี่ยนแปลงที่ระบุ — จำนวน HEAD-of-lineage RPG รวม / งบประมาณรวม / งบประมาณเฉลี่ย / executiveStatusBreakdown (4 กลุ่มตามกฎ #11b: รอตรวจสอบ / รออนุมัติ / อนุมัติ / เกินศักยภาพ). ไม่มี items[] — ใช้ listProjectsInRevisionBook สำหรับรายการ. uncapped aggregate (ไม่มี limit). อ่านอย่างเดียว.',
+  paramsSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['revisionId'],
+    properties: {
+      revisionId: { type: 'string' },
+    },
+  },
+  returnSchema: {
+    type: 'object',
+    required: [
+      'revisionMeta',
+      'totalProjects',
+      'statusBreakdown',
+      'executiveStatusBreakdown',
+      'totalBudget',
+      'averageBudget',
+      'asOf',
+    ],
+    properties: {
+      revisionMeta: revisionMetaSchema,
+      totalProjects: { type: 'integer', minimum: 0 },
+      // Per-canonical-status counts. Always 8 keys per the canonical
+      // status vocabulary.
+      statusBreakdown: {
+        type: 'object',
+        additionalProperties: false,
+        required: [
+          'Ready',
+          'Pending',
+          'Verified',
+          'Pending_Approval',
+          'Approved',
+          'Pull_Back',
+          'Returned_For_Revision',
+          'Rejected',
+        ],
+        properties: {
+          Ready: { type: 'integer', minimum: 0 },
+          Pending: { type: 'integer', minimum: 0 },
+          Verified: { type: 'integer', minimum: 0 },
+          Pending_Approval: { type: 'integer', minimum: 0 },
+          Approved: { type: 'integer', minimum: 0 },
+          Pull_Back: { type: 'integer', minimum: 0 },
+          Returned_For_Revision: { type: 'integer', minimum: 0 },
+          Rejected: { type: 'integer', minimum: 0 },
+        },
+      },
+      executiveStatusBreakdown: executiveStatusBreakdownSchema,
+      totalBudget: { type: 'number', minimum: 0 },
+      averageBudget: { type: 'number', minimum: 0 },
+      asOf: { type: 'string', format: 'date-time' },
+    },
+  },
+  handlerPlaceholder: null,
+};
+
+const getSupplementBookSummary: ExecutiveToolSpec = {
+  name: 'getSupplementBookSummary',
+  thaiLabel: 'สรุปภาพรวมเล่มเพิ่มเติม',
+  description:
+    'สรุปภาพรวมของเล่มเพิ่มเติมที่ระบุ — จำนวน HEAD-of-lineage SPG รวม / งบประมาณรวม / งบประมาณเฉลี่ย / executiveStatusBreakdown (4 กลุ่มตามกฎ #11b). ไม่มี items[] — ใช้ listProjectsInSupplementBook สำหรับรายการ. uncapped aggregate. อ่านอย่างเดียว.',
+  paramsSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['supplementId'],
+    properties: {
+      supplementId: { type: 'string' },
+    },
+  },
+  returnSchema: {
+    type: 'object',
+    required: [
+      'supplementMeta',
+      'totalProjects',
+      'statusBreakdown',
+      'executiveStatusBreakdown',
+      'totalBudget',
+      'averageBudget',
+      'asOf',
+    ],
+    properties: {
+      supplementMeta: supplementMetaSchema,
+      totalProjects: { type: 'integer', minimum: 0 },
+      statusBreakdown: {
+        type: 'object',
+        additionalProperties: false,
+        required: [
+          'Ready',
+          'Pending',
+          'Verified',
+          'Pending_Approval',
+          'Approved',
+          'Pull_Back',
+          'Returned_For_Revision',
+          'Rejected',
+        ],
+        properties: {
+          Ready: { type: 'integer', minimum: 0 },
+          Pending: { type: 'integer', minimum: 0 },
+          Verified: { type: 'integer', minimum: 0 },
+          Pending_Approval: { type: 'integer', minimum: 0 },
+          Approved: { type: 'integer', minimum: 0 },
+          Pull_Back: { type: 'integer', minimum: 0 },
+          Returned_For_Revision: { type: 'integer', minimum: 0 },
+          Rejected: { type: 'integer', minimum: 0 },
+        },
+      },
+      executiveStatusBreakdown: executiveStatusBreakdownSchema,
+      totalBudget: { type: 'number', minimum: 0 },
+      averageBudget: { type: 'number', minimum: 0 },
+      asOf: { type: 'string', format: 'date-time' },
+    },
+  },
+  handlerPlaceholder: null,
+};
+
+// ──────────────────────────────────────────────────────────────────────
+// Wave AI-EXEC-CHAT-ENTERPRISE-OUTPUT-TONE / BE-01 (2026-05-28)
+//
+// getPlanCatalogOverview — fan-out orchestrator over listActivePlans +
+// listDevelopmentPlanRevisions + listDevelopmentPlanSupplements. Returns
+// a server-pre-rendered `renderedMarkdown` field the LLM emits verbatim
+// per Rule #32 / #47 / #48. Phase 1 of the document-centric catalog
+// architecture.
+//
+// Q1-Q5 lock acknowledgement (verbatim from README §0):
+//   Q1 — 'none' activity badge → SILENCE
+//   Q2 — Bullet rendering enforcement → server-side pre-render via
+//        `renderedMarkdown`
+//   Q3 — Empty-bucket negative-space → renderer never produces empty
+//        bullets
+//   Q4 — No other fragile rules
+//   Q5 — Rule #48 "Enterprise Output Bar" appended (BE-02 concern)
+//
+// §17.2 advisory read-only. §17.9 static Thai literals only. §17.11
+// no role exemption — handler does NOT branch on role.
+// ──────────────────────────────────────────────────────────────────────
+const getPlanCatalogOverview: ExecutiveToolSpec = {
+  name: 'getPlanCatalogOverview',
+  thaiLabel: 'ภาพรวมเล่มแผน + เล่มย่อย',
+  description:
+    'ดึงภาพรวมทุกเล่มแผน + เล่มย่อย ในรอบเดียว — คืน renderedMarkdown ที่ประกอบเสร็จแล้วสำหรับ LLM ใช้ verbatim ตามกฎ #47 + #48. ใช้เมื่อ user ถาม general plan listing ("มีเล่มแผนอะไรบ้าง" / "มีกี่แผน" / "แผนทั้งหมด"). อ่านอย่างเดียว.',
+  paramsSchema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      latestOnly: { type: 'boolean', default: false },
+      includeSubBooks: { type: 'boolean', default: true },
+    },
+  },
+  returnSchema: {
+    type: 'object',
+    required: [
+      'plans',
+      'revisionsByPlanId',
+      'supplementsByPlanId',
+      'renderedMarkdown',
+      'metadata',
+    ],
+    properties: {
+      plans: {
+        type: 'array',
+        items: { type: 'object' },
+      },
+      // Map planId → revision[] / supplement[]. The in-house schema
+      // validator has no `patternProperties` support; loose `object` is
+      // sufficient (the LLM consumes `renderedMarkdown` verbatim).
+      revisionsByPlanId: { type: 'object' },
+      supplementsByPlanId: { type: 'object' },
+      renderedMarkdown: { type: 'string' },
+      metadata: {
+        type: 'object',
+        required: [
+          'generatedAt',
+          'documentVersion',
+          'totalPlans',
+          'expandedPlans',
+          'deferredPlans',
+        ],
+        properties: {
+          generatedAt: { type: 'string', format: 'date-time' },
+          documentVersion: { type: 'string', enum: ['1.0'] },
+          totalPlans: { type: 'integer', minimum: 0 },
+          expandedPlans: { type: 'integer', minimum: 0 },
+          deferredPlans: { type: 'integer', minimum: 0 },
+        },
+      },
+    },
+  },
+  handlerPlaceholder: null,
+};
+
 export const EXECUTIVE_TOOL_REGISTRY: Record<
   ExecutiveToolName,
   ExecutiveToolSpec
@@ -2056,6 +2488,20 @@ export const EXECUTIVE_TOOL_REGISTRY: Record<
   // already coerces values via `Number(x)` since the agency PK is an
   // auto-increment integer column).
   listAgencies,
+  // Wave AI-Exec-Chat-Book-Coverage BE-01 (2026-05-28) — sub-book
+  // drill-down read tools (4 new). Closes the gap in `listProjectsInPlan`
+  // which could scope to `revised|supplement` but only ACROSS sub-books.
+  // Listers cap at 200 + offset pagination (Q2); summaries uncapped.
+  // §14.2 HEAD-of-lineage filter applied by default.
+  listProjectsInRevisionBook,
+  listProjectsInSupplementBook,
+  getRevisionBookSummary,
+  getSupplementBookSummary,
+  // Wave AI-Exec-Chat-Enterprise-Output-Tone BE-01 (2026-05-28) —
+  // Phase 1 document-centric catalog orchestrator. Pre-renders the
+  // canonical Rule #47 bullet layout server-side so the LLM emits
+  // verbatim per Rule #32 / #48 (Enterprise Output Bar, BE-02).
+  getPlanCatalogOverview,
 };
 
 /**

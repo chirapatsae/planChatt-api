@@ -92,7 +92,34 @@ export type ExecutiveToolName =
   //     at-least-one-of guard (agencies are far fewer than LAOs so
   //     dumping the full list when no filter is provided is acceptable
   //     token-wise).
-  | 'listAgencies';
+  | 'listAgencies'
+  // --- Wave AI-Exec-Chat-Book-Coverage BE-01 (2026-05-28): sub-book
+  //     drill-down read tools. Closes the gap that prevented executive
+  //     chat from answering "ข้อมูลเล่มแก้ไขมีกี่โครงการ" /
+  //     "เล่มเพิ่มเติมครั้งที่ 1 มีโครงการอะไร" — `listProjectsInPlan`
+  //     could scope to `revised|supplement` but only ACROSS all sub-
+  //     books; it had no per-DPR / per-DPS drill-in. These four tools
+  //     accept a sub-book UUID directly. Per Q1 (org-wide read) the
+  //     handlers apply NO owner filter; per Q2 the listers cap at
+  //     200 rows + `nextOffset`, summaries are uncapped. HEAD-of-
+  //     lineage filter (§14.2) is applied by default; opt-out via
+  //     `includeHistoricalVersions: true` on the listers only.
+  //     Read-only (§17.2 / §17.3). §17.11 no role exemption.
+  | 'listProjectsInRevisionBook'
+  | 'listProjectsInSupplementBook'
+  | 'getRevisionBookSummary'
+  | 'getSupplementBookSummary'
+  // --- Wave AI-Exec-Chat-Enterprise-Output-Tone BE-01 (2026-05-28):
+  //     `getPlanCatalogOverview` — orchestrator that fans out
+  //     `listActivePlans` + per-plan `listDevelopmentPlanRevisions` +
+  //     `listDevelopmentPlanSupplements` and pre-renders the canonical
+  //     Rule #47 bullet layout in a `renderedMarkdown` envelope field.
+  //     Phase 1 of the document-centric catalog architecture — proves
+  //     the pattern. The LLM emits `renderedMarkdown` verbatim per
+  //     Rule #32 + Rule #47 + Rule #48 ("Enterprise Output Bar",
+  //     appended by BE-02). Read-only (§17.2 / §17.3); §17.11 no role
+  //     exemption — handler MUST NOT branch on role.
+  | 'getPlanCatalogOverview';
 
 /**
  * Minimal structural subset of JSON Schema Draft-07. Consumed by the

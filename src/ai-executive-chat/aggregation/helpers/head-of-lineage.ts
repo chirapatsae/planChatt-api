@@ -147,3 +147,42 @@ export function selectIsHeadForRevisedProjectGroup<T extends ObjectLiteral>(
       outAlias,
     );
 }
+
+// ────────────────────────────────────────────────────────────────────
+// Wave AI-Exec-Chat-Book-Coverage BE-01 (2026-05-28) — SPG head-of-
+// lineage helper. Mirrors `applyHeadFilterForProjectGroup` but uses
+// `prev_project_type = 'supplement'` per CLAUDE.md §14.1 (SPG is a
+// lineage root since Wave SUPP-4, 2026-05-24). An SPG is HEAD when no
+// non-soft-deleted RevisedProjectGroup row references it via
+// `prev_project_id` + `prev_project_type = 'supplement'`.
+//
+// Wave 54 no-raw-SQL gate: JOIN target is an entity class
+// (RevisedProjectGroup); no bareword table literal appears in the
+// predicate string.
+// ────────────────────────────────────────────────────────────────────
+
+/**
+ * Apply the §14.2 HEAD anti-join to a `SupplementProjectGroup` query
+ * builder.
+ *
+ * `spgAlias` MUST be the alias used when constructing the QB (e.g.
+ * 'spg'). `descAlias` defaults to `'spg_desc_be01'` to avoid collision
+ * with the W57/W60 RPG aliases if both ever appear on the same QB.
+ */
+export function applyHeadFilterForSupplementProjectGroup<
+  T extends ObjectLiteral,
+>(
+  qb: SelectQueryBuilder<T>,
+  spgAlias = 'spg',
+  descAlias = 'spg_desc_be01',
+): SelectQueryBuilder<T> {
+  return qb
+    .leftJoin(
+      RevisedProjectGroup,
+      descAlias,
+      `${descAlias}.prev_project_id = ${spgAlias}.id ` +
+        `AND ${descAlias}.prev_project_type = 'supplement' ` +
+        `AND ${descAlias}.deleted_at IS NULL`,
+    )
+    .andWhere(`${descAlias}.id IS NULL`);
+}

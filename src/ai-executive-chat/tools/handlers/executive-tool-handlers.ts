@@ -74,6 +74,7 @@ import {
   HEAD_OF_LINEAGE_ADVISORY,
   applyHeadFilterForProjectGroup,
   applyHeadFilterForRevisedProjectGroup,
+  applyHeadFilterForSupplementProjectGroup,
   selectIsHeadForProjectGroup,
   selectIsHeadForRevisedProjectGroup,
 } from '../../aggregation/helpers/head-of-lineage';
@@ -126,6 +127,11 @@ import { PlanPhase } from 'src/plan-phase/entities/plan-phase.entity';
 // per test without re-importing the handler module. The aggregator
 // service itself is reached via `deps.agencyProjectsCanonical`.
 import { isCanonicalAgencyAggregatorEnabled } from '../../aggregation/services/agency-projects-canonical-aggregator.service';
+// Wave AI-Exec-Chat-Enterprise-Output-Tone BE-01 (2026-05-28) — Phase 1
+// document-centric catalog orchestrator. Imported here only so the
+// handler can be wired into EXECUTIVE_TOOL_HANDLERS at file tail; the
+// orchestrator body lives in the `orchestrators/` subdirectory.
+import { getPlanCatalogOverview } from '../orchestrators/plan-catalog-overview.orchestrator';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -5788,6 +5794,702 @@ const listAgencies: ExecutiveToolHandler = async (params, ctx, deps) => {
 };
 
 // ────────────────────────────────────────────────────────────────────
+// Wave AI-Exec-Chat-Book-Coverage BE-01 (2026-05-28) — sub-book
+// drill-down read tools (4 new handlers).
+//
+// Source-of-truth:
+//   - `docs/tasks/wave-ai-exec-chat-book-coverage/README.md` (locked
+//     Q1=org-wide read, Q2=200+offset, Q3=prompt-engineering, Q4=narrow,
+//     Q5=minimal additive)
+//   - CLAUDE.md §17.2 advisory-only / §17.3 audit separation / §17.9
+//     schema-strict / §17.11 no role exemption / §14.2 HEAD-of-lineage
+//   - Wave 54 no-raw-SQL gate — TypeORM QueryBuilder via entity classes
+//
+// Pattern reference: `listProjectsInPlan` (line ~1852) and
+// `listDevelopmentPlanRevisions` (line ~3327) for the agency-JOIN +
+// tracking-status JOIN + budget sub-query pattern.
+//
+// HEAD-of-lineage default per §14.2:
+//   - listProjectsInRevisionBook applies `applyHeadFilterForRevisedProjectGroup`
+//     unless `includeHistoricalVersions: true`
+//   - listProjectsInSupplementBook applies `applyHeadFilterForSupplementProjectGroup`
+//     unless `includeHistoricalVersions: true`
+//   - Summary tools (getRevisionBookSummary / getSupplementBookSummary)
+//     always apply HEAD filter — historical inclusion is a list-only
+//     advisory flag, summaries must reflect current-truth headcount.
+//
+// Org-wide read per Q1: NO `createdBy` filter; the `assertExecutiveRole`
+// guard is the only authority check. PII projection discipline is
+// preserved — handlers expose only `{ projectId, title, currentStatus,
+// statusTh, executiveStatus, responsibleAgencyId, responsibleAgencyName,
+// budget, pageNumber, createdAt }`.
+// ────────────────────────────────────────────────────────────────────
+
+/**
+ * Build the per-row envelope shared by both listers
+ * (`listProjectsInRevisionBook` / `listProjectsInSupplementBook`).
+ *
+ * `statusTh` is sourced from the DB-loaded `status.th_name` lookup per
+ * the W67 Thai-label-source-of-truth contract. `executiveStatus` is the
+ * 4-group rollup per §17.7 / CLAUDE.md "Executive View Status Groups";
+ * null for workflow-internal states (Ready / Pull_Back / Returned_For_Revision).
+ *
+ * Nullable fields (`currentStatus` / `statusTh` / `executiveStatus` /
+ * `responsibleAgencyId` / `responsibleAgencyName` / `pageNumber`) follow
+ * the §17.9 nullable-via-required-only convention — present as keys,
+ * value may be null at runtime.
+ */
+function buildSubBookProjectItem(args: {
+  projectId: string;
+  title: string;
+  statusName: string | null;
+  statusTh: string | null;
+  budget: string | number | null;
+  responsibleAgencyId: string | number | null;
+  responsibleAgencyName: string | null;
+  pageNumber: number | null;
+  createdAt: Date | string;
+}): Record<string, unknown> {
+  const exec = mapToExecutiveStatusGroup(args.statusName);
+  const createdAtIso =
+    args.createdAt instanceof Date
+      ? args.createdAt.toISOString()
+      : String(args.createdAt);
+  const agencyIdRaw = args.responsibleAgencyId;
+  const agencyId =
+    agencyIdRaw === null || agencyIdRaw === undefined
+      ? null
+      : Number(agencyIdRaw);
+  return {
+    projectId: args.projectId,
+    title: args.title,
+    currentStatus: args.statusName ?? null,
+    statusTh: args.statusTh ?? null,
+    executiveStatus: exec ?? null,
+    responsibleAgencyId: agencyId,
+    responsibleAgencyName: args.responsibleAgencyName ?? null,
+    budget: Number(args.budget ?? 0) || 0,
+    pageNumber: args.pageNumber ?? null,
+    createdAt: createdAtIso,
+  };
+}
+
+/**
+ * Initialize the 8-key status breakdown used by both summary tools.
+ * Mirrors the canonical 8-status vocabulary (Ready, Pending, Verified,
+ * Pending_Approval, Approved, Pull_Back, Returned_For_Revision,
+ * Rejected — CLAUDE.md "Core Status Machine").
+ */
+function emptyStatusBreakdown(): Record<string, number> {
+  return {
+    Ready: 0,
+    Pending: 0,
+    Verified: 0,
+    Pending_Approval: 0,
+    Approved: 0,
+    Pull_Back: 0,
+    Returned_For_Revision: 0,
+    Rejected: 0,
+  };
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Handler 1: listProjectsInRevisionBook
+// ────────────────────────────────────────────────────────────────────
+
+const listProjectsInRevisionBook: ExecutiveToolHandler = async (
+  params,
+  ctx,
+  deps,
+) => {
+  assertExecutiveRole(ctx);
+  const revisionIdRaw = String(params.revisionId ?? '');
+  if (!UUID_RX.test(revisionIdRaw)) {
+    return {
+      items: [],
+      totalCount: 0,
+      limit: 50,
+      offset: 0,
+      nextOffset: null,
+      revisionMeta: {
+        revisionId: NIL_UUID,
+        revisionNumber: 0,
+        revisionTypeName: '(ไม่ระบุ)',
+        isOpen: false,
+        isBooked: false,
+      },
+      asOf: nowIso(),
+      message:
+        'revisionId ต้องเป็น UUID ที่ได้จาก listDevelopmentPlanRevisions.items[i].revisionId เท่านั้น กรุณาเรียก listDevelopmentPlanRevisions ก่อน',
+    };
+  }
+  const revisionId = revisionIdRaw;
+  const limit = Math.min(Math.max(Number(params.limit ?? 50), 1), 200);
+  const offset = Math.max(Number(params.offset ?? 0), 0);
+  const includeHistorical = Boolean(params.includeHistoricalVersions);
+  const statusFilter =
+    typeof params.status === 'string' && params.status.length > 0
+      ? params.status
+      : undefined;
+
+  // Resolve the DPR meta. If absent, return a friendly empty envelope
+  // (mirrors the listProjectsInPlan UUID-not-found pattern at line 1855)
+  // — UUID is well-formed but no row exists.
+  const dpr = await deps.dataSource
+    .getRepository(DevelopmentPlanRevision)
+    .createQueryBuilder('dpr')
+    .leftJoinAndSelect('dpr.revisionType', 'rt')
+    .where('dpr.deletedAt IS NULL')
+    .andWhere('dpr.id = :revisionId', { revisionId })
+    .getOne();
+
+  if (!dpr) {
+    return {
+      items: [],
+      totalCount: 0,
+      limit,
+      offset,
+      nextOffset: null,
+      revisionMeta: {
+        revisionId,
+        revisionNumber: 0,
+        revisionTypeName: '(ไม่ระบุ)',
+        isOpen: false,
+        isBooked: false,
+      },
+      asOf: nowIso(),
+      message:
+        'ไม่พบเล่มแก้ไข/เปลี่ยนแปลงตาม revisionId ที่ระบุ — โปรดยืนยัน UUID จาก listDevelopmentPlanRevisions',
+    };
+  }
+
+  const revisionMeta = {
+    revisionId: dpr.id,
+    revisionNumber: dpr.revisionNumber,
+    revisionTypeName: dpr.revisionType?.name ?? '(ไม่ระบุ)',
+    isOpen: !!dpr.isOpen,
+    isBooked: !!dpr.isBooked,
+  };
+
+  // Build base QB: RPG → DPR via FK, plus latest-tracking + agency JOINs.
+  const buildBaseQb = () => {
+    const qb = deps.dataSource
+      .getRepository(RevisedProjectGroup)
+      .createQueryBuilder('rpg')
+      .leftJoin('rpg.trackingStatus', 'ts', 'ts.isLatest = true')
+      .leftJoin('ts.statusId', 'status')
+      .leftJoin(
+        GovernmentAgency,
+        'ga',
+        'ga.id = rpg.responsible_agency_id',
+      )
+      .where('rpg.deletedAt IS NULL')
+      .andWhere('rpg.development_plan_revision_id = :revisionId', {
+        revisionId,
+      });
+    if (!includeHistorical) {
+      // §14.2 HEAD-of-lineage anti-join. Aliases default to 'rpg_desc_w57'
+      // — distinct from any other helper alias.
+      applyHeadFilterForRevisedProjectGroup(qb, 'rpg');
+    }
+    if (statusFilter) {
+      qb.andWhere('status.name = :statusFilter', { statusFilter });
+    }
+    return qb;
+  };
+
+  // Count query (uses DISTINCT to defuse the rare case where multiple
+  // tracking rows share `isLatest=true` for the same RPG — defensive).
+  const countQb = buildBaseQb().select('COUNT(DISTINCT rpg.id)', 'cnt');
+  const countRow = await countQb.getRawOne<{ cnt: string }>();
+  const totalCount = Number(countRow?.cnt ?? 0) || 0;
+
+  // Page query.
+  const listQb = buildBaseQb()
+    .select('rpg.id', 'rpgid')
+    .addSelect('rpg.title', 'title')
+    .addSelect('status.name', 'statusname')
+    .addSelect('status.th_name', 'statusth')
+    .addSelect('rpg.responsible_agency_id', 'agencyid')
+    .addSelect('ga.name', 'agencyname')
+    .addSelect('rpg.pageNumber', 'pagenumber')
+    .addSelect('rpg.createdAt', 'createdat')
+    .addSelect(
+      (subQb: SelectQueryBuilder<Budget>) =>
+        subQb
+          .select('COALESCE(SUM(b.quantity), 0)')
+          .from(Budget, 'b')
+          .where('b.revised_project_group_id = rpg.id'),
+      'budget',
+    )
+    .orderBy('rpg.pageNumber', 'ASC', 'NULLS LAST')
+    .addOrderBy('rpg.createdAt', 'ASC')
+    .offset(offset)
+    .limit(limit);
+
+  const rows: Array<{
+    rpgid: string;
+    title: string;
+    statusname: string | null;
+    statusth: string | null;
+    agencyid: string | number | null;
+    agencyname: string | null;
+    pagenumber: number | null;
+    createdat: Date | string;
+    budget: string | null;
+  }> = await listQb.getRawMany();
+
+  const items = rows.map((r) =>
+    buildSubBookProjectItem({
+      projectId: r.rpgid,
+      title: r.title,
+      statusName: r.statusname,
+      statusTh: r.statusth,
+      budget: r.budget,
+      responsibleAgencyId: r.agencyid,
+      responsibleAgencyName: r.agencyname,
+      pageNumber: r.pagenumber,
+      createdAt: r.createdat,
+    }),
+  );
+
+  const nextOffset =
+    offset + items.length < totalCount ? offset + items.length : null;
+
+  return {
+    items,
+    totalCount,
+    limit,
+    offset,
+    nextOffset,
+    revisionMeta,
+    asOf: nowIso(),
+  };
+};
+
+// ────────────────────────────────────────────────────────────────────
+// Handler 2: listProjectsInSupplementBook
+// ────────────────────────────────────────────────────────────────────
+
+const listProjectsInSupplementBook: ExecutiveToolHandler = async (
+  params,
+  ctx,
+  deps,
+) => {
+  assertExecutiveRole(ctx);
+  const supplementIdRaw = String(params.supplementId ?? '');
+  if (!UUID_RX.test(supplementIdRaw)) {
+    return {
+      items: [],
+      totalCount: 0,
+      limit: 50,
+      offset: 0,
+      nextOffset: null,
+      supplementMeta: {
+        supplementId: NIL_UUID,
+        supplementNumber: 0,
+        isOpen: false,
+        isBooked: false,
+      },
+      asOf: nowIso(),
+      message:
+        'supplementId ต้องเป็น UUID ที่ได้จาก listDevelopmentPlanSupplements.items[i].supplementId เท่านั้น กรุณาเรียก listDevelopmentPlanSupplements ก่อน',
+    };
+  }
+  const supplementId = supplementIdRaw;
+  const limit = Math.min(Math.max(Number(params.limit ?? 50), 1), 200);
+  const offset = Math.max(Number(params.offset ?? 0), 0);
+  const includeHistorical = Boolean(params.includeHistoricalVersions);
+  const statusFilter =
+    typeof params.status === 'string' && params.status.length > 0
+      ? params.status
+      : undefined;
+
+  const dps = await deps.dataSource
+    .getRepository(DevelopmentPlanSupplement)
+    .createQueryBuilder('dps')
+    .where('dps.deletedAt IS NULL')
+    .andWhere('dps.id = :supplementId', { supplementId })
+    .getOne();
+
+  if (!dps) {
+    return {
+      items: [],
+      totalCount: 0,
+      limit,
+      offset,
+      nextOffset: null,
+      supplementMeta: {
+        supplementId,
+        supplementNumber: 0,
+        isOpen: false,
+        isBooked: false,
+      },
+      asOf: nowIso(),
+      message:
+        'ไม่พบเล่มเพิ่มเติมตาม supplementId ที่ระบุ — โปรดยืนยัน UUID จาก listDevelopmentPlanSupplements',
+    };
+  }
+
+  const supplementMeta = {
+    supplementId: dps.id,
+    supplementNumber: dps.supplementNumber,
+    isOpen: !!dps.isOpen,
+    isBooked: !!dps.isBooked,
+  };
+
+  const buildBaseQb = () => {
+    const qb = deps.dataSource
+      .getRepository(SupplementProjectGroup)
+      .createQueryBuilder('spg')
+      .leftJoin('spg.trackingStatus', 'ts', 'ts.isLatest = true')
+      .leftJoin('ts.statusId', 'status')
+      .leftJoin(
+        GovernmentAgency,
+        'ga',
+        'ga.id = spg.responsible_agency_id',
+      )
+      .where('spg.deletedAt IS NULL')
+      .andWhere('spg.development_plan_supplement_id = :supplementId', {
+        supplementId,
+      });
+    if (!includeHistorical) {
+      // §14.2 HEAD-of-lineage anti-join. SPG with no live RPG
+      // descendant via `prev_project_type='supplement'` per Wave SUPP-4
+      // (2026-05-24) lineage edges.
+      applyHeadFilterForSupplementProjectGroup(qb, 'spg');
+    }
+    if (statusFilter) {
+      qb.andWhere('status.name = :statusFilter', { statusFilter });
+    }
+    return qb;
+  };
+
+  const countQb = buildBaseQb().select('COUNT(DISTINCT spg.id)', 'cnt');
+  const countRow = await countQb.getRawOne<{ cnt: string }>();
+  const totalCount = Number(countRow?.cnt ?? 0) || 0;
+
+  const listQb = buildBaseQb()
+    .select('spg.id', 'spgid')
+    .addSelect('spg.title', 'title')
+    .addSelect('status.name', 'statusname')
+    .addSelect('status.th_name', 'statusth')
+    .addSelect('spg.responsible_agency_id', 'agencyid')
+    .addSelect('ga.name', 'agencyname')
+    .addSelect('spg.pageNumber', 'pagenumber')
+    .addSelect('spg.createdAt', 'createdat')
+    .addSelect(
+      (subQb: SelectQueryBuilder<Budget>) =>
+        subQb
+          .select('COALESCE(SUM(b.quantity), 0)')
+          .from(Budget, 'b')
+          .where('b.supplement_project_group_id = spg.id'),
+      'budget',
+    )
+    .orderBy('spg.pageNumber', 'ASC', 'NULLS LAST')
+    .addOrderBy('spg.createdAt', 'ASC')
+    .offset(offset)
+    .limit(limit);
+
+  const rows: Array<{
+    spgid: string;
+    title: string;
+    statusname: string | null;
+    statusth: string | null;
+    agencyid: string | number | null;
+    agencyname: string | null;
+    pagenumber: number | null;
+    createdat: Date | string;
+    budget: string | null;
+  }> = await listQb.getRawMany();
+
+  const items = rows.map((r) =>
+    buildSubBookProjectItem({
+      projectId: r.spgid,
+      title: r.title,
+      statusName: r.statusname,
+      statusTh: r.statusth,
+      budget: r.budget,
+      responsibleAgencyId: r.agencyid,
+      responsibleAgencyName: r.agencyname,
+      pageNumber: r.pagenumber,
+      createdAt: r.createdat,
+    }),
+  );
+
+  const nextOffset =
+    offset + items.length < totalCount ? offset + items.length : null;
+
+  return {
+    items,
+    totalCount,
+    limit,
+    offset,
+    nextOffset,
+    supplementMeta,
+    asOf: nowIso(),
+  };
+};
+
+// ────────────────────────────────────────────────────────────────────
+// Handler 3: getRevisionBookSummary
+// ────────────────────────────────────────────────────────────────────
+
+const getRevisionBookSummary: ExecutiveToolHandler = async (
+  params,
+  ctx,
+  deps,
+) => {
+  assertExecutiveRole(ctx);
+  const revisionIdRaw = String(params.revisionId ?? '');
+  const emptyMeta = {
+    revisionId: NIL_UUID,
+    revisionNumber: 0,
+    revisionTypeName: '(ไม่ระบุ)',
+    isOpen: false,
+    isBooked: false,
+  };
+  if (!UUID_RX.test(revisionIdRaw)) {
+    return {
+      revisionMeta: emptyMeta,
+      totalProjects: 0,
+      statusBreakdown: emptyStatusBreakdown(),
+      executiveStatusBreakdown: {
+        pendingReviewCount: 0,
+        awaitingApprovalCount: 0,
+        approvedCount: 0,
+        rejectedCount: 0,
+      },
+      totalBudget: 0,
+      averageBudget: 0,
+      asOf: nowIso(),
+      message:
+        'revisionId ต้องเป็น UUID ที่ได้จาก listDevelopmentPlanRevisions.items[i].revisionId เท่านั้น',
+    };
+  }
+  const revisionId = revisionIdRaw;
+
+  const dpr = await deps.dataSource
+    .getRepository(DevelopmentPlanRevision)
+    .createQueryBuilder('dpr')
+    .leftJoinAndSelect('dpr.revisionType', 'rt')
+    .where('dpr.deletedAt IS NULL')
+    .andWhere('dpr.id = :revisionId', { revisionId })
+    .getOne();
+  if (!dpr) {
+    return {
+      revisionMeta: { ...emptyMeta, revisionId },
+      totalProjects: 0,
+      statusBreakdown: emptyStatusBreakdown(),
+      executiveStatusBreakdown: {
+        pendingReviewCount: 0,
+        awaitingApprovalCount: 0,
+        approvedCount: 0,
+        rejectedCount: 0,
+      },
+      totalBudget: 0,
+      averageBudget: 0,
+      asOf: nowIso(),
+      message:
+        'ไม่พบเล่มแก้ไข/เปลี่ยนแปลงตาม revisionId ที่ระบุ — โปรดยืนยัน UUID จาก listDevelopmentPlanRevisions',
+    };
+  }
+
+  const revisionMeta = {
+    revisionId: dpr.id,
+    revisionNumber: dpr.revisionNumber,
+    revisionTypeName: dpr.revisionType?.name ?? '(ไม่ระบุ)',
+    isOpen: !!dpr.isOpen,
+    isBooked: !!dpr.isBooked,
+  };
+
+  // Status-grouped count over HEAD-of-lineage RPG rows. Aggregates are
+  // uncapped per Q2 — no `.take()` / `.limit()`.
+  const statusGroupQb = deps.dataSource
+    .getRepository(RevisedProjectGroup)
+    .createQueryBuilder('rpg')
+    .leftJoin('rpg.trackingStatus', 'ts', 'ts.isLatest = true')
+    .leftJoin('ts.statusId', 'status')
+    .select('status.name', 'statusname')
+    .addSelect('COUNT(DISTINCT rpg.id)', 'cnt')
+    .where('rpg.deletedAt IS NULL')
+    .andWhere('rpg.development_plan_revision_id = :revisionId', { revisionId })
+    .groupBy('status.name');
+  applyHeadFilterForRevisedProjectGroup(statusGroupQb, 'rpg');
+  const statusRows: Array<{ statusname: string | null; cnt: string }> =
+    await statusGroupQb.getRawMany();
+
+  const statusBreakdown = emptyStatusBreakdown();
+  let totalProjects = 0;
+  for (const r of statusRows) {
+    const n = Number(r.cnt) || 0;
+    totalProjects += n;
+    if (r.statusname && r.statusname in statusBreakdown) {
+      statusBreakdown[r.statusname] += n;
+    }
+  }
+  const executiveStatusBreakdown = buildExecutiveStatusBreakdown(
+    new Map(statusRows.map((r) => [r.statusname ?? '', Number(r.cnt) || 0])),
+  );
+
+  // Sum-of-budgets over the HEAD-of-lineage RPG set. Two-step pattern
+  // mirroring `getProjectLocationBreakdown` (lines ~3565-3573) — query
+  // through the Budget repo joined to RPG via the entity relation, so
+  // the no-raw-SQL gate (`wave53-no-raw-sql.spec.ts`) does not see any
+  // bare `FROM budget` literal. The HEAD anti-join is applied on the
+  // joined RPG alias.
+  const budgetQb = deps.dataSource
+    .getRepository(Budget)
+    .createQueryBuilder('b')
+    .innerJoin('b.revisedProjectGroupId', 'rpg')
+    .select('COALESCE(SUM(b.quantity), 0)', 'totalbudget')
+    .where('rpg.deletedAt IS NULL')
+    .andWhere('rpg.development_plan_revision_id = :revisionId', { revisionId });
+  applyHeadFilterForRevisedProjectGroup(budgetQb, 'rpg');
+  const budgetRow = await budgetQb.getRawOne<{ totalbudget: string }>();
+  const totalBudget = Number(budgetRow?.totalbudget ?? 0) || 0;
+  const averageBudget =
+    totalProjects > 0 ? Math.round((totalBudget / totalProjects) * 100) / 100 : 0;
+
+  return {
+    revisionMeta,
+    totalProjects,
+    statusBreakdown,
+    executiveStatusBreakdown,
+    totalBudget,
+    averageBudget,
+    asOf: nowIso(),
+  };
+};
+
+// ────────────────────────────────────────────────────────────────────
+// Handler 4: getSupplementBookSummary
+// ────────────────────────────────────────────────────────────────────
+
+const getSupplementBookSummary: ExecutiveToolHandler = async (
+  params,
+  ctx,
+  deps,
+) => {
+  assertExecutiveRole(ctx);
+  const supplementIdRaw = String(params.supplementId ?? '');
+  const emptyMeta = {
+    supplementId: NIL_UUID,
+    supplementNumber: 0,
+    isOpen: false,
+    isBooked: false,
+  };
+  if (!UUID_RX.test(supplementIdRaw)) {
+    return {
+      supplementMeta: emptyMeta,
+      totalProjects: 0,
+      statusBreakdown: emptyStatusBreakdown(),
+      executiveStatusBreakdown: {
+        pendingReviewCount: 0,
+        awaitingApprovalCount: 0,
+        approvedCount: 0,
+        rejectedCount: 0,
+      },
+      totalBudget: 0,
+      averageBudget: 0,
+      asOf: nowIso(),
+      message:
+        'supplementId ต้องเป็น UUID ที่ได้จาก listDevelopmentPlanSupplements.items[i].supplementId เท่านั้น',
+    };
+  }
+  const supplementId = supplementIdRaw;
+
+  const dps = await deps.dataSource
+    .getRepository(DevelopmentPlanSupplement)
+    .createQueryBuilder('dps')
+    .where('dps.deletedAt IS NULL')
+    .andWhere('dps.id = :supplementId', { supplementId })
+    .getOne();
+  if (!dps) {
+    return {
+      supplementMeta: { ...emptyMeta, supplementId },
+      totalProjects: 0,
+      statusBreakdown: emptyStatusBreakdown(),
+      executiveStatusBreakdown: {
+        pendingReviewCount: 0,
+        awaitingApprovalCount: 0,
+        approvedCount: 0,
+        rejectedCount: 0,
+      },
+      totalBudget: 0,
+      averageBudget: 0,
+      asOf: nowIso(),
+      message:
+        'ไม่พบเล่มเพิ่มเติมตาม supplementId ที่ระบุ — โปรดยืนยัน UUID จาก listDevelopmentPlanSupplements',
+    };
+  }
+
+  const supplementMeta = {
+    supplementId: dps.id,
+    supplementNumber: dps.supplementNumber,
+    isOpen: !!dps.isOpen,
+    isBooked: !!dps.isBooked,
+  };
+
+  const statusGroupQb = deps.dataSource
+    .getRepository(SupplementProjectGroup)
+    .createQueryBuilder('spg')
+    .leftJoin('spg.trackingStatus', 'ts', 'ts.isLatest = true')
+    .leftJoin('ts.statusId', 'status')
+    .select('status.name', 'statusname')
+    .addSelect('COUNT(DISTINCT spg.id)', 'cnt')
+    .where('spg.deletedAt IS NULL')
+    .andWhere('spg.development_plan_supplement_id = :supplementId', {
+      supplementId,
+    })
+    .groupBy('status.name');
+  applyHeadFilterForSupplementProjectGroup(statusGroupQb, 'spg');
+  const statusRows: Array<{ statusname: string | null; cnt: string }> =
+    await statusGroupQb.getRawMany();
+
+  const statusBreakdown = emptyStatusBreakdown();
+  let totalProjects = 0;
+  for (const r of statusRows) {
+    const n = Number(r.cnt) || 0;
+    totalProjects += n;
+    if (r.statusname && r.statusname in statusBreakdown) {
+      statusBreakdown[r.statusname] += n;
+    }
+  }
+  const executiveStatusBreakdown = buildExecutiveStatusBreakdown(
+    new Map(statusRows.map((r) => [r.statusname ?? '', Number(r.cnt) || 0])),
+  );
+
+  // Sum-of-budgets via Budget repo join (mirrors revision-summary
+  // handler — avoids any raw `FROM budget` literal that the no-raw-SQL
+  // gate would flag).
+  const budgetQb = deps.dataSource
+    .getRepository(Budget)
+    .createQueryBuilder('b')
+    .innerJoin('b.supplementProjectGroupId', 'spg')
+    .select('COALESCE(SUM(b.quantity), 0)', 'totalbudget')
+    .where('spg.deletedAt IS NULL')
+    .andWhere('spg.development_plan_supplement_id = :supplementId', {
+      supplementId,
+    });
+  applyHeadFilterForSupplementProjectGroup(budgetQb, 'spg');
+  const budgetRow = await budgetQb.getRawOne<{ totalbudget: string }>();
+  const totalBudget = Number(budgetRow?.totalbudget ?? 0) || 0;
+  const averageBudget =
+    totalProjects > 0 ? Math.round((totalBudget / totalProjects) * 100) / 100 : 0;
+
+  return {
+    supplementMeta,
+    totalProjects,
+    statusBreakdown,
+    executiveStatusBreakdown,
+    totalBudget,
+    averageBudget,
+    asOf: nowIso(),
+  };
+};
+
+// ────────────────────────────────────────────────────────────────────
 // Export: handler map keyed by registry tool name.
 // ────────────────────────────────────────────────────────────────────
 
@@ -5826,6 +6528,20 @@ export const EXECUTIVE_TOOL_HANDLERS: ExecutiveToolHandlerMap = {
   // Wave 67 W67-AGENCY-RESOLVER — government-agency name → PK resolver
   // (closes prompt rule #25d gap; mirrors `listAmphoes` / `listLaos`).
   listAgencies,
+  // Wave AI-Exec-Chat-Book-Coverage BE-01 (2026-05-28) — sub-book
+  // drill-down read tools (4 new handlers). Closes the gap in
+  // `listProjectsInPlan` which could not drill into a single DPR / DPS.
+  listProjectsInRevisionBook,
+  listProjectsInSupplementBook,
+  getRevisionBookSummary,
+  getSupplementBookSummary,
+  // Wave AI-Exec-Chat-Enterprise-Output-Tone BE-01 (2026-05-28) — Phase 1
+  // document-centric catalog orchestrator. Fans out listActivePlans +
+  // per-plan listDevelopmentPlanRevisions + listDevelopmentPlanSupplements
+  // and pre-renders the canonical Rule #47 bullet layout in
+  // `renderedMarkdown`. Q1 ('none' → silence), Q3 (empty bucket → silence)
+  // are enforced inside the composer. §17.11 no role exemption.
+  getPlanCatalogOverview,
 };
 
 // Unused but-exported so downstream files can import the context type

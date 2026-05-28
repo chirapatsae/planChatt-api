@@ -64,6 +64,13 @@ import {
   ExecutiveToolHandlerDeps,
 } from './tools/handlers/handler-types';
 import { extractTargetFromToolResult } from './tools/extract-target';
+// BE-03 — Context Hand-Off: replay tool-call summary so the LLM can
+// resolve discourse anaphora ("เล่มนี้") against UUIDs surfaced in a
+// prior turn. The helper is pure; see its header for §17 references.
+import {
+  buildContextHint,
+  CtxHintInputRow,
+} from './services/build-context-hint.helper';
 import type { AiResultTargetKind } from 'src/ai/utils/ai-score-envelope';
 // Wave 54 BE-W54-06 — Tier B aggregation service tokens + interfaces.
 // Injected here so `invokeTool` can hand the 5 service instances to
@@ -1477,17 +1484,47 @@ export class AiExecutiveChatService {
       take: CONTEXT_MESSAGE_CAP,
     });
     const out: ChatMessageParam[] = [];
+    // BE-03 — buffer same-turn `tool` rows so the trailing assistant
+    // row of that turn can carry a compact `<<<CTX_HINT>>>` annotation
+    // summarising what those tool calls returned. The buffer is reset
+    // on every `user` row (a new turn begins) and on every `assistant`
+    // row (the turn's terminating prose is being replayed). Tool rows
+    // are NEVER replayed as their own message — the "tool rows are
+    // transient scratch" invariant from the original loop is preserved.
+    let toolBuffer: CtxHintInputRow[] = [];
     for (const row of rows) {
       if (row.role === 'user') {
+        // New turn begins — discard any stragglers from a malformed
+        // prior turn (defensive; in practice tool rows always come
+        // between an assistant-tool-call row and the assistant-final
+        // row of the SAME turn).
+        toolBuffer = [];
         const redacted = this.piiRedactor.redactText(row.contentText ?? '', {
           endpoint: 'executive-chat',
         }).output;
         out.push({ role: 'user', content: this.wrapUserInput(redacted) });
+      } else if (row.role === 'tool') {
+        // §17.9 — CTX_HINT is BUILT FROM the persisted tool result but
+        // does NOT bypass the structured tool-result schema validation
+        // path (which only runs during the LIVE tool-call hop earlier
+        // in the turn). The hint enters the LLM as PLAIN TEXT inside
+        // the assistant message replay.
+        toolBuffer.push({
+          role: row.role,
+          toolName: row.toolName,
+          toolResultJson: row.toolResultJson,
+        });
       } else if (row.role === 'assistant') {
-        out.push({ role: 'assistant', content: row.contentText ?? '' });
+        const ctxHint = buildContextHint(toolBuffer);
+        toolBuffer = [];
+        const baseContent = row.contentText ?? '';
+        const replayedContent = ctxHint
+          ? `${baseContent}\n\n${ctxHint}`
+          : baseContent;
+        out.push({ role: 'assistant', content: replayedContent });
       }
-      // `tool` / `system` history rows are not replayed — the system
-      // prompt is re-seeded fresh and tool turns are transient scratch.
+      // `system` history rows are not replayed — the system prompt is
+      // re-seeded fresh on every turn.
     }
     return out;
   }
