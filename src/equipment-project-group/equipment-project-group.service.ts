@@ -525,6 +525,12 @@ export class EquipmentProjectGroupService {
     const qb = this.equipmentRepo
       .createQueryBuilder('equipment')
       .leftJoinAndSelect('equipment.createdBy', 'createdBy')
+      // 2026-05-29 — load `createdBy.user` so the staff queue table
+      // can surface "ผู้ส่ง" (firstName + lastName) per parity with
+      // the project staff table (`TableHeaderVerify`'s "เจ้าของโครงการ"
+      // column). Without this leftJoin the FE adapter sees
+      // `createdBy.user = undefined` and renders '-' silently.
+      .leftJoinAndSelect('createdBy.user', 'createdByUser')
       .leftJoinAndSelect('equipment.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('equipment.strategy', 'strategy')
       .leftJoinAndSelect('equipment.tactic', 'tactic')

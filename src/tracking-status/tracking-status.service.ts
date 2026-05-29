@@ -69,6 +69,7 @@ import { User } from 'src/users/entities/user.entity';
 import { PreSubmitSnapshotService } from 'src/ai/pre-submit-snapshot.service';
 import { Budget } from 'src/budget/entities/budget.entity';
 import { ReportFormat } from 'src/development-plan/types/report-format.enum';
+import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { BookFormatResolver } from 'src/common/project-classification/book-format.resolver';
 
 /**
@@ -508,7 +509,17 @@ export class TrackingStatusService {
         // 4. Load project
         const projectGroup = await manager.findOne(ProjectGroup, {
           where: { id: dto.projectId },
-          relations: ['createdBy', 'developmentPlan', 'amphoe'],
+          relations: [
+            'createdBy',
+            'developmentPlan',
+            'amphoe',
+            // 2026-05-29 — needed by the auto-migrate-to-latest-plan
+            // path in the Pending branch below: ISSUE_BASED projects
+            // can only migrate when the linked development issue
+            // belongs to the target plan (§16.5 invariant).
+            'developmentIssue',
+            'developmentIssue.developmentPlan',
+          ],
         });
         if (!projectGroup) {
           throw new NotFoundException(`ProjectGroup with ID ${dto.projectId} not found`);
@@ -613,9 +624,85 @@ export class TrackingStatusService {
 
               // Scope: DevelopmentPlan active + PlanPhase open
               // Re-validates scope on every submission/resubmission (RESUBMISSION CONSTRAINT)
-              const dp = projectGroup.developmentPlan;
-              if (!dp?.isLatest) throw new BadRequestException('แผนพัฒนาฯ ไม่ใช่แผนปัจจุบัน');
-              if (dp?.isBooked) throw new BadRequestException('แผนพัฒนาฯ ถูกรวมเล่มแล้ว');
+              //
+              // 2026-05-29 — auto-migrate to the latest eligible plan
+              // when the project is still attached to an older
+              // `isLatest=false` plan (mirrors the equipment
+              // migration path above; rationale: orphan-cleanup
+              // (§18) leaves Ready PGs under cancelled/finalized
+              // plans, and the owner needs a way to send them under
+              // the new round without re-creating). Critical
+              // §14 GUARD: PGs WITH a non-deleted descendant cannot
+              // migrate — moving the FK would mutate an ancestor
+              // that §14.3 declares immutable. The check is
+              // delegated to `LineageLockService.assertEditable`,
+              // the same gate every other PG mutation honors.
+              //
+              // ISSUE_BASED projects additionally need the linked
+              // development issue to belong to the target plan
+              // (§16.5 invariant — issue is plan-scoped per §16.6).
+              // STRATEGY_BASED projects are always shape-safe
+              // because strategy/tactic/plan are global classification
+              // entities (not plan-scoped).
+              let dp = projectGroup.developmentPlan;
+              if (!dp?.isLatest) {
+                const latestEligible = await manager.findOne(
+                  DevelopmentPlan,
+                  {
+                    where: { isLatest: true, isBooked: false },
+                  },
+                );
+                if (!latestEligible) {
+                  throw new BadRequestException(
+                    dp?.isBooked
+                      ? 'แผนพัฒนาฯ ถูกรวมเล่มแล้ว และยังไม่มีแผนปัจจุบันที่เปิดให้นำส่ง'
+                      : 'แผนพัฒนาฯ ไม่ใช่แผนปัจจุบัน',
+                  );
+                }
+                // §14 lineage lock — refuse migration when the PG
+                // has a non-deleted RPG/SPG descendant.
+                await this.lineageLockService.assertEditable(
+                  projectGroup.id,
+                  'original',
+                  manager,
+                );
+                // Probe the user-classification-matching phase on
+                // the latest plan up-front.
+                const isAgencyClassMig =
+                  workHistory.amphoe?.id === '3001' &&
+                  workHistory.localAdministrativeOrganization?.id === '3001027';
+                const latestPhase = await manager.findOne(PlanPhase, {
+                  where: {
+                    developmentPlan: { id: latestEligible.id },
+                    phaseType: isAgencyClassMig ? PhaseType.AGENCY : PhaseType.LAO,
+                    isOpen: true,
+                  },
+                });
+                if (!latestPhase) {
+                  throw new BadRequestException(
+                    'ระยะเวลายื่นโครงการปิดแล้ว ไม่สามารถส่งโครงการได้',
+                  );
+                }
+                // §16.5 ISSUE_BASED gate.
+                if (projectGroup.developmentIssue) {
+                  const issuePlanId =
+                    projectGroup.developmentIssue.developmentPlan?.id;
+                  if (issuePlanId !== latestEligible.id) {
+                    throw new BadRequestException(
+                      'ไม่สามารถย้ายไปแผนปัจจุบันได้: ประเด็นการพัฒนาที่ใช้อยู่ผูกกับแผนเดิม กรุณาแก้ไขโครงการเพื่อเลือกประเด็นในแผนปัจจุบัน',
+                    );
+                  }
+                }
+                // All gates pass — migrate the FK + persist.
+                projectGroup.developmentPlan = latestEligible;
+                await manager.save(ProjectGroup, projectGroup);
+                dp = latestEligible;
+              } else if (dp?.isBooked) {
+                // Edge case: current plan is `isLatest=true` AND
+                // `isBooked=true` (sealed). No migration target;
+                // reject.
+                throw new BadRequestException('แผนพัฒนาฯ ถูกรวมเล่มแล้ว');
+              }
               const isAgency = workHistory.amphoe?.id === '3001' && workHistory.localAdministrativeOrganization?.id === '3001027';
               const openPhase = await manager.findOne(PlanPhase, {
                 where: { developmentPlan: { id: dp.id }, phaseType: isAgency ? PhaseType.AGENCY : PhaseType.LAO, isOpen: true },
@@ -3518,6 +3605,12 @@ export class TrackingStatusService {
             'developmentPlan',
             'amphoe',
             'responsibleAgency',
+            // 2026-05-29 — needed for the auto-migrate-to-latest-plan
+            // path below: ISSUE_BASED equipment can only migrate when
+            // the development issue belongs to the target plan
+            // (§16.5 ISSUE_BASED shape invariant).
+            'developmentIssue',
+            'developmentIssue.developmentPlan',
           ],
         });
         if (!equipment) {
@@ -3639,11 +3732,99 @@ export class TrackingStatusService {
 
               // §8 scope re-validation on every submission (RESUBMISSION
               // CONSTRAINT). Equipment → AGENCY phase.
-              const dp = equipment.developmentPlan;
+              //
+              // 2026-05-29 — auto-migrate to the latest eligible plan
+              // when the equipment is still attached to an older
+              // `isLatest=false` plan. Rationale (per user direction):
+              // if an AGENCY phase is open on the current latest plan,
+              // the owner SHOULD be able to submit historical Ready
+              // equipment without having to re-create it — we move the
+              // FK to the current plan in-place. This keeps the §8
+              // gate honored (submission lands under the active round)
+              // and obeys §16.5 by re-validating that the equipment's
+              // existing classification shape still fits the new plan
+              // before swapping the FK.
+              //
+              // We DO NOT migrate when:
+              //   - the original plan is already `isLatest=true` (no
+              //     migration needed)
+              //   - the original plan is `isBooked=true` (sealed; §15
+              //     book lineage immutability — manipulating a row
+              //     under a finalized book is forbidden even for the
+              //     owner)
+              //   - no eligible latest plan exists OR its AGENCY phase
+              //     is closed (nothing to migrate INTO)
+              //   - the equipment is ISSUE_BASED and the linked
+              //     development issue is plan-scoped to a DIFFERENT
+              //     plan (§16.5 invariant — issue must belong to the
+              //     equipment's parent plan; we'd violate this if we
+              //     swapped the plan without re-mapping the issue).
+              //
+              // STRATEGY_BASED migration is always shape-safe because
+              // the `equipment_category_scopes` junction is plan-
+              // agnostic (Phase 1 design) — strategy / tactic / plan /
+              // category remain valid regardless of which DevelopmentPlan
+              // the equipment row references.
+              let dp = equipment.developmentPlan;
+              // 2026-05-29 — migration FIRST, then per-plan checks.
+              // Previous ordering rejected on `dp.isBooked` before
+              // reaching the migration path, which is wrong: an old
+              // plan that has been finalized (`isBooked=true`) is
+              // EXACTLY the case where the owner needs to migrate the
+              // equipment to the current open plan. Equipment has no
+              // §14 lineage edges (per §5.3 R3 = NO lineage columns)
+              // so re-pointing the row's `developmentPlanId` does not
+              // mutate either the old finalized plan or the new open
+              // plan in a way that §15 BookLineageImmutability blocks.
               if (!dp?.isLatest) {
-                throw new BadRequestException('แผนพัฒนาฯ ไม่ใช่แผนปัจจุบัน');
-              }
-              if (dp?.isBooked) {
+                const latestEligible = await manager.findOne(
+                  DevelopmentPlan,
+                  {
+                    where: { isLatest: true, isBooked: false },
+                  },
+                );
+                if (!latestEligible) {
+                  // Nothing to migrate INTO. Surface whichever native
+                  // error best describes the current state.
+                  throw new BadRequestException(
+                    dp?.isBooked
+                      ? 'แผนพัฒนาฯ ถูกรวมเล่มแล้ว และยังไม่มีแผนปัจจุบันที่เปิดให้นำส่ง'
+                      : 'แผนพัฒนาฯ ไม่ใช่แผนปัจจุบัน',
+                  );
+                }
+                // Probe the AGENCY phase up-front so the migration
+                // doesn't leave the row pointing at a plan whose phase
+                // is closed (which would just trip the next check).
+                const latestPhase = await manager.findOne(PlanPhase, {
+                  where: {
+                    developmentPlan: { id: latestEligible.id },
+                    phaseType: PhaseType.AGENCY,
+                    isOpen: true,
+                  },
+                });
+                if (!latestPhase) {
+                  throw new BadRequestException(
+                    'ระยะเวลายื่นโครงการ (AGENCY) ปิดแล้ว ไม่สามารถส่งรายการครุภัณฑ์ได้',
+                  );
+                }
+                // ISSUE_BASED shape gate per §16.5.
+                if (equipment.developmentIssue) {
+                  const issuePlanId =
+                    equipment.developmentIssue.developmentPlan?.id;
+                  if (issuePlanId !== latestEligible.id) {
+                    throw new BadRequestException(
+                      'ไม่สามารถย้ายไปแผนปัจจุบันได้: ประเด็นการพัฒนาที่ใช้อยู่ผูกกับแผนเดิม กรุณาแก้ไขรายการเพื่อเลือกประเด็นในแผนปัจจุบัน',
+                    );
+                  }
+                }
+                // All gates pass — migrate the FK + persist before the
+                // existing scope check below re-reads `developmentPlan`.
+                equipment.developmentPlan = latestEligible;
+                await manager.save(EquipmentProjectGroup, equipment);
+                dp = latestEligible;
+              } else if (dp?.isBooked) {
+                // Edge case: current plan flagged latest + booked.
+                // Genuinely sealed for new authoring; reject.
                 throw new BadRequestException('แผนพัฒนาฯ ถูกรวมเล่มแล้ว');
               }
               const openPhase = await manager.findOne(PlanPhase, {
