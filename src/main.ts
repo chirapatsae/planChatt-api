@@ -28,6 +28,33 @@ async function bootstrap() {
     rawBody: true,
   });
 
+  // ── CORS allow-list (2026-05-29) ──────────────────────────────────
+  // Source of truth: `CORS_ALLOWED_ORIGINS` env var (comma-separated
+  // exact-match origins). Falls back to a hard-coded list so dev / known
+  // production origins always work even when the env is missing. Empty
+  // string entries are filtered out so a trailing comma doesn't allow
+  // `''` origin (which Chromium emits for some cross-origin contexts).
+  //
+  // Production fix 2026-05-29 — moved from purely hard-coded list so a
+  // new public origin can be added by ops without a code change /
+  // redeploy. Mismatched origins are LOGGED at WARN level (not just
+  // silently 403'd) so CORS issues are diagnosable from logs.
+  const defaultAllowedOrigins = [
+    'http://localhost:5173',
+    'https://pb.koratpao.go.th',
+    'http://pb.thaiakitech.co.th:8080',
+    'http://pb.thaiakitech.co.th',          // proxy may rewrite without port
+    'https://pb.thaiakitech.co.th',         // https variant
+    'https://pb.thaiakitech.co.th:8080',
+  ];
+  const envOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? '')
+    .split(',')
+    .map((s) => s.trim().replace(/\/$/, ''))   // strip trailing slash
+    .filter(Boolean);
+  const allowedOrigins = Array.from(
+    new Set([...defaultAllowedOrigins, ...envOrigins]),
+  );
+
   // Security middleware - Helmet
   app.use(helmet({
     crossOriginResourcePolicy: { policy: 'cross-origin' },
@@ -35,16 +62,29 @@ async function bootstrap() {
       useDefaults: true,
       directives: {
         "default-src": ["'self'"],
-        "frame-ancestors": ["'self'", "http://localhost:5173", "https://pb.koratpao.go.th", "http://pb.thaiakitech.co.th:8080"],
+        "frame-ancestors": ["'self'", ...allowedOrigins],
       },
     },
   }));
 
   app.enableCors({
-    origin: ['http://localhost:5173', 'https://pb.koratpao.go.th', 'http://pb.thaiakitech.co.th:8080'],
+    // Use a callback so we can log rejections — easier to debug than a
+    // bare array (which 403s silently). The callback also tolerates an
+    // empty `origin` (same-origin / curl) by allowing the request.
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);                 // same-origin / non-browser
+      const normalized = origin.replace(/\/$/, '');
+      if (allowedOrigins.includes(normalized)) {
+        return callback(null, true);
+      }
+      // eslint-disable-next-line no-console
+      console.warn(`[CORS] rejected origin: ${origin}`);
+      return callback(new Error(`Origin ${origin} not allowed by CORS`));
+    },
     credentials: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     allowedHeaders: ['Content-Type', 'Authorization', 'Secret-Key'],
+    optionsSuccessStatus: 204,                                  // some legacy proxies need 204 on OPTIONS
   });
   app.set('trust proxy', true);
   // Serve static files from uploads directory.
