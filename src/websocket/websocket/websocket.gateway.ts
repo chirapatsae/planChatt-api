@@ -47,9 +47,32 @@ import {
  * any audit table. It only mutates Redis (via PresenceService) and an
  * in-process Map.
  */
+// 2026-05-29 — extended hard-coded origin list to include the
+// `pb.thaiakitech.co.th:8080` family (http + https + with/without
+// port) so the production FE can establish the socket. Mirrors the
+// REST CORS allow-list in `main.ts`. We also honor
+// `CORS_ALLOWED_ORIGINS` so ops can extend without a redeploy —
+// the env value is comma-separated, trimmed, slash-stripped, and
+// merged with the defaults.
+const SOCKET_DEFAULT_ORIGINS = [
+  'http://localhost:5173',
+  'https://pb.koratpao.go.th',
+  'http://pb.thaiakitech.co.th',
+  'http://pb.thaiakitech.co.th:8080',
+  'https://pb.thaiakitech.co.th',
+  'https://pb.thaiakitech.co.th:8080',
+];
+const SOCKET_ENV_ORIGINS = (process.env.CORS_ALLOWED_ORIGINS ?? '')
+  .split(',')
+  .map((s) => s.trim().replace(/\/$/, ''))
+  .filter(Boolean);
+const SOCKET_ALLOWED_ORIGINS = Array.from(
+  new Set([...SOCKET_DEFAULT_ORIGINS, ...SOCKET_ENV_ORIGINS]),
+);
+
 @WebSocketGateway({
   cors: {
-    origin: ['http://localhost:5173', 'https://pb.koratpao.go.th'],
+    origin: SOCKET_ALLOWED_ORIGINS,
     credentials: true,
   },
   namespace: '/api/v1/notifications',

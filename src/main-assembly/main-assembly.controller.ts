@@ -87,6 +87,37 @@ export class MainAssemblyController {
   ) {}
 
   // ===================================================================
+  // Sidebar Counts
+  // ===================================================================
+
+  /**
+   * Restored 2026-05-29 — §20.10 CLEANUP wave removed the legacy
+   * `GET /v1/book-assembly/counts` (which returned
+   * `{ main, editRevision, changeRevision }`) without porting it to
+   * the standalone subsystems. The FE `getAssemblyCounts` aggregator
+   * now fans out to three sibling endpoints (this one,
+   * edit-assembly, change-assembly) and merges the envelopes.
+   *
+   * Role-gated to admin + super-admin in the service layer; other
+   * roles receive `{ actionable: 0 }` at HTTP 200 per the §9
+   * fallback-zero convention. §17.2 advisory-only — never gates any
+   * workflow transition.
+   *
+   * Placement: BEFORE any `:developmentPlanId/...` parameterized
+   * route so NestJS path matching cannot resolve `counts` as a UUID
+   * param.
+   */
+  @Get('counts')
+  async getCounts(
+    @Req() req: Request & { user: JwtPayloadUser },
+  ): Promise<{ actionable: number }> {
+    const role = req.user?.role;
+    this.logger.log(`Fetching main-assembly counts role=${role}`);
+    const actionable = await this.mainAssemblyService.getActionableCount(role);
+    return { actionable };
+  }
+
+  // ===================================================================
   // Display State / Readiness
   // ===================================================================
 

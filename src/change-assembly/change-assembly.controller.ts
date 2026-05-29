@@ -90,6 +90,27 @@ export class ChangeAssemblyController {
   ) {}
 
   // ===================================================================
+  // Sidebar Counts
+  // ===================================================================
+
+  /**
+   * Restored 2026-05-29 — §20.10 CLEANUP gap. See
+   * `MainAssemblyController.getCounts` for the full rationale.
+   * Routed BEFORE parameterized paths so NestJS does not treat
+   * `counts` as a UUID param.
+   */
+  @Get('counts')
+  async getCounts(
+    @Req() req: Request & { user: JwtPayloadUser },
+  ): Promise<{ actionable: number }> {
+    const role = req.user?.role;
+    this.logger.log(`Fetching change-assembly counts role=${role}`);
+    const actionable =
+      await this.changeAssemblyService.getActionableCount(role);
+    return { actionable };
+  }
+
+  // ===================================================================
   // Display State / Readiness
   // ===================================================================
 

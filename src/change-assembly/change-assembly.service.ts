@@ -209,6 +209,51 @@ export class ChangeAssemblyService {
   ) {}
 
   // ===================================================================
+  // Sidebar Counts
+  // ===================================================================
+
+  /**
+   * Counts the number of `DevelopmentPlanRevision` rows that are
+   * "actionable" for the admin "รวมเล่มเปลี่ยนแปลง" sidebar badge.
+   *
+   * Restored 2026-05-29 after §20.10 CLEANUP wave removed the legacy
+   * `GET /v1/book-assembly/counts` endpoint. Behavioural twin of
+   * `EditAssemblyService.getActionableCount` — the only difference
+   * is the revision-type discriminator
+   * (`revisionType.name = 'เปลี่ยนแปลง'`). See that method's docs
+   * for filter rationale.
+   *
+   * §17.2 — pure read, advisory only; MUST NOT gate workflow.
+   */
+  async getActionableCount(callerRole: string | undefined): Promise<number> {
+    if (callerRole !== 'admin' && callerRole !== 'super-admin') {
+      return 0;
+    }
+    return this.devPlanRevisionRepo
+      .createQueryBuilder('r')
+      .innerJoin('r.revisionType', 'rt')
+      .innerJoin('r.developmentPlan', 'plan')
+      .where('plan.is_latest = :planLatest', { planLatest: true })
+      .andWhere('rt.name = :revisionType', { revisionType: 'เปลี่ยนแปลง' })
+      .andWhere('r.is_latest = :isLatest', { isLatest: true })
+      .andWhere('r.is_open = :isOpen', { isOpen: true })
+      .andWhere('r.is_booked = :isBooked', { isBooked: false })
+      .andWhere(
+        `NOT EXISTS (
+          SELECT 1
+          FROM development_plan_revision r2
+          INNER JOIN revision_type rt2 ON rt2.id = r2.revision_type_id
+          WHERE r2.development_plan_id = plan.id
+            AND r2.id <> r.id
+            AND r2.created_at > r.created_at
+            AND r2.deleted_at IS NULL
+            AND rt2.name = :revisionType
+        )`,
+      )
+      .getCount();
+  }
+
+  // ===================================================================
   // Public API — Draft management
   // ===================================================================
 

@@ -205,6 +205,67 @@ export class EditAssemblyService {
   ) {}
 
   // ===================================================================
+  // Sidebar Counts
+  // ===================================================================
+
+  /**
+   * Counts the number of `DevelopmentPlanRevision` rows that are
+   * "actionable" for the admin "รวมเล่มแก้ไข" sidebar badge — i.e.
+   * live EDIT revisions an admin can still assemble / finalize.
+   *
+   * Restored 2026-05-29 after §20.10 CLEANUP wave removed the legacy
+   * `GET /v1/book-assembly/counts` endpoint without porting the
+   * count semantic to the standalone subsystems. Mirrors
+   * `SupplementAssemblyService.getActionableCount` byte-for-spirit
+   * with two differences: (a) the discriminator is
+   * `revisionType.name = 'แก้ไข'` (EDIT, not SUPPLEMENT), and
+   * (b) the sibling probe is the corresponding revision-table probe.
+   *
+   * Role gate (§4.1, §17.2):
+   *   - admin + super-admin → live count
+   *   - any other role     → silent `0`
+   *
+   * Filter:
+   *   - parent `plan.is_latest = true` — only revisions under the
+   *     active plan
+   *   - `r.revisionType.name = 'แก้ไข'`
+   *   - `r.is_latest = true`
+   *   - `r.is_open = true`
+   *   - `r.is_booked = false`
+   *   - no newer non-deleted sibling EDIT revision under the same
+   *     plan (mirrors the supplement convention)
+   *
+   * §17.2 — pure read, advisory only; MUST NOT gate workflow.
+   */
+  async getActionableCount(callerRole: string | undefined): Promise<number> {
+    if (callerRole !== 'admin' && callerRole !== 'super-admin') {
+      return 0;
+    }
+    return this.devPlanRevisionRepo
+      .createQueryBuilder('r')
+      .innerJoin('r.revisionType', 'rt')
+      .innerJoin('r.developmentPlan', 'plan')
+      .where('plan.is_latest = :planLatest', { planLatest: true })
+      .andWhere('rt.name = :revisionType', { revisionType: 'แก้ไข' })
+      .andWhere('r.is_latest = :isLatest', { isLatest: true })
+      .andWhere('r.is_open = :isOpen', { isOpen: true })
+      .andWhere('r.is_booked = :isBooked', { isBooked: false })
+      .andWhere(
+        `NOT EXISTS (
+          SELECT 1
+          FROM development_plan_revision r2
+          INNER JOIN revision_type rt2 ON rt2.id = r2.revision_type_id
+          WHERE r2.development_plan_id = plan.id
+            AND r2.id <> r.id
+            AND r2.created_at > r.created_at
+            AND r2.deleted_at IS NULL
+            AND rt2.name = :revisionType
+        )`,
+      )
+      .getCount();
+  }
+
+  // ===================================================================
   // Public API — Draft management
   // ===================================================================
 

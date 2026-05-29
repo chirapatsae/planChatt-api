@@ -196,6 +196,48 @@ export class MainAssemblyService {
   ) {}
 
   // ===================================================================
+  // Sidebar Counts
+  // ===================================================================
+
+  /**
+   * Counts the number of `DevelopmentPlan` rows that are "actionable"
+   * for the admin "รวมเล่ม" sidebar badge — i.e. live main-plan books
+   * that an admin can still assemble / finalize.
+   *
+   * Restored 2026-05-29 after §20.10 CLEANUP wave removed the legacy
+   * `GET /v1/book-assembly/counts` endpoint without porting the
+   * count semantic to the standalone subsystems. Mirrors
+   * `SupplementAssemblyService.getActionableCount` byte-for-spirit:
+   *
+   * Role gate (§4.1, §17.2):
+   *   - admin + super-admin → live count
+   *   - any other role     → silent `0` (no 403; mirrors the
+   *                          `fallbackZero` convention used by
+   *                          `useSidebarCounts`)
+   *
+   * Filter:
+   *   - `is_latest = true`  — only the active development plan
+   *   - `is_booked = false` — admin has not finalized yet
+   *   - `deleted_at IS NULL`— soft-deleted plans drop out
+   *
+   * Plans do not have an `is_open` column the way revisions /
+   * supplements do — the plan is implicitly open until merged, which
+   * is exactly what `is_booked = false` expresses.
+   *
+   * §17.2 — pure read, advisory only; MUST NOT gate workflow.
+   */
+  async getActionableCount(callerRole: string | undefined): Promise<number> {
+    if (callerRole !== 'admin' && callerRole !== 'super-admin') {
+      return 0;
+    }
+    return this.devPlanRepo
+      .createQueryBuilder('p')
+      .where('p.is_latest = :isLatest', { isLatest: true })
+      .andWhere('p.is_booked = :isBooked', { isBooked: false })
+      .getCount();
+  }
+
+  // ===================================================================
   // Public API — Draft management
   // ===================================================================
 
