@@ -43,6 +43,12 @@ import {
 // snapshot fires at the publish path (isDraft=false → Pending). Mirrors
 // the SPG trigger in `TrackingStatusService.fireSpgBaselineSnapshot`.
 import { PreSubmitSnapshotService } from 'src/ai/pre-submit-snapshot.service';
+// 2026-05-30 — decrypt-then-mask createdBy.user PII on read surfaces,
+// parity with `ProjectGroupsService.maskCreatedByUserOnProjects` (W100).
+// Without this the staff equipment table renders the raw ciphertext
+// email hash instead of `c***@gmail.com`.
+import { UsersService } from 'src/users/users.service';
+import { maskEmail } from 'src/notifications/email/utils/mask-email.util';
 
 /**
  * Wave Equipment ผ.03, Phase 2 — BE-04 (2026-05-28).
@@ -90,7 +96,65 @@ export class EquipmentProjectGroupService {
     private readonly bookFormatResolver: BookFormatResolver,
     // Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28).
     private readonly preSubmitSnapshotService: PreSubmitSnapshotService,
+    // 2026-05-30 — PII decrypt-then-mask on read surfaces (W100 parity).
+    private readonly usersService: UsersService,
   ) {}
+
+  /**
+   * 2026-05-30 — W100 parity for equipment read surfaces. Decrypt then
+   * mask the `createdBy.user` PII on every equipment row so the staff
+   * table shows `c***@gmail.com` (not the raw ciphertext) and never
+   * leaks phone / citizenId. Mirrors
+   * `ProjectGroupsService.maskCreatedByUserOnProjects`. Idempotent +
+   * dedup by User identity.
+   */
+  private async maskCreatedByUserOnEquipment(
+    items: EquipmentProjectGroup[],
+  ): Promise<void> {
+    const seen = new WeakSet<object>();
+    // Decrypt-then-mask a single User PII object in place. Display name
+    // (firstName / lastName) is intentionally left untouched so staff
+    // reviewers / owners remain identifiable; only email / phone /
+    // citizenId are masked. Dedup by User identity via `seen`.
+    const maskUser = async (
+      user:
+        | { email?: string; phone?: string; citizenId?: string }
+        | undefined,
+    ): Promise<void> => {
+      if (!user || seen.has(user)) return;
+      seen.add(user);
+      await this.usersService.decryptUserPii(user as any);
+      user.email = user.email ? maskEmail(user.email) : (null as any);
+      user.phone = null as any;
+      user.citizenId = null as any;
+    };
+
+    for (const e of items) {
+      // Equipment owner (createdBy.user).
+      await maskUser(
+        e?.createdBy?.user as
+          | { email?: string; phone?: string; citizenId?: string }
+          | undefined,
+      );
+      // 2026-05-30 — Wave Equipment Comment Visibility (BE-01). The
+      // detail read now eager-loads `trackingStatus[].createdBy.user`
+      // so the owner edit page can render the staff review-comment
+      // thread with its author. Those staff authors carry PII through
+      // the same `user` shape, so mask them identically (parity with
+      // the project path, which masks tracking/comment authors). Staff
+      // display name stays visible — only contact PII is stripped.
+      const tracking = e?.trackingStatus;
+      if (Array.isArray(tracking)) {
+        for (const ts of tracking) {
+          await maskUser(
+            (ts as any)?.createdBy?.user as
+              | { email?: string; phone?: string; citizenId?: string }
+              | undefined,
+          );
+        }
+      }
+    }
+  }
 
   // ──────────────────────────────────────────────────────────────────
   //  CREATE
@@ -531,6 +595,14 @@ export class EquipmentProjectGroupService {
       // column). Without this leftJoin the FE adapter sees
       // `createdBy.user = undefined` and renders '-' silently.
       .leftJoinAndSelect('createdBy.user', 'createdByUser')
+      // 2026-05-30 — load the creator WorkHistory's amphoe + LAO so the
+      // staff table avatar tooltip shows full owner context (parity with
+      // the project table's Avatars props).
+      .leftJoinAndSelect('createdBy.amphoe', 'createdByAmphoe')
+      .leftJoinAndSelect(
+        'createdBy.localAdministrativeOrganization',
+        'createdByLao',
+      )
       .leftJoinAndSelect('equipment.developmentPlan', 'developmentPlan')
       .leftJoinAndSelect('equipment.strategy', 'strategy')
       .leftJoinAndSelect('equipment.tactic', 'tactic')
@@ -579,6 +651,9 @@ export class EquipmentProjectGroupService {
       .take(limit);
 
     const [items, total] = await qb.getManyAndCount();
+    // 2026-05-30 — W100 PII: decrypt-then-mask createdBy.user before
+    // returning so the staff table shows masked email (not ciphertext).
+    await this.maskCreatedByUserOnEquipment(items);
     return {
       items,
       total,
@@ -965,11 +1040,27 @@ export class EquipmentProjectGroupService {
         'budgets',
         'trackingStatus',
         'trackingStatus.statusId',
+        // 2026-05-30 — Wave Equipment Comment Visibility (BE-01). The
+        // owner edit page renders the staff review-comment thread, so
+        // the detail read MUST eager-load the tracking-status comment
+        // sub-tree + author chain. Shape parity with the project detail
+        // path (`ProjectGroupsService` loads `trackingStatus.comments`
+        // + `trackingStatus.createdBy` + `trackingStatus.createdBy.user`).
+        // `comments` is the OneToMany relation name on TrackingStatus
+        // (Comment has no own author — the author IS the tracking row's
+        // `createdBy`). Author PII is masked in
+        // `maskCreatedByUserOnEquipment` (display name preserved).
+        'trackingStatus.comments',
+        'trackingStatus.createdBy',
+        'trackingStatus.createdBy.user',
       ],
     });
     if (!row) {
       throw new NotFoundException(`Equipment item not found: ${id}`);
     }
+    // 2026-05-30 — W100 PII mask on the detail read too. Now also masks
+    // the staff comment authors loaded via `trackingStatus.createdBy.user`.
+    await this.maskCreatedByUserOnEquipment([row]);
     return row;
   }
 }

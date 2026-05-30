@@ -1,7 +1,7 @@
 // ===================================================================
 // 📦 1. Imports
 // ===================================================================
-import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, Repository, In } from 'typeorm';
 import PdfPrinter = require('pdfmake');
@@ -62,6 +62,18 @@ import {
 // storage keys (umbrella §7.1). All writers below persist relative
 // keys (NOT absolute paths) to the `file_path` columns.
 import { StoragePathService } from 'src/storage/storage-path.service';
+
+// Wave staff-draftbook-por03-append — BE-02 (2026-05-29). The staff
+// draft book now appends the plan-wide ผ.03 (ครุภัณฑ์) section to the
+// END of the ผ.02 buffer via `mergePdfBuffers`. `Por03PdfService`
+// already injects `PdfService` (por03-pdf.service.ts:97), so injecting
+// it back here forms a circular dependency — resolved with
+// `forwardRef`. Orchestration lives inside `generateDraftAgencyFromStatus`
+// (single source of truth for "the draft book") rather than the
+// controller, so the combined buffer flows through the unchanged
+// `saveDraftPdfAndMeta`. The plan-wide render is read-only (§17.2): no
+// audit / AI / cooldown.
+import { Por03PdfService } from './por03-pdf.service';
 
 // --- Report Generators (STRATEGY_BASED) ---
 import { createSummaryPartDocDefinition } from './report-summary.part';
@@ -144,6 +156,12 @@ export class PdfService {
     // `generateProjectReportWithPageTracking`, and
     // `generateProjectDetailsOnly`.
     private readonly alignmentResolver: AlignmentResolverService,
+    // Wave staff-draftbook-por03-append — BE-02. `forwardRef` breaks the
+    // `PdfService` ↔ `Por03PdfService` cycle (the latter injects this
+    // service for `createPdfBuffer` / `mergePdfBuffers`). Used only by
+    // `generateDraftAgencyFromStatus` to fetch the plan-wide ผ.03 buffer.
+    @Inject(forwardRef(() => Por03PdfService))
+    private readonly por03PdfService: Por03PdfService,
   ) {
     Wordcut.init();
   }
@@ -1397,12 +1415,114 @@ export class PdfService {
     const pdfBuffer = await this.generateProjectReport(projects);
     const projectIdsSnapshot = projects.map(p => p.id);
 
+    // Wave staff-draftbook-por03-append — BE-02 (Q1/Q2/Q3). Append the
+    // plan-wide ผ.03 (ครุภัณฑ์) section to the END of the ผ.02 buffer so
+    // the single draft book ends with ผ.03 (transparent — Q6 Option A).
+    // `renderPlanScopedPor03Buffer` is read-only and degrades to `null`
+    // for ISSUE_BASED plans, zero qualifying equipment, or a missing
+    // plan window (§17.2; WAVE.md Q2). On `null` we keep the ผ.02 buffer
+    // as-is — no regression. §10 scope binding: bound to the target
+    // `developmentPlanId`, never a global latest lookup.
+    let finalBuffer = pdfBuffer;
+    const por03Buffer = await this.por03PdfService.renderPlanScopedPor03Buffer(
+      options.developmentPlanId,
+    );
+    if (por03Buffer) {
+      finalBuffer = await this.mergePdfBuffers([pdfBuffer, por03Buffer]);
+    }
+
+    // `projectIdsSnapshot` stays ผ.02-only — equipment is NOT a project,
+    // and the custom-column re-generate path (/pdf/generate-custom) is
+    // ผ.02-only. Do NOT pollute the snapshot with equipment ids.
     return this.saveDraftPdfAndMeta({
       developmentPlanId: options.developmentPlanId,
-      pdfBuffer,
+      pdfBuffer: finalBuffer,
       projectIdsSnapshot,
       createdById: options.createdById,
     });
+  }
+
+  /**
+   * Wave staff-draftbook-download-modal (2026-05-30). Scoped, on-demand
+   * download for the LATEST draft of an agency plan. Renders fresh from
+   * the current Pending_Approval/Approved set (NOT a stored snapshot) so
+   * custom-column + scope selection are honored.
+   *
+   *   - scope='project'  → ผ.02 only, with `selectedColumns`
+   *   - scope='equipment'→ ผ.03 only (plan-scoped, fixed layout)
+   *   - scope='combined' → ผ.02 (custom columns) + ผ.03 appended, merged
+   *
+   * Read-only (§17.2): no TrackingStatus / AI / audit writes, no version
+   * row created. ผ.03 is STRATEGY_BASED-only and degrades to null per
+   * `renderPlanScopedPor03Buffer`. Column selection applies ONLY to the
+   * ผ.02 portion; equipment has no column picker.
+   */
+  async generateScopedDraftAgencyDownload(
+    developmentPlanId: string,
+    scope: 'combined' | 'project' | 'equipment',
+    selectedColumns?: string[],
+  ): Promise<Buffer> {
+    const plan = await this.developmentPlanRepo.findOne({
+      where: { id: developmentPlanId },
+    });
+    if (!plan) throw new BadRequestException('ไม่พบแผนพัฒนา');
+
+    const DEFAULT_COLUMNS = [
+      'index',
+      'title',
+      'objective',
+      'target',
+      'budget',
+      'kpi',
+      'expectedResult',
+      'mainAgency',
+    ];
+
+    let projectBuffer: Buffer | null = null;
+    if (scope === 'combined' || scope === 'project') {
+      const projects = await this.findProjectsForDraftAgency(developmentPlanId);
+      if (projects.length > 0) {
+        projectBuffer = await this.generateProjectReportWithColumns(
+          projects,
+          selectedColumns && selectedColumns.length > 0
+            ? selectedColumns
+            : DEFAULT_COLUMNS,
+          { developmentPlanId },
+        );
+      }
+    }
+
+    let equipmentBuffer: Buffer | null = null;
+    if (scope === 'combined' || scope === 'equipment') {
+      equipmentBuffer =
+        await this.por03PdfService.renderPlanScopedPor03Buffer(developmentPlanId);
+    }
+
+    if (scope === 'project') {
+      if (!projectBuffer) {
+        throw new BadRequestException(
+          'ไม่มีโครงการ (ผ.02) ที่พร้อมดาวน์โหลดในเล่มนี้',
+        );
+      }
+      return projectBuffer;
+    }
+    if (scope === 'equipment') {
+      if (!equipmentBuffer) {
+        throw new BadRequestException(
+          'ไม่มีครุภัณฑ์ (ผ.03) ที่พร้อมดาวน์โหลดในเล่มนี้ (เฉพาะแผนยุทธศาสตร์ที่มีครุภัณฑ์รออนุมัติขึ้นไป)',
+        );
+      }
+      return equipmentBuffer;
+    }
+
+    // combined
+    const parts = [projectBuffer, equipmentBuffer].filter(
+      (b): b is Buffer => !!b,
+    );
+    if (parts.length === 0) {
+      throw new BadRequestException('ไม่มีข้อมูลสำหรับดาวน์โหลดในเล่มนี้');
+    }
+    return parts.length === 1 ? parts[0] : this.mergePdfBuffers(parts);
   }
 
   async saveDraftPdfAndMeta(options: {

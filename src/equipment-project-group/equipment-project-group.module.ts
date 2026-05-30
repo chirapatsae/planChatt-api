@@ -20,6 +20,8 @@ import { PlanPhase } from 'src/plan-phase/entities/plan-phase.entity';
 
 import { ProjectClassificationModule } from 'src/common/project-classification/project-classification.module';
 import { WorkHistoryModule } from 'src/work-history/work-history.module';
+// 2026-05-30 — UsersService for W100 PII decrypt-then-mask on read.
+import { UsersModule } from 'src/users/users.module';
 import { WorkStatusApprovedGuard } from 'src/auth/work-status-approved.guard';
 import { AgencyOnlyGuard } from 'src/common/guards/agency-only.guard';
 // Wave Print ผ.03 — BE-02 (2026-05-28). Layer-1 controller guard for
@@ -85,6 +87,7 @@ import { AiModule } from 'src/ai/ai.module';
     ProjectClassificationModule,
     WorkHistoryModule,
     AiModule,
+    UsersModule,
   ],
   controllers: [EquipmentProjectGroupController],
   providers: [

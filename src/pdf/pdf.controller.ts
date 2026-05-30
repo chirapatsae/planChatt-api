@@ -319,6 +319,30 @@ export class PdfController {
     return this.pdfService.getAllDraftAgencyVersions(developmentPlanId);
   }
 
+  // Wave staff-draftbook-download-modal (2026-05-30) — scoped on-demand
+  // download of the LATEST draft. Body: { scope, selectedColumns? }.
+  // scope ∈ {combined, project, equipment}. Read-only (§17.2): renders
+  // fresh, writes no version row / audit. Old versions are NOT served
+  // here — the FE streams those via the existing :version/stream route.
+  @Post('draft/agency/:developmentPlanId/download')
+  async downloadScopedDraftAgency(
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Body() body: { scope?: 'combined' | 'project' | 'equipment'; selectedColumns?: string[] },
+    @Res() res: Response,
+  ) {
+    const scope = body?.scope ?? 'combined';
+    const pdfBuffer = await this.pdfService.generateScopedDraftAgencyDownload(
+      developmentPlanId,
+      scope,
+      body?.selectedColumns,
+    );
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="draft-agency-${scope}.pdf"`,
+    });
+    res.end(pdfBuffer);
+  }
+
   @Get('draft/agency/:developmentPlanId/:version/stream')
   async streamDraftAgencyByVersion(
     @Param('developmentPlanId') developmentPlanId: string,

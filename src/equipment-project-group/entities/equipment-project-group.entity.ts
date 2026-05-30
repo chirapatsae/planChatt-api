@@ -235,6 +235,24 @@ export class EquipmentProjectGroup {
   responsibleAgency: GovernmentAgency | null;
 
   // ──────────────────────────────────────────────────────────────────
+  // Book placement (2026-05-30) — parity with ProjectGroup
+  // (`project-group.entity.ts:70-76`) and §20.3 Invariant 1 booked-state
+  // columns. Equipment lives in the same draft book as projects, so it
+  // carries the same booking placement fields. (likeCount / viewCount
+  // already declared above.) synchronize:true creates these with the
+  // declared defaults; legacy rows backfill to false / null.
+  // ──────────────────────────────────────────────────────────────────
+
+  @Column({ name: 'is_booked', default: false })
+  isBooked: boolean;
+
+  @Column({ name: 'booked_at', type: 'timestamptz', nullable: true })
+  bookedAt: Date | null;
+
+  @Column({ name: 'page_number', type: 'int', nullable: true })
+  pageNumber: number | null;
+
+  // ──────────────────────────────────────────────────────────────────
   // Polymorphic children (§12 audit + budget)
   // ──────────────────────────────────────────────────────────────────
 

@@ -145,6 +145,57 @@ export const createPor03DetailDocDefinition = (
   const HEADER_ROWS = 3;
   const totalColumns = 5 + years.length; // index + name + target + N years + expected + agency
 
+  // Per-group summary rows (2026-05-30) — mirror ผ.02's "รวมงบประมาณ" +
+  // count rows (`report-project-detail.part.ts:354-406`). Two rows:
+  //   1. รวมงบประมาณ          — sum of budget per fiscal year
+  //   2. รวมจำนวนครุภัณฑ์      — count of items with budget per year
+  // Layout: label spans the 3 left columns (index/name/target); the
+  // trailing 2 columns (expected/agency) span an empty cell. Cell count
+  // = 3 + years.length + 2 = totalColumns.
+  const buildSummaryRows = (rows: EquipmentProjectGroup[]): any[][] => {
+    const sumByYear: Record<number, number> = Object.fromEntries(
+      years.map((y) => [y, 0]),
+    );
+    const countByYear: Record<number, number> = Object.fromEntries(
+      years.map((y) => [y, 0]),
+    );
+    for (const r of rows) {
+      for (const year of years) {
+        const match = r.budgets?.find((b) => Number(b.year) === year);
+        if (!match) continue;
+        const val = Number(match.quantity);
+        if (Number.isNaN(val)) continue;
+        sumByYear[year] += val;
+        countByYear[year] += 1;
+      }
+    }
+    const budgetRow: any[] = [
+      { text: 'รวมงบประมาณ', colSpan: 3, alignment: 'center', bold: true },
+      {},
+      {},
+      ...years.map((y) => ({
+        text: sumByYear[y] ? sumByYear[y].toLocaleString('th-TH') : '',
+        alignment: 'right',
+        bold: true,
+      })),
+      { text: '', colSpan: 2 },
+      {},
+    ];
+    const countRow: any[] = [
+      { text: 'รวมจำนวนครุภัณฑ์', colSpan: 3, alignment: 'center', bold: true },
+      {},
+      {},
+      ...years.map((y) => ({
+        text: countByYear[y] ? String(countByYear[y]) : '',
+        alignment: 'center',
+        bold: true,
+      })),
+      { text: '', colSpan: 2 },
+      {},
+    ];
+    return [budgetRow, countRow];
+  };
+
   // ── Top-of-document centered cover block ─────────────────────────
   // Emitted ONCE before the first group's table. Mirrors ผ.02's
   // "รายละเอียดโครงการ" centered cover block at
@@ -297,7 +348,7 @@ export const createPor03DetailDocDefinition = (
       // `report-project-detail.part.ts:266` (`th-TH` locale,
       // thousand-separated).
       for (const year of years) {
-        const match = row.budgets?.find((b) => b.year === year);
+        const match = row.budgets?.find((b) => Number(b.year) === year);
         if (!match) {
           rowData.push({ text: '', alignment: 'right' });
         } else {
@@ -324,6 +375,11 @@ export const createPor03DetailDocDefinition = (
       });
 
       tableBody.push(rowData);
+    }
+
+    // Per-group summary — รวมงบประมาณ (per year) + รวมจำนวนครุภัณฑ์.
+    for (const summaryRow of buildSummaryRows(group.rows)) {
+      tableBody.push(summaryRow);
     }
 
     const tableContent: any = {
@@ -380,3 +436,70 @@ export const createPor03DetailDocDefinition = (
     },
   };
 };
+
+/**
+ * Full-page ผ.03 SECTION DIVIDER (wave-staff-draftbook-por03-append,
+ * 2026-05-30).
+ *
+ * Renders a single landscape A4 page carrying ONLY a large vertically-
+ * centered title "บัญชีครุภัณฑ์ (ผ.03)". Mirrors the ผ.02 strategy
+ * divider page (`createGroupCoverPageDocDefinition` at
+ * `report-project-detail.part.ts:55-114`, 48pt bold centered title)
+ * so the combined staff draft book gets a clean visual break between
+ * the ผ.02 project section and the appended ผ.03 equipment section —
+ * exactly like the per-strategy divider pages inside ผ.02.
+ *
+ * Scope: PREPENDED only on the STAFF plan-wide draft-book path
+ * (`Por03PdfService.renderPlanScopedPor03Buffer`). The owner-side
+ * `/project/print-equipment` (`generate()` → `buildPor03Buffer`) is
+ * UNTOUCHED — it keeps its inline 4-line cover block and gets no
+ * full-page divider.
+ *
+ * Style notes:
+ *   - Top-right "แบบ ผ.03" stamp matches every ผ.03 detail page
+ *     (header function identical to `createPor03DetailDocDefinition`).
+ *   - NO page numbers (footer returns null) — consistent with the
+ *     ผ.03 no-page-numbers rule (README §12 / §5.3 Phase 2.5).
+ *   - Landscape A4 + same page margins as the ผ.03 detail doc so the
+ *     merged section is dimensionally homogeneous.
+ */
+export const createPor03SectionDividerDocDefinition =
+  (): TDocumentDefinitions => {
+    // Landscape A4 inner height = 595 - top(60) - bottom(40) = 495.
+    // Center the 36pt title vertically (mirror of the ผ.02 divider's
+    // `availablePageHeight / 2 - fontSize / 2` math).
+    const pageHeight = 595;
+    const availablePageHeight = pageHeight - PAGE_MARGINS[1] - PAGE_MARGINS[3];
+    const titleFontSize = 36;
+    const titleTopMargin = Math.max(
+      0,
+      availablePageHeight / 2 - titleFontSize / 2,
+    );
+
+    return {
+      header: function () {
+        return {
+          text: 'แบบ ผ.03',
+          alignment: 'right',
+          fontSize: 11,
+          margin: [0, 40, 20, 0],
+        };
+      },
+      footer: function () {
+        return null;
+      },
+      content: [
+        {
+          text: 'บัญชีครุภัณฑ์ (ผ.03)',
+          fontSize: titleFontSize,
+          bold: true,
+          alignment: 'center',
+          margin: [0, titleTopMargin, 0, 0],
+        },
+      ],
+      pageSize: 'A4',
+      pageOrientation: PAGE_ORIENTATION,
+      pageMargins: PAGE_MARGINS,
+      defaultStyle: { font: 'THSarabun', fontSize: 10 },
+    };
+  };

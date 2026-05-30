@@ -2,14 +2,19 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  forwardRef,
   HttpException,
   HttpStatus,
+  Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Repository } from 'typeorm';
 
+import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
+import { ReportFormat } from 'src/development-plan/types/report-format.enum';
 import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 import { WorkHistoryLookupService } from 'src/work-history/work-history-lookup.service';
 import { isAgencyWorkHistory } from 'src/project-groups/util/agency-data.util';
@@ -17,6 +22,7 @@ import { isAgencyWorkHistory } from 'src/project-groups/util/agency-data.util';
 import { PdfService } from './pdf.service';
 import {
   createPor03DetailDocDefinition,
+  createPor03SectionDividerDocDefinition,
   EquipmentTableGroup,
 } from './por03-table.part';
 
@@ -83,11 +89,20 @@ export class Por03PdfService {
   private static readonly COOLDOWN_WINDOW_MS = 10_000;
   private static readonly COOLDOWN_ENDPOINT_KEY = 'print-por03';
   private readonly cooldownStore = new Map<string, number>();
+  private readonly logger = new Logger(Por03PdfService.name);
 
   constructor(
     @InjectRepository(EquipmentProjectGroup)
     private readonly equipmentRepo: Repository<EquipmentProjectGroup>,
+    @InjectRepository(DevelopmentPlan)
+    private readonly developmentPlanRepo: Repository<DevelopmentPlan>,
     private readonly workHistoryLookup: WorkHistoryLookupService,
+    // `forwardRef` is REQUIRED on BOTH sides of the PdfService ↔
+    // Por03PdfService cycle. PdfService injects this service with
+    // `forwardRef(() => Por03PdfService)` (BE-02, pdf.service.ts:163);
+    // without the symmetric forwardRef here Nest fails to resolve
+    // dependency index [3] at boot (UndefinedDependencyException).
+    @Inject(forwardRef(() => PdfService))
     private readonly pdfService: PdfService,
   ) {}
 
@@ -206,50 +221,24 @@ export class Por03PdfService {
     if (!parentPlan?.startYear || !parentPlan?.endYear) {
       // README §13 risk row — defensive fallback. Plan window is
       // mandatory data for the year axis; if missing, fail loudly
-      // rather than render an empty axis.
+      // rather than render an empty axis. The owner path THROWS here;
+      // the shared `buildPor03Buffer` core instead returns null (the
+      // plan-wide caller relies on that degradation), so this guard
+      // stays in the owner `generate()` path per BE-01 scope.
       throw new BadRequestException({
         code: 'EQUIPMENT_PRINT_PLAN_WINDOW_MISSING',
         message: 'แผนพัฒนาต้นทางไม่มี startYear/endYear กรุณาตรวจสอบ',
       });
     }
 
-    // README §10 — year axis derived from parent plan's [startYear,
-    // endYear] window.
-    const years = Array.from(
-      { length: parentPlan.endYear - parentPlan.startYear + 1 },
-      (_, i) => parentPlan.startYear + i,
-    );
+    // Shared render tail (extracted to `buildPor03Buffer`). For the
+    // owner path the rows have already been ownership/shape/mixed-plan
+    // validated and the plan window asserted non-null above, so the
+    // core never returns null here in practice. The defensive
+    // empty-selection guard below preserves the prior contract.
+    const pdfBuffer = await this.buildPor03Buffer(rows, parentPlan);
 
-    // Grouping (README §8) — Category(sortOrder ASC) → Tactic(id ASC)
-    // → Plan(id ASC) → rows(equipmentName ASC).
-    const groups = this.groupRows(rows);
-
-    // Render: a SINGLE document. The 4-line centered cover block is
-    // embedded as the first item of `content[]` inside the detail doc
-    // (refactor 2026-05-28 — replaces the prior standalone cover page
-    // that the user rejected). NO `mergePdfBuffers` step.
-    const fonts = this.pdfService.getPdfFonts();
-    const newWord = this.pdfService.newWord.bind(this.pdfService);
-
-    // Resolve the plan-name line for the centered cover block. Per
-    // user spec the third cover line is the parent plan's display
-    // name, which already encodes the "พ.ศ. {start-end}" window
-    // (e.g., "แผนพัฒนาท้องถิ่น พ.ศ. 2566-2570"). If `name` is empty
-    // we synthesize the line from the validated start/end window so
-    // the output is never blank.
-    const developmentPlanLine =
-      parentPlan.name?.trim()
-        ? parentPlan.name
-        : `แผนพัฒนาท้องถิ่น พ.ศ. ${parentPlan.startYear}-${parentPlan.endYear}`;
-
-    const detailDoc = createPor03DetailDocDefinition({
-      developmentPlanName: developmentPlanLine,
-      groups,
-      years,
-      newWord,
-    });
-
-    if (!detailDoc) {
+    if (!pdfBuffer) {
       // groups.length === 0 — every other branch above has thrown by
       // now (zero ids would have produced a 404), so this is a
       // defensive guard rather than a reachable path.
@@ -259,8 +248,6 @@ export class Por03PdfService {
       });
     }
 
-    const pdfBuffer = await this.pdfService.createPdfBuffer(detailDoc, fonts);
-
     // Q6 — arm the cooldown ONLY after a successful 2xx render. Any
     // throw above skips this line, satisfying the "5xx does NOT arm"
     // contract automatically (5xx propagates from this method as a
@@ -268,6 +255,223 @@ export class Por03PdfService {
     this.armCooldown(callerWhId);
 
     return pdfBuffer;
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Shared render core (BE-01, wave-staff-draftbook-por03-append)
+  // ──────────────────────────────────────────────────────────────────
+
+  /**
+   * Shared ผ.03 render tail — the pdfmake layout pipeline that BOTH the
+   * owner-side `generate()` AND the staff plan-wide
+   * `renderPlanScopedPor03Buffer()` reuse. Extracted verbatim from the
+   * former `generate()` render tail so there is no layout/grouping
+   * duplication (WAVE.md Q3).
+   *
+   * Pipeline: year-axis derivation (from `parentPlan` window) →
+   * `groupRows` → cover-line resolution → `createPor03DetailDocDefinition`
+   * → `createPdfBuffer`.
+   *
+   * Degradation (read-only, never throws on equipment edge cases):
+   *   - Returns `null` if the parent plan window
+   *     (`startYear`/`endYear`) is missing — the owner `generate()`
+   *     throws `EQUIPMENT_PRINT_PLAN_WINDOW_MISSING` BEFORE calling this
+   *     core, so the throw contract is preserved there; the plan-wide
+   *     caller relies on this null degradation.
+   *   - Returns `null` if `groups.length === 0` (renderer returns null).
+   *
+   * Writes NOTHING — no audit, no AI snapshot, no TrackingStatus, no
+   * cooldown (§17.2). Cooldown arming stays in `generate()`.
+   */
+  private async buildPor03Buffer(
+    rows: EquipmentProjectGroup[],
+    parentPlan: DevelopmentPlan,
+  ): Promise<Buffer | null> {
+    // Degrade (do NOT throw) on a missing plan window. The owner path
+    // guards + throws upstream; the plan-wide path wants a clean null.
+    if (!parentPlan?.startYear || !parentPlan?.endYear) {
+      return null;
+    }
+
+    // README §10 — year axis derived from parent plan's [startYear,
+    // endYear] window. Coerce to Number defensively: if the
+    // DevelopmentPlan start/end columns hydrate as strings, `startYear +
+    // i` would string-concat and the per-year budget match would never
+    // hit (silent blank budget columns).
+    const startYear = Number(parentPlan.startYear);
+    const endYear = Number(parentPlan.endYear);
+    const years = Array.from(
+      { length: endYear - startYear + 1 },
+      (_, i) => startYear + i,
+    );
+
+    // Grouping (README §8) — Category(sortOrder ASC) → Tactic(id ASC)
+    // → Plan(id ASC) → rows(equipmentName ASC).
+    const groups = this.groupRows(rows);
+
+    // Render: a SINGLE document. The 4-line centered cover block is
+    // embedded as the first item of `content[]` inside the detail doc.
+    const fonts = this.pdfService.getPdfFonts();
+    const newWord = this.pdfService.newWord.bind(this.pdfService);
+
+    // Resolve the plan-name line for the centered cover block. Per
+    // user spec the third cover line is the parent plan's display
+    // name, which already encodes the "พ.ศ. {start-end}" window
+    // (e.g., "แผนพัฒนาท้องถิ่น พ.ศ. 2566-2570"). If `name` is empty
+    // we synthesize the line from the validated start/end window so
+    // the output is never blank.
+    const developmentPlanLine = parentPlan.name?.trim()
+      ? parentPlan.name
+      : `แผนพัฒนาท้องถิ่น พ.ศ. ${parentPlan.startYear}-${parentPlan.endYear}`;
+
+    const detailDoc = createPor03DetailDocDefinition({
+      developmentPlanName: developmentPlanLine,
+      groups,
+      years,
+      newWord,
+    });
+
+    if (!detailDoc) {
+      // groups.length === 0 — no renderable rows.
+      return null;
+    }
+
+    return this.pdfService.createPdfBuffer(detailDoc, fonts);
+  }
+
+  /**
+   * Plan-WIDE ผ.03 render core for the staff draft-book generator
+   * (BE-01, wave-staff-draftbook-por03-append). Renders ALL equipment
+   * under `developmentPlanId` whose latest tracking status is in
+   * `{ Pending_Approval, Approved }`, regardless of creator (staff sees
+   * all). STRATEGY_BASED-only (ISSUE_BASED rows skipped per row).
+   *
+   * Degrades to `null` (NEVER throws on equipment edge cases — WAVE.md
+   * Q2 / risk row) when:
+   *   - the plan is missing
+   *   - the plan is ISSUE_BASED (Q2 skip)
+   *   - the plan window (startYear/endYear) is missing
+   *   - there is zero qualifying equipment after the STRATEGY filter
+   *
+   * Read-only (§17.2): NO ownership check, NO agency-only assertion, NO
+   * cooldown, NO audit / AI / TrackingStatus writes. Plan scope binding
+   * is via the passed `developmentPlanId` ONLY (§10).
+   */
+  async renderPlanScopedPor03Buffer(
+    developmentPlanId: string,
+  ): Promise<Buffer | null> {
+    // §10 — bind to the passed plan id; never a global latest lookup.
+    const parentPlan = await this.developmentPlanRepo.findOne({
+      where: { id: developmentPlanId, deletedAt: IsNull() },
+    });
+
+    // Missing plan → no ผ.03 section.
+    if (!parentPlan) {
+      this.logger.warn(
+        `renderPlanScopedPor03Buffer: DevelopmentPlan ${developmentPlanId} not found; skipping ผ.03 section`,
+      );
+      return null;
+    }
+
+    // Q2 — ISSUE_BASED plans skip the ผ.03 section entirely (no throw).
+    if (parentPlan.reportFormat === ReportFormat.ISSUE_BASED) {
+      this.logger.warn(
+        `renderPlanScopedPor03Buffer: plan ${developmentPlanId} is ISSUE_BASED (reportFormat=${parentPlan.reportFormat}); ผ.03 not supported — skipping section`,
+      );
+      return null;
+    }
+
+    // Q2 / risk row — missing plan window degrades to null.
+    if (!parentPlan.startYear || !parentPlan.endYear) {
+      this.logger.warn(
+        `renderPlanScopedPor03Buffer: plan ${developmentPlanId} missing startYear/endYear; skipping ผ.03 section`,
+      );
+      return null;
+    }
+
+    // Plan-wide equipment fetch. Mirrors the EXISTS-subquery latest-
+    // status pattern from `EquipmentProjectGroupService.findAll`
+    // (`equipment-project-group.service.ts:557-566`) and the status set
+    // from `findProjectsForDraftAgency` (`pdf.service.ts:761`). Eager-
+    // loads the same relations the owner `generate()` find loads.
+    const rows = await this.equipmentRepo
+      .createQueryBuilder('equipment')
+      .leftJoinAndSelect('equipment.developmentPlan', 'developmentPlan')
+      .leftJoinAndSelect('equipment.equipmentCategory', 'equipmentCategory')
+      .leftJoinAndSelect('equipment.tactic', 'tactic')
+      .leftJoinAndSelect('equipment.plan', 'plan')
+      .leftJoinAndSelect('equipment.strategy', 'strategy')
+      .leftJoinAndSelect('equipment.developmentIssue', 'developmentIssue')
+      .leftJoinAndSelect('equipment.responsibleAgency', 'responsibleAgency')
+      .leftJoinAndSelect('equipment.budgets', 'budgets')
+      .leftJoinAndSelect('equipment.createdBy', 'createdBy')
+      .where('developmentPlan.id = :planId', { planId: developmentPlanId })
+      .andWhere('equipment.deletedAt IS NULL')
+      .andWhere(
+        'EXISTS (SELECT 1 FROM tracking_status ts ' +
+          ' INNER JOIN status s ON s.id = ts.status_id ' +
+          ' WHERE ts.equipment_project_group_id = equipment.id ' +
+          '   AND ts.is_latest = true ' +
+          '   AND s.name IN (:...statusNames))',
+        { statusNames: ['Pending_Approval', 'Approved'] },
+      )
+      .getMany();
+
+    this.logger.log(
+      `renderPlanScopedPor03Buffer: plan ${developmentPlanId} (reportFormat=${parentPlan.reportFormat}) — ${rows.length} equipment row(s) matched status IN {Pending_Approval, Approved}`,
+    );
+
+    // Q2 — STRATEGY_BASED-only narrowing. Skip (do NOT throw) any row
+    // that is not STRATEGY_BASED-shaped. Shape SHOULD follow the parent
+    // plan format, so an ISSUE_BASED row under a STRATEGY_BASED plan is
+    // a defensive edge case worth logging.
+    const filteredRows = rows.filter((r) => {
+      const isStrategyShape =
+        !!r.strategy && !!r.tactic && !!r.plan && !r.developmentIssue;
+      if (!isStrategyShape) {
+        this.logger.warn(
+          `renderPlanScopedPor03Buffer: equipment ${r.id} under STRATEGY_BASED plan ${developmentPlanId} is not STRATEGY_BASED-shaped; skipping row`,
+        );
+      }
+      return isStrategyShape;
+    });
+
+    // Zero qualifying rows → no ผ.03 section.
+    if (filteredRows.length === 0) {
+      this.logger.warn(
+        `renderPlanScopedPor03Buffer: plan ${developmentPlanId} — 0 STRATEGY_BASED-shaped equipment rows after filter (matched=${rows.length}); skipping ผ.03 section. ` +
+          `Likely causes: equipment still Verified (not yet "รวมเล่ม ผ.03" → Pending_Approval), or equipment belongs to a different plan.`,
+      );
+      return null;
+    }
+
+    this.logger.log(
+      `renderPlanScopedPor03Buffer: plan ${developmentPlanId} — appending ผ.03 section with ${filteredRows.length} equipment row(s)`,
+    );
+
+    const detailBuffer = await this.buildPor03Buffer(filteredRows, parentPlan);
+
+    // buildPor03Buffer degrades to null on missing window / zero groups.
+    // Those guards already ran above, but keep the null-propagation so a
+    // late degradation still yields a clean "no ผ.03 section" result.
+    if (!detailBuffer) {
+      return null;
+    }
+
+    // Prepend the full-page "บัญชีครุภัณฑ์ (ผ.03)" section divider so
+    // the combined staff draft book gets a clean visual break between
+    // the ผ.02 project section and the appended ผ.03 equipment section,
+    // mirroring ผ.02's per-strategy divider pages (user direction
+    // 2026-05-30). Owner-side `generate()` is UNTOUCHED — it calls
+    // `buildPor03Buffer` directly and keeps its inline cover block.
+    const fonts = this.pdfService.getPdfFonts();
+    const dividerDoc = createPor03SectionDividerDocDefinition();
+    const dividerBuffer = await this.pdfService.createPdfBuffer(
+      dividerDoc,
+      fonts,
+    );
+
+    return this.pdfService.mergePdfBuffers([dividerBuffer, detailBuffer]);
   }
 
   // ──────────────────────────────────────────────────────────────────

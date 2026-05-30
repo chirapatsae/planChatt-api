@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import { PlanPhase, PhaseType } from 'src/plan-phase/entities/plan-phase.entity';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { CreateTrackingStatusDto } from './dto/create-tracking-status.dto';
 import { UpdateTrackingStatusDto } from './dto/update-tracking-status.dto';
 import { Status } from 'src/status/entities/status.entity';
@@ -691,6 +691,64 @@ export class TrackingStatusService {
                     throw new BadRequestException(
                       'ไม่สามารถย้ายไปแผนปัจจุบันได้: ประเด็นการพัฒนาที่ใช้อยู่ผูกกับแผนเดิม กรุณาแก้ไขโครงการเพื่อเลือกประเด็นในแผนปัจจุบัน',
                     );
+                  }
+                }
+                // Budget-window gate (wave-budget-window-submit-gate, BE-02).
+                // Mirrors the equipment migrate gate (BE-01). The auto-migrate
+                // re-points the PG's developmentPlan FK to `latestEligible`. A
+                // PG authored under an older plan window that missed its round
+                // may carry budget years outside the target plan's
+                // [startYear..endYear]; migrating it would corrupt the edit
+                // form and plan-window budget reporting. §10 — validate against
+                // the TARGET plan. The throw runs BEFORE the FK write, so it
+                // rolls back the transaction: no FK move, no tracking row
+                // (§12). Same budget-window semantics as
+                // project-groups.service.ts update (`budgetItem.year <
+                // startYear || > endYear`). Scoped to the MIGRATE branch only —
+                // same-plan submits already passed create/update validation.
+                const targetStartYear = latestEligible.startYear;
+                const targetEndYear = latestEligible.endYear;
+                if (
+                  targetStartYear !== undefined &&
+                  targetStartYear !== null &&
+                  targetEndYear !== undefined &&
+                  targetEndYear !== null
+                ) {
+                  // Ensure the budgets relation is loaded — the outer PG load
+                  // (line ~510) does not include `budgets`, so reload here.
+                  // Revised 2026-05-30 (user direction): AUTO-PRUNE
+                  // out-of-window budget rows instead of blocking; block
+                  // only if NO in-window positive budget survives. Same
+                  // semantics as the equipment gate (BE-01). The prune
+                  // delete + the block throw both live inside this
+                  // transaction, so a block rolls everything back (§12).
+                  const pgWithBudgets = await manager.findOne(ProjectGroup, {
+                    where: { id: projectGroup.id },
+                    relations: ['budgets'],
+                  });
+                  const pgBudgets = pgWithBudgets?.budgets ?? [];
+                  const pgOutOfWindow = pgBudgets.filter(
+                    (b) =>
+                      b.year !== undefined &&
+                      b.year !== null &&
+                      (b.year < targetStartYear || b.year > targetEndYear),
+                  );
+                  if (pgOutOfWindow.length > 0) {
+                    await manager.delete(Budget, {
+                      id: In(pgOutOfWindow.map((b) => b.id)),
+                    });
+                  }
+                  const pgHasInWindowBudget = pgBudgets.some(
+                    (b) =>
+                      b.year >= targetStartYear &&
+                      b.year <= targetEndYear &&
+                      Number(b.quantity) > 0,
+                  );
+                  if (!pgHasInWindowBudget) {
+                    throw new BadRequestException({
+                      code: 'PROJECT_BUDGET_OUT_OF_PLAN_WINDOW',
+                      message: `ไม่สามารถนำส่งได้: งบประมาณเดิมอยู่นอกกรอบแผนปัจจุบัน (พ.ศ. ${targetStartYear}-${targetEndYear}) กรุณาแก้ไขเพิ่มงบประมาณในกรอบปีของแผนก่อนนำส่ง`,
+                    });
                   }
                 }
                 // All gates pass — migrate the FK + persist.
@@ -2481,18 +2539,26 @@ export class TrackingStatusService {
         await manager.delete(TrackingStatus, { id: currentTracking.id });
         await manager.update(TrackingStatus, { id: previousTracking.id }, { isLatest: true });
 
-        // 11. CLAUDE.md §14.6 — Rollback Ghost-Descendant Fix (BEHAVIORAL CHANGE).
-        // Hard-delete the rolled-back row itself so any upstream parent
-        // unlocks automatically under §14. After this line completes, no
-        // row in revised_project_groups may reference this projectGroupId
-        // via (prev_project_id, prev_project_type) — the lineage-lock guard
-        // above already confirmed no non-deleted descendants exist.
+        // 11. CLAUDE.md §14.6 — Rollback Ghost-Descendant Fix.
         //
-        // The cascade FK on tracking_status.project_group_id will remove any
-        // remaining tracking history rows (older non-latest entries). This is
-        // the intentional rollback audit exception documented in §12 and the
-        // STAFF-LED ROLLBACK RULE.
-        await manager.delete(ProjectGroup, { id: projectGroupId });
+        // The §14.6 hard-delete of the rolled-back ROW exists solely so an
+        // upstream parent unlocks automatically under §14 ("so upstream
+        // unlocks"). It therefore applies ONLY to lineage DESCENDANTS —
+        // i.e. RevisedProjectGroup (see `rollbackRevisionProjectGroupStatus`).
+        //
+        // A main-plan ProjectGroup is a lineage ROOT: it has no
+        // prev_project pointer and thus no upstream parent to unlock.
+        // Moreover the §14.3 guard at step 6.5 (`assertDeletable(...,
+        // 'original', ...)`) REJECTS rollback whenever this PG has any
+        // non-deleted descendant — so every PG that reaches this point is a
+        // childless root. Hard-deleting it would destroy a live project for
+        // no §14 benefit (the data-loss bug fixed here, 2026-05-30).
+        //
+        // Main-plan rollback is therefore a pure status revert: the tracking
+        // flags above are flipped and the ProjectGroup row is PRESERVED. The
+        // older non-latest tracking history is left intact (§12 audit
+        // preservation); only the demoted current tracking row was deleted,
+        // per the documented rollback audit exception.
 
         return { message: `ย้อนสถานะสำเร็จ (กลับไปเป็น "${previousTracking.statusId.name}")`, status: 'success' };
       });
@@ -3611,6 +3677,13 @@ export class TrackingStatusService {
             // (§16.5 ISSUE_BASED shape invariant).
             'developmentIssue',
             'developmentIssue.developmentPlan',
+            // wave-budget-window-submit-gate BE-01 — needed for the
+            // budget-window guard in front of the auto-migrate FK move:
+            // the equipment's budget years MUST fall inside the TARGET
+            // plan's [startYear..endYear] before we re-point the FK,
+            // otherwise out-of-window budget rows get silently carried
+            // into the new plan (corrupting the edit form + reporting).
+            'budgets',
           ],
         });
         if (!equipment) {
@@ -3816,6 +3889,66 @@ export class TrackingStatusService {
                       'ไม่สามารถย้ายไปแผนปัจจุบันได้: ประเด็นการพัฒนาที่ใช้อยู่ผูกกับแผนเดิม กรุณาแก้ไขรายการเพื่อเลือกประเด็นในแผนปัจจุบัน',
                     );
                   }
+                }
+                // wave-budget-window-submit-gate BE-01 — budget-window
+                // gate (validate BEFORE migrate; BLOCK on mismatch).
+                //
+                // The auto-migrate re-points the equipment FK to the
+                // target latest plan. Its budget rows were originally
+                // validated against the OLD plan's window
+                // (`assertBudgetYears` in EquipmentProjectGroupService
+                // create/update). If the target plan's
+                // [startYear..endYear] is narrower / shifted, those
+                // budget years would silently land outside the new
+                // plan's window — corrupting the edit form + reporting.
+                //
+                // §10 — validate against the TARGET plan (latestEligible),
+                // never a global latest. Same semantics as
+                // `assertBudgetYears` (`b.year < startYear || b.year >
+                // endYear`), inlined here so we can collect ALL offending
+                // years for a precise FE message.
+                //
+                // §12 — the throw rolls back the whole transaction, so
+                // the FK is NOT moved and NO tracking-status row is
+                // written. This gate runs BEFORE the migrate save AND
+                // before any tracking write further down.
+                // Revised 2026-05-30 (user direction): AUTO-PRUNE
+                // out-of-window budget rows instead of blocking. The
+                // migrate re-points the FK to `latestEligible`; budget
+                // rows whose year falls OUTSIDE the target window are
+                // DELETED so the row stays consistent with the new book.
+                // The submit is BLOCKED only when NO in-window budget row
+                // with a positive amount survives the prune — an item
+                // MUST carry at least one in-window budget year to be
+                // sent. The block throw rolls back the whole transaction
+                // (no migrate, no tracking row, prune reverted — §12).
+                const equipBudgets = equipment.budgets ?? [];
+                const equipOutOfWindow = equipBudgets.filter(
+                  (b) =>
+                    b.year < latestEligible.startYear ||
+                    b.year > latestEligible.endYear,
+                );
+                if (equipOutOfWindow.length > 0) {
+                  await manager.delete(Budget, {
+                    id: In(equipOutOfWindow.map((b) => b.id)),
+                  });
+                  equipment.budgets = equipBudgets.filter(
+                    (b) =>
+                      b.year >= latestEligible.startYear &&
+                      b.year <= latestEligible.endYear,
+                  );
+                }
+                const equipHasInWindowBudget = (equipment.budgets ?? []).some(
+                  (b) => Number(b.quantity) > 0,
+                );
+                if (!equipHasInWindowBudget) {
+                  throw new BadRequestException({
+                    code: 'EQUIPMENT_BUDGET_OUT_OF_PLAN_WINDOW',
+                    message:
+                      `ไม่สามารถนำส่งได้: งบประมาณเดิมอยู่นอกกรอบแผนปัจจุบัน ` +
+                      `(พ.ศ. ${latestEligible.startYear}-${latestEligible.endYear}) ` +
+                      `กรุณาแก้ไขเพิ่มงบประมาณในกรอบปีของแผนก่อนนำส่ง`,
+                  });
                 }
                 // All gates pass — migrate the FK + persist before the
                 // existing scope check below re-reads `developmentPlan`.
