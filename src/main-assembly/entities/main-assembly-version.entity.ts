@@ -142,6 +142,28 @@ export class MainAssemblyVersion {
   @Column({ name: 'part3_project_count', type: 'int' })
   part3ProjectCount: number;
 
+  /**
+   * §21.4 — equipment (ผ.03) UUID snapshot captured at merge time.
+   * Used by the read-time staleness diff in
+   * `MainAssemblyService.computePart3Staleness` to compute
+   * `part3StaleEquipmentCount` / `part3RemovedEquipmentCount`.
+   *
+   * NULL on historical rows merged before §21.4 landed; the staleness
+   * computation degrades to "equipment snapshot unavailable" and only
+   * reports PG-side staleness.
+   *
+   * §17.5 — no auto-recompute. The snapshot is captured ONLY at merge
+   * time and never updated; staleness is detected by a read-time diff
+   * against the current Approved set.
+   */
+  @Column({
+    name: 'part3_equipment_snapshot',
+    type: 'uuid',
+    array: true,
+    nullable: true,
+  })
+  part3EquipmentSnapshot: string[] | null;
+
   // Merged output
 
   @Exclude()

@@ -43,6 +43,7 @@ import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { PlanPhase } from 'src/plan-phase/entities/plan-phase.entity';
 import { User } from 'src/users/entities/user.entity';
+import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 
 import { UsersService } from 'src/users/users.service';
 import { PdfService } from 'src/pdf/pdf.service';
@@ -119,6 +120,8 @@ interface MockRepos {
   devPlanRepo: jest.Mocked<Repository<DevelopmentPlan>>;
   planPhaseRepo: jest.Mocked<Repository<PlanPhase>>;
   userRepo: jest.Mocked<Repository<User>>;
+  // §21.2 BE-01 — equipment repo for the both-sources merge gate
+  equipmentRepo: jest.Mocked<Repository<EquipmentProjectGroup>>;
 }
 
 async function buildService(): Promise<{
@@ -136,6 +139,7 @@ async function buildService(): Promise<{
     devPlanRepo: createMockRepository<DevelopmentPlan>(),
     planPhaseRepo: createMockRepository<PlanPhase>(),
     userRepo: createMockRepository<User>(),
+    equipmentRepo: createMockRepository<EquipmentProjectGroup>(),
   };
 
   const bookLockService = { assertEditable: jest.fn().mockResolvedValue(undefined) };
@@ -152,6 +156,8 @@ async function buildService(): Promise<{
       { provide: getRepositoryToken(DevelopmentPlan), useValue: repos.devPlanRepo },
       { provide: getRepositoryToken(PlanPhase), useValue: repos.planPhaseRepo },
       { provide: getRepositoryToken(User), useValue: repos.userRepo },
+      // §21.2 BE-01 — equipment repo for both-sources merge gate
+      { provide: getRepositoryToken(EquipmentProjectGroup), useValue: repos.equipmentRepo },
       { provide: UsersService, useValue: { findOne: jest.fn() } },
       { provide: PdfService, useValue: {} },
       // Phase 3 — ผ.03 formal-assembly render core injected into
@@ -236,11 +242,18 @@ describe('MainAssemblyService.getCurrentVersion', () => {
       part3Source: 'generated',
       part3ProjectCount: 5,
       part3ProjectSnapshot: ['p1', 'p2', 'p3', 'p4', 'p5'],
+      // §21.4 BE-03 — set EQ snapshot to null (legacy/historical row) so
+      // equipmentSnapshotMissing=true and the equipment query is skipped.
+      part3EquipmentSnapshot: null,
       createdById: 'wh-creator',
       mergedAt: new Date('2026-05-25T00:00:00Z'),
       createdAt: new Date('2026-05-25T00:00:00Z'),
     } as any;
     repos.versionRepo.findOne.mockResolvedValueOnce(completed);
+    // §21.4 BE-03 — enrichWithStaleness queries current Approved PG set.
+    repos.projectGroupRepo.createQueryBuilder.mockReturnValueOnce(
+      buildQbStub({ getRawMany: [] }),
+    );
 
     const result = await service.getCurrentVersion(PLAN_ID, USER_ID);
 
@@ -275,8 +288,14 @@ describe('MainAssemblyService.getCurrentVersion', () => {
       createdById: 'wh-creator',
       deprecatedAt: new Date(),
       deprecationReason: 'reason',
+      // §21.4 BE-03 — null snapshot → equipment query skipped
+      part3EquipmentSnapshot: null,
     } as any;
     repos.versionRepo.findOne.mockResolvedValueOnce(deprecated);
+    // §21.4 BE-03 — enrichWithStaleness PG query mock
+    repos.projectGroupRepo.createQueryBuilder.mockReturnValueOnce(
+      buildQbStub({ getRawMany: [] }),
+    );
 
     const result = await service.getCurrentVersion(PLAN_ID, USER_ID);
 
@@ -313,6 +332,8 @@ describe('MainAssemblyService.getReadiness', () => {
       .mockReturnValueOnce(buildQbStub({ getCount: 3 }))
       // agency
       .mockReturnValueOnce(buildQbStub({ getCount: 3 }))
+      // §21.2 BE-01 — approvedAgencyCount
+      .mockReturnValueOnce(buildQbStub({ getCount: 3 }))
       // status aggregate
       .mockReturnValueOnce(
         buildQbStub({
@@ -322,13 +343,18 @@ describe('MainAssemblyService.getReadiness', () => {
     repos.planPhaseRepo.createQueryBuilder.mockReturnValueOnce(
       buildQbStub({ getExists: false }),
     );
+    // §21.2 BE-01 — equipment Approved count (0 is fine here; LAO=0 still fails gate)
+    repos.equipmentRepo.createQueryBuilder.mockReturnValueOnce(
+      buildQbStub({ getCount: 0 }),
+    );
 
     const result = await service.getReadiness(PLAN_ID, USER_ID);
 
     expect(result.totalCount).toBe(3);
     expect(result.approvedCount).toBe(3);
     expect(result.hasOpenPhase).toBe(false);
-    expect(result.isReady).toBe(true);
+    // §21.2 — LAO Approved = 0 so the both-sources gate makes isReady false
+    expect(result.isReady).toBe(false);
     expect(result.breakdown).toMatchObject({
       agencyCount: 3,
       laoCount: 0,
@@ -351,6 +377,8 @@ describe('MainAssemblyService.getReadiness', () => {
       .mockReturnValueOnce(buildQbStub({ getCount: 2 }))
       .mockReturnValueOnce(buildQbStub({ getCount: 2 }))
       .mockReturnValueOnce(buildQbStub({ getCount: 1 }))
+      // §21.2 BE-01 — approvedAgencyCount
+      .mockReturnValueOnce(buildQbStub({ getCount: 1 }))
       .mockReturnValueOnce(
         buildQbStub({
           getRawMany: [{ statusName: STATUS_NAMES.APPROVED, cnt: '2' }],
@@ -358,6 +386,9 @@ describe('MainAssemblyService.getReadiness', () => {
       );
     repos.planPhaseRepo.createQueryBuilder.mockReturnValueOnce(
       buildQbStub({ getExists: true }),
+    );
+    repos.equipmentRepo.createQueryBuilder.mockReturnValueOnce(
+      buildQbStub({ getCount: 0 }),
     );
 
     const result = await service.getReadiness(PLAN_ID, USER_ID);
@@ -377,9 +408,14 @@ describe('MainAssemblyService.getReadiness', () => {
       .mockReturnValueOnce(buildQbStub({ getCount: 0 }))
       .mockReturnValueOnce(buildQbStub({ getCount: 0 }))
       .mockReturnValueOnce(buildQbStub({ getCount: 0 }))
+      // §21.2 BE-01 — approvedAgencyCount
+      .mockReturnValueOnce(buildQbStub({ getCount: 0 }))
       .mockReturnValueOnce(buildQbStub({ getRawMany: [] }));
     repos.planPhaseRepo.createQueryBuilder.mockReturnValueOnce(
       buildQbStub({ getExists: false }),
+    );
+    repos.equipmentRepo.createQueryBuilder.mockReturnValueOnce(
+      buildQbStub({ getCount: 0 }),
     );
 
     const result = await service.getReadiness(PLAN_ID, USER_ID);

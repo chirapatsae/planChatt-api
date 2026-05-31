@@ -71,4 +71,25 @@ export interface MainAssemblyVersionDto {
   part1DownloadUrl: string;
   part2DownloadUrl: string;
   part3DownloadUrl: string;
+
+  // §21.4 — Part 3 staleness signal (advisory, §17.2). Populated only
+  // by `getCurrentVersion` / `getVersionByNumber`; `getVersions` (list)
+  // skips computation to avoid N+1. Undefined when not computed.
+
+  /** Currently-Approved PGs under the same plan that are NOT in the snapshot. */
+  part3StaleProjectCount?: number;
+  /** Snapshot PGs that are no longer Approved (rolled back / deleted / demoted). */
+  part3RemovedProjectCount?: number;
+  /** Currently-Approved equipment under the same plan NOT in the snapshot. */
+  part3StaleEquipmentCount?: number;
+  /** Snapshot equipment no longer Approved. */
+  part3RemovedEquipmentCount?: number;
+  /** Derived: `(stale + removed) > 0` across both kinds. */
+  isPart3Stale?: boolean;
+  /**
+   * True when this row predates the §21.4 equipment-snapshot column
+   * (NULL `part3EquipmentSnapshot`); FE should render
+   * "ข้อมูลครุภัณฑ์ของเวอร์ชันนี้ไม่พร้อมใช้งาน" sub-line.
+   */
+  equipmentSnapshotMissing?: boolean;
 }

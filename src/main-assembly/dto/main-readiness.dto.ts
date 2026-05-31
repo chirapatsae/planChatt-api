@@ -24,6 +24,23 @@ export class MainReadinessBreakdownDto {
   agencyCount: number;
   /** Projects created by lao-classified WorkHistory (all other cases). */
   laoCount: number;
+  /**
+   * Approved PGs whose creator WorkHistory is agency-classified (§1).
+   * §21.2 both-sources merge gate — agency-side contribution sub-count.
+   */
+  approvedAgencyCount: number;
+  /**
+   * Approved PGs whose creator WorkHistory is lao-classified (§1).
+   * §21.2 both-sources merge gate — LAO-side contribution sub-count.
+   */
+  approvedLaoCount: number;
+  /**
+   * Approved equipment (ผ.03) rows under the plan. Per §5.3,
+   * equipment is agency-origin-only by construction. Counted toward
+   * the agency-side contribution per §21.2 — INTERCHANGEABLE with
+   * `approvedAgencyCount`: either alone satisfies the agency-side floor.
+   */
+  approvedEquipmentCount: number;
   /** Projects whose latest TrackingStatus is Pending. */
   pendingCount: number;
   /** Projects whose latest TrackingStatus is Verified. */

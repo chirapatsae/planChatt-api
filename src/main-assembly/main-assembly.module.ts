@@ -53,6 +53,9 @@ import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { PlanPhase } from 'src/plan-phase/entities/plan-phase.entity';
 import { User } from 'src/users/entities/user.entity';
+// §21.2 both-sources merge gate — equipment is the agency-side
+// alternate contributor (interchangeable with agency-origin PG).
+import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 
 // External modules consumed by MainAssemblyService.
 import { UsersModule } from 'src/users/users.module';
@@ -83,6 +86,8 @@ import { BookAssemblyModule } from 'src/book-assembly/book-assembly.module';
       DevelopmentPlan,
       PlanPhase,
       User,
+      // §21.2 — equipment Approved count contributes to the agency-side floor.
+      EquipmentProjectGroup,
     ]),
     UsersModule,
     PdfModule,

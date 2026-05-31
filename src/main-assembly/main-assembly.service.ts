@@ -91,6 +91,10 @@ import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { PlanPhase } from 'src/plan-phase/entities/plan-phase.entity';
 import { User } from 'src/users/entities/user.entity';
+// §21.2 — both-sources merge gate counts Approved equipment toward
+// the agency-side floor (interchangeable with agency-origin PG).
+// Equipment is agency-origin-only by §5.3 construction.
+import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 import { ReportFormat } from 'src/development-plan/types/report-format.enum';
 import { STATUS_NAMES } from 'src/common/status-names';
 import { UnifiedProjectMapper } from 'src/project-groups/dto/unified-project-display.dto';
@@ -185,6 +189,10 @@ export class MainAssemblyService {
 
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+
+    // §21.2 — Approved equipment count (agency-side, sibling of agency PG).
+    @InjectRepository(EquipmentProjectGroup)
+    private readonly equipmentRepo: Repository<EquipmentProjectGroup>,
 
     private readonly usersService: UsersService,
     private readonly pdfService: PdfService,
@@ -606,13 +614,31 @@ export class MainAssemblyService {
     // §15 main-plan freeze guard.
     await this.assertMainBookNotFrozen(developmentPlanId);
 
+    // §21.2 — both-sources merge gate (ABSOLUTE, no role bypass).
+    // Re-asserted here so admins cannot pre-bake a Part 3 that merge
+    // would later reject. Mirrors the merge() assertion.
+    await this.assertBothSourcesContribute(developmentPlanId);
+
     const draft = await this.loadActiveDraftOrFail(developmentPlanId);
 
     await this.notifyProgress(userId, developmentPlanId, 10, 'starting', 'กำลังเริ่มสร้างส่วนที่ 3...');
 
+    // §21.3.2 / BE-02 Surface B — Standalone Part 3 preview must also
+    // render continuous page numbers from whichever of P1 / P2 are
+    // uploaded at the time of this call. Degrades to 0 when neither
+    // is uploaded yet. If P1 or P2 is re-uploaded later with a
+    // different page count, this standalone file becomes stale until
+    // the user re-invokes generatePart3 — the dashboard's Part 3
+    // GENERATED status signals that regeneration may be needed.
+    const standaloneOffset = await this.computeStandalonePart3Offset(draft);
+    this.logger.log(
+      `[MainAssembly] generatePart3 standaloneOffset=${standaloneOffset} plan=${developmentPlanId}`,
+    );
+
     const { projects, projectIds, pageMap } = await this.queryAndRenderPart3(
       developmentPlanId,
       userId,
+      standaloneOffset,
     );
 
     if (projects.length === 0) {
@@ -623,13 +649,15 @@ export class MainAssemblyService {
 
     // Phase 3 (2026-05-31) — append the formal ผ.03 section to Part 3
     // at generate time. The renderer footer renders ผ.02-style page
-    // numbers continuing the ผ.02 sequence via `pageOffset` = page count
-    // of `pageMap.buffer` (the ผ.02 part-3 body). Read-only (§17.2),
-    // degrades to null when no Approved equipment exists.
+    // numbers continuing the ผ.02 sequence via `pageOffset` = standalone
+    // offset (P1+P2 if uploaded) + page count of `pageMap.buffer`. The
+    // ผ.03 footers therefore continue the running count in the standalone
+    // preview, satisfying §21.3.2 Surface B. Read-only (§17.2), degrades
+    // to null when no Approved equipment exists.
     const por02PageCount = (await PDFDocument.load(pageMap.buffer)).getPageCount();
     const por03 = await this.por03Service.renderApprovedPlanScopedPor03Buffer(
       developmentPlanId,
-      por02PageCount,
+      standaloneOffset + por02PageCount,
     );
     const part3Buffer = por03
       ? await this.mergePdfBuffers([pageMap.buffer, por03.buffer])
@@ -775,6 +803,12 @@ export class MainAssemblyService {
       // §15 main-plan freeze guard (inside transaction).
       await this.assertMainBookNotFrozen(developmentPlanId, manager);
 
+      // §21.2 — both-sources merge gate (ABSOLUTE, no role bypass).
+      // Runs AFTER §15 freeze check so a frozen plan still 403s first.
+      // The gate uses fresh queries (not the captured FE counts) — the
+      // FE may be stale by the time the user clicks Merge.
+      await this.assertBothSourcesContribute(developmentPlanId);
+
       // 1. Load + validate draft.
       const draft = await manager.findOne(MainAssemblyDraft, {
         where: {
@@ -891,6 +925,29 @@ export class MainAssemblyService {
         mergedBuffer,
       );
 
+      // §21.3.3 / BE-02 Surface C — Persist the OFFSET-STAMPED Part 3
+      // buffer to disk under the same (planId, versionNumber,
+      // partNumber=3) key. This OVERWRITES the standalone-offset Part 3
+      // file saved at generatePart3 time so the per-part download
+      // `/v1/main-assembly/:planId/versions/:n/parts/3` returns a file
+      // whose page numbers match the merged book download byte-for-byte.
+      //
+      // The merge transaction is atomic with respect to DB writes; the
+      // file system is not transactional. If the transaction aborts
+      // after this overwrite, the standalone-offset Part 3 file is gone
+      // — but the version row is not saved either, so no consumer
+      // references the lost file. The next merge attempt re-renders
+      // and overwrites at the same path.
+      const persistedOffsetPart3Path = this.fileService.savePartFile(
+        mergeLocation,
+        draft.targetVersion,
+        3,
+        part3,
+      );
+      this.logger.log(
+        `[MainAssembly] merge persistedOffsetPart3 path=${persistedOffsetPart3Path} offset=${mainOffset} plan=${developmentPlanId}`,
+      );
+
       await this.notifyProgress(userId, developmentPlanId, 50, 'booking', 'กำลังจองโครงการ...');
 
       // 5. §18.2.1 — orphan-cleanup cascade BEFORE isBooked flip.
@@ -995,10 +1052,20 @@ export class MainAssemblyService {
         part2FilePath: draft.part2FilePath,
         part2Source: this.toPartSource(draft.part2Status),
         part2OriginalFileName: draft.part2OriginalFileName,
-        part3FilePath: draft.part3FilePath,
+        // §21.3.3 / BE-02 Surface C — reference the offset-stamped Part 3
+        // file persisted above, NOT the draft's standalone-offset file.
+        // The per-part download endpoint serves the version row's path.
+        part3FilePath: persistedOffsetPart3Path,
         part3Source: this.toPartSource(draft.part3Status),
         part3ProjectSnapshot: projectIds,
         part3ProjectCount: projectIds.length,
+        // §21.4 — equipment UUID snapshot for read-time staleness diff.
+        // Falls back to the draft's snapshot if the fresh equipmentIds
+        // happen to be empty (defensive — should match in steady state).
+        part3EquipmentSnapshot:
+          equipmentIds.length > 0
+            ? equipmentIds
+            : (draft.part3EquipmentSnapshot ?? []),
         mergedFilePath,
         mergedAt: new Date(),
         totalPages,
@@ -1353,7 +1420,11 @@ export class MainAssemblyService {
       },
       relations: ['createdBy', 'createdBy.user'],
     });
-    if (completed) return this.toVersionDto(completed);
+    if (completed) {
+      // §21.4 — enrich the detail-endpoint payload with the staleness
+      // signal. Skipped on the list endpoint to avoid N+1.
+      return this.enrichWithStaleness(this.toVersionDto(completed), completed);
+    }
 
     // Step 2 — DEPRECATED via active draft's previousVersionId.
     const activeDraft = await this.draftRepo.findOne({
@@ -1370,7 +1441,9 @@ export class MainAssemblyService {
         where: { id: activeDraft.previousVersionId },
         relations: ['createdBy', 'createdBy.user'],
       });
-      if (previous) return this.toVersionDto(previous);
+      if (previous) {
+        return this.enrichWithStaleness(this.toVersionDto(previous), previous);
+      }
     }
 
     return null;
@@ -1391,7 +1464,8 @@ export class MainAssemblyService {
         `ไม่พบเวอร์ชัน v${versionNumber} สำหรับเล่มแผนหลักนี้`,
       );
     }
-    return this.toVersionDto(version);
+    // §21.4 — enrich the single-version detail with the staleness diff.
+    return this.enrichWithStaleness(this.toVersionDto(version), version);
   }
 
   // ===================================================================
@@ -1438,7 +1512,6 @@ export class MainAssemblyService {
       .getExists();
 
     const hasOpenPhase = openPhaseExists;
-    const isReady = approvedCount === totalCount && totalCount > 0 && !hasOpenPhase;
 
     // Origin breakdown.
     const agencyCount = await this.projectGroupRepo
@@ -1460,6 +1533,51 @@ export class MainAssemblyService {
       .getCount();
     const laoCount = totalCount - agencyCount;
 
+    // §21.2 both-sources merge gate — per-source Approved sub-counts.
+    // Agency Approved (§1 classification on creator WorkHistory):
+    const approvedAgencyCount = await this.projectGroupRepo
+      .createQueryBuilder('pg')
+      .innerJoin('pg.createdBy', 'wh')
+      .innerJoin('wh.amphoe', 'amp')
+      .innerJoin('wh.localAdministrativeOrganization', 'lao')
+      .innerJoin('pg.trackingStatus', 'ts')
+      .innerJoin('ts.statusId', 'status')
+      .where('pg.developmentPlan = :id', { id: developmentPlanId })
+      .andWhere('pg.deletedAt IS NULL')
+      .andWhere('pg.isDraft = :isDraft', { isDraft: false })
+      .andWhere('ts.isLatest = :isLatest', { isLatest: true })
+      .andWhere('status.name = :name', { name: STATUS_NAMES.APPROVED })
+      .andWhere('amp.id = :amphoeId', { amphoeId: '3001' })
+      .andWhere('lao.id = :laoId', { laoId: '3001027' })
+      .getCount();
+    // LAO Approved = total Approved − Agency Approved.
+    const approvedLaoCount = approvedCount - approvedAgencyCount;
+
+    // Approved equipment (§5.3) — agency-origin only by construction.
+    // Mirrors the EXISTS clause used in por03-pdf.service.ts approved
+    // equipment query. We count rows whose latest tracking row is Approved.
+    const approvedEquipmentCount = await this.equipmentRepo
+      .createQueryBuilder('eq')
+      .innerJoin(
+        'tracking_status',
+        'ts',
+        'ts.equipment_project_group_id = eq.id AND ts.is_latest = true',
+      )
+      .innerJoin('status', 'status', 'status.id = ts.status_id')
+      .where('eq.development_plan_id = :id', { id: developmentPlanId })
+      .andWhere('eq.deleted_at IS NULL')
+      .andWhere('status.name = :name', { name: STATUS_NAMES.APPROVED })
+      .getCount();
+
+    // §21.2 — final gate formula. Both sources MUST contribute.
+    const agencySideContribution = approvedAgencyCount + approvedEquipmentCount;
+    const isReady =
+      approvedCount === totalCount &&
+      totalCount > 0 &&
+      !hasOpenPhase &&
+      approvedLaoCount > 0 &&
+      agencySideContribution > 0;
+
     // Status counts.
     const statusRows: { statusName: string; cnt: string }[] = await this.projectGroupRepo
       .createQueryBuilder('pg')
@@ -1480,6 +1598,10 @@ export class MainAssemblyService {
     const breakdown: MainReadinessBreakdownDto = {
       agencyCount,
       laoCount,
+      // §21.2 — new per-source Approved sub-counts.
+      approvedAgencyCount,
+      approvedLaoCount,
+      approvedEquipmentCount,
       pendingCount: statusMap[STATUS_NAMES.PENDING] ?? 0,
       verifiedCount: statusMap[STATUS_NAMES.VERIFIED] ?? 0,
       pendingApprovalCount: statusMap[STATUS_NAMES.PENDING_APPROVAL] ?? 0,
@@ -1492,6 +1614,116 @@ export class MainAssemblyService {
     };
 
     return { approvedCount, totalCount, isReady, hasOpenPhase, breakdown };
+  }
+
+  /**
+   * §21.2 — Re-asserts the both-sources merge gate without the role
+   * check that `getReadiness` performs. Used by `merge` and
+   * `generatePart3` as defense-in-depth; FE has already enforced via
+   * the disabled merge button but BE cannot trust FE.
+   *
+   * Throws `409 BOTH_SOURCES_REQUIRED` with a structured body when the
+   * gate fails. Body shape mirrors `MainReadinessDto` so the FE 409
+   * handler can render the same per-source missing-reason copy.
+   *
+   * Constraints:
+   *   - §21.2.2 — ABSOLUTE GATE. No role bypass; super-admin hits the
+   *     same 409.
+   *   - §17.2 — advisory in spirit, integrity in enforcement.
+   *   - The gate runs AFTER `assertMainBookNotFrozen` so a frozen
+   *     plan still 403s first per §15 precedence.
+   */
+  private async assertBothSourcesContribute(
+    developmentPlanId: string,
+  ): Promise<void> {
+    // Use a fictitious user id with READ_ROLES — but we cannot avoid
+    // the loadAndValidateWorkHistory call inside getReadiness. Instead,
+    // recompute the four counts inline (cheap; same queries as above
+    // but factored). Keeping a private inline implementation avoids
+    // introducing a parameter to getReadiness that would skip its role
+    // gate.
+    const totalCount = await this.projectGroupRepo
+      .createQueryBuilder('pg')
+      .innerJoin('pg.trackingStatus', 'ts')
+      .innerJoin('ts.statusId', 'status')
+      .where('pg.developmentPlan = :id', { id: developmentPlanId })
+      .andWhere('pg.deletedAt IS NULL')
+      .andWhere('pg.isDraft = :isDraft', { isDraft: false })
+      .andWhere('ts.isLatest = :isLatest', { isLatest: true })
+      .andWhere('status.name NOT IN (:...excluded)', {
+        excluded: READINESS_EXCLUSION_STATUSES,
+      })
+      .getCount();
+
+    const approvedCount = await this.projectGroupRepo
+      .createQueryBuilder('pg')
+      .innerJoin('pg.trackingStatus', 'ts')
+      .innerJoin('ts.statusId', 'status')
+      .where('pg.developmentPlan = :id', { id: developmentPlanId })
+      .andWhere('pg.deletedAt IS NULL')
+      .andWhere('ts.isLatest = :isLatest', { isLatest: true })
+      .andWhere('status.name = :name', { name: STATUS_NAMES.APPROVED })
+      .getCount();
+
+    const approvedAgencyCount = await this.projectGroupRepo
+      .createQueryBuilder('pg')
+      .innerJoin('pg.createdBy', 'wh')
+      .innerJoin('wh.amphoe', 'amp')
+      .innerJoin('wh.localAdministrativeOrganization', 'lao')
+      .innerJoin('pg.trackingStatus', 'ts')
+      .innerJoin('ts.statusId', 'status')
+      .where('pg.developmentPlan = :id', { id: developmentPlanId })
+      .andWhere('pg.deletedAt IS NULL')
+      .andWhere('pg.isDraft = :isDraft', { isDraft: false })
+      .andWhere('ts.isLatest = :isLatest', { isLatest: true })
+      .andWhere('status.name = :name', { name: STATUS_NAMES.APPROVED })
+      .andWhere('amp.id = :amphoeId', { amphoeId: '3001' })
+      .andWhere('lao.id = :laoId', { laoId: '3001027' })
+      .getCount();
+    const approvedLaoCount = approvedCount - approvedAgencyCount;
+
+    const approvedEquipmentCount = await this.equipmentRepo
+      .createQueryBuilder('eq')
+      .innerJoin(
+        'tracking_status',
+        'ts',
+        'ts.equipment_project_group_id = eq.id AND ts.is_latest = true',
+      )
+      .innerJoin('status', 'status', 'status.id = ts.status_id')
+      .where('eq.development_plan_id = :id', { id: developmentPlanId })
+      .andWhere('eq.deleted_at IS NULL')
+      .andWhere('status.name = :name', { name: STATUS_NAMES.APPROVED })
+      .getCount();
+
+    const openPhaseExists = await this.planPhaseRepo
+      .createQueryBuilder('pp')
+      .where('pp.developmentPlan = :id', { id: developmentPlanId })
+      .andWhere('pp.isOpen = :isOpen', { isOpen: true })
+      .getExists();
+
+    const agencySideContribution = approvedAgencyCount + approvedEquipmentCount;
+    const isReady =
+      approvedCount === totalCount &&
+      totalCount > 0 &&
+      !openPhaseExists &&
+      approvedLaoCount > 0 &&
+      agencySideContribution > 0;
+
+    if (!isReady) {
+      throw new ConflictException({
+        code: 'BOTH_SOURCES_REQUIRED',
+        message:
+          'เล่มแผนหลักต้องมีโครงการอนุมัติของฝั่ง อปท. และ ฝั่ง อบจ./ครุภัณฑ์ อย่างน้อย 1 รายการต่อฝั่ง จึงจะรวมเล่มได้',
+        breakdown: {
+          approvedLaoCount,
+          approvedAgencyCount,
+          approvedEquipmentCount,
+          approvedCount,
+          totalCount,
+          hasOpenPhase: openPhaseExists,
+        },
+      });
+    }
   }
 
   /**
@@ -1952,6 +2184,51 @@ export class MainAssemblyService {
     return { projects, projectIds, pageMap: pdfResult };
   }
 
+  /**
+   * §21.3.2 / BE-02 Surface B — Computes the page offset for the
+   * standalone Part 3 preview based on whichever of P1 / P2 are
+   * currently uploaded on the draft. Returns 0 when neither part is
+   * uploaded yet (graceful degrade).
+   *
+   * Read-only; pure I/O against the draft's on-disk part files via
+   * `BookAssemblyFileService`. Used by `generatePart3` to thread an
+   * `initialPageOffset` into the Part 3 renderer so the standalone
+   * file footers match what the merged book will eventually show.
+   *
+   * Constraints:
+   *   - §17.5 — no auto-recompute. The offset is captured at the
+   *     moment `generatePart3` is invoked; if P1 / P2 changes after
+   *     this call, the standalone file becomes stale until the user
+   *     re-invokes generatePart3.
+   *   - §20.10.3 — file-service exemption: shared infrastructure I/O.
+   */
+  private async computeStandalonePart3Offset(
+    draft: MainAssemblyDraft,
+  ): Promise<number> {
+    let offset = 0;
+    if (draft.part1FilePath) {
+      try {
+        const p1 = this.fileService.readPartFileByStored(draft.part1FilePath);
+        offset += (await PDFDocument.load(p1)).getPageCount();
+      } catch (err) {
+        this.logger.warn(
+          `[MainAssembly] computeStandalonePart3Offset: failed to read P1 (${draft.part1FilePath}) — treating as absent. err=${(err as Error).message}`,
+        );
+      }
+    }
+    if (draft.part2FilePath) {
+      try {
+        const p2 = this.fileService.readPartFileByStored(draft.part2FilePath);
+        offset += (await PDFDocument.load(p2)).getPageCount();
+      } catch (err) {
+        this.logger.warn(
+          `[MainAssembly] computeStandalonePart3Offset: failed to read P2 (${draft.part2FilePath}) — treating as absent. err=${(err as Error).message}`,
+        );
+      }
+    }
+    return offset;
+  }
+
   // ===================================================================
   // Private helpers — small utilities
   // ===================================================================
@@ -2155,6 +2432,95 @@ export class MainAssemblyService {
       part1DownloadUrl: `${prefix}/versions/${v.versionNumber}/parts/1`,
       part2DownloadUrl: `${prefix}/versions/${v.versionNumber}/parts/2`,
       part3DownloadUrl: `${prefix}/versions/${v.versionNumber}/parts/3`,
+    };
+  }
+
+  /**
+   * §21.4 — Computes the read-time Part 3 staleness signal for a
+   * single version row by diffing the persisted snapshots against the
+   * current Approved-PG / Approved-equipment sets under the same plan.
+   *
+   * Constraints:
+   *   - §17.2 advisory — the signal MUST NOT gate any workflow
+   *     transition; it informs the FE banner only.
+   *   - §17.5 no auto-recompute — this is a pure read; no DB writes.
+   *   - §12 / §17.3 — no `tracking_status` or `ai_*` writes.
+   *   - O(N) on PG + equipment count; called only by
+   *     `getCurrentVersion` / `getVersionByNumber` (not by the list
+   *     endpoint `getVersions`) to avoid N+1.
+   */
+  private async enrichWithStaleness(
+    dto: MainAssemblyVersionDto,
+    v: MainAssemblyVersion,
+  ): Promise<MainAssemblyVersionDto> {
+    const snapshotPgIds = new Set(v.part3ProjectSnapshot ?? []);
+    const snapshotEquipmentIds = new Set(v.part3EquipmentSnapshot ?? []);
+    const equipmentSnapshotMissing = v.part3EquipmentSnapshot === null;
+
+    // Current Approved PG set under the plan.
+    const currentApprovedPgRows: { id: string }[] = await this.projectGroupRepo
+      .createQueryBuilder('pg')
+      .select('pg.id', 'id')
+      .innerJoin('pg.trackingStatus', 'ts')
+      .innerJoin('ts.statusId', 'status')
+      .where('pg.developmentPlan = :id', { id: v.developmentPlanId })
+      .andWhere('pg.deletedAt IS NULL')
+      .andWhere('ts.isLatest = :isLatest', { isLatest: true })
+      .andWhere('status.name = :name', { name: STATUS_NAMES.APPROVED })
+      .getRawMany();
+    const currentPgSet = new Set(currentApprovedPgRows.map((r) => r.id));
+
+    let part3StaleProjectCount = 0;
+    for (const id of currentPgSet) {
+      if (!snapshotPgIds.has(id)) part3StaleProjectCount += 1;
+    }
+    let part3RemovedProjectCount = 0;
+    for (const id of snapshotPgIds) {
+      if (!currentPgSet.has(id)) part3RemovedProjectCount += 1;
+    }
+
+    // Current Approved equipment set under the plan — only counted
+    // when the snapshot column exists (NULL = historical row).
+    let part3StaleEquipmentCount = 0;
+    let part3RemovedEquipmentCount = 0;
+    if (!equipmentSnapshotMissing) {
+      const currentApprovedEqRows: { id: string }[] = await this.equipmentRepo
+        .createQueryBuilder('eq')
+        .select('eq.id', 'id')
+        .innerJoin(
+          'tracking_status',
+          'ts',
+          'ts.equipment_project_group_id = eq.id AND ts.is_latest = true',
+        )
+        .innerJoin('status', 'status', 'status.id = ts.status_id')
+        .where('eq.development_plan_id = :id', { id: v.developmentPlanId })
+        .andWhere('eq.deleted_at IS NULL')
+        .andWhere('status.name = :name', { name: STATUS_NAMES.APPROVED })
+        .getRawMany();
+      const currentEqSet = new Set(currentApprovedEqRows.map((r) => r.id));
+      for (const id of currentEqSet) {
+        if (!snapshotEquipmentIds.has(id)) part3StaleEquipmentCount += 1;
+      }
+      for (const id of snapshotEquipmentIds) {
+        if (!currentEqSet.has(id)) part3RemovedEquipmentCount += 1;
+      }
+    }
+
+    const isPart3Stale =
+      part3StaleProjectCount +
+        part3RemovedProjectCount +
+        part3StaleEquipmentCount +
+        part3RemovedEquipmentCount >
+      0;
+
+    return {
+      ...dto,
+      part3StaleProjectCount,
+      part3RemovedProjectCount,
+      part3StaleEquipmentCount,
+      part3RemovedEquipmentCount,
+      isPart3Stale,
+      equipmentSnapshotMissing,
     };
   }
 }
