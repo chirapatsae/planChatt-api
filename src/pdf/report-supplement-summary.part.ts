@@ -46,7 +46,7 @@ const renderStrategyBasedSummary = (params: SupplementSummaryDocParams): TDocume
 
   // Splash title page (mirrors revision-edit summary).
   content.push({
-    text: 'รายละเอียดโครงการ',
+    text: (params as any).coverTitle ?? 'รายละเอียดโครงการ',
     fontSize: 48,
     bold: true,
     alignment: 'center',
@@ -271,7 +271,7 @@ const renderIssueBasedSummary = (params: SupplementSummaryDocParams): TDocumentD
 
   // Splash title page (mirrors revision-edit summary).
   content.push({
-    text: 'รายละเอียดโครงการ',
+    text: (params as any).coverTitle ?? 'รายละเอียดโครงการ',
     fontSize: 48,
     bold: true,
     alignment: 'center',

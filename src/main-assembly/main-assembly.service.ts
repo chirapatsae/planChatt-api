@@ -65,7 +65,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
 import { MainAssemblyDraft } from './entities/main-assembly-draft.entity';
 import { MainAssemblyVersion } from './entities/main-assembly-version.entity';
@@ -97,6 +97,7 @@ import { UnifiedProjectMapper } from 'src/project-groups/dto/unified-project-dis
 
 import { UsersService } from 'src/users/users.service';
 import { PdfService } from 'src/pdf/pdf.service';
+import { Por03PdfService } from 'src/pdf/por03-pdf.service';
 import { WebsocketService } from 'src/websocket/websocket/websocket.service';
 import {
   BookLockService,
@@ -187,6 +188,7 @@ export class MainAssemblyService {
 
     private readonly usersService: UsersService,
     private readonly pdfService: PdfService,
+    private readonly por03Service: Por03PdfService,
     private readonly websocketService: WebsocketService,
     private readonly fileService: BookAssemblyFileService,
     private readonly storagePathService: StoragePathService,
@@ -619,6 +621,25 @@ export class MainAssemblyService {
       );
     }
 
+    // Phase 3 (2026-05-31) — append the formal ผ.03 section to Part 3
+    // at generate time. The renderer footer renders ผ.02-style page
+    // numbers continuing the ผ.02 sequence via `pageOffset` = page count
+    // of `pageMap.buffer` (the ผ.02 part-3 body). Read-only (§17.2),
+    // degrades to null when no Approved equipment exists.
+    const por02PageCount = (await PDFDocument.load(pageMap.buffer)).getPageCount();
+    const por03 = await this.por03Service.renderApprovedPlanScopedPor03Buffer(
+      developmentPlanId,
+      por02PageCount,
+    );
+    const part3Buffer = por03
+      ? await this.mergePdfBuffers([pageMap.buffer, por03.buffer])
+      : pageMap.buffer;
+    // BE-04 — equipmentId → 1-based LOCAL page within the ผ.03 buffer
+    // (divider = local page 1). Persisted on the draft so `merge()` can
+    // recover the per-equipment absolute page without re-rendering.
+    const equipmentIds = por03?.equipmentIds ?? [];
+    const equipmentPageMap = por03?.pageMap ?? new Map<string, number>();
+
     const generateLocation: BookAssemblyLocation = {
       kind: 'MAIN_PLAN',
       planId: developmentPlanId,
@@ -627,7 +648,7 @@ export class MainAssemblyService {
       generateLocation,
       draft.targetVersion,
       3,
-      pageMap.buffer,
+      part3Buffer,
     );
 
     draft.part3Status = MainAssemblyPartUploadStatus.GENERATED;
@@ -635,6 +656,10 @@ export class MainAssemblyService {
     draft.part3GeneratedAt = new Date();
     draft.part3ProjectSnapshot = projectIds;
     draft.part3PageMap = Object.fromEntries(pageMap.pageMap);
+    // BE-04 — equipment snapshot + per-equipment local page map persisted
+    // on the draft for the merge step to consume.
+    draft.part3EquipmentSnapshot = equipmentIds;
+    draft.part3EquipmentPageMap = Object.fromEntries(equipmentPageMap);
 
     this.updateAssemblyStatus(draft);
     const saved = await this.draftRepo.save(draft);
@@ -780,16 +805,86 @@ export class MainAssemblyService {
       };
       const part1 = this.fileService.readPartFileByStored(draft.part1FilePath);
       const part2 = this.fileService.readPartFileByStored(draft.part2FilePath);
-      const part3 = this.fileService.readPartFileByStored(draft.part3FilePath);
+      const part3FromDisk = this.fileService.readPartFileByStored(draft.part3FilePath);
 
       await this.notifyProgress(userId, developmentPlanId, 30, 'merging', 'กำลังรวมไฟล์ PDF...');
 
-      // 3. Merge.
-      const mergedBuffer = await this.mergePdfBuffers([part1, part2, part3]);
+      // Phase 3 (2026-05-31) — page-numbering convention for MAIN_PLAN
+      // (per user direction): the assembled MAIN book numbers pages
+      // CONTINUOUSLY from Part 1's first page to Part 3's last page.
+      // Standalone Part 3 preview keeps the "start at 1" behavior so the
+      // preview reads naturally. To achieve both, we RE-RENDER Part 3
+      // in-memory at merge time with `initialPageOffset = pageCount(part1
+      // + part2)` so the baked footer numbers shift to continue the
+      // assembled book's running count. The on-disk Part 3 file is
+      // UNCHANGED (preview still starts at 1).
+      //
+      // Edit / Change / Supplement assemblies do NOT enter this branch
+      // (they live in EditAssemblyService / ChangeAssemblyService /
+      // SupplementAssemblyService) — their Part 3 keeps the "start at 1"
+      // numbering verbatim per the user direction.
+      const part1PageCount = (await PDFDocument.load(part1)).getPageCount();
+      const part2PageCount = (await PDFDocument.load(part2)).getPageCount();
+      const mainOffset = part1PageCount + part2PageCount;
+      const { pageMap: rerenderedPart3, projectIds: rerenderedProjectIds } =
+        await this.queryAndRenderPart3(developmentPlanId, userId, mainOffset);
+      // Append the formal ผ.03 with the SAME offset accumulated past the
+      // re-rendered ผ.02 body, so equipment footers continue the count
+      // unbroken into the ผ.03 section.
+      const por02PageCount = (await PDFDocument.load(rerenderedPart3.buffer)).getPageCount();
+      const por03 = await this.por03Service.renderApprovedPlanScopedPor03Buffer(
+        developmentPlanId,
+        mainOffset + por02PageCount,
+      );
+      const part3 = por03
+        ? await this.mergePdfBuffers([rerenderedPart3.buffer, por03.buffer])
+        : rerenderedPart3.buffer;
+      const equipmentIds: string[] = por03?.equipmentIds ?? [];
+      // Replace the draft-persisted page maps with the freshly-rendered
+      // ones — the draft snapshot used Part-3-local numbers (start at 1),
+      // but the merged book uses continuous absolute numbers (start at
+      // mainOffset + 1). Stamped values must match the printed book.
+      const pageMapFromMerge = new Map<string, number>(rerenderedPart3.pageMap);
+      const equipmentPageMapFromMerge = por03?.pageMap ?? new Map<string, number>();
+      // Sanity — the re-rendered project id set should match the snapshot
+      // on the draft. If not, log + fall through (merge continues; some
+      // booking stamps may be off if Approved status changed since
+      // generatePart3 — that's a stale-snapshot scenario, not a phase-3
+      // bug). Suppress unused-var warning when set matches.
+      if (
+        rerenderedProjectIds.length !== (draft.part3ProjectSnapshot ?? []).length
+      ) {
+        this.logger.warn(
+          `[MainAssembly] merge: Part 3 project count changed since generatePart3 (snapshot=${(draft.part3ProjectSnapshot ?? []).length}, rerender=${rerenderedProjectIds.length})`,
+        );
+      }
+      // Silence unused-var warning — `part3FromDisk` only used for
+      // hypothetical fallback (not taken in current MAIN_PLAN path).
+      void part3FromDisk;
+
+      // 4. Merge — part3 (re-rendered above) already contains ผ.03.
+      const partBuffers: Buffer[] = [part1, part2, part3];
+      const combinedBuffer = await this.mergePdfBuffers(partBuffers);
+
+      // Equipment booking absolute pages — use the freshly-rendered
+      // ผ.03 pageMap. It's 1-based RELATIVE to the ผ.03 sub-buffer; add
+      // `(mainOffset + por02PageCount)` to convert to the ABSOLUTE book
+      // page. (`equipmentPageMapFromMerge` keys = equipmentId → local.)
+      const por03LocalPageMap = equipmentPageMapFromMerge;
+      const por03SectionStartOffset = mainOffset + por02PageCount;
+
+      // Phase 3 (2026-05-31 user direction) — page numbers are baked at
+      // SOURCE by each part's own pdfmake footer (ผ.01/ผ.02 bottom-right
+      // bold THSarabun; ผ.03 received `pageOffset = ผ.02 page count` at
+      // generatePart3 time so its footer renders CONTINUOUS numbers in
+      // the same style). No post-merge global page-number pass needed —
+      // doing one here would draw a second number over the existing
+      // baked ones (user-reported overlap defect).
+      const mergedBuffer = combinedBuffer;
       const mergedPdf = await PDFDocument.load(mergedBuffer);
       const totalPages = mergedPdf.getPageCount();
 
-      // 4. Save merged file (relative key persisted on version row).
+      // 4c. Save merged file (relative key persisted on version row).
       const mergedFilePath = this.fileService.saveMergedFile(
         mergeLocation,
         draft.targetVersion,
@@ -817,10 +912,10 @@ export class MainAssemblyService {
         `[MainAssembly] merge cascade plan=${developmentPlanId} pg=${cascadeResult.pgCount} rpg=${cascadeResult.rpgCount}`,
       );
 
-      // 6. Project booking flips on Approved PGs.
+      // 6. Project booking flips on Approved PGs. `pageMapFromMerge`
+      // already holds ABSOLUTE book pages (re-rendered with mainOffset),
+      // matching what the user sees in the printed footer.
       const projectIds = draft.part3ProjectSnapshot ?? [];
-      const pageMap = draft.part3PageMap;
-
       if (projectIds.length > 0) {
         const pgRepo = manager.getRepository(ProjectGroup);
         for (const projectId of projectIds) {
@@ -829,10 +924,50 @@ export class MainAssemblyService {
             {
               isBooked: true,
               bookedAt: new Date(),
-              pageNumber: pageMap[projectId] ?? null,
+              pageNumber: pageMapFromMerge.get(projectId) ?? null,
             },
           );
         }
+      }
+
+      // 6b. Equipment (ผ.03) booking stamp on the Approved equipment rows
+      //     that the renderer included in the appended section. Parallels
+      //     the PG booking flip above; §5.3 booking columns live on
+      //     `EquipmentProjectGroup`. §12 — a booking flip is NOT a status
+      //     transition, so NO TrackingStatus row is written here (the §18
+      //     cascade above already reset non-Approved equipment to `Ready`;
+      //     these rows are Approved and stay Approved).
+      //     BE-04 (2026-05-30) — `pageNumber` now carries the ABSOLUTE
+      //     book page (GROUP-LEVEL granularity: all rows in the same
+      //     Category/Tactic/Plan or Issue group share the group's first
+      //     page), replacing the prior best-effort NULL placeholder.
+      //     absolutePage(id) = por03SectionStartOffset + localPage(id)
+      //     where localPage is the renderer's 1-based page within
+      //     por03.buffer. A row missing from the map (should not occur)
+      //     degrades to NULL. Stamped via a single `unnest`-driven bulk
+      //     UPDATE (ids[], pages[]) inside the finalize transaction;
+      //     raw query keeps the equipment entity out of main-assembly
+      //     beyond the §20.10.3 shared-infra channel.
+      if (equipmentIds.length > 0) {
+        const equipmentBookedAt = new Date();
+        const absolutePages: (number | null)[] = equipmentIds.map((id) => {
+          const local = por03LocalPageMap.get(id);
+          return local === undefined
+            ? null
+            : por03SectionStartOffset + local;
+        });
+        await manager.query(
+          `UPDATE equipment_project_groups e
+             SET is_booked = true,
+                 booked_at = $1,
+                 page_number = u.page_number
+           FROM unnest($2::uuid[], $3::int[]) AS u(id, page_number)
+           WHERE e.id = u.id`,
+          [equipmentBookedAt, equipmentIds, absolutePages],
+        );
+        this.logger.log(
+          `[MainAssembly] merge stamped isBooked + page_number on ${equipmentIds.length} equipment row(s) plan=${developmentPlanId} (sectionStart=${por03SectionStartOffset})`,
+        );
       }
 
       // 7. Plan booking + PlanPhase merged flip.
@@ -879,7 +1014,7 @@ export class MainAssemblyService {
           joinRepo.create({
             versionId: savedVersion.id,
             projectGroupId: projectId,
-            pageNumber: pageMap[projectId] ?? 0,
+            pageNumber: pageMapFromMerge.get(projectId) ?? 0,
           }),
         );
       }
@@ -1745,6 +1880,13 @@ export class MainAssemblyService {
   private async queryAndRenderPart3(
     developmentPlanId: string,
     _userId: string,
+    /**
+     * Phase 3 — initial page offset baked into the Part 3 footer. For
+     * standalone Part 3 preview (generatePart3) this is 0 so footers
+     * start at 1. For MAIN_PLAN merge it is `pageCount(part1+part2)` so
+     * Part 3 footers continue the assembled book's running count.
+     */
+    initialPageOffset: number = 0,
   ): Promise<{
     projects: any[];
     projectIds: string[];
@@ -1804,7 +1946,7 @@ export class MainAssemblyService {
     const pdfResult = await this.pdfService.generateProjectReportWithPageTracking(
       projects,
       ['index', 'title', 'objective', 'target', 'budget', 'expectedResult', 'mainAgency'],
-      { developmentPlanId },
+      { developmentPlanId, initialPageOffset },
     );
 
     return { projects, projectIds, pageMap: pdfResult };
@@ -1850,6 +1992,63 @@ export class MainAssemblyService {
     }
     const mergedBytes = await merged.save();
     return Buffer.from(mergedBytes);
+  }
+
+  /**
+   * THE HEADLINE — single post-merge GLOBAL page-number pass.
+   *
+   * Loads the WHOLE combined book (ผ.01 → ผ.02 → ผ.03), then draws a
+   * sequential page number `N` (N = pageIndex + 1, running 1..totalPages
+   * with NO restart per section) on EVERY page. Because every page is
+   * numbered in document order regardless of which source PDF it came
+   * from, the appended ผ.03 section automatically CONTINUES the sequence
+   * ("รันเลขหน้าต่อยันยาวลงไป").
+   *
+   * Font: pdf-lib's built-in `Helvetica` (a StandardFont) — no fontkit /
+   * THSarabun embedding is needed because we draw a bare ASCII numeral,
+   * not Thai text. This keeps the global pass dependency-free.
+   *
+   * Position: bottom-CENTER. The center placement is deliberate — any
+   * per-part footer/number baked into ผ.01 / ผ.02 by the upstream
+   * generators tends to sit bottom-right, so a bottom-center global
+   * number avoids visual collision. The GLOBAL pass is the authoritative
+   * page sequence for the assembled book.
+   *
+   * Landscape vs portrait is handled per-page: x is computed from each
+   * page's OWN width via `page.getSize()`, so ผ.03 (landscape A4) and a
+   * portrait ผ.02 both center correctly.
+   *
+   * Pure buffer transform — NO DB writes, NO transaction interaction.
+   */
+  private async stampGlobalPageNumbers(combined: Buffer): Promise<Buffer> {
+    const doc = await PDFDocument.load(combined);
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const fontSize = 11;
+    const bottomMargin = 18;
+    const color = rgb(0, 0, 0);
+
+    // Position — BOTTOM-RIGHT (user direction 2026-05-31). ผ.01/ผ.02 bake
+    // their per-section page numbers bottom-right already; ผ.03 has no
+    // footer. Drawing the global continuous sequence bottom-right
+    // OVERWRITES the per-section numbers with the unbroken 1..N sequence
+    // (same position → operator sees ONE number per page, not two).
+    const rightMargin = 24;
+    const pages = doc.getPages();
+    pages.forEach((page, index) => {
+      const label = String(index + 1);
+      const { width } = page.getSize();
+      const textWidth = font.widthOfTextAtSize(label, fontSize);
+      page.drawText(label, {
+        x: width - rightMargin - textWidth,
+        y: bottomMargin,
+        size: fontSize,
+        font,
+        color,
+      });
+    });
+
+    const stampedBytes = await doc.save();
+    return Buffer.from(stampedBytes);
   }
 
   private async notifyProgress(

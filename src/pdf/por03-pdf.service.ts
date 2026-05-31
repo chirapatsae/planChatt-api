@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Repository } from 'typeorm';
+import { PDFDocument } from 'pdf-lib';
 
 import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { ReportFormat } from 'src/development-plan/types/report-format.enum';
@@ -25,6 +26,11 @@ import {
   createPor03SectionDividerDocDefinition,
   EquipmentTableGroup,
 } from './por03-table.part';
+import {
+  createPor03IssueBasedDetailDocDefinition,
+  EquipmentIssueCategoryGroup,
+  EquipmentIssueTableGroup,
+} from './por03-issue-based-table.part';
 
 /**
  * Wave Print ผ.03 — BE-01 (2026-05-28).
@@ -474,6 +480,300 @@ export class Por03PdfService {
     return this.pdfService.mergePdfBuffers([dividerBuffer, detailBuffer]);
   }
 
+  /**
+   * FORMAL-assembly plan-WIDE ผ.03 render core (Wave Equipment Phase 3 —
+   * BE-02, 2026-05-30). Sibling of `renderPlanScopedPor03Buffer`
+   * (Phase 2.6 staff draft-append), which is left UNCHANGED.
+   *
+   * Differences from the Phase 2.6 draft method:
+   *   - **Approved-only predicate.** The draft method matches latest
+   *     status IN `{ Pending_Approval, Approved }` (the pre-approval
+   *     committee packet). This FORMAL method is the FINAL published
+   *     book, so it matches latest status = `Approved` ONLY.
+   *   - **Dual-format dispatch (§16.8).** Resolves the parent
+   *     `DevelopmentPlan.reportFormat` and routes:
+   *       - STRATEGY_BASED → existing `groupRows` + `createPor03DetailDocDefinition`
+   *       - ISSUE_BASED    → `groupRowsByIssue` + `createPor03IssueBasedDetailDocDefinition`
+   *     The Phase 2.6 draft method is STRATEGY_BASED-only (ISSUE_BASED
+   *     skipped); this FORMAL method renders BOTH per §16.5 dual-shape.
+   *   - **Returns `{ buffer, equipmentIds, pageMap }`** so BE-01 can
+   *     stamp `isBooked` / `bookedAt` / `pageNumber` on the included
+   *     rows. `pageMap` maps each included equipment id → its 1-based
+   *     LOCAL page within the returned `buffer` (the prepended
+   *     "บัญชีครุภัณฑ์ (ผ.03)" divider is local page 1). BE-04
+   *     (2026-05-30): GROUP-LEVEL granularity — every equipment row in
+   *     the same Category/Tactic/Plan group (STRATEGY) or
+   *     Issue group (ISSUE) shares its group's first local page.
+   *     Adapts the ProjectGroup `generateProjectReportWithPageTracking`
+   *     running-`pageOffset` accumulation (`pdf.service.ts:1159-1287`).
+   *
+   * Section-divider handling: the "บัญชีครุภัณฑ์ (ผ.03)" full-page
+   * divider is PREPENDED INSIDE the returned `buffer` (same as the
+   * Phase 2.6 sibling), so BE-01 simply appends `por03.buffer` to the
+   * ผ.02 book and runs its global post-merge page-number pass over the
+   * whole combined document. The divider is format-agnostic and reused
+   * from `por03-table.part.ts` (BE-03 explicitly does NOT redefine it).
+   *
+   * Degrades to `null` (NEVER throws on equipment edge cases — the
+   * combined book must not fail over an equipment edge case) when:
+   *   - the plan is missing
+   *   - the plan window (startYear/endYear) is missing
+   *   - there are zero Approved equipment rows
+   *   - (defensively) every row violates its plan-format shape, leaving
+   *     zero renderable groups
+   *
+   * Read-only (§17.2): NO ownership check, NO agency-only assertion, NO
+   * cooldown, NO audit / AI / TrackingStatus writes. Plan scope binding
+   * is via the passed `developmentPlanId` ONLY (§10). BE-01 owns the
+   * `isBooked` stamp.
+   */
+  async renderApprovedPlanScopedPor03Buffer(
+    developmentPlanId: string,
+    /**
+     * Phase 3 — continuous page offset (sum of ผ.01 + ผ.02 page counts).
+     * Each per-group buffer's footer renders `currentPage + pageOffset`
+     * so ผ.03 pages continue the ผ.02 sequence visually-identically. The
+     * offset is added per group to the running local offset so the
+     * footer always reflects the absolute book page. Default 0 → no
+     * offset, footer null (Phase 2.5/2.6 print-surface behavior preserved).
+     */
+    pageOffset: number = 0,
+  ): Promise<{
+    buffer: Buffer;
+    equipmentIds: string[];
+    pageMap: Map<string, number>;
+  } | null> {
+    // §10 — bind to the passed plan id; never a global latest lookup.
+    const parentPlan = await this.developmentPlanRepo.findOne({
+      where: { id: developmentPlanId, deletedAt: IsNull() },
+    });
+
+    if (!parentPlan) {
+      this.logger.warn(
+        `renderApprovedPlanScopedPor03Buffer: DevelopmentPlan ${developmentPlanId} not found; skipping ผ.03 section`,
+      );
+      return null;
+    }
+
+    // Risk row — missing plan window degrades to null (no throw).
+    if (!parentPlan.startYear || !parentPlan.endYear) {
+      this.logger.warn(
+        `renderApprovedPlanScopedPor03Buffer: plan ${developmentPlanId} missing startYear/endYear; skipping ผ.03 section`,
+      );
+      return null;
+    }
+
+    // Plan-wide Approved-only equipment fetch. Mirrors the Phase 2.6
+    // method's relation eager-loads EXACTLY; differs ONLY in the status
+    // set — FORMAL book is `Approved`-only (the published book), not
+    // `{ Pending_Approval, Approved }`.
+    const rows = await this.equipmentRepo
+      .createQueryBuilder('equipment')
+      .leftJoinAndSelect('equipment.developmentPlan', 'developmentPlan')
+      .leftJoinAndSelect('equipment.equipmentCategory', 'equipmentCategory')
+      .leftJoinAndSelect('equipment.tactic', 'tactic')
+      .leftJoinAndSelect('equipment.plan', 'plan')
+      .leftJoinAndSelect('equipment.strategy', 'strategy')
+      .leftJoinAndSelect('equipment.developmentIssue', 'developmentIssue')
+      .leftJoinAndSelect('equipment.responsibleAgency', 'responsibleAgency')
+      .leftJoinAndSelect('equipment.budgets', 'budgets')
+      .leftJoinAndSelect('equipment.createdBy', 'createdBy')
+      .where('developmentPlan.id = :planId', { planId: developmentPlanId })
+      .andWhere('equipment.deletedAt IS NULL')
+      .andWhere(
+        'EXISTS (SELECT 1 FROM tracking_status ts ' +
+          ' INNER JOIN status s ON s.id = ts.status_id ' +
+          ' WHERE ts.equipment_project_group_id = equipment.id ' +
+          '   AND ts.is_latest = true ' +
+          '   AND s.name = :statusName)',
+        { statusName: 'Approved' },
+      )
+      .getMany();
+
+    this.logger.log(
+      `renderApprovedPlanScopedPor03Buffer: plan ${developmentPlanId} (reportFormat=${parentPlan.reportFormat}) — ${rows.length} Approved equipment row(s)`,
+    );
+
+    if (rows.length === 0) {
+      this.logger.warn(
+        `renderApprovedPlanScopedPor03Buffer: plan ${developmentPlanId} — 0 Approved equipment rows; skipping ผ.03 section`,
+      );
+      return null;
+    }
+
+    // §16.5 year axis (shared by both formats) — derive from the parent
+    // plan window. Coerce to Number defensively (string-hydrated columns
+    // would string-concat and break per-year budget matching).
+    const startYear = Number(parentPlan.startYear);
+    const endYear = Number(parentPlan.endYear);
+    const years = Array.from(
+      { length: endYear - startYear + 1 },
+      (_, i) => startYear + i,
+    );
+
+    const fonts = this.pdfService.getPdfFonts();
+    const newWord = this.pdfService.newWord.bind(this.pdfService);
+
+    const developmentPlanLine = parentPlan.name?.trim()
+      ? parentPlan.name
+      : `แผนพัฒนาท้องถิ่น พ.ศ. ${parentPlan.startYear}-${parentPlan.endYear}`;
+
+    // ── GROUP-LEVEL page tracking (BE-04, 2026-05-30) ───────────────
+    // Instead of rendering the whole detail body as ONE doc-definition,
+    // render the divider buffer first, then EACH GROUP as its own
+    // buffer, accumulating a running `pageOffset` (mirrors the PG
+    // accumulation loop at `pdf.service.ts:1276`). Every equipment row
+    // in a group gets the SAME `pageMap` value = the group's first
+    // (1-based LOCAL) page within the returned buffer.
+    //
+    // The "บัญชีครุภัณฑ์ (ผ.03)" full-page divider is the FIRST buffer,
+    // so its page count seeds `pageOffset`. The first group emits the
+    // centered 4-line cover block (`includeCoverBlock: true`); every
+    // subsequent group suppresses it (`includeCoverBlock: false`) so
+    // the cover does not repeat. Each group already starts on a fresh
+    // page (the single-document layout used `pageBreak: 'before'` for
+    // groupIndex > 0), so splitting at group boundaries is visually
+    // identical — each per-group buffer is its own document starting on
+    // its own page 1, which becomes a fresh page after merge.
+    const dividerDoc = createPor03SectionDividerDocDefinition();
+    const dividerBuffer = await this.pdfService.createPdfBuffer(
+      dividerDoc,
+      fonts,
+    );
+
+    const pageMap = new Map<string, number>();
+    const groupBuffers: Buffer[] = [];
+    const includedIds: string[] = [];
+
+    // Seed the LOCAL offset with the divider's page count (the divider
+    // is local page 1, so the first group's body starts at local page 2).
+    // Renamed from `pageOffset` to avoid shadowing the caller's
+    // ผ.01+ผ.02 page-count parameter that is passed into each group's
+    // doc-definition so its footer renders continuous absolute numbers.
+    let localOffset = (await PDFDocument.load(dividerBuffer)).getPageCount();
+
+    if (parentPlan.reportFormat === ReportFormat.ISSUE_BASED) {
+      // ISSUE_BASED shape (§16.5): development_issue NOT NULL, strategy/
+      // tactic/plan NULL. Defensively skip any row that does not satisfy
+      // the issue shape (should not occur — shape follows the parent
+      // plan format).
+      const issueRows = rows.filter((r) => {
+        const isIssueShape =
+          !!r.developmentIssue && !r.strategy && !r.tactic && !r.plan;
+        if (!isIssueShape) {
+          this.logger.warn(
+            `renderApprovedPlanScopedPor03Buffer: equipment ${r.id} under ISSUE_BASED plan ${developmentPlanId} is not ISSUE_BASED-shaped; skipping row`,
+          );
+        }
+        return isIssueShape;
+      });
+      if (issueRows.length === 0) {
+        this.logger.warn(
+          `renderApprovedPlanScopedPor03Buffer: plan ${developmentPlanId} — 0 ISSUE_BASED-shaped equipment rows after filter; skipping ผ.03 section`,
+        );
+        return null;
+      }
+      const issueGroups = this.groupRowsByIssue(issueRows);
+
+      // One buffer per issue group. All rows in the issue share the
+      // issue's first local page.
+      for (let i = 0; i < issueGroups.length; i += 1) {
+        const issueGroup = issueGroups[i];
+        const groupDoc = createPor03IssueBasedDetailDocDefinition({
+          developmentPlanName: developmentPlanLine,
+          groups: [issueGroup],
+          years,
+          newWord,
+          includeCoverBlock: i === 0,
+          // Phase 3 — render ผ.02-style footer with continuous absolute
+          // page numbers. pdfmake's currentPage is 1-based RELATIVE to
+          // this per-group buffer, so add `pageOffset` (callers' ผ.01+
+          // ผ.02 totals) + `localOffset` (sum of divider + prior groups)
+          // for the absolute book page on each footer.
+          pageOffset: pageOffset + localOffset,
+        });
+        if (!groupDoc) continue;
+        const groupBuffer = await this.pdfService.createPdfBuffer(
+          groupDoc,
+          fonts,
+        );
+        const groupIds = issueGroup.categories.flatMap((c) =>
+          c.rows.map((r) => r.id),
+        );
+        for (const id of groupIds) {
+          pageMap.set(id, localOffset + 1);
+          includedIds.push(id);
+        }
+        groupBuffers.push(groupBuffer);
+        localOffset += (await PDFDocument.load(groupBuffer)).getPageCount();
+      }
+    } else {
+      // STRATEGY_BASED shape (§16.5): strategy/tactic/plan NOT NULL,
+      // development_issue NULL. Defensively skip mis-shaped rows.
+      const strategyRows = rows.filter((r) => {
+        const isStrategyShape =
+          !!r.strategy && !!r.tactic && !!r.plan && !r.developmentIssue;
+        if (!isStrategyShape) {
+          this.logger.warn(
+            `renderApprovedPlanScopedPor03Buffer: equipment ${r.id} under STRATEGY_BASED plan ${developmentPlanId} is not STRATEGY_BASED-shaped; skipping row`,
+          );
+        }
+        return isStrategyShape;
+      });
+      if (strategyRows.length === 0) {
+        this.logger.warn(
+          `renderApprovedPlanScopedPor03Buffer: plan ${developmentPlanId} — 0 STRATEGY_BASED-shaped equipment rows after filter; skipping ผ.03 section`,
+        );
+        return null;
+      }
+      const strategyGroups = this.groupRows(strategyRows);
+
+      // One buffer per (Category, Tactic, Plan) group. All rows in the
+      // group share the group's first local page.
+      for (let i = 0; i < strategyGroups.length; i += 1) {
+        const group = strategyGroups[i];
+        const groupDoc = createPor03DetailDocDefinition({
+          developmentPlanName: developmentPlanLine,
+          groups: [group],
+          years,
+          newWord,
+          includeCoverBlock: i === 0,
+          // Phase 3 — render ผ.02-style footer; see ISSUE branch comment.
+          pageOffset: pageOffset + localOffset,
+        });
+        if (!groupDoc) continue;
+        const groupBuffer = await this.pdfService.createPdfBuffer(
+          groupDoc,
+          fonts,
+        );
+        for (const r of group.rows) {
+          pageMap.set(r.id, localOffset + 1);
+          includedIds.push(r.id);
+        }
+        groupBuffers.push(groupBuffer);
+        localOffset += (await PDFDocument.load(groupBuffer)).getPageCount();
+      }
+    }
+
+    // Degrade cleanly if every group failed to render (defensive — the
+    // shape filters above already returned null on zero rows).
+    if (groupBuffers.length === 0) {
+      return null;
+    }
+
+    // Prepend the format-agnostic "บัญชีครุภัณฑ์ (ผ.03)" full-page
+    // divider INSIDE the returned buffer so BE-01 just appends
+    // `por03.buffer` to the ผ.02 book; BE-01's global post-merge pass
+    // numbers the whole combined book. Same contract as the Phase 2.6
+    // sibling.
+    const buffer = await this.pdfService.mergePdfBuffers([
+      dividerBuffer,
+      ...groupBuffers,
+    ]);
+
+    return { buffer, equipmentIds: includedIds, pageMap };
+  }
+
   // ──────────────────────────────────────────────────────────────────
   // Grouping helper
   // ──────────────────────────────────────────────────────────────────
@@ -521,6 +821,93 @@ export class Por03PdfService {
       const ap = a.rows[0].plan?.id ?? '';
       const bp = b.rows[0].plan?.id ?? '';
       return ap < bp ? -1 : ap > bp ? 1 : 0;
+    });
+
+    return groups;
+  }
+
+  /**
+   * ISSUE_BASED grouping helper (BE-02) — produces the
+   * `EquipmentIssueTableGroup[]` shape consumed by
+   * `createPor03IssueBasedDetailDocDefinition`.
+   *
+   * Ordering:
+   *   - Outer DevelopmentIssue: `sortOrder` ASC, then `name` (Thai
+   *     collation) as a tiebreak / fallback when sortOrder is equal /
+   *     absent.
+   *   - Inner EquipmentCategory: `sortOrder` ASC, then `code` ASC.
+   *   - Rows: `equipmentName` (Thai collation) ASC.
+   *
+   * Callers pre-filter to ISSUE_BASED-shaped rows (developmentIssue
+   * present), so `r.developmentIssue` is always defined here.
+   */
+  private groupRowsByIssue(
+    rows: EquipmentProjectGroup[],
+  ): EquipmentIssueTableGroup[] {
+    // Bucket by issue id → category id, preserving the source rows.
+    const issueBuckets = new Map<
+      string,
+      {
+        issueName: string;
+        issueSortOrder: number;
+        categories: Map<string, EquipmentProjectGroup[]>;
+      }
+    >();
+
+    for (const r of rows) {
+      const issue = r.developmentIssue!;
+      let issueBucket = issueBuckets.get(issue.id);
+      if (!issueBucket) {
+        issueBucket = {
+          issueName: issue.name,
+          issueSortOrder: issue.sortOrder ?? 0,
+          categories: new Map<string, EquipmentProjectGroup[]>(),
+        };
+        issueBuckets.set(issue.id, issueBucket);
+      }
+      const catId = r.equipmentCategory.id;
+      if (!issueBucket.categories.has(catId)) {
+        issueBucket.categories.set(catId, []);
+      }
+      issueBucket.categories.get(catId)!.push(r);
+    }
+
+    const groups: EquipmentIssueTableGroup[] = [];
+    for (const issueBucket of issueBuckets.values()) {
+      const categories: EquipmentIssueCategoryGroup[] = [];
+      for (const bucket of issueBucket.categories.values()) {
+        bucket.sort((a, b) =>
+          (a.equipmentName ?? '').localeCompare(b.equipmentName ?? '', 'th'),
+        );
+        const first = bucket[0];
+        categories.push({
+          categoryCode: first.equipmentCategory.code,
+          categoryName: first.equipmentCategory.name,
+          rows: bucket,
+        });
+      }
+
+      // Inner category sort — sortOrder ASC, then code ASC.
+      categories.sort((a, b) => {
+        const as = a.rows[0].equipmentCategory.sortOrder;
+        const bs = b.rows[0].equipmentCategory.sortOrder;
+        if (as !== bs) return as - bs;
+        return a.categoryCode - b.categoryCode;
+      });
+
+      groups.push({
+        issueName: issueBucket.issueName,
+        issueSortOrder: issueBucket.issueSortOrder,
+        categories,
+      });
+    }
+
+    // Outer issue sort — sortOrder ASC, then name (Thai) as tiebreak.
+    groups.sort((a, b) => {
+      const as = a.issueSortOrder ?? 0;
+      const bs = b.issueSortOrder ?? 0;
+      if (as !== bs) return as - bs;
+      return (a.issueName ?? '').localeCompare(b.issueName ?? '', 'th');
     });
 
     return groups;

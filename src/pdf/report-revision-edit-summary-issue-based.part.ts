@@ -19,7 +19,7 @@ export const createIssueBasedRevisionEditSummaryPartDocDefinition = (
 
   // Cover page
   content.push({
-    text: 'รายละเอียดโครงการ',
+    text: (params as any).coverTitle ?? 'รายละเอียดโครงการ',
     fontSize: 48,
     bold: true,
     alignment: 'center',

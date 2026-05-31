@@ -106,6 +106,15 @@ import {
 type GenerateReportOptions = {
   developmentPlanId?: string;
   reportType?: PdfReportType;
+  /**
+   * Phase 3 (2026-05-31) — seed the internal running `pageOffset` so the
+   * baked-in pdfmake footer page numbers START at `initialPageOffset + 1`
+   * instead of 1. Used by MAIN_PLAN `merge()` to make Part 3 footer
+   * numbers continue the ผ.01+ผ.02 sequence (one unbroken count across
+   * the whole assembled book). Default 0 → preserves existing per-part
+   * standalone preview behavior.
+   */
+  initialPageOffset?: number;
 };
 
 @Injectable()
@@ -1003,7 +1012,7 @@ export class PdfService {
 
       let coverSummaryDoc: TDocumentDefinitions | null = null;
       if (!skipSummaryCover) {
-        coverSummaryDoc = createIssueBasedSummaryPartDocDefinition({
+        coverSummaryDoc = createIssueBasedSummaryPartDocDefinition({ coverTitle: 'บัญชีโครงการพัฒนา',
           developmentPlanName, years, issues, overallSum, overallCount,
           pageMargins, pageOrientation, newWord: this.newWord.bind(this),
         });
@@ -1054,7 +1063,7 @@ export class PdfService {
 
       let coverSummaryDoc: TDocumentDefinitions | null = null;
       if (!skipSummaryCover) {
-        coverSummaryDoc = createSummaryPartDocDefinition({
+        coverSummaryDoc = createSummaryPartDocDefinition({ coverTitle: 'บัญชีโครงการพัฒนา',
           developmentPlanName, years, strategies, overallSum, overallCount,
           pageMargins, pageOrientation, newWord: this.newWord.bind(this),
         });
@@ -1157,7 +1166,12 @@ export class PdfService {
 
     const pdfBuffers: Buffer[] = [];
     const pageMap = new Map<string, number>();
-    let pageOffset = 0;
+    // Phase 3 — seed with caller-supplied initialPageOffset so the baked
+    // footer numbers START at `initialPageOffset + 1`. MAIN_PLAN merge
+    // passes `pageCount(part1) + pageCount(part2)` here so Part 3 (ผ.02
+    // + appended ผ.03) continues the assembled book's running count.
+    // Default 0 preserves standalone Part 3 preview behavior.
+    let pageOffset = options?.initialPageOffset ?? 0;
 
     if (reportFormat === ReportFormat.ISSUE_BASED) {
       // --- ISSUE_BASED path with page tracking ---
@@ -1165,7 +1179,7 @@ export class PdfService {
 
       let coverSummaryDoc: TDocumentDefinitions | null = null;
       if (reportType !== 'outAuthority') {
-        coverSummaryDoc = createIssueBasedSummaryPartDocDefinition({
+        coverSummaryDoc = createIssueBasedSummaryPartDocDefinition({ coverTitle: 'บัญชีโครงการพัฒนา',
           developmentPlanName, years, issues, overallSum, overallCount,
           pageMargins, pageOrientation, newWord: this.newWord.bind(this),
         });
@@ -1217,7 +1231,7 @@ export class PdfService {
 
       let coverSummaryDoc: TDocumentDefinitions | null = null;
       if (reportType !== 'outAuthority') {
-        coverSummaryDoc = createSummaryPartDocDefinition({
+        coverSummaryDoc = createSummaryPartDocDefinition({ coverTitle: 'บัญชีโครงการพัฒนา',
           developmentPlanName, years, strategies, overallSum, overallCount,
           pageMargins, pageOrientation, newWord: this.newWord.bind(this),
         });
@@ -2007,7 +2021,7 @@ export class PdfService {
       // --- ISSUE_BASED path ---
       const { issues, overallSum, overallCount } = this.prepareIssueBasedReportAggregations(unifiedProjects, years);
 
-      const summaryDoc = createIssueBasedRevisionEditSummaryPartDocDefinition({
+      const summaryDoc = createIssueBasedRevisionEditSummaryPartDocDefinition({ coverTitle: "บัญชีแก้ไข",
         developmentPlanRevisionName, years, issues, overallSum, overallCount,
         pageMargins, pageOrientation, newWord: this.newWord.bind(this),
       });
@@ -2061,7 +2075,7 @@ export class PdfService {
       // --- STRATEGY_BASED path (existing logic) ---
       const { strategies, overallSum, overallCount } = this.prepareReportAggregations(unifiedProjects, years);
 
-      const summaryDoc = createRevisionEditSummaryPartDocDefinition({
+      const summaryDoc = createRevisionEditSummaryPartDocDefinition({ coverTitle: "บัญชีแก้ไข",
         developmentPlanRevisionName, years, strategies, overallSum, overallCount,
         pageMargins, pageOrientation, newWord: this.newWord.bind(this),
       });
@@ -2494,7 +2508,7 @@ export class PdfService {
       // --- ISSUE_BASED path ---
       const { issues, overallSum, overallCount } = this.prepareIssueBasedReportAggregations(unifiedProjects, years);
 
-      const summaryDoc = createIssueBasedRevisionEditSummaryPartDocDefinition({
+      const summaryDoc = createIssueBasedRevisionEditSummaryPartDocDefinition({ coverTitle: "บัญชีเปลี่ยนแปลง",
         developmentPlanRevisionName, years, issues, overallSum, overallCount,
         pageMargins, pageOrientation, newWord: this.newWord.bind(this),
       });
@@ -2547,7 +2561,7 @@ export class PdfService {
       // --- STRATEGY_BASED path (existing logic) ---
       const { strategies, overallSum, overallCount } = this.prepareReportAggregations(unifiedProjects, years);
 
-      const summaryDoc = createRevisionEditSummaryPartDocDefinition({
+      const summaryDoc = createRevisionEditSummaryPartDocDefinition({ coverTitle: "บัญชีเปลี่ยนแปลง",
         developmentPlanRevisionName, years, strategies, overallSum, overallCount,
         pageMargins, pageOrientation, newWord: this.newWord.bind(this),
       });
@@ -2986,7 +3000,7 @@ export class PdfService {
       // --- ISSUE_BASED path ---
       const { issues, overallSum, overallCount } = this.prepareIssueBasedReportAggregations(unifiedProjects, years);
 
-      const summaryDoc = createIssueBasedRevisionEditSummaryPartDocDefinition({
+      const summaryDoc = createIssueBasedRevisionEditSummaryPartDocDefinition({ coverTitle: revisionTypeName.includes("เปลี่ยนแปลง") ? "บัญชีเปลี่ยนแปลง" : "บัญชีแก้ไข",
         developmentPlanRevisionName, years, issues, overallSum, overallCount,
         pageMargins, pageOrientation, newWord: this.newWord.bind(this),
       });
@@ -3039,7 +3053,7 @@ export class PdfService {
       // --- STRATEGY_BASED path (existing logic) ---
       const { strategies, overallSum, overallCount } = this.prepareReportAggregations(unifiedProjects, years);
 
-      const summaryDoc = createRevisionEditSummaryPartDocDefinition({
+      const summaryDoc = createRevisionEditSummaryPartDocDefinition({ coverTitle: revisionTypeName.includes("เปลี่ยนแปลง") ? "บัญชีเปลี่ยนแปลง" : "บัญชีแก้ไข",
         developmentPlanRevisionName, years, strategies, overallSum, overallCount,
         pageMargins, pageOrientation, newWord: this.newWord.bind(this),
       });
@@ -3171,7 +3185,7 @@ export class PdfService {
       // --- ISSUE_BASED path with page tracking ---
       const { issues, overallSum, overallCount } = this.prepareIssueBasedReportAggregations(unifiedProjects, years);
 
-      const summaryDoc = createIssueBasedRevisionEditSummaryPartDocDefinition({
+      const summaryDoc = createIssueBasedRevisionEditSummaryPartDocDefinition({ coverTitle: revisionTypeName.includes("เปลี่ยนแปลง") ? "บัญชีเปลี่ยนแปลง" : "บัญชีแก้ไข",
         developmentPlanRevisionName, years, issues, overallSum, overallCount,
         pageMargins, pageOrientation, newWord: this.newWord.bind(this),
       });
@@ -3228,7 +3242,7 @@ export class PdfService {
       // --- STRATEGY_BASED path (existing logic) ---
       const { strategies, overallSum, overallCount } = this.prepareReportAggregations(unifiedProjects, years);
 
-      const summaryDoc = createRevisionEditSummaryPartDocDefinition({
+      const summaryDoc = createRevisionEditSummaryPartDocDefinition({ coverTitle: revisionTypeName.includes("เปลี่ยนแปลง") ? "บัญชีเปลี่ยนแปลง" : "บัญชีแก้ไข",
         developmentPlanRevisionName, years, strategies, overallSum, overallCount,
         pageMargins, pageOrientation, newWord: this.newWord.bind(this),
       });

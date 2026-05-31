@@ -145,6 +145,20 @@ export class MainAssemblyDraft {
   @Column({ name: 'part3_page_map', type: 'jsonb', nullable: true })
   part3PageMap: Record<string, number> | null;
 
+  // Phase 3 (2026-05-31) — equipment (ผ.03) appended INSIDE Part 3 at
+  // generatePart3 time so the user previews / downloads ผ.02 + ผ.03 as
+  // one Part 3 file. These columns persist the equipment snapshot + the
+  // per-equipment 1-based LOCAL page within the ผ.03 sub-buffer so
+  // merge() can compute the absolute book page + stamp booking columns
+  // without re-rendering ผ.03. typeorm synchronize:true creates the
+  // jsonb columns on next reload; legacy rows have null (no equipment
+  // appended). Mirror of part3ProjectSnapshot / part3PageMap above.
+  @Column({ name: 'part3_equipment_snapshot', type: 'jsonb', nullable: true })
+  part3EquipmentSnapshot: string[] | null;
+
+  @Column({ name: 'part3_equipment_page_map', type: 'jsonb', nullable: true })
+  part3EquipmentPageMap: Record<string, number> | null;
+
   // Assembly status
 
   @Column({

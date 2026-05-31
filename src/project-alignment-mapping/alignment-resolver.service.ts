@@ -9,6 +9,7 @@ import {
   TripleKey,
   buildTripleKey,
 } from './types/alignment.types';
+import { projectDimension } from './internal/project-dimension.helper';
 
 /**
  * AlignmentResolverService — BATCHED read-only resolver.
@@ -31,6 +32,20 @@ import {
  *        own auth before invoking).
  * §17.3 — alignment masters have no FK to project tables; this query
  *        never touches the workflow audit trail.
+ * §20 — parity: this resolver is the SINGLE projection consumed by all
+ *        4 PDF subsystems (MAIN / EDIT / CHANGE / SUPPLEMENT), so the
+ *        Wave multi-national-strategy-per-alignment array expansion
+ *        lands uniformly with no per-subsystem branch.
+ *
+ * --- Multi-value secondaries (Wave multi-national-strategy-per-alignment) ---
+ *
+ * Three dimensions (NS / SDG / PS) are now multi-valued via sibling
+ * junction entities. The resolver eager-loads the 3 junctions and
+ * projects each dimension as a primary-first array. The legacy scalar
+ * fields on `AlignmentRow` are retained for backward compatibility
+ * (set to `arrays[0]`) and are @deprecated — see
+ * `docs/tasks/wave-multi-national-strategy-per-alignment/README.md`
+ * §Scalar-FK Deprecation Contract.
  */
 @Injectable()
 export class AlignmentResolverService {
@@ -64,8 +79,17 @@ export class AlignmentResolverService {
    * `OR (a=? AND b=? AND c=?)` clauses, which is slower and harder to
    * read in slow-query logs.
    *
-   * Eager relations are loaded for the four master refs so the
-   * downstream projection requires zero extra SQL.
+   * Eager relations:
+   *  - 4 scalar master refs (NS / MS / SDG / PS) for back-compat.
+   *  - 3 junctions (NS / SDG / PS) plus their nested master refs for
+   *    the array projections shipped by Wave
+   *    multi-national-strategy-per-alignment.
+   *
+   * The 6 added joins (3 junction + 3 nested refs) add cost to the
+   * eager query; the resolver is batched by triple (small N), so the
+   * cost is acceptable per BE-01 §11. Phase 2 filter endpoints
+   * intentionally bypass this resolver per DOCS-02 §7.5 to keep filter
+   * performance independent.
    */
   async resolveMany(
     triples: AlignmentTriple[],
@@ -122,6 +146,14 @@ export class AlignmentResolverService {
       .leftJoinAndSelect('pam.milestone', 'ms')
       .leftJoinAndSelect('pam.sdg', 'sd')
       .leftJoinAndSelect('pam.provinceStrategy', 'ps')
+      // 3 junction expansions (uniform pattern) — Wave
+      // multi-national-strategy-per-alignment.
+      .leftJoinAndSelect('pam.nationalStrategies', 'pamNs')
+      .leftJoinAndSelect('pamNs.nationalStrategy', 'pamNsRef')
+      .leftJoinAndSelect('pam.sdgs', 'pamSdg')
+      .leftJoinAndSelect('pamSdg.sdg', 'pamSdgRef')
+      .leftJoinAndSelect('pam.provinceStrategies', 'pamPs')
+      .leftJoinAndSelect('pamPs.provinceStrategy', 'pamPsRef')
       .where(
         `(pam.strategy_id, pam.tactic_id, pam.plan_id) IN (${placeholders.join(', ')})`,
         params,
@@ -150,26 +182,37 @@ export class AlignmentResolverService {
         planId: row.planId,
       });
 
+      // Build the 3 dimension arrays — primary scalar first, junction
+      // secondaries sorted by sortOrder ASC, deduped by id. The scalar
+      // back-compat field is set to arrays[0] (Scalar-FK Deprecation
+      // Contract — README §3 sort order, §1 status).
+      const nationalStrategies = projectDimension(
+        row.nationalStrategy,
+        row.nationalStrategies,
+        'nationalStrategy',
+      );
+      const sdgs = projectDimension(row.sdg, row.sdgs, 'sdg');
+      const provinceStrategies = projectDimension(
+        row.provinceStrategy,
+        row.provinceStrategies,
+        'provinceStrategy',
+      );
+
       result.set(key, {
-        nationalStrategy: {
-          id: row.nationalStrategy.id,
-          code: row.nationalStrategy.code ?? null,
-          nameTh: row.nationalStrategy.nameTh,
-        },
+        // Back-compat scalars — equal to arrays[0]. @deprecated; new
+        // code MUST read the array fields instead.
+        nationalStrategy: nationalStrategies[0],
+        sdg: sdgs[0],
+        provinceStrategy: provinceStrategies[0],
+        // Source-of-truth arrays.
+        nationalStrategies,
+        sdgs,
+        provinceStrategies,
+        // Milestone — stays scalar (single-valued by domain).
         milestone: {
           id: row.milestone.id,
           code: row.milestone.code ?? null,
           nameTh: row.milestone.nameTh,
-        },
-        sdg: {
-          id: row.sdg.id,
-          code: row.sdg.code ?? null,
-          nameTh: row.sdg.nameTh,
-        },
-        provinceStrategy: {
-          id: row.provinceStrategy.id,
-          code: row.provinceStrategy.code ?? null,
-          nameTh: row.provinceStrategy.nameTh,
         },
       });
     }

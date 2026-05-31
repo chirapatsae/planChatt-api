@@ -16,7 +16,12 @@ export const createSummaryPartDocDefinition = (params: CoverSummaryDocParams): T
   const content: any[] = [];
 
   content.push({
-    text: 'รายละเอียดโครงการ',
+    // Phase 3 (2026-05-31) — book-kind-aware cover title. Caller passes
+    // `coverTitle` per the book subsystem (MAIN='บัญชีโครงการพัฒนา',
+    // EDIT='บัญชีแก้ไข', CHANGE='บัญชีเปลี่ยนแปลง', SUPP='บัญชีเพิ่มเติม').
+    // Defaults to the legacy 'รายละเอียดโครงการ' so any caller that does
+    // NOT pass the new param renders identically to pre-Phase-3.
+    text: (params as any).coverTitle ?? 'รายละเอียดโครงการ',
     fontSize: 48,
     bold: true,
     alignment: 'center',

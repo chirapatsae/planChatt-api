@@ -60,6 +60,24 @@ export interface Por03DetailDocParams {
   groups: EquipmentTableGroup[];
   years: number[];
   newWord: (text: string) => any;
+  /**
+   * Phase 3 (2026-05-31) — when set, the footer renders a continuous
+   * page number = `currentPage + pageOffset` in the SAME style as the
+   * ผ.02 detail part (`report-project-detail.part.ts:72-99`) so ผ.03
+   * pages continue the ผ.02 sequence with a visually identical footer.
+   * When undefined, the footer stays null (Phase 2.5/2.6 print surfaces).
+   */
+  pageOffset?: number;
+  /**
+   * When `false`, the top-of-document centered 4-line cover block is
+   * OMITTED. Used by the group-level page-tracking render path
+   * (Wave Equipment Phase 3 BE-04), where the cover block is emitted
+   * ONCE on the first group's buffer and suppressed on every
+   * subsequent group's buffer so the cover does not repeat per page.
+   * Defaults to `true` — the single-document render path (owner print
+   * + draft append) keeps the cover on the first page as before.
+   */
+  includeCoverBlock?: boolean;
 }
 
 const PAGE_MARGINS: [number, number, number, number] = [15, 60, 15, 40];
@@ -129,7 +147,13 @@ const calculateEquipmentColumnWidths = (years: number[]): string[] => {
 export const createPor03DetailDocDefinition = (
   params: Por03DetailDocParams,
 ): TDocumentDefinitions | null => {
-  const { developmentPlanName, groups, years, newWord } = params;
+  const {
+    developmentPlanName,
+    groups,
+    years,
+    newWord,
+    includeCoverBlock = true,
+  } = params;
 
   if (groups.length === 0) {
     return null;
@@ -205,19 +229,21 @@ export const createPor03DetailDocDefinition = (
   //   2. สำหรับที่ไม่ได้จัดทำเป็นโครงการพัฒนาท้องถิ่น
   //   3. {developmentPlanName}  — already includes "พ.ศ. {start-end}"
   //   4. กองยุทธศาสตร์และงบประมาณ  — hardcoded per spec
-  content.push({
-    text: [
-      { text: 'บัญชีครุภัณฑ์\n' },
-      'สำหรับที่ไม่ได้จัดทำเป็นโครงการพัฒนาท้องถิ่น\n',
-      developmentPlanName + '\n',
-      POR03_COVER_AGENCY_LINE + '\n',
-    ],
-    alignment: 'center',
-    margin: [0, 0, 0, 10],
-    fontSize: 12,
-    bold: true,
-    style: 'tableHeader',
-  });
+  if (includeCoverBlock) {
+    content.push({
+      text: [
+        { text: 'บัญชีครุภัณฑ์\n' },
+        'สำหรับที่ไม่ได้จัดทำเป็นโครงการพัฒนาท้องถิ่น\n',
+        developmentPlanName + '\n',
+        POR03_COVER_AGENCY_LINE + '\n',
+      ],
+      alignment: 'center',
+      margin: [0, 0, 0, 10],
+      fontSize: 12,
+      bold: true,
+      style: 'tableHeader',
+    });
+  }
 
   groups.forEach((group, groupIndex) => {
     const tableBody: any[] = [];
@@ -421,10 +447,40 @@ export const createPor03DetailDocDefinition = (
         margin: [0, 40, 20, 0],
       };
     },
-    // NO page numbers per locked decision in README §12.
-    footer: function () {
-      return null;
-    },
+    // Phase 3 — when `pageOffset` is set, render the ผ.02-style footer
+    // (centered plan name + right-aligned continuous page number) so
+    // ผ.03 pages continue the ผ.02 sequence visually-identically. When
+    // omitted (Phase 2.5/2.6 print surfaces) the footer stays null per
+    // the locked decision in README §12.
+    footer: typeof params.pageOffset === 'number'
+      ? function (currentPage: number) {
+          const footerText = params.newWord
+            ? params.newWord(params.developmentPlanName)
+            : params.developmentPlanName;
+          const pageNumber = currentPage + (params.pageOffset ?? 0);
+          return {
+            columns: [
+              { text: '', width: '*' },
+              {
+                text: footerText,
+                alignment: 'center',
+                width: 'auto',
+                fontSize: 12,
+                bold: true,
+              },
+              {
+                text: String(pageNumber),
+                alignment: 'right',
+                width: '*',
+                margin: [0, 0, 20, 0],
+                fontSize: 12,
+                bold: true,
+              },
+            ],
+            margin: [15, 0, 15, 20],
+          };
+        }
+      : function () { return null; },
     content,
     pageSize: 'A4',
     pageOrientation: PAGE_ORIENTATION,

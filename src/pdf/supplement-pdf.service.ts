@@ -507,7 +507,7 @@ export class SupplementPdfService {
             orderedProjects as any,
             years,
           );
-        const summaryDoc = createSupplementSummaryDocDefinition({
+        const summaryDoc = createSupplementSummaryDocDefinition({ coverTitle: "บัญชีเพิ่มเติม",
           developmentPlanSupplementName: supplementDisplayName,
           years,
           reportFormat: 'ISSUE_BASED',
@@ -532,7 +532,7 @@ export class SupplementPdfService {
             orderedProjects as any,
             years,
           );
-        const summaryDoc = createSupplementSummaryDocDefinition({
+        const summaryDoc = createSupplementSummaryDocDefinition({ coverTitle: "บัญชีเพิ่มเติม",
           developmentPlanSupplementName: supplementDisplayName,
           years,
           reportFormat: 'STRATEGY_BASED',

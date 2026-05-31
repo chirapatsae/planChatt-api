@@ -326,6 +326,14 @@ import { ProvinceStrategy } from './province-strategy/entities/province-strategy
 import { StrategicMappingModule } from './strategic-mapping/strategic-mapping.module';
 import { ProjectAlignmentMappingModule } from './project-alignment-mapping/project-alignment-mapping.module';
 import { ProjectAlignmentMapping } from './project-alignment-mapping/entities/project-alignment-mapping.entity';
+// Wave multi-national-strategy-per-alignment / DB-01 — 3 uniform
+// junctions for multi-value secondaries on NS / SDG / PS. Same Wave 41
+// dual-reg rule: every `@Entity` must be listed BOTH in the module's
+// `forFeature(...)` AND here in `forRoot({ entities: [...] })`, or
+// TypeORM boot dies with `EntityMetadataNotFoundError`.
+import { ProjectAlignmentNationalStrategy } from './project-alignment-mapping/entities/project-alignment-national-strategy.entity';
+import { ProjectAlignmentSdg } from './project-alignment-mapping/entities/project-alignment-sdg.entity';
+import { ProjectAlignmentProvinceStrategy } from './project-alignment-mapping/entities/project-alignment-province-strategy.entity';
 // CHAIN-CLEANUP 2026-05-18 — schema narrowed to strict NS→MS→SDG↔PS chain.
 // Dropped: SdgNationalStrategy, ProvinceStrategyNationalStrategy,
 // MilestoneProvinceStrategy. Row backup at
@@ -545,6 +553,12 @@ import { EquipmentProjectGroupModule } from './equipment-project-group/equipment
         // Project alignment triple-keyed bridge. Owned by
         // `ProjectAlignmentMappingModule`; same Wave 41 dual-reg rule.
         ProjectAlignmentMapping,
+        // Wave multi-national-strategy-per-alignment / DB-01 — 3 uniform
+        // junctions for multi-value secondaries on NS / SDG / PS.
+        // Owned by `ProjectAlignmentMappingModule`; same dual-reg rule.
+        ProjectAlignmentNationalStrategy,
+        ProjectAlignmentSdg,
+        ProjectAlignmentProvinceStrategy,
         // Wave engagement-counters BE-01 — anonymous engagement audit
         // tables. NO FK to project / plan / tracking tables (§17.3).
         // Owned by `PublicEngagementModule` via `forFeature`; root

@@ -105,38 +105,124 @@ function buildAlignmentLines(
   alignment: AlignmentRow | null,
   strategy: InternalStrategyRef | null,
 ): string[] {
-  const ns = alignment?.nationalStrategy ?? null;
-  const ms = alignment?.milestone ?? null;
-  const sdg = alignment?.sdg ?? null;
-  const ps = alignment?.provinceStrategy ?? null;
+  // ---------------------------------------------------------------
+  // Multi-value secondaries (Wave multi-national-strategy-per-alignment)
+  //
+  // Lines ก / ค / ง iterate over the SOURCE-OF-TRUTH plural array
+  // projections on `AlignmentRow`:
+  //   - `alignment.nationalStrategies[]`
+  //   - `alignment.sdgs[]`
+  //   - `alignment.provinceStrategies[]`
+  //
+  // Per the Scalar-FK Deprecation Contract (see README §Scalar-FK
+  // Deprecation Contract + alignment.types.ts JSDoc), the deprecated
+  // scalar fields `nationalStrategy` / `sdg` / `provinceStrategy` MUST
+  // NOT be read here. The plural arrays are the canonical read API.
+  //
+  // 2026-05-31 LAYOUT CHANGE (per user direction): each dimension renders
+  // as ONE line with the bullet+label rendered ONCE at the start, then
+  // every entry (`<ordinalLabel> <ordinal> <name>`) joined by `, `.
+  //   - 1 entry → same as legacy scalar output (single segment, no comma)
+  //   - 2+ entries → `<bullet>.<label> seg1, seg2[, segN...]`
+  //   - 0 entries (defensive) → fallback segment with `—` ordinal + `—`
+  //
+  // Line ข (milestone) STAYS scalar — milestone is single-valued by
+  // domain (zero multi rows in dataset; no junction this wave). The
+  // `milestone` scalar is NOT @deprecated and remains the canonical
+  // read field for that dimension.
+  // ---------------------------------------------------------------
 
-  return [
-    composeLine(
-      'ก',
-      'ยุทธศาสตร์ชาติ 20 ปี',
-      'ยุทธศาสตร์ที่',
-      ns?.code ?? null,
-      ns?.nameTh ?? null,
-    ),
-    composeLine(
-      'ข',
-      'แผนพัฒนาเศรษฐกิจและสังคมแห่งชาติ ฉบับที่ 13',
-      'หมุดหมายที่',
-      ms?.code ?? null,
-      ms?.nameTh ?? null,
-    ),
-    composeLine(
-      'ค',
-      'Sustainable Development Goals : SDGs',
-      'เป้าหมายที่',
-      sdg?.code ?? null,
-      sdg?.nameTh ?? null,
-    ),
-    // ง. has no separate "label" segment — the bullet+name carry the
-    // canonical phrase. Synthesise a label-less line.
-    `ง.ยุทธศาสตร์จังหวัดที่ ${ordinalFromCode(ps?.code ?? null)} ${(ps?.nameTh ?? '').trim() || '—'}`,
-    `จ.ยุทธศาสตร์การพัฒนาของ อปท. ในเขตจังหวัดที่ ${ordinalFromCode(strategy?.code ?? null)} ${(strategy?.name ?? '').trim() || '—'}`,
-  ];
+  /**
+   * Parse the numeric ordinal from a code string for SORT purposes.
+   * Returns `Number.POSITIVE_INFINITY` for null / no-digit codes so
+   * those entries sink to the end of the ASC sort (defensive — should
+   * not occur on real data).
+   */
+  const ordinalNumber = (code: string | null | undefined): number => {
+    if (!code) return Number.POSITIVE_INFINITY;
+    const match = code.match(/\d+/);
+    if (!match) return Number.POSITIVE_INFINITY;
+    const parsed = parseInt(match[0], 10);
+    return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+  };
+
+  /**
+   * Build a single comma-joined line for a multi-value dimension.
+   * Mirrors `composeLine` shape but joins N entry segments with `, `.
+   *
+   * 2026-05-31 — segments are SORTED ASC by the numeric ordinal
+   * extracted from `code` (e.g., NS1 before NS6, regardless of which
+   * value lives in the scalar primary). Display order is a presentation
+   * concern, decoupled from the resolver's "primary at index 0"
+   * mechanical ordering per the Scalar-FK Deprecation Contract.
+   */
+  const composeMultiLine = (
+    bullet: string,
+    label: string,
+    ordinalLabel: string,
+    items: ReadonlyArray<{ code: string | null | undefined; nameTh: string | null | undefined } | null | undefined>,
+  ): string => {
+    const sortedItems = [...items].sort(
+      (a, b) => ordinalNumber(a?.code) - ordinalNumber(b?.code),
+    );
+    const segments =
+      sortedItems.length > 0
+        ? sortedItems.map((it) => {
+            const ordinal = ordinalFromCode(it?.code ?? null);
+            const name = (it?.nameTh ?? '').trim() || '—';
+            return `${ordinalLabel} ${ordinal} ${name}`;
+          })
+        : [`${ordinalLabel} — —`];
+    return `${bullet}.${label} ${segments.join(', ')}`;
+  };
+
+  // ก. NationalStrategy — single comma-joined line
+  const nsLine = composeMultiLine(
+    'ก',
+    'ยุทธศาสตร์ชาติ 20 ปี',
+    'ยุทธศาสตร์ที่',
+    alignment?.nationalStrategies ?? [],
+  );
+
+  // ข. Milestone — single line (stays scalar; not deprecated)
+  const ms = alignment?.milestone ?? null;
+  const msLine = composeLine(
+    'ข',
+    'แผนพัฒนาเศรษฐกิจและสังคมแห่งชาติ ฉบับที่ 13',
+    'หมุดหมายที่',
+    ms?.code ?? null,
+    ms?.nameTh ?? null,
+  );
+
+  // ค. SDG — single comma-joined line
+  const sdgLine = composeMultiLine(
+    'ค',
+    'Sustainable Development Goals : SDGs',
+    'เป้าหมายที่',
+    alignment?.sdgs ?? [],
+  );
+
+  // ง. ProvinceStrategy — single comma-joined line. No outer label (the
+  // ordinalLabel "ยุทธศาสตร์จังหวัดที่" IS the dimension name), so we feed
+  // an empty label and strip the trailing space below. Sort ASC by
+  // ordinal for the same reason as ก / ค (see composeMultiLine note).
+  const psItems = alignment?.provinceStrategies ?? [];
+  const sortedPsItems = [...psItems].sort(
+    (a, b) => ordinalNumber(a?.code) - ordinalNumber(b?.code),
+  );
+  const psSegments =
+    sortedPsItems.length > 0
+      ? sortedPsItems.map(
+          (ps) =>
+            `ยุทธศาสตร์จังหวัดที่ ${ordinalFromCode(ps?.code ?? null)} ${(ps?.nameTh ?? '').trim() || '—'}`,
+        )
+      : [`ยุทธศาสตร์จังหวัดที่ ${ordinalFromCode(null)} —`];
+  const psLine = `ง.${psSegments.join(', ')}`;
+
+  // จ. Internal strategy — unchanged (does not come from alignment row).
+  const internalLine = `จ.ยุทธศาสตร์การพัฒนาของ อปท. ในเขตจังหวัดที่ ${ordinalFromCode(strategy?.code ?? null)} ${(strategy?.name ?? '').trim() || '—'}`;
+
+  return [nsLine, msLine, sdgLine, psLine, internalLine];
 }
 
 /**

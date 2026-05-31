@@ -37,6 +37,8 @@ export interface ReportAggregations {
 }
 
 export interface CoverSummaryDocParams {
+  /** Phase 3 — book-kind-aware cover title (Part 3 first-page big text). */
+  coverTitle?: string;
   developmentPlanName: string;
   years: number[];
   strategies: Map<string, StrategySummary>;
@@ -94,6 +96,8 @@ export interface IssueBasedReportAggregations {
  * Parallel to CoverSummaryDocParams.
  */
 export interface IssueBasedCoverSummaryDocParams {
+  /** Phase 3 — book-kind-aware cover title (Part 3 first-page big text). */
+  coverTitle?: string;
   developmentPlanName: string;
   years: number[];
   issues: Map<string, IssueSummary>;
@@ -128,6 +132,8 @@ export interface IssueBasedProjectDetailDocParams {
  * report-revision-edit-summary.part.ts).
  */
 export interface IssueBasedRevisionEditSummaryDocParams {
+  /** Phase 3 — book-kind-aware cover title (Part 3 first-page big text). */
+  coverTitle?: string;
   developmentPlanRevisionName: string;
   years: number[];
   issues: Map<string, IssueSummary>;
@@ -244,6 +250,8 @@ export interface SupplementCoverDocParams {
  * One of `strategies` / `issues` MUST be provided based on `reportFormat`.
  */
 export interface SupplementSummaryDocParams {
+  /** Phase 3 — book-kind-aware cover title (Part 3 first-page big text). */
+  coverTitle?: string;
   developmentPlanSupplementName: string;
   years: number[];
   reportFormat: 'STRATEGY_BASED' | 'ISSUE_BASED';

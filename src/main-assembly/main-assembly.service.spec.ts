@@ -46,6 +46,7 @@ import { User } from 'src/users/entities/user.entity';
 
 import { UsersService } from 'src/users/users.service';
 import { PdfService } from 'src/pdf/pdf.service';
+import { Por03PdfService } from 'src/pdf/por03-pdf.service';
 import { WebsocketService } from 'src/websocket/websocket/websocket.service';
 import { BookAssemblyFileService } from 'src/book-assembly/book-assembly-file.service';
 import { StoragePathService } from 'src/storage/storage-path.service';
@@ -153,6 +154,10 @@ async function buildService(): Promise<{
       { provide: getRepositoryToken(User), useValue: repos.userRepo },
       { provide: UsersService, useValue: { findOne: jest.fn() } },
       { provide: PdfService, useValue: {} },
+      // Phase 3 — ผ.03 formal-assembly render core injected into
+      // MainAssemblyService at constructor index [11]. Mock returns null
+      // (no equipment appended) so existing merge specs are unaffected.
+      { provide: Por03PdfService, useValue: { renderApprovedPlanScopedPor03Buffer: jest.fn().mockResolvedValue(null) } },
       { provide: WebsocketService, useValue: { notifyPdfGenerationProgress: jest.fn() } },
       { provide: BookAssemblyFileService, useValue: {} },
       { provide: StoragePathService, useValue: {} },

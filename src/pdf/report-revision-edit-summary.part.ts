@@ -2,6 +2,8 @@ import type { TDocumentDefinitions } from 'pdfmake/interfaces';
 import type { StrategySummary, PlanSummary } from './report.types';
 
 export interface RevisionEditSummaryDocParams {
+  /** Phase 3 — book-kind-aware cover title (Part 3 first-page big text). */
+  coverTitle?: string;
   developmentPlanRevisionName: string;
   years: number[];
   strategies: Map<string, StrategySummary>;
@@ -27,7 +29,7 @@ export const createRevisionEditSummaryPartDocDefinition = (params: RevisionEditS
   const content: any[] = [];
 
   content.push({
-    text: 'รายละเอียดโครงการ',
+    text: (params as any).coverTitle ?? 'รายละเอียดโครงการ',
     fontSize: 48,
     bold: true,
     alignment: 'center',
