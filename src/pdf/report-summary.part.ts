@@ -11,6 +11,12 @@ export const createSummaryPartDocDefinition = (params: CoverSummaryDocParams): T
     pageMargins,
     pageOrientation,
     newWord,
+    // §21.3 (2026-05-31 hotfix) — pageOffset baked into the footer so
+    // the summary's footer page numbers continue the running count of
+    // an enclosing assembled book (e.g. Part 3 inside MAIN_PLAN merge
+    // receives `pageCount(P1)+pageCount(P2)` here). Defaults to 0 for
+    // standalone callers — preserves pre-hotfix behavior.
+    pageOffset = 0,
   } = params;
 
   const content: any[] = [];
@@ -188,13 +194,17 @@ export const createSummaryPartDocDefinition = (params: CoverSummaryDocParams): T
         margin: [0, 40, 20, 0],
       };
     },
-    footer: (currentPage, pageCount) => {
+    footer: (currentPage, _pageCount) => {
       const footerText = newWord ? newWord(developmentPlanName) : developmentPlanName;
-    
+      // §21.3 (2026-05-31 hotfix) — currentPage is pdfmake's local
+      // 1-based page within THIS doc. Add pageOffset (pages already
+      // emitted by upstream Parts 1+2 in the assembled book) so the
+      // baked footer matches the absolute book page number.
+      const pageNumber = currentPage + pageOffset;
       return {
         columns: [
           { text: '', width: '*' }, // dummy ซ้าย
-    
+
           // ตรงกลาง (ชื่อแผน)
           {
             text: footerText,
@@ -203,10 +213,10 @@ export const createSummaryPartDocDefinition = (params: CoverSummaryDocParams): T
             fontSize: 12,
             bold: true,
           },
-    
+
           // เลขหน้า (มี margin ขวาเพิ่ม)
           {
-            text: String(currentPage),
+            text: String(pageNumber),
             alignment: 'right',
             width: '*',
             margin: [0, 0, 20, 0], // <<<<<< เว้นขวา 20px

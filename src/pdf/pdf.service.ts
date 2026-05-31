@@ -1182,6 +1182,13 @@ export class PdfService {
         coverSummaryDoc = createIssueBasedSummaryPartDocDefinition({ coverTitle: 'บัญชีโครงการพัฒนา',
           developmentPlanName, years, issues, overallSum, overallCount,
           pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+          // §21.3 (2026-05-31 hotfix) — thread the running pageOffset
+          // through the summary doc so its baked footer renders absolute
+          // page numbers when sitting inside an assembled book (MAIN_PLAN
+          // Part 3 receives `pageCount(P1)+pageCount(P2)` here). At the
+          // moment of build, pageOffset = initialPageOffset (nothing has
+          // been emitted into pdfBuffers yet for this generator).
+          pageOffset,
         });
       }
 
@@ -1234,6 +1241,11 @@ export class PdfService {
         coverSummaryDoc = createSummaryPartDocDefinition({ coverTitle: 'บัญชีโครงการพัฒนา',
           developmentPlanName, years, strategies, overallSum, overallCount,
           pageMargins, pageOrientation, newWord: this.newWord.bind(this),
+          // §21.3 (2026-05-31 hotfix) — see ISSUE_BASED branch above.
+          // Threads the running pageOffset into the summary doc so the
+          // baked footer renders absolute page numbers when this Part 3
+          // sits inside the assembled MAIN_PLAN book.
+          pageOffset,
         });
       }
 

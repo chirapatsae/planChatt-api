@@ -47,6 +47,18 @@ export interface CoverSummaryDocParams {
   pageMargins: [number, number, number, number];
   pageOrientation: 'portrait' | 'landscape';
   newWord: (text: string) => any;
+  /**
+   * §21.3 (2026-05-31 hotfix) — page offset baked into the summary
+   * footer. When supplied, footer renders `currentPage + pageOffset`
+   * so the summary's page numbers continue the running count of an
+   * enclosing assembled book (e.g. Part 3 inside the MAIN_PLAN merge
+   * uses `pageCount(P1)+pageCount(P2)` here). Defaults to 0 for
+   * standalone callers — preserves pre-hotfix behavior.
+   *
+   * Parallels the existing `pageOffset` plumbing on cover-page and
+   * detail-page builders (report-project-detail.part.ts).
+   */
+  pageOffset?: number;
 }
 
 export interface ProjectDetailDocParams {
@@ -106,6 +118,13 @@ export interface IssueBasedCoverSummaryDocParams {
   pageMargins: [number, number, number, number];
   pageOrientation: 'portrait' | 'landscape';
   newWord: (text: string) => any;
+  /**
+   * §21.3 (2026-05-31 hotfix) — see CoverSummaryDocParams.pageOffset.
+   * Mirror field for the ISSUE_BASED summary builder so MAIN_PLAN
+   * merge / standalone Part 3 preview render continuous page numbers
+   * regardless of plan reportFormat.
+   */
+  pageOffset?: number;
 }
 
 /**

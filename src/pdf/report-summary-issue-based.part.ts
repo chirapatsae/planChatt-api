@@ -13,6 +13,12 @@ export const createIssueBasedSummaryPartDocDefinition = (
     pageMargins,
     pageOrientation,
     newWord,
+    // §21.3 (2026-05-31 hotfix) — pageOffset baked into the footer so
+    // the summary's footer page numbers continue the running count of
+    // an enclosing assembled book (e.g. Part 3 inside MAIN_PLAN merge
+    // receives `pageCount(P1)+pageCount(P2)` here). Defaults to 0 for
+    // standalone callers — preserves pre-hotfix behavior.
+    pageOffset = 0,
   } = params;
 
   const content: any[] = [];
@@ -208,11 +214,16 @@ export const createIssueBasedSummaryPartDocDefinition = (
         margin: [0, 40, 20, 0],
       };
     },
-    footer: (currentPage, pageCount) => {
+    footer: (currentPage, _pageCount) => {
       const footerText = newWord
         ? newWord(developmentPlanName)
         : developmentPlanName;
-
+      // §21.3 (2026-05-31 hotfix) — see report-summary.part.ts for the
+      // parallel STRATEGY_BASED fix. currentPage is pdfmake's local
+      // 1-based page within this summary doc; add pageOffset to match
+      // the absolute book page when this doc sits inside an assembled
+      // book (e.g. Part 3 of MAIN_PLAN).
+      const pageNumber = currentPage + pageOffset;
       return {
         columns: [
           { text: '', width: '*' },
@@ -224,7 +235,7 @@ export const createIssueBasedSummaryPartDocDefinition = (
             bold: true,
           },
           {
-            text: String(currentPage),
+            text: String(pageNumber),
             alignment: 'right',
             width: '*',
             margin: [0, 0, 20, 0],

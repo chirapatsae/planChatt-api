@@ -351,7 +351,7 @@ export class MainAssemblyService {
     this.logger.log(
       `Created main-plan draft plan=${developmentPlanId} v${targetVersion} draftId=${saved.id}`,
     );
-    return this.toDraftDto(saved);
+    return await this.toDraftDto(saved);
   }
 
   /**
@@ -373,7 +373,7 @@ export class MainAssemblyService {
       },
       relations: ['createdBy', 'createdBy.user'],
     });
-    return draft ? this.toDraftDto(draft) : null;
+    return draft ? await this.toDraftDto(draft) : null;
   }
 
   /**
@@ -597,7 +597,7 @@ export class MainAssemblyService {
 
     this.updateAssemblyStatus(draft);
     const saved = await this.draftRepo.save(draft);
-    return this.toDraftDto(saved);
+    return await this.toDraftDto(saved);
   }
 
   /**
@@ -692,7 +692,7 @@ export class MainAssemblyService {
     this.updateAssemblyStatus(draft);
     const saved = await this.draftRepo.save(draft);
     await this.notifyProgress(userId, developmentPlanId, 100, 'completed', 'สร้างส่วนที่ 3 สำเร็จแล้ว!');
-    return this.toDraftDto(saved);
+    return await this.toDraftDto(saved);
   }
 
   /**
@@ -744,6 +744,12 @@ export class MainAssemblyService {
       draft.part3FilePath = copiedPath;
       draft.part3GeneratedAt = new Date();
       draft.part3ProjectSnapshot = sourceVersion.part3ProjectSnapshot;
+      // 2026-05-31 (Part 3 SET-staleness, draft-side) — propagate the
+      // equipment snapshot from the reused source version so the
+      // reused draft is staleness-comparable. Defensive `?? []` for
+      // legacy version rows that predate the equipment snapshot column.
+      draft.part3EquipmentSnapshot =
+        sourceVersion.part3EquipmentSnapshot ?? [];
       // Wave A1 / BE-01 — page map is now sourced from the version-
       // projects join (denormalized) instead of inline JSONB. Reuse
       // queries the join for the source version's mapping so the merge
@@ -759,7 +765,7 @@ export class MainAssemblyService {
 
     this.updateAssemblyStatus(draft);
     const saved = await this.draftRepo.save(draft);
-    return this.toDraftDto(saved);
+    return await this.toDraftDto(saved);
   }
 
   // ===================================================================
@@ -1341,6 +1347,13 @@ export class MainAssemblyService {
             draft.part3FilePath = copiedPath;
             draft.part3GeneratedAt = now;
             draft.part3ProjectSnapshot = currentVersion.part3ProjectSnapshot;
+            // 2026-05-31 (Part 3 SET-staleness, draft-side) — propagate
+            // the equipment snapshot from the deprecated version so the
+            // reused draft is staleness-comparable. Defensive `?? []`
+            // for legacy version rows that predate the equipment
+            // snapshot column (treated as empty set; no drift expected).
+            draft.part3EquipmentSnapshot =
+              currentVersion.part3EquipmentSnapshot ?? [];
             // Wave A1 — repopulate page_map from the deprecated
             // version-projects join (NOT from inline JSONB).
             const sourceJoin = await manager
@@ -1373,7 +1386,7 @@ export class MainAssemblyService {
         where: { id: saved.id },
         relations: ['createdBy', 'createdBy.user'],
       });
-      return this.toDraftDto(full ?? saved);
+      return await this.toDraftDto(full ?? saved);
     });
   }
 
@@ -2350,8 +2363,8 @@ export class MainAssemblyService {
   // Private helpers — DTO mapping
   // ===================================================================
 
-  private toDraftDto(d: MainAssemblyDraft): MainAssemblyDraftDto {
-    return {
+  private async toDraftDto(d: MainAssemblyDraft): Promise<MainAssemblyDraftDto> {
+    const baseDto: MainAssemblyDraftDto = {
       id: d.id,
       developmentPlanId: d.developmentPlanId,
       assemblyStatus: d.assemblyStatus,
@@ -2363,6 +2376,21 @@ export class MainAssemblyService {
       part2UploadedAt: d.part2UploadedAt ? d.part2UploadedAt.toISOString() : null,
       part3Status: d.part3Status,
       part3GeneratedAt: d.part3GeneratedAt ? d.part3GeneratedAt.toISOString() : null,
+      // 2026-05-31 — Expose the Part 3 PG snapshot on the draft DTO so
+      // the FE can detect Part 3 staleness (snapshot.length vs live
+      // approvedCount). Written by generatePart3 (line 685) and by the
+      // CORRECTION_PART3 reuse path (line 1343). Null until Part 3 has
+      // been generated/reused for the active draft.
+      part3ProjectSnapshot: d.part3ProjectSnapshot ?? null,
+      // 2026-05-31 (Part 3 SET-staleness, draft-side) — pass-through.
+      part3EquipmentSnapshot: d.part3EquipmentSnapshot ?? null,
+      // Default to non-stale; `enrichDraftWithStaleness` overrides
+      // these when Part 3 has been generated/reused.
+      isPart3Stale: false,
+      part3StalePgCount: 0,
+      part3RemovedPgCount: 0,
+      part3StaleEquipmentCount: 0,
+      part3RemovedEquipmentCount: 0,
       createdById: d.createdById,
       createdAt: d.createdAt ? d.createdAt.toISOString() : new Date().toISOString(),
       createdBy: d.createdBy
@@ -2378,6 +2406,7 @@ export class MainAssemblyService {
           }
         : undefined,
     };
+    return this.enrichDraftWithStaleness(baseDto, d);
   }
 
   private toVersionDto(v: MainAssemblyVersion): MainAssemblyVersionDto {
@@ -2521,6 +2550,129 @@ export class MainAssemblyService {
       part3RemovedEquipmentCount,
       isPart3Stale,
       equipmentSnapshotMissing,
+    };
+  }
+
+  /**
+   * 2026-05-31 (Part 3 SET-staleness, draft-side) — Computes the
+   * read-time Part 3 staleness signal for the active DRAFT by SET-diffing
+   * the persisted `part3ProjectSnapshot` / `part3EquipmentSnapshot`
+   * arrays against the current Approved PG / equipment sets under the
+   * same plan.
+   *
+   * Why SET diff (not count compare): the user-reported bug is the
+   * "rollback A + approve C" tie — same count, different set. A pure
+   * count compare misses it; we MUST compare membership.
+   *
+   * Equipment parity: the user explicitly requested equipment drift
+   * to ALSO block merge + show "สร้างใหม่". Equipment IDs are now
+   * captured into `part3EquipmentSnapshot` at generatePart3 time
+   * (main-assembly.service.ts:689), mirroring the version-side
+   * `enrichWithStaleness` (lines 2458-2531).
+   *
+   * Constraints:
+   *   - §17.2 advisory — the signal MUST NOT gate any workflow
+   *     transition; the FE uses it to gate the merge button only.
+   *     The BE merge path has its own §21.2 both-sources gate and
+   *     does NOT consult this signal.
+   *   - §17.5 no auto-recompute — pure read; no DB writes.
+   *   - §12 / §17.3 — no `tracking_status` / `ai_*` writes.
+   *   - Skipped when Part 3 has not yet been generated/reused
+   *     (status NOT IN {generated, reused}); returns the input DTO
+   *     verbatim. No queries issued in that case.
+   *   - Legacy drafts: `part3EquipmentSnapshot === null` is treated
+   *     as the empty set (no drift expected — pre-equipment-snapshot
+   *     rows simply have no equipment IDs to compare against).
+   *
+   * §20 parity scope: MAIN_PLAN only per user direction. EDIT /
+   * CHANGE / SUPPLEMENT remain on the legacy count-compare or no
+   * comparison; a follow-up wave will propagate this pattern uniformly.
+   */
+  private async enrichDraftWithStaleness(
+    dto: MainAssemblyDraftDto,
+    d: MainAssemblyDraft,
+  ): Promise<MainAssemblyDraftDto> {
+    // Skip staleness compute when Part 3 isn't generated/reused yet.
+    // Returns the input DTO verbatim with all-zero / false defaults
+    // already set by `toDraftDto`.
+    const part3Done =
+      d.part3Status === MainAssemblyPartUploadStatus.GENERATED ||
+      d.part3Status === MainAssemblyPartUploadStatus.REUSED;
+    if (!part3Done) {
+      return dto;
+    }
+
+    const snapshotPgIds = new Set(d.part3ProjectSnapshot ?? []);
+    // Legacy fallback — pre-this-change drafts have null equipment
+    // snapshot; treat as empty set (no drift signal).
+    const snapshotEquipmentIds = new Set(d.part3EquipmentSnapshot ?? []);
+
+    // Current Approved PG set under the plan. Same query as the
+    // version-side `enrichWithStaleness` (lines 2467-2476) and as
+    // `getReadiness.approvedCount` (lines 1498-1506) — projected via
+    // `.getRawMany()` instead of `.getCount()` to return the ID list.
+    const currentApprovedPgRows: { id: string }[] = await this.projectGroupRepo
+      .createQueryBuilder('pg')
+      .select('pg.id', 'id')
+      .innerJoin('pg.trackingStatus', 'ts')
+      .innerJoin('ts.statusId', 'status')
+      .where('pg.developmentPlan = :id', { id: d.developmentPlanId })
+      .andWhere('pg.deletedAt IS NULL')
+      .andWhere('ts.isLatest = :isLatest', { isLatest: true })
+      .andWhere('status.name = :name', { name: STATUS_NAMES.APPROVED })
+      .getRawMany();
+    const currentPgSet = new Set(currentApprovedPgRows.map((r) => r.id));
+
+    let part3StalePgCount = 0;
+    for (const id of currentPgSet) {
+      if (!snapshotPgIds.has(id)) part3StalePgCount += 1;
+    }
+    let part3RemovedPgCount = 0;
+    for (const id of snapshotPgIds) {
+      if (!currentPgSet.has(id)) part3RemovedPgCount += 1;
+    }
+
+    // Current Approved equipment set under the plan. Mirrors the
+    // version-side `enrichWithStaleness` (lines 2493-2505) and the
+    // readiness equipment query (lines 1559-1570).
+    const currentApprovedEqRows: { id: string }[] = await this.equipmentRepo
+      .createQueryBuilder('eq')
+      .select('eq.id', 'id')
+      .innerJoin(
+        'tracking_status',
+        'ts',
+        'ts.equipment_project_group_id = eq.id AND ts.is_latest = true',
+      )
+      .innerJoin('status', 'status', 'status.id = ts.status_id')
+      .where('eq.development_plan_id = :id', { id: d.developmentPlanId })
+      .andWhere('eq.deleted_at IS NULL')
+      .andWhere('status.name = :name', { name: STATUS_NAMES.APPROVED })
+      .getRawMany();
+    const currentEqSet = new Set(currentApprovedEqRows.map((r) => r.id));
+
+    let part3StaleEquipmentCount = 0;
+    for (const id of currentEqSet) {
+      if (!snapshotEquipmentIds.has(id)) part3StaleEquipmentCount += 1;
+    }
+    let part3RemovedEquipmentCount = 0;
+    for (const id of snapshotEquipmentIds) {
+      if (!currentEqSet.has(id)) part3RemovedEquipmentCount += 1;
+    }
+
+    const isPart3Stale =
+      part3StalePgCount +
+        part3RemovedPgCount +
+        part3StaleEquipmentCount +
+        part3RemovedEquipmentCount >
+      0;
+
+    return {
+      ...dto,
+      isPart3Stale,
+      part3StalePgCount,
+      part3RemovedPgCount,
+      part3StaleEquipmentCount,
+      part3RemovedEquipmentCount,
     };
   }
 }
