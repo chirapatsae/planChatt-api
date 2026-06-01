@@ -197,17 +197,17 @@ export class PublicArchiveController {
     // param `?d=<uuid>`. UUID-shape validation is defensive — anything
     // malformed is treated as null.
     //
-    // NOTE (Wave public-archive-supplement BE-01): supplement downloads
-    // are streamed and audited via the same controller hook, but the
-    // `recordDownload` engagement path does NOT yet roll up supplement
-    // book-level downloads into the parent plan's `download_count`.
-    // This matches task BE-01 §6.6 decision — supplement book-level
-    // download counter is out of scope; per §5 the supplement download
-    // counter parity with revisions (which also lack per-revision
-    // download counters) is intentional. We skip `recordDownload` for
-    // supplement to avoid emitting a download event with an unsupported
-    // `sourceType`; the PDF stream itself remains unaffected.
-    if (resolvedSourceType !== 'supplement') {
+    // Wave per-version-engagement-counts (2026-06-01): supplement
+    // downloads are NOW recorded too — the prior public-archive-supplement
+    // skip is removed so the public archive can show per-`<VersionRow>`
+    // supplement download counts. `recordDownload` resolves the parent
+    // plan for supplement via development_plan_supplement → plan and
+    // still increments the plan-level `download_count`. Every source
+    // type writes an `engagement_download_events` row carrying
+    // `(source_type, source_id, version_number)` — already per-version.
+    // recordDownload is internally try/caught — analytics never blocks
+    // the PDF stream.
+    {
       const rawHeader = req.headers['x-engagement-device-id'];
       const rawQuery = (req.query?.['d'] as string | undefined) ?? undefined;
       const deviceCandidate = (
@@ -217,14 +217,8 @@ export class PublicArchiveController {
         deviceCandidate && /^[0-9a-f-]{36}$/i.test(deviceCandidate)
           ? deviceCandidate
           : null;
-      // CLEANUP wave BE-02 — `resolvedSourceType` is already typed
-      // as `PublicBookSourceType` literal union; the legacy
-      // `BookAssemblySourceType` enum lookup is no longer needed.
-      // The outer `if (resolvedSourceType !== 'supplement')` guard
-      // ensures we never pass `'supplement'` to `recordDownload`,
-      // which only accepts the three BookAssembly source types.
       await this.engagementService.recordDownload({
-        sourceType: resolvedSourceType as 'main_plan' | 'edit_revision' | 'change_revision',
+        sourceType: resolvedSourceType,
         sourceId,
         versionNumber,
         deviceId,

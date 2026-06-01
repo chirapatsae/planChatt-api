@@ -2968,9 +2968,23 @@ export class ProjectGroupsService {
 
       .where('pg.development_plan_id = :developmentPlanId', { developmentPlanId })
       .andWhere('rev.id IS NULL')   // ไม่มี revision
-      .andWhere('pg.isDraft = false')
-      .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true });
-    // ไม่มีเงื่อนไข isBooked และ status
+      .andWhere('pg.isDraft = false');
+    // 2026-05-31 — DROP `trackingStatus.isLatest = true` filter.
+    // Previously this constraint caused the JOIN to load ONLY the latest
+    // tracking row per project, which broke the FE OrphanResetDetailsModal
+    // (and any other consumer that needs to look up the PREVIOUS status
+    // before a cascade reset). Removing the filter loads the FULL tracking
+    // history per project. Impact:
+    //   - Payload grows ~3-5× per project (typical history = 3-10 rows)
+    //     but for typical user (5-20 projects) the total stays well under
+    //     500KB — acceptable for a single dashboard call.
+    //   - All existing consumers in `Project.tsx` already look up the
+    //     latest row via `tracking.find(t => t.isLatest === true)`
+    //     (lines 2108-2109 + others), so they work unchanged.
+    //   - New consumers (modal, drift signals, audit displays) can now
+    //     derive prior-status data without a second roundtrip.
+    // No condition on isBooked / status either — keep ทั้งหมด for the
+    // dashboard's chip-narrowing path.
 
     const projects = await queryBuilder.getMany();
     // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).

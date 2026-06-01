@@ -37,7 +37,7 @@
 
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { ILike, In, Repository } from 'typeorm';
+import { DataSource, ILike, In, Repository } from 'typeorm';
 
 import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
@@ -81,6 +81,22 @@ export interface PublicVersionDto {
   totalPages: number | null;
   /** Download URL for streaming the assembled PDF. */
   downloadUrl: string;
+  /**
+   * Wave per-version-engagement-counts (2026-06-01) — per-version
+   * engagement counts (CLAUDE.md §17.2 advisory; never gate workflow).
+   * Both default 0.
+   *   - `viewCount` = COUNT(*) of `engagement_view_events` rows whose
+   *     `(source_type, source_id, version_number)` matches this version.
+   *     Historical (pre-wave) views are plan-level only and have NULL
+   *     version columns, so per-version view counts START AT 0 and grow
+   *     forward.
+   *   - `downloadCount` = COUNT(*) of `engagement_download_events` rows
+   *     for this version. Download events were already per-version, so
+   *     main/edit/change show FULL history immediately; supplement
+   *     starts fresh (downloads were not recorded pre-wave).
+   */
+  viewCount: number;
+  downloadCount: number;
 }
 
 export interface PublicRevisionDto {
@@ -260,7 +276,88 @@ export class PublicArchiveService {
     private readonly editAssemblyService: EditAssemblyService,
     private readonly changeAssemblyService: ChangeAssemblyService,
     private readonly supplementAssemblyService: SupplementAssemblyService,
+    // Wave per-version-engagement-counts — raw rollup reads against the
+    // FK-free engagement event tables (§17.3). No new repo / forFeature
+    // entry needed; the engagement tables carry no entity here.
+    private readonly dataSource: DataSource,
   ) {}
+
+  /* ── Per-version engagement rollups (Wave per-version-engagement-counts) ── */
+
+  /** Composite key for the rollup maps: sourceType::sourceId::versionNumber. */
+  private engagementKey(
+    sourceType: PublicBookSourceType,
+    sourceId: string,
+    versionNumber: number,
+  ): string {
+    return `${sourceType}::${sourceId}::${versionNumber}`;
+  }
+
+  /**
+   * Roll up per-version DOWNLOAD counts from `engagement_download_events`,
+   * bounded to the given source ids. Returns a map keyed by
+   * `sourceType::sourceId::versionNumber`. §17.3 — pure read, no writes,
+   * no FK.
+   */
+  private async loadDownloadCounts(
+    sourceIds: string[],
+  ): Promise<Map<string, number>> {
+    const map = new Map<string, number>();
+    if (sourceIds.length === 0) return map;
+    const rows = (await this.dataSource.query(
+      `SELECT source_type, source_id, version_number, COUNT(*)::int AS cnt
+         FROM engagement_download_events
+        WHERE source_id = ANY($1::uuid[])
+        GROUP BY source_type, source_id, version_number`,
+      [sourceIds],
+    )) as Array<{
+      source_type: string;
+      source_id: string;
+      version_number: number;
+      cnt: number;
+    }>;
+    for (const r of rows) {
+      map.set(
+        `${r.source_type}::${r.source_id}::${r.version_number}`,
+        Number(r.cnt),
+      );
+    }
+    return map;
+  }
+
+  /**
+   * Roll up per-version VIEW counts from `engagement_view_events`,
+   * bounded to the given source ids. Only version-scoped rows
+   * (`source_type IS NOT NULL`) participate — legacy plan-level rows
+   * (NULL version columns) are intentionally excluded so per-version
+   * view counts start fresh. §17.3 — pure read, no writes, no FK.
+   */
+  private async loadViewCounts(
+    sourceIds: string[],
+  ): Promise<Map<string, number>> {
+    const map = new Map<string, number>();
+    if (sourceIds.length === 0) return map;
+    const rows = (await this.dataSource.query(
+      `SELECT source_type, source_id, version_number, COUNT(*)::int AS cnt
+         FROM engagement_view_events
+        WHERE source_type IS NOT NULL
+          AND source_id = ANY($1::uuid[])
+        GROUP BY source_type, source_id, version_number`,
+      [sourceIds],
+    )) as Array<{
+      source_type: string;
+      source_id: string;
+      version_number: number;
+      cnt: number;
+    }>;
+    for (const r of rows) {
+      map.set(
+        `${r.source_type}::${r.source_id}::${r.version_number}`,
+        Number(r.cnt),
+      );
+    }
+    return map;
+  }
 
   /**
    * Shared eligibility predicate for the public surface.
@@ -439,6 +536,34 @@ export class PublicArchiveService {
       supplementsByPlan.get(pid)!.push(s);
     }
 
+    // ── Per-version engagement rollups (Wave per-version-engagement-counts)
+    // Bound the rollup reads to the source ids actually on this page:
+    //   - main:       plan ids (source_id of a main version = plan id)
+    //   - edit/change: revision ids
+    //   - supplement: supplement ids
+    // The download / view event tables key downloads + version-scoped
+    // views by `(source_type, source_id, version_number)`, so a single
+    // ANY($1) read per table covers every version on the page.
+    const engagementSourceIds = Array.from(
+      new Set<string>([...planIds, ...revisionIds, ...supplementIds]),
+    );
+    const [downloadCounts, viewCounts] = await Promise.all([
+      this.loadDownloadCounts(engagementSourceIds),
+      this.loadViewCounts(engagementSourceIds),
+    ]);
+    const dl = (
+      sourceType: PublicBookSourceType,
+      sourceId: string,
+      versionNumber: number,
+    ): number =>
+      downloadCounts.get(this.engagementKey(sourceType, sourceId, versionNumber)) ?? 0;
+    const vw = (
+      sourceType: PublicBookSourceType,
+      sourceId: string,
+      versionNumber: number,
+    ): number =>
+      viewCounts.get(this.engagementKey(sourceType, sourceId, versionNumber)) ?? 0;
+
     const toPublicMainVersion = (v: MainAssemblyVersion): PublicVersionDto | null => {
       if (v.status !== MainAssemblyVersionStatus.COMPLETED) return null;
       return {
@@ -447,6 +572,8 @@ export class PublicArchiveService {
           v.mergedAt instanceof Date ? v.mergedAt.toISOString() : String(v.mergedAt),
         totalPages: v.totalPages,
         downloadUrl: this.buildDownloadUrl('main_plan', v.developmentPlanId, v.versionNumber),
+        viewCount: vw('main_plan', v.developmentPlanId, v.versionNumber),
+        downloadCount: dl('main_plan', v.developmentPlanId, v.versionNumber),
       };
     };
 
@@ -462,6 +589,8 @@ export class PublicArchiveService {
           v.developmentPlanRevisionId,
           v.versionNumber,
         ),
+        viewCount: vw('edit_revision', v.developmentPlanRevisionId, v.versionNumber),
+        downloadCount: dl('edit_revision', v.developmentPlanRevisionId, v.versionNumber),
       };
     };
 
@@ -473,6 +602,12 @@ export class PublicArchiveService {
           v.mergedAt instanceof Date ? v.mergedAt.toISOString() : String(v.mergedAt),
         totalPages: v.totalPages,
         downloadUrl: this.buildDownloadUrl(
+          'change_revision',
+          v.developmentPlanRevisionId,
+          v.versionNumber,
+        ),
+        viewCount: vw('change_revision', v.developmentPlanRevisionId, v.versionNumber),
+        downloadCount: dl(
           'change_revision',
           v.developmentPlanRevisionId,
           v.versionNumber,
@@ -494,6 +629,8 @@ export class PublicArchiveService {
         // column on `supplement_assembly_versions`); null preserves
         // parity with the historical pre-totalPages BookAssembly shape.
         totalPages: null,
+        viewCount: vw('supplement', v.developmentPlanSupplementId, v.versionNumber),
+        downloadCount: dl('supplement', v.developmentPlanSupplementId, v.versionNumber),
         downloadUrl: this.buildDownloadUrl(
           'supplement',
           v.developmentPlanSupplementId,

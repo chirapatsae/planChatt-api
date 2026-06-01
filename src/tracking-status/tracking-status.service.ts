@@ -4313,4 +4313,368 @@ export class TrackingStatusService {
       handleException(this.logger, error);
     }
   }
+
+  /**
+   * Wave wave-orphan-cleanup-history / BE-01 (2026-06-01).
+   *
+   * Owner-scoped read-side aggregator over `tracking_status` rows whose
+   * `staff_remark` matches one of the FROZEN §18.6 orphan-cleanup reason
+   * patterns. Returns paginated cascade events affecting projects owned
+   * by the caller's current WorkHistory.
+   *
+   * CLAUDE.md compliance:
+   *   - §4 ownership — filters via `pg.create_by`/`rpg.create_by`/
+   *     `spg.create_by`/`eq.create_by` against the caller's current WH id.
+   *   - §17.2 advisory — ZERO writes; never gates workflow.
+   *   - §18.5 (no new write-side storage) — read-only over EXISTING rows.
+   *   - §18.13 (read-side aggregator allowance) — sanctioned surface.
+   *   - §18.10 no role exemption — owner-scoped, not admin; the admin
+   *     preview tool remains at `/v1/book-cleanup/preview`.
+   *
+   * The 4 FROZEN reason templates (§18.6):
+   *   BOOK_CANCELLED         → `เล่ม<type> '<name>' ถูกยกเลิก`
+   *   FINALIZE_OWNER_TIMEOUT → `คุณไม่ได้แก้ไขให้แล้วเสร็จภายในรอบ '<name>' จึงถูกส่งกลับ`
+   *   FINALIZE_STAFF_TIMEOUT → `รอบ '<name>' ปิดแล้ว โครงการของคุณยังไม่ได้รับการอนุมัติในเวลา`
+   *   LEGACY_BACKFILL        → `ระบบทำความสะอาดโครงการคงค้างย้อนหลัง`
+   */
+  async getOrphanCleanupHistory(
+    userId: string,
+    query: {
+      page?: number;
+      limit?: number;
+      kind?:
+        | 'all'
+        | 'cancelled'
+        | 'owner-timeout'
+        | 'staff-timeout'
+        | 'legacy';
+      from?: string;
+      to?: string;
+    },
+  ): Promise<{
+    items: Array<{
+      trackingId: string;
+      projectId: string;
+      projectKind:
+        | 'project-group'
+        | 'revised-project-group'
+        | 'supplement-project-group'
+        | 'equipment-project-group';
+      projectTitle: string | null;
+      resetAt: string;
+      reason: string;
+      reasonKind: 'cancelled' | 'owner-timeout' | 'staff-timeout' | 'legacy';
+      bookName: string | null;
+      previousStatus: string | null;
+    }>;
+    total: number;
+    page: number;
+    limit: number;
+  }> {
+    try {
+      const page = Math.max(1, query.page ?? 1);
+      const limit = Math.min(100, Math.max(1, query.limit ?? 20));
+      const kind = query.kind ?? 'all';
+
+      // 1-3. WorkHistory + workStatus (CLAUDE.md validation order)
+      const workHistory = await this.workHistoryRepo.findOne({
+        where: { user: { id: userId }, isCurrent: true },
+        relations: ['user', 'role', 'workStatus'],
+      });
+      if (!workHistory) {
+        throw new UnauthorizedException(
+          'ไม่พบข้อมูลการทำงานปัจจุบันของผู้ใช้',
+        );
+      }
+      if (workHistory.workStatus?.name !== 'approved') {
+        throw new UnauthorizedException(
+          'คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)',
+        );
+      }
+
+      // Build base query: LEFT JOIN the 4 project tables so the WHERE
+      // clause can match ownership via any of the four nullable FKs.
+      // Each project table joins its `createdBy` relation (`create_by`
+      // FK on disk) so we can filter by WorkHistory id without raw
+      // column references.
+      const qb = this.trackingStatusRepo
+        .createQueryBuilder('ts')
+        .leftJoin('ts.projectGroupId', 'pg')
+        .leftJoin('pg.createdBy', 'pgCreatedBy')
+        .leftJoin('ts.revisedProjectGroupId', 'rpg')
+        .leftJoin('rpg.createdBy', 'rpgCreatedBy')
+        .leftJoin('ts.supplementProjectGroupId', 'spg')
+        .leftJoin('spg.createdBy', 'spgCreatedBy')
+        .leftJoin('ts.equipmentProjectGroupId', 'eq')
+        .leftJoin('eq.createdBy', 'eqCreatedBy')
+        .leftJoin('ts.statusId', 'st');
+
+      // Owner-scope (§4). One of the four FK joins must point at a row
+      // whose creator WorkHistory id equals the caller's WH id.
+      qb.where(
+        `(pgCreatedBy.id = :whId OR rpgCreatedBy.id = :whId OR spgCreatedBy.id = :whId OR eqCreatedBy.id = :whId)`,
+        { whId: workHistory.id },
+      );
+
+      // Reason filter — match against the FROZEN §18.6 templates.
+      const reasonClauses: string[] = [];
+      const reasonParams: Record<string, string> = {};
+      const addClause = (sql: string, params: Record<string, string>) => {
+        reasonClauses.push(sql);
+        Object.assign(reasonParams, params);
+      };
+      if (kind === 'all' || kind === 'cancelled') {
+        addClause(`ts.staff_remark LIKE :rxCancelled`, {
+          rxCancelled: 'เล่ม%ถูกยกเลิก',
+        });
+      }
+      if (kind === 'all' || kind === 'owner-timeout') {
+        addClause(`ts.staff_remark LIKE :rxOwnerTimeout`, {
+          rxOwnerTimeout: 'คุณไม่ได้แก้ไขให้แล้วเสร็จภายในรอบ%',
+        });
+      }
+      if (kind === 'all' || kind === 'staff-timeout') {
+        addClause(`ts.staff_remark LIKE :rxStaffTimeout`, {
+          rxStaffTimeout: 'รอบ %ปิดแล้ว%',
+        });
+      }
+      if (kind === 'all' || kind === 'legacy') {
+        addClause(`ts.staff_remark = :rxLegacy`, {
+          rxLegacy: 'ระบบทำความสะอาดโครงการคงค้างย้อนหลัง',
+        });
+      }
+      if (reasonClauses.length > 0) {
+        qb.andWhere(`(${reasonClauses.join(' OR ')})`, reasonParams);
+      }
+
+      // Optional date range over create_at.
+      if (query.from) {
+        qb.andWhere(`ts.create_at >= :tsFrom`, { tsFrom: query.from });
+      }
+      if (query.to) {
+        qb.andWhere(`ts.create_at <= :tsTo`, { tsTo: query.to });
+      }
+
+      // Project the columns we need (avoid pulling unrelated FK chains).
+      // Equipment uses `equipmentName` not `title`; the other 3 project
+      // tables expose `title`. All four are projected as `*Title` in the
+      // result envelope for uniform downstream handling.
+      qb.select([
+        'ts.id AS "tsId"',
+        'ts.staff_remark AS "tsStaffRemark"',
+        'ts.create_at AS "tsCreateAt"',
+        'pg.id AS "pgId"',
+        'pg.title AS "pgTitle"',
+        'rpg.id AS "rpgId"',
+        'rpg.title AS "rpgTitle"',
+        'spg.id AS "spgId"',
+        'spg.title AS "spgTitle"',
+        'eq.id AS "eqId"',
+        'eq.equipment_name AS "eqTitle"',
+      ]);
+
+      qb.orderBy('ts.create_at', 'DESC');
+
+      // Count BEFORE pagination so total reflects the full filtered set.
+      const total = await qb.getCount();
+
+      qb.offset((page - 1) * limit).limit(limit);
+      const raw = await qb.getRawMany<{
+        tsId: string;
+        tsStaffRemark: string | null;
+        tsCreateAt: Date;
+        pgId: string | null;
+        pgTitle: string | null;
+        rpgId: string | null;
+        rpgTitle: string | null;
+        spgId: string | null;
+        spgTitle: string | null;
+        eqId: string | null;
+        eqTitle: string | null;
+      }>();
+
+      // Resolve previousStatus per row in a single batched query per kind.
+      // Group tracking ids by project FK so we can issue ONE prior-status
+      // lookup per kind instead of N round-trips.
+      type ProjectRef = {
+        kind:
+          | 'project-group'
+          | 'revised-project-group'
+          | 'supplement-project-group'
+          | 'equipment-project-group';
+        projectId: string;
+        projectTitle: string | null;
+        tsId: string;
+        tsCreateAt: Date;
+      };
+      const refs: ProjectRef[] = raw.map((r) => {
+        if (r.pgId)
+          return {
+            kind: 'project-group' as const,
+            projectId: r.pgId,
+            projectTitle: r.pgTitle,
+            tsId: r.tsId,
+            tsCreateAt: r.tsCreateAt,
+          };
+        if (r.rpgId)
+          return {
+            kind: 'revised-project-group' as const,
+            projectId: r.rpgId,
+            projectTitle: r.rpgTitle,
+            tsId: r.tsId,
+            tsCreateAt: r.tsCreateAt,
+          };
+        if (r.spgId)
+          return {
+            kind: 'supplement-project-group' as const,
+            projectId: r.spgId,
+            projectTitle: r.spgTitle,
+            tsId: r.tsId,
+            tsCreateAt: r.tsCreateAt,
+          };
+        return {
+          kind: 'equipment-project-group' as const,
+          projectId: r.eqId ?? '',
+          projectTitle: r.eqTitle,
+          tsId: r.tsId,
+          tsCreateAt: r.tsCreateAt,
+        };
+      });
+
+      // Prior-status resolution. For each row find the tracking row with
+      // the same project FK + the LARGEST create_at strictly less than
+      // the cascade row's create_at. We do this with one batched query
+      // per kind, then bucket + scan in memory.
+      const priorByTrackingId = new Map<string, string | null>();
+      const resolvePrior = async (
+        relation:
+          | 'projectGroupId'
+          | 'revisedProjectGroupId'
+          | 'supplementProjectGroupId'
+          | 'equipmentProjectGroupId',
+        scopedRefs: ProjectRef[],
+      ) => {
+        if (scopedRefs.length === 0) return;
+        const projectIds = Array.from(
+          new Set(scopedRefs.map((r) => r.projectId)),
+        );
+        if (projectIds.length === 0) return;
+        // Join the project FK relation and select the FK id alongside
+        // status name + create_at. Filtering by the joined alias's `id`
+        // lets us bind via parameterised IN without raw column names.
+        const priorRows = await this.trackingStatusRepo
+          .createQueryBuilder('p')
+          .leftJoin(`p.${relation}`, 'proj')
+          .leftJoin('p.statusId', 's')
+          .select([
+            'p.id AS "id"',
+            'proj.id AS "projectId"',
+            'p.create_at AS "createAt"',
+            's.name AS "statusName"',
+          ])
+          .where('proj.id IN (:...projectIds)', { projectIds })
+          .getRawMany<{
+            id: string;
+            projectId: string | null;
+            createAt: Date;
+            statusName: string | null;
+          }>();
+
+        // Bucket prior rows by projectId, then for each ref find the
+        // newest row whose createAt < ref.tsCreateAt AND id !== ref.tsId.
+        const byProject = new Map<
+          string,
+          Array<{ id: string; createAt: Date; statusName: string | null }>
+        >();
+        for (const pr of priorRows) {
+          if (!pr.projectId) continue;
+          const list = byProject.get(pr.projectId) ?? [];
+          list.push({
+            id: pr.id,
+            createAt: pr.createAt,
+            statusName: pr.statusName,
+          });
+          byProject.set(pr.projectId, list);
+        }
+        for (const ref of scopedRefs) {
+          const list = byProject.get(ref.projectId) ?? [];
+          const refTime = new Date(ref.tsCreateAt).getTime();
+          let bestStatus: string | null = null;
+          let bestTime = -Infinity;
+          for (const p of list) {
+            if (p.id === ref.tsId) continue;
+            const t = new Date(p.createAt).getTime();
+            if (t < refTime && t > bestTime) {
+              bestTime = t;
+              bestStatus = p.statusName ?? null;
+            }
+          }
+          priorByTrackingId.set(ref.tsId, bestStatus);
+        }
+      };
+
+      await resolvePrior(
+        'projectGroupId',
+        refs.filter((r) => r.kind === 'project-group'),
+      );
+      await resolvePrior(
+        'revisedProjectGroupId',
+        refs.filter((r) => r.kind === 'revised-project-group'),
+      );
+      await resolvePrior(
+        'supplementProjectGroupId',
+        refs.filter((r) => r.kind === 'supplement-project-group'),
+      );
+      await resolvePrior(
+        'equipmentProjectGroupId',
+        refs.filter((r) => r.kind === 'equipment-project-group'),
+      );
+
+      const classifyReason = (
+        remark: string,
+      ): 'cancelled' | 'owner-timeout' | 'staff-timeout' | 'legacy' => {
+        if (remark === 'ระบบทำความสะอาดโครงการคงค้างย้อนหลัง') return 'legacy';
+        if (/^คุณไม่ได้แก้ไขให้แล้วเสร็จภายในรอบ/.test(remark))
+          return 'owner-timeout';
+        if (/^รอบ .+ปิดแล้ว/.test(remark)) return 'staff-timeout';
+        return 'cancelled';
+      };
+
+      const extractBookName = (remark: string): string | null => {
+        // BOOK_CANCELLED — "เล่ม<type> 'BOOK_NAME' ถูกยกเลิก"
+        const cancelled = remark.match(/^เล่ม.+?\s'([^']+)'\sถูกยกเลิก$/);
+        if (cancelled?.[1]) return cancelled[1];
+        // FINALIZE_OWNER_TIMEOUT — "...ภายในรอบ 'BOOK_NAME' จึงถูกส่งกลับ"
+        const ownerTimeout = remark.match(/ภายในรอบ\s'([^']+)'/);
+        if (ownerTimeout?.[1]) return ownerTimeout[1];
+        // FINALIZE_STAFF_TIMEOUT — "รอบ 'BOOK_NAME' ปิดแล้ว ..."
+        const staffTimeout = remark.match(/^รอบ\s'([^']+)'\sปิดแล้ว/);
+        if (staffTimeout?.[1]) return staffTimeout[1];
+        return null;
+      };
+
+      const items = refs.map((ref, idx) => {
+        const r = raw[idx];
+        const remark = r.tsStaffRemark ?? '';
+        return {
+          trackingId: r.tsId,
+          projectId: ref.projectId,
+          projectKind: ref.kind,
+          projectTitle: ref.projectTitle,
+          resetAt: new Date(r.tsCreateAt).toISOString(),
+          reason: remark,
+          reasonKind: classifyReason(remark),
+          bookName: extractBookName(remark),
+          previousStatus: priorByTrackingId.get(r.tsId) ?? null,
+        };
+      });
+
+      return { items, total, page, limit };
+    } catch (error) {
+      handleException(this.logger, error);
+      // handleException always throws; this is unreachable but satisfies
+      // the type checker.
+      throw error;
+    }
+  }
 }

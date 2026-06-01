@@ -17,6 +17,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
+import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entities/development-plan-supplement.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
@@ -41,6 +42,9 @@ import { PublicEngagementService } from './public-engagement.service';
       SupplementProjectGroup,
       DevelopmentPlan,
       DevelopmentPlanRevision,
+      // Wave per-version-engagement-counts — supplement download
+      // plan-id resolution in `recordDownload`.
+      DevelopmentPlanSupplement,
     ]),
     // `forwardRef` defends against future circular imports — the
     // public archive controller will, in a follow-up edit, call

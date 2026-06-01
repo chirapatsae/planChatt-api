@@ -29,7 +29,15 @@ export class EngagementDownloadEvent {
   developmentPlanId: string;
 
   @Column({ name: 'source_type', type: 'varchar', length: 32 })
-  sourceType: 'main_plan' | 'edit_revision' | 'change_revision';
+  sourceType:
+    | 'main_plan'
+    | 'edit_revision'
+    | 'change_revision'
+    // Wave per-version-engagement-counts (2026-06-01): supplement
+    // downloads are now recorded too, so per-version supplement
+    // download counts populate. Column is already varchar(32); this is
+    // a TS-only widening.
+    | 'supplement';
 
   @Column({ name: 'source_id', type: 'uuid' })
   sourceId: string;

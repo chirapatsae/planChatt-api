@@ -32,6 +32,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
+import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entities/development-plan-supplement.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
@@ -64,7 +65,25 @@ export type ViewTargetKind =
 export type DownloadSourceType =
   | 'main_plan'
   | 'edit_revision'
-  | 'change_revision';
+  | 'change_revision'
+  // Wave per-version-engagement-counts (2026-06-01) — supplement
+  // downloads are now recorded so per-version supplement download
+  // counts populate. The plan id is resolved via
+  // development_plan_supplement → development_plan.
+  | 'supplement';
+
+/**
+ * Book source type for VERSION-scoped view attribution. Wave
+ * per-version-engagement-counts (2026-06-01). Distinct from the
+ * `ViewTargetKind` denormalized-counter discriminator — this is the
+ * assembled-book dimension written into the new
+ * `engagement_view_events.source_type` column.
+ */
+export type ViewSourceType =
+  | 'main_plan'
+  | 'edit_revision'
+  | 'change_revision'
+  | 'supplement';
 
 const BOT_UA_REGEX = /bot|crawler|spider|prerender|headless|preview/i;
 
@@ -89,6 +108,10 @@ export class PublicEngagementService {
     private readonly planRepo: Repository<DevelopmentPlan>,
     @InjectRepository(DevelopmentPlanRevision)
     private readonly revisionRepo: Repository<DevelopmentPlanRevision>,
+    // Wave per-version-engagement-counts — supplement download plan-id
+    // resolution.
+    @InjectRepository(DevelopmentPlanSupplement)
+    private readonly supplementRepo: Repository<DevelopmentPlanSupplement>,
     @Inject(forwardRef(() => PublicArchiveService))
     private readonly publicArchive: PublicArchiveService,
     private readonly dataSource: DataSource,
@@ -289,20 +312,64 @@ export class PublicEngagementService {
     targetKind: ViewTargetKind;
     targetId: string;
     deviceId: string;
+    // Wave per-version-engagement-counts — OPTIONAL book version
+    // attribution. When present, written into the new
+    // engagement_view_events columns so the public archive can roll up
+    // per-`<VersionRow>` view counts. Absent → legacy behaviour
+    // (version columns NULL).
+    sourceType?: ViewSourceType;
+    sourceId?: string;
+    versionNumber?: number;
   }): Promise<{ viewCount: number; debounced: boolean }> {
     await this.assertEligible(input.targetKind, input.targetId);
     const table = this.targetTableForView(input.targetKind);
     const today = this.todayBangkok();
 
+    // Only treat the view as version-scoped when the FULL triple is
+    // present — a partial triple would create an inconsistent rollup
+    // key, so we defensively fall back to plan-level NULLs.
+    const hasVersion =
+      input.sourceType != null &&
+      input.sourceId != null &&
+      input.versionNumber != null;
+    const sourceType = hasVersion ? input.sourceType! : null;
+    const sourceId = hasVersion ? input.sourceId! : null;
+    const versionNumber = hasVersion ? input.versionNumber! : null;
+
     return this.dataSource.transaction(async (em) => {
-      // Use ON CONFLICT DO NOTHING to atomically detect a same-day
-      // duplicate without a separate SELECT-then-INSERT race.
+      // ON CONFLICT arbitrates against the COALESCE-based expression
+      // unique index `uq_engagement_views_target_ver_device_day`
+      // (migration 1781200000000). The expression list MUST match the
+      // index definition byte-for-byte so Postgres recognises it as the
+      // conflict arbiter. COALESCing the nullable version columns to
+      // sentinels collapses every NULL-version (legacy / project-level)
+      // row to a single arbiter value, preserving the legacy
+      // once-per-(target,device,day) debounce while distinguishing
+      // distinct version-scoped rows.
       const insertResult = (await em.query(
-        `INSERT INTO engagement_view_events (target_kind, target_id, device_id, view_date)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT ON CONSTRAINT uq_engagement_views_target_device_day DO NOTHING
+        `INSERT INTO engagement_view_events
+           (target_kind, target_id, source_type, source_id, version_number, device_id, view_date)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (
+           target_kind,
+           target_id,
+           COALESCE(source_type, ''),
+           COALESCE(source_id, '00000000-0000-0000-0000-000000000000'::uuid),
+           COALESCE(version_number, -1),
+           device_id,
+           view_date
+         )
+         DO NOTHING
          RETURNING id`,
-        [input.targetKind, input.targetId, input.deviceId, today],
+        [
+          input.targetKind,
+          input.targetId,
+          sourceType,
+          sourceId,
+          versionNumber,
+          input.deviceId,
+          today,
+        ],
       )) as Array<{ id: string }>;
 
       const inserted = insertResult.length > 0;
@@ -338,9 +405,11 @@ export class PublicEngagementService {
    * propagated — the PDF stream must not be blocked by analytics.
    *
    * Resolves `development_plan_id` from `sourceType + sourceId`:
-   *   - main_plan      → sourceId IS the plan id
-   *   - edit_revision  → JOIN through development_plan_revision
+   *   - main_plan       → sourceId IS the plan id
+   *   - edit_revision   → JOIN through development_plan_revision
    *   - change_revision → JOIN through development_plan_revision
+   *   - supplement      → JOIN through development_plan_supplement
+   *                       (Wave per-version-engagement-counts)
    */
   async recordDownload(input: {
     sourceType: DownloadSourceType;
@@ -356,6 +425,14 @@ export class PublicEngagementService {
           select: { id: true },
         });
         planId = plan?.id ?? null;
+      } else if (input.sourceType === 'supplement') {
+        // Supplement → plan via development_plan_supplement.
+        const sup = await this.supplementRepo
+          .createQueryBuilder('sup')
+          .leftJoinAndSelect('sup.developmentPlan', 'plan')
+          .where('sup.id = :id', { id: input.sourceId })
+          .getOne();
+        planId = sup?.developmentPlan?.id ?? null;
       } else {
         const rev = await this.revisionRepo
           .createQueryBuilder('rev')

@@ -16,6 +16,10 @@ import { TrackingStatusService } from './tracking-status.service';
 import { CreateTrackingStatusDto } from './dto/create-tracking-status.dto';
 import { UpdateTrackingStatusDto } from './dto/update-tracking-status.dto';
 import { BulkSubmitDto } from './dto/bulk-submit.dto';
+// Wave wave-orphan-cleanup-history / BE-01 (2026-06-01).
+// Owner-scoped read-side aggregator over §18-cascade `tracking_status`
+// rows (FROZEN reason patterns per §18.6). Sanctioned by §18.13.
+import { OrphanCleanupHistoryQueryDto } from './dto/orphan-cleanup-history.dto';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 
@@ -170,6 +174,33 @@ export class TrackingStatusController {
   findAll() {
     this.logger.log('Request to fetch all tracking statuses');
     return this.trackingStatusService.findAll();
+  }
+
+  /**
+   * Wave wave-orphan-cleanup-history / BE-01 (2026-06-01).
+   *
+   * Owner-scoped history of §18 orphan-cleanup cascade events affecting
+   * the caller's projects (PG / RPG / SPG / Equipment). Strictly
+   * advisory (§17.2) — read-only over EXISTING `tracking_status` rows;
+   * no writes, no notifications, no workflow gating.
+   *
+   * Sanctioned read surface per CLAUDE.md §18.13 — read-side aggregator
+   * allowance over the FROZEN §18.6 reason templates. Distinct from the
+   * admin-only `/v1/book-cleanup/preview` which is staff-scoped (§18.3
+   * authority).
+   */
+  @Get('orphan-cleanup-history')
+  getOrphanCleanupHistory(
+    @Query() query: OrphanCleanupHistoryQueryDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    this.logger.log(
+      `Request orphan-cleanup history (page=${query.page ?? 1}, limit=${query.limit ?? 20}, kind=${query.kind ?? 'all'})`,
+    );
+    return this.trackingStatusService.getOrphanCleanupHistory(
+      req.user.userId,
+      query,
+    );
   }
 
   @Post('rollback/:projectGroupId')
