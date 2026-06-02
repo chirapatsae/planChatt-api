@@ -11,6 +11,8 @@ import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
 import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
+import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
+import { PrevEquipmentProjectType } from 'src/revised-equipment-project-group/dto/prev-equipment-project-type.enum';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
 import { Status } from 'src/status/entities/status.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
@@ -106,6 +108,8 @@ export class OrphanCleanupService {
     private readonly supplementProjectGroupRepo: Repository<SupplementProjectGroup>,
     @InjectRepository(EquipmentProjectGroup)
     private readonly equipmentProjectGroupRepo: Repository<EquipmentProjectGroup>,
+    @InjectRepository(RevisedEquipmentProjectGroup)
+    private readonly revisedEquipmentProjectGroupRepo: Repository<RevisedEquipmentProjectGroup>,
     @InjectRepository(Status)
     private readonly statusRepo: Repository<Status>,
     @InjectRepository(TrackingStatus)
@@ -172,6 +176,20 @@ export class OrphanCleanupService {
 
     if (bookKind === 'REVISION') {
       rpgCount = await this.bulkSoftDeleteRevisedProjectGroups({
+        em,
+        bookId: book.id,
+        actorWorkHistoryId: actorWorkHistory.id,
+        reasonText,
+        statusFilter: 'all',
+      });
+
+      // Wave Equipment Revision Management — BE-01 (Phase 3).
+      // RELPG (RevisedEquipmentProjectGroup) is the equipment analog of
+      // RPG under a DPR. Apply the SAME Phase B soft-delete procedure:
+      // external-descendant lineage guard, tombstone TrackingStatus row
+      // (isLatest=false) BEFORE `deletedAt`. Folded into `rpgCount` so
+      // the cascade return shape is unchanged (§18.4.2).
+      rpgCount += await this.bulkSoftDeleteRevisedEquipmentProjectGroups({
         em,
         bookId: book.id,
         actorWorkHistoryId: actorWorkHistory.id,
@@ -251,6 +269,18 @@ export class OrphanCleanupService {
 
     if (bookKind === 'REVISION') {
       rpgCount = await this.bulkSoftDeleteRevisedProjectGroups({
+        em,
+        bookId: book.id,
+        actorWorkHistoryId: actorWorkHistory.id,
+        reasonText: null,
+        bookNameForFinalize: bookName,
+        statusFilter: 'finalize',
+      });
+
+      // Wave Equipment Revision Management — BE-01 (Phase 3). RELPG
+      // finalize cascade: exclude {Approved, Rejected}; resolve reason
+      // per-row. Folded into `rpgCount` (§18.4.2).
+      rpgCount += await this.bulkSoftDeleteRevisedEquipmentProjectGroups({
         em,
         bookId: book.id,
         actorWorkHistoryId: actorWorkHistory.id,
@@ -812,6 +842,232 @@ export class OrphanCleanupService {
     await em.save(TrackingStatus, tombstone);
     await em.softDelete(SupplementProjectGroup, { id: spgId });
     return true;
+  }
+
+  // ===================================================================
+  // Internals — RELPG soft-delete (Wave Equipment Revision Management —
+  // BE-01, Phase 3). Mirror of `bulkSoftDeleteRevisedProjectGroups`:
+  // RELPG is the equipment analog of RPG under a DPR. Same Phase B
+  // procedure — external-descendant lineage guard, deepest-first
+  // topological sort, tombstone TrackingStatus row (isLatest=false)
+  // tagged on `revisedEquipmentProjectGroupId` BEFORE `deletedAt`.
+  // ===================================================================
+
+  private async bulkSoftDeleteRevisedEquipmentProjectGroups(args: {
+    em: EntityManager;
+    bookId: string;
+    actorWorkHistoryId: string;
+    reasonText: string | null;
+    bookNameForFinalize?: string;
+    statusFilter: 'all' | 'finalize';
+  }): Promise<number> {
+    const ids = await this.materializeCandidateRelpgIds({
+      em: args.em,
+      bookId: args.bookId,
+      statusFilter: args.statusFilter,
+    });
+    if (ids.length === 0) return 0;
+
+    // §18.8 + §14.3 — abort if any candidate RELPG has a LIVE external
+    // descendant (a child RELPG outside the candidate set, typically
+    // because it lives under a different DPR not being cleaned up).
+    await this.assertNoLiveExternalDescendantRelpg(args.em, ids);
+
+    // Deepest-first topo sort — RELPG-to-RELPG chains link via
+    // prevProjectId when prevProjectType='revised_equipment'.
+    const sortedIds = await this.topoSortRelpgDeepestFirst(args.em, ids);
+
+    let count = 0;
+    for (const relpgId of sortedIds) {
+      const wrote = await this.tombstoneAndSoftDeleteRelpg({
+        em: args.em,
+        relpgId,
+        actorWorkHistoryId: args.actorWorkHistoryId,
+        reasonText: args.reasonText,
+        bookNameForFinalize: args.bookNameForFinalize,
+      });
+      if (wrote) count += 1;
+    }
+    return count;
+  }
+
+  private async tombstoneAndSoftDeleteRelpg(args: {
+    em: EntityManager;
+    relpgId: string;
+    actorWorkHistoryId: string;
+    reasonText: string | null;
+    bookNameForFinalize?: string;
+  }): Promise<boolean> {
+    const { em, relpgId, actorWorkHistoryId } = args;
+
+    const relpg = await em
+      .createQueryBuilder(RevisedEquipmentProjectGroup, 'relpg')
+      .where('relpg.id = :relpgId', { relpgId })
+      .andWhere('relpg.deletedAt IS NULL')
+      .setLock('pessimistic_write')
+      .getOne();
+    if (!relpg) return false;
+
+    const currentTracking = await em.findOne(TrackingStatus, {
+      where: {
+        revisedEquipmentProjectGroupId: { id: relpgId },
+        isLatest: true,
+      },
+      relations: ['statusId'],
+    });
+
+    let staffRemark = args.reasonText;
+    if (staffRemark === null) {
+      const priorStatusName = currentTracking?.statusId?.name ?? '';
+      const reasonKind = resolveFinalizeReasonKind(priorStatusName);
+      if (reasonKind === 'NOT_AFFECTED') return false;
+      const bookName = args.bookNameForFinalize ?? '';
+      staffRemark =
+        reasonKind === 'OWNER_TIMEOUT'
+          ? ORPHAN_CLEANUP_REASONS.FINALIZE_OWNER_TIMEOUT(bookName)
+          : ORPHAN_CLEANUP_REASONS.FINALIZE_STAFF_TIMEOUT(bookName);
+    }
+
+    // Demote prior latest (§12 — RELPG is leaving the workflow).
+    if (currentTracking) {
+      await em.update(
+        TrackingStatus,
+        { id: currentTracking.id },
+        { isLatest: false },
+      );
+    }
+
+    const tombstoneStatusId =
+      currentTracking?.statusId?.id ??
+      (await this.resolveStatusId(em, STATUS_NAMES.READY));
+    const tombstone = em.create(TrackingStatus, {
+      statusId: { id: tombstoneStatusId } as Status,
+      isLatest: false,
+      comment: undefined,
+      staffRemark,
+      projectGroupId: null,
+      revisedProjectGroupId: null,
+      supplementProjectGroupId: null,
+      equipmentProjectGroupId: null,
+      revisedEquipmentProjectGroupId: {
+        id: relpgId,
+      } as RevisedEquipmentProjectGroup,
+      createdBy: { id: actorWorkHistoryId } as WorkHistory,
+    });
+    await em.save(TrackingStatus, tombstone);
+
+    await em.softDelete(RevisedEquipmentProjectGroup, { id: relpgId });
+    return true;
+  }
+
+  private async materializeCandidateRelpgIds(args: {
+    em: EntityManager;
+    bookId: string;
+    statusFilter: 'all' | 'finalize';
+  }): Promise<string[]> {
+    const qb = args.em
+      .createQueryBuilder(RevisedEquipmentProjectGroup, 'relpg')
+      .leftJoin('relpg.developmentPlanRevision', 'dpr')
+      .innerJoin(
+        TrackingStatus,
+        'ts',
+        'ts.revised_equipment_project_group_id = relpg.id AND ts.is_latest = TRUE',
+      )
+      .innerJoin(Status, 'st', 'st.id = ts.status_id')
+      .where('relpg.deletedAt IS NULL')
+      .andWhere('dpr.id = :bookId', { bookId: args.bookId });
+
+    if (args.statusFilter === 'finalize') {
+      qb.andWhere('st.name NOT IN (:...nonTarget)', {
+        nonTarget: [STATUS_NAMES.APPROVED, STATUS_NAMES.REJECTED],
+      });
+    }
+    qb.select('relpg.id', 'id');
+    const rows = await qb.getRawMany<{ id: string }>();
+    return rows.map((r) => r.id);
+  }
+
+  /**
+   * RELPG analog of `assertNoLiveExternalDescendantRpg`. Aborts the
+   * cancel/finalize transaction if any candidate RELPG has a live RELPG
+   * descendant (prev_project_type='revised_equipment') whose id is NOT in
+   * the candidate set (§18.8 + §14.3).
+   */
+  private async assertNoLiveExternalDescendantRelpg(
+    em: EntityManager,
+    candidateIds: string[],
+  ): Promise<void> {
+    if (candidateIds.length === 0) return;
+
+    const candidateSet = new Set(candidateIds);
+    const offenders: Array<{ parentId: string; descendantId: string }> = [];
+
+    const rows = await em
+      .createQueryBuilder(RevisedEquipmentProjectGroup, 'child')
+      .select('child.id', 'descendantId')
+      .addSelect('child.prevProjectId', 'parentId')
+      .where('child.deletedAt IS NULL')
+      .andWhere('child.prev_project_type = :type', {
+        type: PrevEquipmentProjectType.REVISED_EQUIPMENT,
+      })
+      .andWhere('child.prev_project_id IN (:...ids)', { ids: candidateIds })
+      .getRawMany<{ parentId: string; descendantId: string }>();
+
+    for (const row of rows) {
+      if (!candidateSet.has(row.descendantId)) {
+        offenders.push(row);
+      }
+    }
+
+    if (offenders.length > 0) {
+      const summary = offenders
+        .slice(0, 5)
+        .map((o) => `${o.parentId}->${o.descendantId}`)
+        .join(', ');
+      throw new ConflictException(
+        `${ORPHAN_CASCADE_HAS_LIVE_DESCENDANT}: ไม่สามารถยกเลิก/รวมเล่มได้ เนื่องจากครุภัณฑ์ (ฉบับแก้ไข) ในเล่มนี้มีเวอร์ชันที่ใช้งานอยู่ภายนอก (CLAUDE.md §18.8/§14.3) [${summary}${offenders.length > 5 ? ', ...' : ''}]`,
+      );
+    }
+  }
+
+  /**
+   * Deepest-first topological sort for RELPG candidates (RELPG-to-RELPG
+   * chains via prevProjectId). Mirrors `topoSortRpgDeepestFirst`.
+   */
+  private async topoSortRelpgDeepestFirst(
+    em: EntityManager,
+    ids: string[],
+  ): Promise<string[]> {
+    if (ids.length <= 1) return [...ids];
+
+    const idSet = new Set(ids);
+    const childrenOf = new Map<string, Set<string>>();
+    for (const id of ids) childrenOf.set(id, new Set());
+
+    const rows = await em
+      .createQueryBuilder(RevisedEquipmentProjectGroup, 'relpg')
+      .select('relpg.id', 'id')
+      .addSelect('relpg.prevProjectId', 'parentId')
+      .where('relpg.id IN (:...ids)', { ids })
+      .getRawMany<{ id: string; parentId: string | null }>();
+
+    for (const row of rows) {
+      if (row.parentId && idSet.has(row.parentId)) {
+        childrenOf.get(row.parentId)!.add(row.id);
+      }
+    }
+
+    const visited = new Set<string>();
+    const sorted: string[] = [];
+    const visit = (id: string): void => {
+      if (visited.has(id)) return;
+      visited.add(id);
+      const children = childrenOf.get(id) ?? new Set();
+      for (const childId of children) visit(childId);
+      sorted.push(id);
+    };
+    for (const id of ids) visit(id);
+    return sorted;
   }
 
   // ===================================================================

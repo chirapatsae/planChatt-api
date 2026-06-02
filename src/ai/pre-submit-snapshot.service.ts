@@ -14,6 +14,9 @@ import { SupplementProjectGroup } from 'src/supplement-project-group/entities/su
 // Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28). Owner lookup branch
 // for the new `'equipment-project-group'` target kind.
 import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
+// Wave Equipment Revision Management — BE-01 (Phase 3). Owner lookup
+// branch for the new `'revised-equipment-project-group'` target kind.
+import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { CreatePreSubmitSnapshotDto } from './dto/pre-submit-snapshot.dto';
 import {
@@ -68,6 +71,9 @@ export class PreSubmitSnapshotService {
     // Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28).
     @InjectRepository(EquipmentProjectGroup)
     private readonly equipmentRepo: Repository<EquipmentProjectGroup>,
+    // Wave Equipment Revision Management — BE-01 (Phase 3).
+    @InjectRepository(RevisedEquipmentProjectGroup)
+    private readonly revisedEquipmentRepo: Repository<RevisedEquipmentProjectGroup>,
     @InjectRepository(WorkHistory)
     private readonly workHistoryRepo: Repository<WorkHistory>,
     private readonly dataSource: DataSource,
@@ -328,7 +334,9 @@ export class PreSubmitSnapshotService {
       targetKind !== 'revised-project-group' &&
       targetKind !== 'supplement-project-group' &&
       // Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28).
-      targetKind !== 'equipment-project-group'
+      targetKind !== 'equipment-project-group' &&
+      // Wave Equipment Revision Management — BE-01 (Phase 3).
+      targetKind !== 'revised-equipment-project-group'
     ) {
       throw new NotFoundException('ไม่พบข้อมูล snapshot');
     }
@@ -435,7 +443,9 @@ export class PreSubmitSnapshotService {
       targetKind !== 'revised-project-group' &&
       targetKind !== 'supplement-project-group' &&
       // Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28).
-      targetKind !== 'equipment-project-group'
+      targetKind !== 'equipment-project-group' &&
+      // Wave Equipment Revision Management — BE-01 (Phase 3).
+      targetKind !== 'revised-equipment-project-group'
     ) {
       throw new NotFoundException('ไม่พบข้อมูล snapshot');
     }
@@ -603,21 +613,41 @@ export class PreSubmitSnapshotService {
       return id;
     }
     // Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28).
-    // equipment-project-group
+    if (targetKind === 'equipment-project-group') {
+      const row = outerManager
+        ? await outerManager.findOne(EquipmentProjectGroup, {
+            where: { id: targetId },
+            relations: ['createdBy'],
+          })
+        : await this.equipmentRepo.findOne({
+            where: { id: targetId },
+            relations: ['createdBy'],
+          });
+      if (!row) throw new NotFoundException('ไม่พบรายการครุภัณฑ์');
+      const id = row.createdBy?.id;
+      if (!id) {
+        throw new ForbiddenException(
+          'รายการครุภัณฑ์นี้ไม่มีข้อมูลเจ้าของที่ถูกต้อง',
+        );
+      }
+      return id;
+    }
+    // Wave Equipment Revision Management — BE-01 (Phase 3).
+    // revised-equipment-project-group
     const row = outerManager
-      ? await outerManager.findOne(EquipmentProjectGroup, {
+      ? await outerManager.findOne(RevisedEquipmentProjectGroup, {
           where: { id: targetId },
           relations: ['createdBy'],
         })
-      : await this.equipmentRepo.findOne({
+      : await this.revisedEquipmentRepo.findOne({
           where: { id: targetId },
           relations: ['createdBy'],
         });
-    if (!row) throw new NotFoundException('ไม่พบรายการครุภัณฑ์');
+    if (!row) throw new NotFoundException('ไม่พบรายการครุภัณฑ์ (ฉบับแก้ไข)');
     const id = row.createdBy?.id;
     if (!id) {
       throw new ForbiddenException(
-        'รายการครุภัณฑ์นี้ไม่มีข้อมูลเจ้าของที่ถูกต้อง',
+        'รายการครุภัณฑ์ (ฉบับแก้ไข) นี้ไม่มีข้อมูลเจ้าของที่ถูกต้อง',
       );
     }
     return id;

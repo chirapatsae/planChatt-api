@@ -20,6 +20,10 @@ import { PlanPhase } from 'src/plan-phase/entities/plan-phase.entity';
 
 import { ProjectClassificationModule } from 'src/common/project-classification/project-classification.module';
 import { WorkHistoryModule } from 'src/work-history/work-history.module';
+// QA DEF-1 fix — provides LineageLockService for the §14.3 / §14.9 EPG
+// mutate-path guard (assertEditable / assertDeletable). Same import BE-01
+// added to RevisedEquipmentProjectGroupModule.
+import { LineageLockModule } from 'src/common/lineage-lock/lineage-lock.module';
 // 2026-05-30 — UsersService for W100 PII decrypt-then-mask on read.
 import { UsersModule } from 'src/users/users.module';
 import { WorkStatusApprovedGuard } from 'src/auth/work-status-approved.guard';
@@ -88,6 +92,7 @@ import { AiModule } from 'src/ai/ai.module';
     WorkHistoryModule,
     AiModule,
     UsersModule,
+    LineageLockModule,
   ],
   controllers: [EquipmentProjectGroupController],
   providers: [

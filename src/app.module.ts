@@ -136,6 +136,10 @@ import { AttachmentProjectGroupsModule } from './attachment-project-groups/attac
 import { AttachmentProjectGroup } from './attachment-project-groups/entities/attachment-project-group.entity';
 import { AttachmentRevisedProjectGroupsModule } from './attachment-revised-project-groups/attachment-revised-project-groups.module';
 import { AttachmentRevisedProjectGroup } from './attachment-revised-project-groups/entities/attachment-revised-project-group.entity';
+// Wave Equipment Revision Management — attachment support for RELPG
+// (clone of the RPG attachment module, no AI analysis).
+import { AttachmentRevisedEquipmentProjectGroupsModule } from './attachment-revised-equipment-project-groups/attachment-revised-equipment-project-groups.module';
+import { AttachmentRevisedEquipmentProjectGroup } from './attachment-revised-equipment-project-groups/entities/attachment-revised-equipment-project-group.entity';
 // SUPP-3 / BE-07 — SPG attachment module (new table mirrors PG / RPG split).
 import { AttachmentSupplementProjectGroupsModule } from './attachment-supplement-project-groups/attachment-supplement-project-groups.module';
 import { AttachmentSupplementProjectGroup } from './attachment-supplement-project-groups/entities/attachment-supplement-project-group.entity';
@@ -386,6 +390,22 @@ import { EquipmentCategoryModule } from './equipment-category/equipment-category
 // BE-04.
 import { EquipmentProjectGroup } from './equipment-project-group/entities/equipment-project-group.entity';
 import { EquipmentProjectGroupModule } from './equipment-project-group/equipment-project-group.module';
+// Wave Equipment Revision Management — DB-01 (Phase 3). RELPG is the
+// equipment (ผ.03) analog of RevisedProjectGroup: a lineage fork from an
+// approved EquipmentProjectGroup into a DevelopmentPlanRevision. Same
+// Wave 41 footgun as every other entity — `forFeature` in
+// `RevisedEquipmentProjectGroupModule` provides the repo token, but the
+// metadata MUST also be in the root `entities[]` list below. Budget +
+// tracking_status polymorphic extension is on the existing entities and
+// needs no extra root registration. Service/controller deferred to BE-01.
+import { RevisedEquipmentProjectGroup } from './revised-equipment-project-group/entities/revised-equipment-project-group.entity';
+import { RevisedEquipmentProjectGroupModule } from './revised-equipment-project-group/revised-equipment-project-group.module';
+// Wave Unified Equipment Tab — BE-01. Read-only unified equipment
+// projection (EPG + RELPG, §14.2 HEAD-of-lineage REPLACE semantic) for
+// the `/project?tab=equipment` surface. No new @Entity — reads the
+// already-registered EquipmentProjectGroup / RevisedEquipmentProjectGroup
+// / WorkHistory roots.
+import { UnifiedEquipmentModule } from './unified-equipment/unified-equipment.module';
 
 
 @Module({
@@ -591,6 +611,13 @@ import { EquipmentProjectGroupModule } from './equipment-project-group/equipment
         // SupplementProjectGroup; goes through the full §12 workflow
         // via the new `equipment_project_group_id` FK on tracking_status.
         EquipmentProjectGroup,
+        // Wave Equipment Revision Management — DB-01 (Phase 3). RELPG —
+        // equipment analog of RevisedProjectGroup. §12 audit via the new
+        // `revised_equipment_project_group_id` FK on tracking_status (5th).
+        RevisedEquipmentProjectGroup,
+        // Wave Equipment Revision Management — attachment support for RELPG
+        // (clone of the RPG attachment table; FK → revised_equipment_project_groups).
+        AttachmentRevisedEquipmentProjectGroup,
       ],
       synchronize: true,
       extra: {
@@ -661,6 +688,7 @@ import { EquipmentProjectGroupModule } from './equipment-project-group/equipment
     PlanPhaseModule,
     AttachmentProjectGroupsModule,
     AttachmentRevisedProjectGroupsModule,
+    AttachmentRevisedEquipmentProjectGroupsModule,
     AttachmentSupplementProjectGroupsModule,
     AdminDocumentAnalysisModule,
     BookAssemblyModule,
@@ -760,6 +788,12 @@ import { EquipmentProjectGroupModule } from './equipment-project-group/equipment
     // Entity-only skeleton; controller/service deferred to BE-04. Order
     // irrelevant; no cyclical dependency.
     EquipmentProjectGroupModule,
+    // Wave Equipment Revision Management — DB-01 (Phase 3). Entity-only
+    // skeleton; service/controller deferred to BE-01. Order irrelevant.
+    RevisedEquipmentProjectGroupModule,
+    // Wave Unified Equipment Tab — BE-01. Read-only unified equipment
+    // (EPG + RELPG) projection for `/project?tab=equipment`.
+    UnifiedEquipmentModule,
   ],
   controllers: [AppController],
   providers: [AppService],

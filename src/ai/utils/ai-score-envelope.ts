@@ -48,7 +48,12 @@ export type AiResultTargetKind =
   // `no-ai-baseline` snapshot can fire for equipment publish without a
   // parallel `ai_*` table. Same audit-by-UUID-no-FK semantics as the
   // other three values (§17.3).
-  | 'equipment-project-group';
+  | 'equipment-project-group'
+  // Wave Equipment Revision Management — BE-01 (Phase 3). RELPG
+  // (RevisedEquipmentProjectGroup) fires the §17.4 `no-ai-baseline`
+  // snapshot on submit (Ready → Pending) with the same
+  // audit-by-UUID-no-FK semantics (§17.3).
+  | 'revised-equipment-project-group';
 
 /**
  * Canonical AI score envelope consumed by UI surfaces.

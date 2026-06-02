@@ -2232,9 +2232,17 @@ export class TrackingStatusService {
             if (!dprDp?.isLatest) {
               throw new BadRequestException('แผนพัฒนาฯ ที่อ้างอิงโดยรอบการแก้ไขไม่ใช่แผนปัจจุบัน ไม่สามารถดำเนินการได้');
             }
-            if (dprDp?.isBooked) {
-              throw new BadRequestException('แผนพัฒนาฯ ที่อ้างอิงโดยรอบการแก้ไขถูกรวมเล่มแล้ว ไม่สามารถดำเนินการได้');
-            }
+            // 2026-06-02 — REMOVED the `dprDp.isBooked` gate. A revision/change
+            // round (DPR) is ALWAYS authored against a FINALIZED main plan
+            // (`DevelopmentPlan.isBooked = true` is the normal precondition —
+            // you revise an approved, booked plan). The correct activeness
+            // gate is the DPR's OWN open state (`dpr.isOpen`, checked above),
+            // NOT the parent plan's booked flag. This mirrors the STAFF branch
+            // rationale below ("DevelopmentPlan.isBooked is NOT a gate — main
+            // plan being booked is expected") and CLAUDE.md §10 (scope binds to
+            // the DPR, not a global/parent-plan booked check). Previously this
+            // blocked owner pull-back with a spurious 400 once the main plan
+            // was finalized.
 
             // 8-9. Current status + allowed transitions
             const currentTracking = await manager.findOne(TrackingStatus, {
@@ -4359,7 +4367,8 @@ export class TrackingStatusService {
         | 'project-group'
         | 'revised-project-group'
         | 'supplement-project-group'
-        | 'equipment-project-group';
+        | 'equipment-project-group'
+        | 'revised-equipment-project-group';
       projectTitle: string | null;
       resetAt: string;
       reason: string;
@@ -4407,12 +4416,18 @@ export class TrackingStatusService {
         .leftJoin('spg.createdBy', 'spgCreatedBy')
         .leftJoin('ts.equipmentProjectGroupId', 'eq')
         .leftJoin('eq.createdBy', 'eqCreatedBy')
+        // Wave Equipment Revision Management — BE-01 (Phase 3). Fifth
+        // polymorphic FK — RELPG (RevisedEquipmentProjectGroup) rows are
+        // owner-created by agency users, so the owner-scoped cleanup
+        // history aggregator (§18.13) must surface them too.
+        .leftJoin('ts.revisedEquipmentProjectGroupId', 'relpg')
+        .leftJoin('relpg.createdBy', 'relpgCreatedBy')
         .leftJoin('ts.statusId', 'st');
 
-      // Owner-scope (§4). One of the four FK joins must point at a row
+      // Owner-scope (§4). One of the five FK joins must point at a row
       // whose creator WorkHistory id equals the caller's WH id.
       qb.where(
-        `(pgCreatedBy.id = :whId OR rpgCreatedBy.id = :whId OR spgCreatedBy.id = :whId OR eqCreatedBy.id = :whId)`,
+        `(pgCreatedBy.id = :whId OR rpgCreatedBy.id = :whId OR spgCreatedBy.id = :whId OR eqCreatedBy.id = :whId OR relpgCreatedBy.id = :whId)`,
         { whId: workHistory.id },
       );
 
@@ -4471,6 +4486,8 @@ export class TrackingStatusService {
         'spg.title AS "spgTitle"',
         'eq.id AS "eqId"',
         'eq.equipment_name AS "eqTitle"',
+        'relpg.id AS "relpgId"',
+        'relpg.equipment_name AS "relpgTitle"',
       ]);
 
       qb.orderBy('ts.create_at', 'DESC');
@@ -4491,6 +4508,8 @@ export class TrackingStatusService {
         spgTitle: string | null;
         eqId: string | null;
         eqTitle: string | null;
+        relpgId: string | null;
+        relpgTitle: string | null;
       }>();
 
       // Resolve previousStatus per row in a single batched query per kind.
@@ -4501,7 +4520,8 @@ export class TrackingStatusService {
           | 'project-group'
           | 'revised-project-group'
           | 'supplement-project-group'
-          | 'equipment-project-group';
+          | 'equipment-project-group'
+          | 'revised-equipment-project-group';
         projectId: string;
         projectTitle: string | null;
         tsId: string;
@@ -4532,10 +4552,19 @@ export class TrackingStatusService {
             tsId: r.tsId,
             tsCreateAt: r.tsCreateAt,
           };
+        if (r.eqId)
+          return {
+            kind: 'equipment-project-group' as const,
+            projectId: r.eqId,
+            projectTitle: r.eqTitle,
+            tsId: r.tsId,
+            tsCreateAt: r.tsCreateAt,
+          };
+        // Wave Equipment Revision Management — BE-01 (Phase 3).
         return {
-          kind: 'equipment-project-group' as const,
-          projectId: r.eqId ?? '',
-          projectTitle: r.eqTitle,
+          kind: 'revised-equipment-project-group' as const,
+          projectId: r.relpgId ?? '',
+          projectTitle: r.relpgTitle,
           tsId: r.tsId,
           tsCreateAt: r.tsCreateAt,
         };
@@ -4551,7 +4580,8 @@ export class TrackingStatusService {
           | 'projectGroupId'
           | 'revisedProjectGroupId'
           | 'supplementProjectGroupId'
-          | 'equipmentProjectGroupId',
+          | 'equipmentProjectGroupId'
+          | 'revisedEquipmentProjectGroupId',
         scopedRefs: ProjectRef[],
       ) => {
         if (scopedRefs.length === 0) return;
@@ -4628,6 +4658,11 @@ export class TrackingStatusService {
       await resolvePrior(
         'equipmentProjectGroupId',
         refs.filter((r) => r.kind === 'equipment-project-group'),
+      );
+      // Wave Equipment Revision Management — BE-01 (Phase 3).
+      await resolvePrior(
+        'revisedEquipmentProjectGroupId',
+        refs.filter((r) => r.kind === 'revised-equipment-project-group'),
       );
 
       const classifyReason = (

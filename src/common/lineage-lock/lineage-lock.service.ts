@@ -2,10 +2,13 @@ import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { PrevProjectType } from 'src/revised-project-group/dto/create-revised-project-group.dto';
+import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
+import { PrevEquipmentProjectType } from 'src/revised-equipment-project-group/dto/prev-equipment-project-type.enum';
 
 /**
  * Lineage type discriminator used by LineageLockService.
  *
+ * Project-side discriminators (query `revised_project_groups`):
  * - 'original'   targets a ProjectGroup (main-plan) row. Its descendants are
  *                RevisedProjectGroup rows whose prev_project_type = 'original'.
  * - 'revised'    targets a RevisedProjectGroup row. Its descendants are
@@ -13,8 +16,22 @@ import { PrevProjectType } from 'src/revised-project-group/dto/create-revised-pr
  * - 'supplement' targets a SupplementProjectGroup row (Wave SUPP-4). Its
  *                descendants are RevisedProjectGroup rows whose
  *                prev_project_type = 'supplement'.
+ *
+ * Equipment-side discriminators (query `revised_equipment_project_groups`,
+ * Wave Equipment Revision Management — DB-01, Phase 3):
+ * - 'equipment'         targets an EquipmentProjectGroup (EPG) row. Its
+ *                       descendants are RevisedEquipmentProjectGroup (RELPG)
+ *                       rows whose prev_project_type = 'equipment'.
+ * - 'revised_equipment' targets a RevisedEquipmentProjectGroup row. Its
+ *                       descendants are RELPG rows whose
+ *                       prev_project_type = 'revised_equipment'.
  */
-export type LineageProjectType = 'original' | 'revised' | 'supplement';
+export type LineageProjectType =
+  | 'original'
+  | 'revised'
+  | 'supplement'
+  | 'equipment'
+  | 'revised_equipment';
 
 /**
  * Canonical error code prefix thrown when a row has a non-deleted descendant
@@ -52,9 +69,32 @@ export class LineageLockService {
   ): Promise<boolean> {
     if (!projectId) return false;
 
-    // Wave SUPP-4 — discriminator now covers SPG. The enum-string mapping is
+    // ── Equipment-side discriminators (Wave Equipment Revision
+    // Management — DB-01, Phase 3). EPG / RELPG rows are locked by
+    // RevisedEquipmentProjectGroup descendants in the SEPARATE
+    // `revised_equipment_project_groups` table, keyed by the
+    // `PrevEquipmentProjectType` varchar discriminator. This branch is
+    // dispatched first so the project-side switch below stays
+    // byte-for-byte unchanged for the existing discriminators.
+    if (projectType === 'equipment' || projectType === 'revised_equipment') {
+      const equipmentEnumValue: PrevEquipmentProjectType =
+        projectType === 'equipment'
+          ? PrevEquipmentProjectType.EQUIPMENT
+          : PrevEquipmentProjectType.REVISED_EQUIPMENT;
+
+      // TypeORM `exists` honours the entity's @DeleteDateColumn by
+      // default, so soft-deleted descendants are excluded (§14.2).
+      return await manager.exists(RevisedEquipmentProjectGroup, {
+        where: {
+          prevProjectId: projectId,
+          prevProjectType: equipmentEnumValue,
+        },
+      });
+    }
+
+    // Wave SUPP-4 — discriminator covers SPG. The enum-string mapping is
     // intentionally exhaustive (the TS exhaustiveness check below catches any
-    // future LineageProjectType addition at compile time).
+    // future project-side LineageProjectType addition at compile time).
     let enumValue: PrevProjectType;
     switch (projectType) {
       case 'original':

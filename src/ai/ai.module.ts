@@ -41,6 +41,11 @@ import { SupplementProjectGroup } from 'src/supplement-project-group/entities/su
 // `equipment-project-group` target kind; register here so the
 // `@InjectRepository(EquipmentProjectGroup)` resolution succeeds.
 import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
+// Wave Equipment Revision Management — BE-01 (Phase 3). PreSubmitSnapshotService
+// loads the owner WorkHistory id from RevisedEquipmentProjectGroup for the
+// new `revised-equipment-project-group` target kind; register here so the
+// `@InjectRepository(RevisedEquipmentProjectGroup)` resolution succeeds.
+import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { Budget } from 'src/budget/entities/budget.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
@@ -106,6 +111,7 @@ import { IssueCriteriaEvidenceCheckService } from './criteria/issue-criteria-evi
       RevisedProjectGroup,
       SupplementProjectGroup,
       EquipmentProjectGroup,
+      RevisedEquipmentProjectGroup,
       WorkHistory,
       Budget,
       TrackingStatus,

@@ -4,6 +4,7 @@ import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
 import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
+import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
 import { Status } from 'src/status/entities/status.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import {
@@ -124,6 +125,30 @@ export class TrackingStatus {
   )
   @JoinColumn({ name: 'equipment_project_group_id' })
   equipmentProjectGroupId: EquipmentProjectGroup | null;
+
+  /**
+   * Wave Equipment Revision Management — DB-01 (Phase 3).
+   * Fifth nullable FK so RELPG (RevisedEquipmentProjectGroup) rows can
+   * record §12 audit transitions the same way PG / RPG / SPG / EPG do.
+   * Exactly one of the five target FKs is expected to be set per row;
+   * downstream code that branches on
+   * `if (ts.projectGroupId) … else if (ts.revisedProjectGroupId) …
+   *  else if (ts.supplementProjectGroupId) …
+   *  else if (ts.equipmentProjectGroupId) …`
+   * MUST be extended with `… else if (ts.revisedEquipmentProjectGroupId) …`
+   * (BE-01 owns the RELPG service extension).
+   */
+  @ManyToOne(
+    () => RevisedEquipmentProjectGroup,
+    (revisedEquipmentProjectGroup) => revisedEquipmentProjectGroup.trackingStatus,
+    {
+      onDelete: 'CASCADE',
+      onUpdate: 'CASCADE',
+      nullable: true,
+    },
+  )
+  @JoinColumn({ name: 'revised_equipment_project_group_id' })
+  revisedEquipmentProjectGroupId: RevisedEquipmentProjectGroup | null;
 
   @ManyToOne(() => Status, (status) => status.trackingStatus, {
     onDelete: 'CASCADE',

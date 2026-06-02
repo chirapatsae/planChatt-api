@@ -85,6 +85,11 @@ export class AiStaffReviewRun {
       'revised-project-group',
       'supplement-project-group',
       'equipment-project-group',
+      // Wave Equipment Revision Management — Phase 3 (2026-06-01). MUST
+      // mirror AbstractAiResult + AiExecutiveMessage exactly (shared
+      // `ai_target_kind` type) or synchronize:true loops the enum-rename
+      // cycle on every boot — see the class-doc note above.
+      'revised-equipment-project-group',
     ] as AiResultTargetKind[],
     enumName: 'ai_target_kind',
   })

@@ -61,14 +61,15 @@ export class OrphanCleanupHistoryQueryDto {
 export interface OrphanCleanupHistoryItem {
   /** UUID of the cascade-produced `tracking_status` row. */
   trackingId: string;
-  /** UUID of the affected project (PG / RPG / SPG / Equipment). */
+  /** UUID of the affected project (PG / RPG / SPG / Equipment / RELPG). */
   projectId: string;
   /** Project kind discriminator — determines which join populated the row. */
   projectKind:
     | 'project-group'
     | 'revised-project-group'
     | 'supplement-project-group'
-    | 'equipment-project-group';
+    | 'equipment-project-group'
+    | 'revised-equipment-project-group';
   /** Project title; null only if the project row was deleted with NULL title. */
   projectTitle: string | null;
   /** Cascade reset timestamp (TrackingStatus.createAt) as ISO 8601 UTC. */

@@ -19,6 +19,11 @@ import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { WorkHistoryLookupService } from 'src/work-history/work-history-lookup.service';
 import { ProjectClassificationValidator } from 'src/common/project-classification/project-classification.validator';
 import { BookFormatResolver } from 'src/common/project-classification/book-format.resolver';
+// Wave Equipment Revision Management — QA DEF-1 fix. §14 Version Lineage
+// Immutability is bidirectional: a frozen EPG ancestor (one with a live
+// RELPG descendant via prev_project_type='equipment') MUST reject its own
+// data-mutation / row-delete paths, not only the RELPG fork-side check.
+import { LineageLockService } from 'src/common/lineage-lock/lineage-lock.service';
 import { ReportFormat } from 'src/development-plan/types/report-format.enum';
 import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { DevelopmentIssue } from 'src/development-issue/entities/development-issue.entity';
@@ -98,6 +103,8 @@ export class EquipmentProjectGroupService {
     private readonly preSubmitSnapshotService: PreSubmitSnapshotService,
     // 2026-05-30 — PII decrypt-then-mask on read surfaces (W100 parity).
     private readonly usersService: UsersService,
+    // QA DEF-1 fix — §14.3 / §14.9 EPG-mutate-path lineage lock.
+    private readonly lineageLockService: LineageLockService,
   ) {}
 
   /**
@@ -414,6 +421,13 @@ export class EquipmentProjectGroupService {
       }
       this.assertOwnership(existing, workHistory);
 
+      // QA DEF-1 fix — §14.3 / §14.9 Version Lineage Immutability. A frozen
+      // EPG (one with a live RELPG descendant via prev_project_type=
+      // 'equipment') MUST reject field mutation. Runs inside this
+      // transaction's `manager` and BEFORE any repository write. No role
+      // exemption (§14.5). Throws ConflictException PROJECT_HAS_DESCENDANT.
+      await this.lineageLockService.assertEditable(id, 'equipment', manager);
+
       // Determine the effective developmentPlanId for shape resolution.
       // We disallow re-pointing the parent plan on update — that's a
       // structural change indistinguishable from delete + recreate.
@@ -566,6 +580,13 @@ export class EquipmentProjectGroupService {
       }
       this.assertOwnership(existing, workHistory);
 
+      // QA DEF-1 fix — §14.3 / §14.9 Version Lineage Immutability. A frozen
+      // EPG (one with a live RELPG descendant via prev_project_type=
+      // 'equipment') MUST reject soft-delete. Runs inside this transaction's
+      // `manager` and BEFORE the softRemove write. No role exemption
+      // (§14.5). Throws ConflictException PROJECT_HAS_DESCENDANT.
+      await this.lineageLockService.assertDeletable(id, 'equipment', manager);
+
       await manager.softRemove(EquipmentProjectGroup, existing);
       this.logger.log(`Soft-removed equipment id=${id} by=${workHistory.id}`);
     });
@@ -654,6 +675,28 @@ export class EquipmentProjectGroupService {
     // 2026-05-30 — W100 PII: decrypt-then-mask createdBy.user before
     // returning so the staff table shows masked email (not ciphertext).
     await this.maskCreatedByUserOnEquipment(items);
+
+    // CLAUDE.md §14 — decorate each EPG with `hasDescendant` so the
+    // revision-equipment "select source" list can lock / hide an EPG that
+    // already has a live RELPG (revised_equipment_project_groups with
+    // prev_project_type='equipment', deleted_at IS NULL). Single batched
+    // query (mirrors project-groups.findProjectGroupIdsWithDescendants).
+    if (items.length > 0) {
+      const rows = (await this.dataSource.query(
+        `SELECT DISTINCT prev_project_id AS "parentId"
+           FROM revised_equipment_project_groups
+          WHERE prev_project_id = ANY($1::uuid[])
+            AND prev_project_type = 'equipment'
+            AND deleted_at IS NULL`,
+        [items.map((i) => i.id)],
+      )) as Array<{ parentId: string }>;
+      const lockedIds = new Set(rows.map((r) => r.parentId));
+      items.forEach((i) => {
+        (i as unknown as { hasDescendant: boolean }).hasDescendant =
+          lockedIds.has(i.id);
+      });
+    }
+
     return {
       items,
       total,
