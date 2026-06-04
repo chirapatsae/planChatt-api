@@ -24,6 +24,10 @@ import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 import { Por03PdfService } from './por03-pdf.service';
 import { GeneratePor03Dto } from './dto/generate-por03.dto';
 import { AgencyOnlyGuard } from 'src/common/guards/agency-only.guard';
+// Wave Revision/Change Equipment ผ.03 Print (OLD vs NEW) — BE-01
+// (2026-06-03). Equipment revision/change OLD-vs-NEW print endpoint +
+// DTO. Sibling of `generate-por03` (NOT a discriminator on it).
+import { GenerateRevisionPor03Dto } from './dto/generate-revision-por03.dto';
 
 // SUPP_PRINT_BE_03 — supplement-PDF endpoints.
 import { SupplementPdfService } from './supplement-pdf.service';
@@ -240,6 +244,53 @@ export class PdfController {
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': 'attachment; filename="por03-equipment.pdf"',
+    });
+    res.end(pdfBuffer);
+  }
+
+  // ============================================
+  // Wave Revision/Change Equipment ผ.03 Print (OLD vs NEW) — BE-01
+  // (2026-06-03)
+  //
+  // Equipment revision/change print: ผ.03 column layout in an
+  // OLD (โครงการเดิม) vs NEW (โครงการใหม่) comparison format. Sibling of
+  // `generate-por03`; selection is a set of RELPG ids.
+  //
+  // Defense-in-depth (§5.3):
+  //   - Controller: JwtAuthGuard (class) + AgencyOnlyGuard (LAO callers
+  //     rejected `403 EQUIPMENT_AGENCY_ONLY`).
+  //   - Service: `Por03PdfService.generateRevisionPor03` re-asserts
+  //     `isAgencyWorkHistory(callerWh)`, per-row owner check (§4 — WH id),
+  //     per-row STRATEGY_BASED shape, single-plan, plan window.
+  //
+  // §17.11 — NO super-admin bypass. The agency-only check ignores role.
+  // §17.2 — read-only: NO TrackingStatus / AI snapshot / audit / any DB
+  //   write.
+  // §17.8 — distinct cooldown key `print-por03-revision` (10s,
+  //   2xx arms / 5xx no-arm, 429 PRINT_COOLDOWN_ACTIVE { retryAfterSeconds }),
+  //   independent from the owner `print-por03` window.
+  // ============================================
+  @Post('generate-revision-por03')
+  @UseGuards(AgencyOnlyGuard)
+  async generateRevisionPor03Pdf(
+    @Body() body: GenerateRevisionPor03Dto,
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Res() res: Response,
+  ) {
+    const userId = req.user?.userId;
+    if (!userId) {
+      throw new UnauthorizedException('UNAUTHENTICATED');
+    }
+
+    const pdfBuffer = await this.por03PdfService.generateRevisionPor03(
+      userId,
+      body.revisedEquipmentProjectGroupIds,
+    );
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition':
+        'attachment; filename="por03-revision-equipment.pdf"',
     });
     res.end(pdfBuffer);
   }
@@ -659,6 +710,29 @@ export class PdfController {
     return this.pdfService.getAllRevisionEditDraftVersions(developmentPlanId, developmentPlanRevisionId);
   }
 
+  // Wave staff-revision-combined-draftbook-por03 — BE-03. Scoped, fresh
+  // download for the LATEST revision-EDIT draft (ผ.02 + ผ.03 RELPG).
+  // Read-only (§17.2): renders fresh per scope+columns; no version row,
+  // no audit. Older versions use the `/:version/stream` endpoint above.
+  @Post('revision-edit-draft/:developmentPlanId/:developmentPlanRevisionId/download')
+  async downloadScopedRevisionEditDraft(
+    @Param('developmentPlanRevisionId') developmentPlanRevisionId: string,
+    @Body() body: { scope?: 'combined' | 'project' | 'equipment'; selectedColumns?: string[] },
+    @Res() res: Response,
+  ) {
+    const scope = body?.scope ?? 'combined';
+    const pdfBuffer = await this.pdfService.generateScopedRevisionEditDraftDownload(
+      developmentPlanRevisionId,
+      scope,
+      body?.selectedColumns,
+    );
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="draft-revision-edit-${scope}.pdf"`,
+    });
+    res.end(pdfBuffer);
+  }
+
   @Get('revision-edit-draft/:developmentPlanId/:developmentPlanRevisionId/:version/stream')
   async streamRevisionEditDraftByVersion(
     @Param('version') version: number,
@@ -739,6 +813,28 @@ export class PdfController {
     @Param('developmentPlanRevisionId') developmentPlanRevisionId: string
   ) {
     return this.pdfService.getAllRevisionChangeDraftVersions(developmentPlanId, developmentPlanRevisionId);
+  }
+
+  // Wave staff-revision-combined-draftbook-por03 — BE-03. Scoped, fresh
+  // download for the LATEST revision-CHANGE draft (ผ.02 + ผ.03 RELPG).
+  // Twin of the EDIT download endpoint above. Read-only (§17.2).
+  @Post('revision-change-draft/:developmentPlanId/:developmentPlanRevisionId/download')
+  async downloadScopedRevisionChangeDraft(
+    @Param('developmentPlanRevisionId') developmentPlanRevisionId: string,
+    @Body() body: { scope?: 'combined' | 'project' | 'equipment'; selectedColumns?: string[] },
+    @Res() res: Response,
+  ) {
+    const scope = body?.scope ?? 'combined';
+    const pdfBuffer = await this.pdfService.generateScopedRevisionChangeDraftDownload(
+      developmentPlanRevisionId,
+      scope,
+      body?.selectedColumns,
+    );
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="draft-revision-change-${scope}.pdf"`,
+    });
+    res.end(pdfBuffer);
   }
 
   @Get('revision-change-draft/:developmentPlanId/:developmentPlanRevisionId/:version/stream')

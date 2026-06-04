@@ -50,6 +50,12 @@ import { ProjectAlignmentMappingModule } from 'src/project-alignment-mapping/pro
 import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 import { Por03PdfService } from './por03-pdf.service';
 import { AgencyOnlyGuard } from 'src/common/guards/agency-only.guard';
+// Wave Revision/Change Equipment ผ.03 Print (OLD vs NEW) — BE-01
+// (2026-06-03). Por03PdfService now also reads RELPG rows for the
+// OLD-vs-NEW revision print. Register the entity for repo injection.
+// Entity already registered in its owning module + app.module.ts; this
+// is a `forFeature` wiring only (NO new @Entity).
+import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
 
 @Module({
   imports: [
@@ -78,6 +84,10 @@ import { AgencyOnlyGuard } from 'src/common/guards/agency-only.guard';
       // repo is injected into `Por03PdfService` for the read-only print
       // path. Entity already in app.module.ts root registration.
       EquipmentProjectGroup,
+      // Wave Revision/Change Equipment ผ.03 Print (OLD vs NEW) — BE-01
+      // (2026-06-03). RELPG repo injected into `Por03PdfService` for the
+      // OLD-vs-NEW revision print path. Entity already in app.module.ts.
+      RevisedEquipmentProjectGroup,
       User,
       // SUPP_PRINT post-SEC_01 hotfix — `WorkStatusApprovedGuard`
       // injects `Repository<WorkHistory>` per `work-status-approved.guard.ts`.

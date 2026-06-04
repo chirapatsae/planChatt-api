@@ -17,6 +17,8 @@ import { PDFDocument } from 'pdf-lib';
 import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { ReportFormat } from 'src/development-plan/types/report-format.enum';
 import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
+import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
+import { PrevEquipmentProjectType } from 'src/revised-equipment-project-group/dto/prev-equipment-project-type.enum';
 import { WorkHistoryLookupService } from 'src/work-history/work-history-lookup.service';
 import { isAgencyWorkHistory } from 'src/project-groups/util/agency-data.util';
 
@@ -31,6 +33,11 @@ import {
   EquipmentIssueCategoryGroup,
   EquipmentIssueTableGroup,
 } from './por03-issue-based-table.part';
+import {
+  createPor03RevisionDetailDocDefinition,
+  EquipmentRevisionPair,
+  EquipmentRevisionTableGroup,
+} from './por03-revision-table.part';
 
 /**
  * Wave Print ผ.03 — BE-01 (2026-05-28).
@@ -94,12 +101,24 @@ export class Por03PdfService {
    */
   private static readonly COOLDOWN_WINDOW_MS = 10_000;
   private static readonly COOLDOWN_ENDPOINT_KEY = 'print-por03';
+  /**
+   * Wave Revision/Change Equipment ผ.03 Print (OLD vs NEW) — BE-01.
+   * Distinct cooldown surface from `print-por03` per §17.8 (the key is
+   * registered in CLAUDE.md §17.8). The two print surfaces have
+   * INDEPENDENT windows because the composite key embeds the endpoint
+   * key (`${whId}|${endpointKey}`), so arming the owner ผ.03 print does
+   * NOT throttle the revision ผ.03 print and vice-versa.
+   */
+  private static readonly COOLDOWN_ENDPOINT_KEY_REVISION =
+    'print-por03-revision';
   private readonly cooldownStore = new Map<string, number>();
   private readonly logger = new Logger(Por03PdfService.name);
 
   constructor(
     @InjectRepository(EquipmentProjectGroup)
     private readonly equipmentRepo: Repository<EquipmentProjectGroup>,
+    @InjectRepository(RevisedEquipmentProjectGroup)
+    private readonly revisedEquipmentRepo: Repository<RevisedEquipmentProjectGroup>,
     @InjectRepository(DevelopmentPlan)
     private readonly developmentPlanRepo: Repository<DevelopmentPlan>,
     private readonly workHistoryLookup: WorkHistoryLookupService,
@@ -261,6 +280,493 @@ export class Por03PdfService {
     this.armCooldown(callerWhId);
 
     return pdfBuffer;
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Revision/Change ผ.03 print — OLD vs NEW (BE-01, 2026-06-03)
+  //
+  // Wave Revision/Change Equipment ผ.03 Print. Renders the equipment
+  // revision/change list (RELPG) using the ผ.03 column layout but in an
+  // OLD (โครงการเดิม) vs NEW (โครงการใหม่) comparison FORMAT. The OLD
+  // side is the §14 lineage parent (EPG | RELPG) resolved via
+  // (prevProjectId, prevProjectType). Read-only (§17.2): NO
+  // TrackingStatus / AI / audit / any DB write.
+  // ──────────────────────────────────────────────────────────────────
+
+  /**
+   * Generate the OLD/NEW ผ.03 PDF for the given RELPG selection.
+   *
+   * @param userId — authenticated caller's userId (from JWT).
+   * @param revisedEquipmentProjectGroupIds — UUIDs of the selected RELPG
+   *   rows.
+   * @returns Buffer containing the application/pdf payload.
+   *
+   * Error codes (see endpoint contract):
+   *   - 401 UNAUTHENTICATED — missing caller userId (controller-side)
+   *   - 403 EQUIPMENT_AGENCY_ONLY — LAO caller (defense-in-depth re-assert)
+   *   - 403 EQUIPMENT_NOT_OWNED — any row whose createdBy ≠ caller WH id
+   *   - 400 EQUIPMENT_PRINT_REQUIRES_STRATEGY_SHAPE — non-STRATEGY shape
+   *   - 400 EQUIPMENT_PRINT_PLAN_WINDOW_MISSING — plan missing start/end
+   *   - 404 EQUIPMENT_NOT_FOUND — any id missing / soft-deleted
+   *   - 409 EQUIPMENT_MIXED_PLANS — selection spans >1 development plan
+   *   - 429 PRINT_COOLDOWN_ACTIVE { retryAfterSeconds }
+   */
+  async generateRevisionPor03(
+    userId: string,
+    revisedEquipmentProjectGroupIds: string[],
+  ): Promise<Buffer> {
+    // §1 / §2 — resolve caller WorkHistory + workStatus first (read-only
+    // path; no transaction needed).
+    const em = this.revisedEquipmentRepo.manager;
+    const callerWh = await this.workHistoryLookup.getCurrent(em, userId);
+    this.workHistoryLookup.assertWorkStatusApproved(callerWh);
+
+    // §5.3 / §17.11 defense-in-depth — re-assert agency-only. The
+    // controller guard ran already; the service re-checks independently.
+    // `isAgencyWorkHistory` ignores role, so super-admin LAO STILL gets
+    // 403 (no role exemption).
+    if (!isAgencyWorkHistory(callerWh)) {
+      throw new ForbiddenException({
+        code: 'EQUIPMENT_AGENCY_ONLY',
+        message: 'ฟีเจอร์ครุภัณฑ์ (ผ.03) ใช้ได้เฉพาะผู้ใช้สังกัด อบจ.',
+      });
+    }
+
+    // §17.8 cooldown probe — DISTINCT surface key `print-por03-revision`,
+    // independent window from the owner ผ.03 print. Probe after authn/
+    // authz so anonymous probes can't enumerate cooldown state.
+    this.assertCooldownClear(
+      callerWh.id,
+      Por03PdfService.COOLDOWN_ENDPOINT_KEY_REVISION,
+    );
+
+    // Load RELPG rows by id with the relations the renderer + comparison
+    // resolver need. `deletedAt IS NULL` excludes soft-deleted rows.
+    const rows = await this.revisedEquipmentRepo.find({
+      where: {
+        id: In(revisedEquipmentProjectGroupIds),
+        deletedAt: IsNull(),
+      },
+      relations: {
+        developmentPlanRevision: { developmentPlan: true },
+        developmentPlan: true,
+        equipmentProjectGroup: true,
+        equipmentCategory: true,
+        tactic: true,
+        plan: true,
+        strategy: true,
+        developmentIssue: true,
+        responsibleAgency: true,
+        budgets: true,
+        createdBy: true,
+      },
+    });
+
+    // 404 — any requested id missing (soft-deleted, mistyped, etc.).
+    if (rows.length !== revisedEquipmentProjectGroupIds.length) {
+      throw new NotFoundException({ code: 'EQUIPMENT_NOT_FOUND' });
+    }
+
+    // §4 ownership — every row's createdBy MUST be the caller's current
+    // WorkHistory. Compare WorkHistory.id, NOT user.id.
+    const callerWhId = callerWh.id;
+    const foreignRow = rows.find((r) => r.createdBy?.id !== callerWhId);
+    if (foreignRow) {
+      throw new ForbiddenException({ code: 'EQUIPMENT_NOT_OWNED' });
+    }
+
+    // STRATEGY_BASED narrowing (v1, §5.3 Phase 2.5 / §16.5) — per-row
+    // assert strategy+tactic+plan present AND no development issue. Loud
+    // failure, not silent skip.
+    const shapeOffender = rows.find(
+      (r) => !r.strategy || !r.tactic || !r.plan || r.developmentIssue,
+    );
+    if (shapeOffender) {
+      throw new BadRequestException({
+        code: 'EQUIPMENT_PRINT_REQUIRES_STRATEGY_SHAPE',
+        message:
+          'ผ.03 v1 รองรับเฉพาะครุภัณฑ์รูปแบบยุทธศาสตร์ (STRATEGY_BASED) เท่านั้น',
+      });
+    }
+
+    // §10 single-plan constraint — the cover page renders ONE plan name.
+    // Resolve the plan via the RELPG's own `developmentPlan` denorm FK,
+    // falling back to the parent revision's plan. Never a global latest
+    // lookup.
+    const planIdOf = (r: RevisedEquipmentProjectGroup): string | undefined =>
+      r.developmentPlan?.id ?? r.developmentPlanRevision?.developmentPlan?.id;
+    const planIds = new Set(rows.map(planIdOf).filter(Boolean));
+    if (planIds.size !== 1) {
+      throw new ConflictException({
+        code: 'EQUIPMENT_MIXED_PLANS',
+        message:
+          'ครุภัณฑ์ที่เลือกอยู่คนละแผนพัฒนา ไม่สามารถพิมพ์ในรายงานเดียวกันได้',
+      });
+    }
+
+    const firstRow = rows[0];
+    const parentPlan =
+      firstRow.developmentPlan ??
+      firstRow.developmentPlanRevision?.developmentPlan;
+    // `parentPlan` is `DevelopmentPlan | undefined` (both FKs are
+    // nullable on RELPG). Narrow to non-undefined here so the rest of
+    // the method can read `.startYear` / `.endYear` / `.name` safely;
+    // also enforce the §10 plan-window invariant (mandatory for the
+    // year axis — fail loudly rather than render an empty axis, mirror
+    // the owner `generate()` path).
+    if (!parentPlan || !parentPlan.startYear || !parentPlan.endYear) {
+      throw new BadRequestException({
+        code: 'EQUIPMENT_PRINT_PLAN_WINDOW_MISSING',
+        message: 'แผนพัฒนาต้นทางไม่มี startYear/endYear กรุณาตรวจสอบ',
+      });
+    }
+
+    // Build OLD/NEW pairs — resolve each RELPG's lineage parent.
+    const pairs = await Promise.all(
+      rows.map((current) => this.resolveEquipmentComparison(current)),
+    );
+
+    // §16.5 year axis — derive from the parent plan window. Coerce to
+    // Number defensively (string-hydrated columns would string-concat and
+    // break per-year budget matching — same precedent as buildPor03Buffer).
+    const startYear = Number(parentPlan.startYear);
+    const endYear = Number(parentPlan.endYear);
+    const years = Array.from(
+      { length: endYear - startYear + 1 },
+      (_, i) => startYear + i,
+    );
+
+    const groups = this.groupRevisionPairs(pairs);
+
+    const fonts = this.pdfService.getPdfFonts();
+    const newWord = this.pdfService.newWord.bind(this.pdfService);
+
+    const developmentPlanLine = parentPlan.name?.trim()
+      ? parentPlan.name
+      : `แผนพัฒนาท้องถิ่น พ.ศ. ${parentPlan.startYear}-${parentPlan.endYear}`;
+
+    const detailDoc = createPor03RevisionDetailDocDefinition({
+      developmentPlanName: developmentPlanLine,
+      groups,
+      years,
+      newWord,
+    });
+
+    if (!detailDoc) {
+      // groups.length === 0 — unreachable in practice (zero ids → 404),
+      // defensive guard mirroring the owner path's empty-selection guard.
+      throw new BadRequestException({
+        code: 'EQUIPMENT_PRINT_EMPTY_SELECTION',
+        message: 'ไม่มีครุภัณฑ์สำหรับพิมพ์',
+      });
+    }
+
+    const pdfBuffer = await this.pdfService.createPdfBuffer(detailDoc, fonts);
+
+    // §17.8 — arm the DISTINCT revision cooldown ONLY after a successful
+    // 2xx render. Any throw above skips this line (5xx does NOT arm).
+    this.armCooldown(
+      callerWhId,
+      Por03PdfService.COOLDOWN_ENDPOINT_KEY_REVISION,
+    );
+
+    return pdfBuffer;
+  }
+
+  /**
+   * Resolve the §14 lineage parent of a RELPG into an OLD/NEW pair.
+   *
+   * Equipment analog of `PdfService.findProjectComparisonForRevisionEdit`
+   * (§14.7 detection mapping: `'equipment'` → EPG, `'revised_equipment'`
+   * → RELPG, mirroring `'original'` → PG, `'revised'` → RPG).
+   *
+   *   - `prevProjectType === 'equipment'`         → load EquipmentProjectGroup
+   *   - `prevProjectType === 'revised_equipment'` → load RevisedEquipmentProjectGroup
+   *   - fallback to the RELPG's own `equipmentProjectGroup` FK when
+   *     `prevProjectId` is missing.
+   *
+   * Returns `{ current, previous }`. `previous` is `null` when there is
+   * no lineage parent (the OLD column renders blank — README §11 risk
+   * row, do NOT throw). A soft-deleted chained parent also resolves to
+   * `null` (logged) — the find filters `deletedAt IS NULL`.
+   *
+   * Read-only — pure lookups; NO writes (§17.2).
+   */
+  private async resolveEquipmentComparison(
+    current: RevisedEquipmentProjectGroup,
+  ): Promise<EquipmentRevisionPair> {
+    let previous:
+      | EquipmentProjectGroup
+      | RevisedEquipmentProjectGroup
+      | null = null;
+
+    const equipmentRelations = {
+      equipmentCategory: true,
+      tactic: true,
+      plan: true,
+      strategy: true,
+      developmentIssue: true,
+      responsibleAgency: true,
+      budgets: true,
+    };
+
+    if (
+      current.prevProjectType === PrevEquipmentProjectType.EQUIPMENT &&
+      current.prevProjectId
+    ) {
+      previous = await this.equipmentRepo.findOne({
+        where: { id: current.prevProjectId, deletedAt: IsNull() },
+        relations: equipmentRelations,
+      });
+    } else if (
+      current.prevProjectType === PrevEquipmentProjectType.REVISED_EQUIPMENT &&
+      current.prevProjectId
+    ) {
+      previous = await this.revisedEquipmentRepo.findOne({
+        where: { id: current.prevProjectId, deletedAt: IsNull() },
+        relations: equipmentRelations,
+      });
+    }
+
+    // Fallback to the RELPG's own EPG FK when the lineage pointer is
+    // missing (first-fork rows always carry prevProjectId, but the FK is
+    // a robust fallback). The eager relation was loaded on `current` with
+    // `equipmentProjectGroup: true`, but it lacks the deep equipment
+    // relations the renderer needs, so re-load it fully when used.
+    if (!previous && current.prevProjectId == null) {
+      const fallbackId = current.equipmentProjectGroup?.id;
+      if (fallbackId) {
+        previous = await this.equipmentRepo.findOne({
+          where: { id: fallbackId, deletedAt: IsNull() },
+          relations: equipmentRelations,
+        });
+      }
+    }
+
+    if (!previous && current.prevProjectId) {
+      // Lineage pointer present but parent not resolvable (soft-deleted /
+      // missing) — render OLD column blank, log a warning (README §11).
+      this.logger.warn(
+        `resolveEquipmentComparison: RELPG ${current.id} prevProjectId=${current.prevProjectId} ` +
+          `(type=${current.prevProjectType}) did not resolve to a live parent; OLD column will be blank`,
+      );
+    }
+
+    return { current, previous };
+  }
+
+  /**
+   * Group OLD/NEW pairs into `EquipmentRevisionTableGroup[]` by the
+   * CURRENT (RELPG) row's (Category, Tactic, Plan), reusing the SAME
+   * ordering as `groupRows` so ผ.03 row ordering does not drift between
+   * the owner print and the revision print:
+   *   - Outer: category.sortOrder ASC → tactic.id ASC → plan.id ASC
+   *   - Inner pairs: current.equipmentName ASC (Thai collation)
+   */
+  private groupRevisionPairs(
+    pairs: EquipmentRevisionPair[],
+  ): EquipmentRevisionTableGroup[] {
+    const keyOf = (p: EquipmentRevisionPair) =>
+      `${p.current.equipmentCategory.id}|${p.current.tactic?.id ?? ''}|${p.current.plan?.id ?? ''}`;
+
+    const buckets = new Map<string, EquipmentRevisionPair[]>();
+    for (const p of pairs) {
+      const k = keyOf(p);
+      if (!buckets.has(k)) buckets.set(k, []);
+      buckets.get(k)!.push(p);
+    }
+
+    const groups: EquipmentRevisionTableGroup[] = [];
+    for (const [, bucket] of buckets) {
+      bucket.sort((a, b) =>
+        (a.current.equipmentName ?? '').localeCompare(
+          b.current.equipmentName ?? '',
+          'th',
+        ),
+      );
+      const first = bucket[0].current;
+      groups.push({
+        categoryCode: first.equipmentCategory.code,
+        categoryName: first.equipmentCategory.name,
+        tacticName: first.tactic?.name ?? '-',
+        planName: first.plan?.name ?? '-',
+        pairs: bucket,
+      });
+    }
+
+    groups.sort((a, b) => {
+      const ac = a.pairs[0].current.equipmentCategory.sortOrder;
+      const bc = b.pairs[0].current.equipmentCategory.sortOrder;
+      if (ac !== bc) return ac - bc;
+      const at = a.pairs[0].current.tactic?.id ?? '';
+      const bt = b.pairs[0].current.tactic?.id ?? '';
+      if (at !== bt) return at < bt ? -1 : 1;
+      const ap = a.pairs[0].current.plan?.id ?? '';
+      const bp = b.pairs[0].current.plan?.id ?? '';
+      return ap < bp ? -1 : ap > bp ? 1 : 0;
+    });
+
+    return groups;
+  }
+
+  /**
+   * Plan-WIDE (DPR-scoped) revision ผ.03 render core — the RELPG analog
+   * of `renderPlanScopedPor03Buffer`, for the STAFF combined revise/change
+   * draft book (Wave staff-revision-combined-draftbook-por03, 2026-06-04).
+   *
+   * Renders ALL `RevisedEquipmentProjectGroup` (RELPG) rows under
+   * `developmentPlanRevisionId` whose latest tracking status is in
+   * `{ Verified, Pending_Approval }`, regardless of creator (staff sees
+   * all), in the OLD-vs-NEW (โครงการเดิม / โครงการใหม่) ผ.03 layout —
+   * reusing the SAME `resolveEquipmentComparison` + `groupRevisionPairs`
+   * + `createPor03RevisionDetailDocDefinition` core as the owner-side
+   * `generateRevisionPor03`, so there is NO layout/grouping duplication.
+   *
+   * STRATEGY_BASED-only narrowing (§16.5 / §5.3 Phase 2.5) is identical
+   * to the owner revision print: any non-STRATEGY-shaped RELPG is SILENT-
+   * SKIPPED (logged), NOT a loud throw — the staff combined book must
+   * never fail over an equipment edge case (mirror of the Phase 2.6
+   * draft-append contract).
+   *
+   * Degrades to `null` (NEVER throws) when:
+   *   - the DPR is missing
+   *   - the parent plan is missing or its window (startYear/endYear) is missing
+   *   - there are zero qualifying RELPG rows after the STRATEGY filter
+   *
+   * Read-only (§17.2): NO ownership check, NO agency-only assertion, NO
+   * cooldown, NO audit / AI / TrackingStatus writes. §10 scope binding is
+   * via the passed `developmentPlanRevisionId` ONLY (never a global lookup).
+   */
+  async renderRevisionScopedPor03Buffer(
+    developmentPlanRevisionId: string,
+  ): Promise<Buffer | null> {
+    // DPR-scoped RELPG fetch. Mirrors the relation eager-loads the owner
+    // `generateRevisionPor03` find loads + the EXISTS latest-status
+    // pattern from `renderPlanScopedPor03Buffer`. §10 — bound to the
+    // passed DPR; never a global open-revision lookup.
+    const rows = await this.revisedEquipmentRepo
+      .createQueryBuilder('relpg')
+      .leftJoinAndSelect('relpg.developmentPlanRevision', 'developmentPlanRevision')
+      .leftJoinAndSelect('developmentPlanRevision.developmentPlan', 'dprPlan')
+      .leftJoinAndSelect('relpg.developmentPlan', 'developmentPlan')
+      .leftJoinAndSelect('relpg.equipmentProjectGroup', 'equipmentProjectGroup')
+      .leftJoinAndSelect('relpg.equipmentCategory', 'equipmentCategory')
+      .leftJoinAndSelect('relpg.tactic', 'tactic')
+      .leftJoinAndSelect('relpg.plan', 'plan')
+      .leftJoinAndSelect('relpg.strategy', 'strategy')
+      .leftJoinAndSelect('relpg.developmentIssue', 'developmentIssue')
+      .leftJoinAndSelect('relpg.responsibleAgency', 'responsibleAgency')
+      .leftJoinAndSelect('relpg.budgets', 'budgets')
+      .leftJoinAndSelect('relpg.createdBy', 'createdBy')
+      .where('developmentPlanRevision.id = :dprId', {
+        dprId: developmentPlanRevisionId,
+      })
+      .andWhere('relpg.deletedAt IS NULL')
+      .andWhere(
+        'EXISTS (SELECT 1 FROM tracking_status ts ' +
+          ' INNER JOIN status s ON s.id = ts.status_id ' +
+          ' WHERE ts.revised_equipment_project_group_id = relpg.id ' +
+          '   AND ts.is_latest = true ' +
+          '   AND s.name IN (:...statusNames))',
+        // เข้าเล่มร่าง (print) = สถานะ {Verified, Pending_Approval}. หน้า print
+        // เลื่อน ตรวจสอบผ่าน(Verified)→รออนุมัติ(Pending_Approval) จึงครอบสองสถานะนี้;
+        // Approved ไปแสดงหน้ารออนุมัติ (ready-to-approved). สอดคล้องกับ ผ.02
+        // (findProjectsForRevisionEditDraft / generateRevisionEditDraftReportWithColumns).
+        { statusNames: ['Verified', 'Pending_Approval'] },
+      )
+      .getMany();
+
+    this.logger.log(
+      `renderRevisionScopedPor03Buffer: DPR ${developmentPlanRevisionId} — ${rows.length} RELPG row(s) matched status IN {Verified, Pending_Approval}`,
+    );
+
+    if (rows.length === 0) {
+      this.logger.warn(
+        `renderRevisionScopedPor03Buffer: DPR ${developmentPlanRevisionId} — 0 RELPG rows; skipping ผ.03 section`,
+      );
+      return null;
+    }
+
+    // STRATEGY_BASED-only narrowing (§16.5) — silent skip mis-shaped rows
+    // (staff combined book must not throw over an equipment edge case).
+    const filteredRows = rows.filter((r) => {
+      const isStrategyShape =
+        !!r.strategy && !!r.tactic && !!r.plan && !r.developmentIssue;
+      if (!isStrategyShape) {
+        this.logger.warn(
+          `renderRevisionScopedPor03Buffer: RELPG ${r.id} under DPR ${developmentPlanRevisionId} is not STRATEGY_BASED-shaped; skipping row`,
+        );
+      }
+      return isStrategyShape;
+    });
+
+    if (filteredRows.length === 0) {
+      this.logger.warn(
+        `renderRevisionScopedPor03Buffer: DPR ${developmentPlanRevisionId} — 0 STRATEGY_BASED-shaped RELPG rows after filter (matched=${rows.length}); skipping ผ.03 section`,
+      );
+      return null;
+    }
+
+    // Resolve the parent plan via the DPR (or the RELPG denorm FK as a
+    // fallback) — needed for the year axis + cover line. §10: never a
+    // global latest plan lookup.
+    const firstRow = filteredRows[0];
+    const parentPlan =
+      firstRow.developmentPlanRevision?.developmentPlan ??
+      firstRow.developmentPlan;
+    if (!parentPlan || !parentPlan.startYear || !parentPlan.endYear) {
+      this.logger.warn(
+        `renderRevisionScopedPor03Buffer: DPR ${developmentPlanRevisionId} parent plan missing or has no startYear/endYear; skipping ผ.03 section`,
+      );
+      return null;
+    }
+
+    // §16.5 year axis — derive from the parent plan window. Coerce to
+    // Number defensively (string-hydrated columns would string-concat).
+    const startYear = Number(parentPlan.startYear);
+    const endYear = Number(parentPlan.endYear);
+    const years = Array.from(
+      { length: endYear - startYear + 1 },
+      (_, i) => startYear + i,
+    );
+
+    // OLD/NEW pairs — reuse the owner-path lineage resolver + grouping.
+    const pairs = await Promise.all(
+      filteredRows.map((current) => this.resolveEquipmentComparison(current)),
+    );
+    const groups = this.groupRevisionPairs(pairs);
+
+    const fonts = this.pdfService.getPdfFonts();
+    const newWord = this.pdfService.newWord.bind(this.pdfService);
+
+    const developmentPlanLine = parentPlan.name?.trim()
+      ? parentPlan.name
+      : `แผนพัฒนาท้องถิ่น พ.ศ. ${parentPlan.startYear}-${parentPlan.endYear}`;
+
+    const detailDoc = createPor03RevisionDetailDocDefinition({
+      developmentPlanName: developmentPlanLine,
+      groups,
+      years,
+      newWord,
+    });
+
+    if (!detailDoc) {
+      return null;
+    }
+
+    const detailBuffer = await this.pdfService.createPdfBuffer(detailDoc, fonts);
+
+    // Prepend the full-page "บัญชีครุภัณฑ์ (ผ.03)" section divider so the
+    // combined staff draft book gets a clean break between the ผ.02
+    // revision section and the appended ผ.03 revision section (mirror of
+    // `renderPlanScopedPor03Buffer`).
+    const dividerDoc = createPor03SectionDividerDocDefinition();
+    const dividerBuffer = await this.pdfService.createPdfBuffer(
+      dividerDoc,
+      fonts,
+    );
+
+    return this.pdfService.mergePdfBuffers([dividerBuffer, detailBuffer]);
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -927,8 +1433,11 @@ export class Por03PdfService {
    * HttpStatus.TOO_MANY_REQUESTS)` because there is no first-class
    * `TooManyRequestsException` shortcut in @nestjs/common.
    */
-  private assertCooldownClear(workHistoryId: string): void {
-    const key = `${workHistoryId}|${Por03PdfService.COOLDOWN_ENDPOINT_KEY}`;
+  private assertCooldownClear(
+    workHistoryId: string,
+    endpointKey: string = Por03PdfService.COOLDOWN_ENDPOINT_KEY,
+  ): void {
+    const key = `${workHistoryId}|${endpointKey}`;
     const expiresAt = this.cooldownStore.get(key);
     if (expiresAt === undefined) return;
     if (expiresAt <= Date.now()) {
@@ -946,15 +1455,21 @@ export class Por03PdfService {
   }
 
   /**
-   * Arm the cooldown for `(workHistoryId, 'print-por03')` for the next
-   * 10 seconds. Idempotent — re-arming refreshes the window.
+   * Arm the cooldown for `(workHistoryId, endpointKey)` for the next
+   * 10 seconds. Idempotent — re-arming refreshes the window. The
+   * `endpointKey` defaults to `print-por03`; the revision ผ.03 print
+   * passes `print-por03-revision` so the two surfaces have independent
+   * windows (§17.8).
    *
    * Capped at 10,000 entries (mirror of `InMemoryAiCooldownStore`
    * MEMORY_CAPACITY) so a runaway high-cardinality scenario cannot
    * unbounded-grow memory.
    */
-  private armCooldown(workHistoryId: string): void {
-    const key = `${workHistoryId}|${Por03PdfService.COOLDOWN_ENDPOINT_KEY}`;
+  private armCooldown(
+    workHistoryId: string,
+    endpointKey: string = Por03PdfService.COOLDOWN_ENDPOINT_KEY,
+  ): void {
+    const key = `${workHistoryId}|${endpointKey}`;
     const expiresAt = Date.now() + Por03PdfService.COOLDOWN_WINDOW_MS;
     // Refresh insertion order for LRU semantics.
     if (this.cooldownStore.has(key)) this.cooldownStore.delete(key);

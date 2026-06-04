@@ -899,7 +899,10 @@ export class PdfService {
       .where('developmentPlanRevision.id = :developmentPlanRevisionId', { developmentPlanRevisionId })
       .andWhere('revisionType.name = :revisionTypeName', { revisionTypeName: 'แก้ไข' })
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-      .andWhere('status.name IN (:...statusNames)', { statusNames: ['Pending_Approval', 'Approved'] })
+      // เข้าเล่มร่าง (print) = สถานะ {Verified, Pending_Approval}. หน้า print
+      // เลื่อน ตรวจสอบผ่าน(Verified)→รออนุมัติ(Pending_Approval) จึงต้องครอบสองสถานะนี้;
+      // Approved ไปแสดงหน้ารออนุมัติ (ready-to-approved) ไม่อยู่ในเล่มร่าง.
+      .andWhere('status.name IN (:...statusNames)', { statusNames: ['Verified', 'Pending_Approval'] })
       .orderBy('strategy.id', 'ASC')
       .getMany();
 
@@ -936,7 +939,8 @@ export class PdfService {
       .where('developmentPlanRevision.id = :developmentPlanRevisionId', { developmentPlanRevisionId })
       .andWhere('revisionType.name = :revisionTypeName', { revisionTypeName: 'เปลี่ยนแปลง' })
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-      .andWhere('status.name IN (:...statusNames)', { statusNames: ['Pending_Approval', 'Approved'] })
+      // เข้าเล่มร่าง (print) = สถานะ {Verified, Pending_Approval} — ดู findProjectsForRevisionEditDraft.
+      .andWhere('status.name IN (:...statusNames)', { statusNames: ['Verified', 'Pending_Approval'] })
       .orderBy('strategy.id', 'ASC')
       .getMany();
 
@@ -1551,6 +1555,103 @@ export class PdfService {
     return parts.length === 1 ? parts[0] : this.mergePdfBuffers(parts);
   }
 
+  /**
+   * Wave staff-revision-combined-draftbook-por03 — BE-03. Scoped,
+   * on-demand download for the LATEST revision-EDIT draft of a DPR.
+   * RELPG analog of `generateScopedDraftAgencyDownload`.
+   *
+   *   - scope='project'  → ผ.02 revision only, with `selectedColumns`
+   *   - scope='equipment'→ ผ.03 revision only (OLD-vs-NEW, fixed layout)
+   *   - scope='combined' → ผ.02 (custom columns) + ผ.03 appended, merged
+   *
+   * Read-only (§17.2): no TrackingStatus / AI / audit writes, no version
+   * row created. ผ.03 is STRATEGY_BASED-only and degrades to null per
+   * `renderRevisionScopedPor03Buffer`. Column selection applies ONLY to
+   * the ผ.02 portion. §10 scope: bound to the passed DPR.
+   */
+  async generateScopedRevisionEditDraftDownload(
+    developmentPlanRevisionId: string,
+    scope: 'combined' | 'project' | 'equipment',
+    selectedColumns?: string[],
+  ): Promise<Buffer> {
+    const DEFAULT_COLUMNS = ['index', 'title', 'objective', 'target', 'budget', 'expectedResult', 'mainAgency'];
+
+    let projectBuffer: Buffer | null = null;
+    if (scope === 'combined' || scope === 'project') {
+      try {
+        projectBuffer = await this.generateRevisionEditDraftReportWithColumns(
+          developmentPlanRevisionId,
+          selectedColumns && selectedColumns.length > 0 ? selectedColumns : DEFAULT_COLUMNS,
+        );
+      } catch {
+        // No qualifying ผ.02 revision rows — leave null; handled below.
+        projectBuffer = null;
+      }
+    }
+
+    let equipmentBuffer: Buffer | null = null;
+    if (scope === 'combined' || scope === 'equipment') {
+      equipmentBuffer = await this.por03PdfService.renderRevisionScopedPor03Buffer(developmentPlanRevisionId);
+    }
+
+    if (scope === 'project') {
+      if (!projectBuffer) throw new BadRequestException('ไม่มีโครงการ (ผ.02) ที่พร้อมดาวน์โหลดในเล่มนี้');
+      return projectBuffer;
+    }
+    if (scope === 'equipment') {
+      if (!equipmentBuffer) throw new BadRequestException('ไม่มีครุภัณฑ์ (ผ.03) ที่พร้อมดาวน์โหลดในเล่มนี้ (เฉพาะแผนยุทธศาสตร์ที่มีครุภัณฑ์รออนุมัติขึ้นไป)');
+      return equipmentBuffer;
+    }
+
+    const parts = [projectBuffer, equipmentBuffer].filter((b): b is Buffer => !!b);
+    if (parts.length === 0) throw new BadRequestException('ไม่มีข้อมูลสำหรับดาวน์โหลดในเล่มนี้');
+    return parts.length === 1 ? parts[0] : this.mergePdfBuffers(parts);
+  }
+
+  /**
+   * Wave staff-revision-combined-draftbook-por03 — BE-03. Scoped download
+   * for the LATEST revision-CHANGE draft. Behavioral twin of
+   * `generateScopedRevisionEditDraftDownload` (same scope semantics,
+   * same RELPG render core); differs only in the ผ.02 generator used.
+   */
+  async generateScopedRevisionChangeDraftDownload(
+    developmentPlanRevisionId: string,
+    scope: 'combined' | 'project' | 'equipment',
+    selectedColumns?: string[],
+  ): Promise<Buffer> {
+    const DEFAULT_COLUMNS = ['index', 'title', 'objective', 'target', 'budget', 'expectedResult', 'mainAgency'];
+
+    let projectBuffer: Buffer | null = null;
+    if (scope === 'combined' || scope === 'project') {
+      try {
+        projectBuffer = await this.generateRevisionChangeDraftReportWithColumns(
+          developmentPlanRevisionId,
+          selectedColumns && selectedColumns.length > 0 ? selectedColumns : DEFAULT_COLUMNS,
+        );
+      } catch {
+        projectBuffer = null;
+      }
+    }
+
+    let equipmentBuffer: Buffer | null = null;
+    if (scope === 'combined' || scope === 'equipment') {
+      equipmentBuffer = await this.por03PdfService.renderRevisionScopedPor03Buffer(developmentPlanRevisionId);
+    }
+
+    if (scope === 'project') {
+      if (!projectBuffer) throw new BadRequestException('ไม่มีโครงการ (ผ.02) ที่พร้อมดาวน์โหลดในเล่มนี้');
+      return projectBuffer;
+    }
+    if (scope === 'equipment') {
+      if (!equipmentBuffer) throw new BadRequestException('ไม่มีครุภัณฑ์ (ผ.03) ที่พร้อมดาวน์โหลดในเล่มนี้ (เฉพาะแผนยุทธศาสตร์ที่มีครุภัณฑ์รออนุมัติขึ้นไป)');
+      return equipmentBuffer;
+    }
+
+    const parts = [projectBuffer, equipmentBuffer].filter((b): b is Buffer => !!b);
+    if (parts.length === 0) throw new BadRequestException('ไม่มีข้อมูลสำหรับดาวน์โหลดในเล่มนี้');
+    return parts.length === 1 ? parts[0] : this.mergePdfBuffers(parts);
+  }
+
   async saveDraftPdfAndMeta(options: {
     developmentPlanId: string;
     pdfBuffer: Buffer;
@@ -1934,7 +2035,7 @@ export class PdfService {
     );
 
     const projects = await this.findProjectsForRevisionEditDraft(options.developmentPlanRevisionId);
-    if (projects.length === 0) throw new Error('No projects found with status Pending_Approval or Approved');
+    if (projects.length === 0) throw new Error('No projects found with status Verified or Pending_Approval');
 
     const selectedColumns = ['index', 'title', 'objective', 'target', 'budget', 'expectedResult', 'mainAgency'];
     const pdfBuffer = await this.generateRevisionEditDraftReportWithColumns(
@@ -1942,10 +2043,27 @@ export class PdfService {
     );
     const projectIdsSnapshot = projects.map(p => p.id);
 
+    // Wave staff-revision-combined-draftbook-por03 — BE-02. Append the
+    // DPR-scoped ผ.03 (RELPG) revision section to the END of the ผ.02
+    // revision buffer so the single draft book ends with ผ.03 (OLD-vs-NEW).
+    // `renderRevisionScopedPor03Buffer` is read-only (§17.2) and degrades
+    // to `null` for ISSUE_BASED / zero RELPGs / missing plan window — on
+    // `null` we keep the ผ.02 buffer as-is (no regression). §10 scope:
+    // bound to the target DPR, never a global open-revision lookup.
+    // `projectIdsSnapshot` stays ผ.02-only (equipment is not a project;
+    // the /pdf/generate-custom re-render path is ผ.02-only).
+    let finalBuffer = pdfBuffer;
+    const por03Buffer = await this.por03PdfService.renderRevisionScopedPor03Buffer(
+      options.developmentPlanRevisionId,
+    );
+    if (por03Buffer) {
+      finalBuffer = await this.mergePdfBuffers([pdfBuffer, por03Buffer]);
+    }
+
     return this.saveRevisionEditDraftPdfAndMeta({
       developmentPlanId: options.developmentPlanId,
       developmentPlanRevisionId: options.developmentPlanRevisionId,
-      pdfBuffer, projectIdsSnapshot, createdById: options.createdById, editNo,
+      pdfBuffer: finalBuffer, projectIdsSnapshot, createdById: options.createdById, editNo,
     });
   }
 
@@ -1990,12 +2108,13 @@ export class PdfService {
         .where('developmentPlanRevision.id = :developmentPlanRevisionId', { developmentPlanRevisionId })
         .andWhere('revisionType.name = :revisionTypeName', { revisionTypeName: 'แก้ไข' })
         .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-        .andWhere('status.name IN (:...statusNames)', { statusNames: ['Pending_Approval', 'Approved'] })
+        // เข้าเล่มร่าง (print) = สถานะ {Verified, Pending_Approval} — ดู findProjectsForRevisionEditDraft.
+        .andWhere('status.name IN (:...statusNames)', { statusNames: ['Verified', 'Pending_Approval'] })
         .orderBy('strategy.id', 'ASC')
         .getMany();
     }
 
-    if (revisedProjects.length === 0) throw new Error('No projects found with status Pending_Approval or Approved');
+    if (revisedProjects.length === 0) throw new Error('No projects found with status Verified or Pending_Approval');
 
     // Resolve reportFormat from the parent plan
     const reportFormat = dp.reportFormat ?? ReportFormat.STRATEGY_BASED;
@@ -2420,7 +2539,7 @@ export class PdfService {
     );
 
     const projects = await this.findProjectsForRevisionChangeDraft(options.developmentPlanRevisionId);
-    if (projects.length === 0) throw new Error('No projects found with status Pending_Approval or Approved');
+    if (projects.length === 0) throw new Error('No projects found with status Verified or Pending_Approval');
 
     const selectedColumns = ['index', 'title', 'objective', 'target', 'budget', 'expectedResult', 'mainAgency'];
     const pdfBuffer = await this.generateRevisionChangeDraftReportWithColumns(
@@ -2428,11 +2547,23 @@ export class PdfService {
     );
     const projectIdsSnapshot = projects.map(p => p.id);
 
+    // Wave staff-revision-combined-draftbook-por03 — BE-02. Append the
+    // DPR-scoped ผ.03 (RELPG) revision section to the END of the ผ.02
+    // change buffer (OLD-vs-NEW). Read-only (§17.2); degrades to null →
+    // keep ผ.02 as-is. §10 scope: bound to the target DPR.
+    let finalBuffer = pdfBuffer;
+    const por03Buffer = await this.por03PdfService.renderRevisionScopedPor03Buffer(
+      options.developmentPlanRevisionId,
+    );
+    if (por03Buffer) {
+      finalBuffer = await this.mergePdfBuffers([pdfBuffer, por03Buffer]);
+    }
+
     return this.saveRevisionChangeDraftPdfAndMeta({
       developmentPlanId: options.developmentPlanId,
       developmentPlanRevisionId: options.developmentPlanRevisionId,
       revisionTypeName: developmentPlanRevision.revisionType.name,
-      revisionCount, pdfBuffer, projectIdsSnapshot, createdById: options.createdById,
+      revisionCount, pdfBuffer: finalBuffer, projectIdsSnapshot, createdById: options.createdById,
     });
   }
 
@@ -2480,12 +2611,13 @@ export class PdfService {
         .where('developmentPlanRevision.id = :developmentPlanRevisionId', { developmentPlanRevisionId })
         .andWhere('revisionType.name = :revisionTypeName', { revisionTypeName: 'เปลี่ยนแปลง' })
         .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
-        .andWhere('status.name IN (:...statusNames)', { statusNames: ['Pending_Approval', 'Approved'] })
+        // เข้าเล่มร่าง (print) = สถานะ {Verified, Pending_Approval} — ดู findProjectsForRevisionEditDraft.
+        .andWhere('status.name IN (:...statusNames)', { statusNames: ['Verified', 'Pending_Approval'] })
         .orderBy('strategy.id', 'ASC')
         .getMany();
     }
 
-    if (revisedProjects.length === 0) throw new Error('No projects found with status Pending_Approval or Approved');
+    if (revisedProjects.length === 0) throw new Error('No projects found with status Verified or Pending_Approval');
 
     const projectsWithComparison = await Promise.all(
       revisedProjects.map(async (current) => this.findProjectComparisonForRevisionEdit(current, developmentPlanId))

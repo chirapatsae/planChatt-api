@@ -14,6 +14,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { CreateTrackingStatusDto } from './dto/create-tracking-status.dto';
 import { UpdateTrackingStatusDto } from './dto/update-tracking-status.dto';
+import { PromoteVerifiedRevisedScopeDto } from './dto/promote-verified-revised-scope.dto';
 import { Status } from 'src/status/entities/status.entity';
 import { TrackingStatus } from './entities/tracking-status.entity';
 import { Comment } from 'src/comments/entities/comment.entity';
@@ -29,6 +30,12 @@ import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-
 // §14.6 ghost-descendant hard-delete is intentionally NOT applied to SPG
 // because SPG is the ROOT of its lineage (no upstream parent to unlock).
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
+// BE-03 (Wave wave-print-merge-scale-statuschange, 2026-06-04) — scope-driven
+// promote-verified for SPG reuses the verified-supplement list finder
+// (`findByStatusForStaff`) for selection so the promoted set matches the
+// page-5 list EXACTLY (same §2 / §3 / §4.1 + agency-responsibility gates).
+import { SupplementProjectGroupService } from 'src/supplement-project-group/supplement-project-group.service';
+import { PromoteVerifiedSupplementScopeDto } from './dto/promote-verified-supplement-scope.dto';
 import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entities/development-plan-supplement.entity';
 // Wave Equipment ผ.03 Phase 2 — BE-04b (2026-05-28). Equipment items
 // are a 4th project kind (alongside PG / RPG / SPG) and run the full
@@ -71,6 +78,19 @@ import { Budget } from 'src/budget/entities/budget.entity';
 import { ReportFormat } from 'src/development-plan/types/report-format.enum';
 import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { BookFormatResolver } from 'src/common/project-classification/book-format.resolver';
+// Wave wave-print-merge-scale-statuschange / BE-01 (2026-06-04) — shared
+// list-finder predicate reused by the scope-driven promote endpoint.
+import { ProjectGroupsService } from 'src/project-groups/project-groups.service';
+import { PromoteVerifiedScopeDto } from './dto/promote-verified-scope.dto';
+// Wave wave-print-merge-scale-statuschange / BE-04 (2026-06-04) — scope-driven
+// promote-verified for EquipmentProjectGroup (EPG) + RevisedEquipmentProjectGroup
+// (RELPG). The RELPG entity is resolved via `createQueryBuilder`/`manager`
+// inside the transaction (metadata is registered app-wide by its own module),
+// so no new constructor-injected repo is required.
+import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
+import { PromoteVerifiedEquipmentScopeDto } from './dto/promote-verified-equipment-scope.dto';
+import { PromoteVerifiedRevisedEquipmentScopeDto } from './dto/promote-verified-revised-equipment-scope.dto';
+import { STATUS_NAMES } from 'src/common/status-names';
 
 /**
  * W105-BE-PR1 — sentinel thrown inside a per-project sub-transaction in
@@ -80,6 +100,27 @@ import { BookFormatResolver } from 'src/common/project-classification/book-forma
  *
  * Not exported — internal to the bulk-submit flow.
  */
+/**
+ * Post-commit notification emit descriptor for SPG staff transitions.
+ * Shared by `createManySupplementProjectGroup` (capped page-based bulk),
+ * `promoteVerifiedSupplementProjectGroupsByScope` (BE-03 scope-driven), and
+ * the shared `applySpgStaffTransition` helper. Collected inside the
+ * transaction; dispatched after commit so a notification failure cannot
+ * roll back the SQL transition (§4.1, §17.2).
+ */
+type BulkSpgEmitCtx = {
+  fromStatus: string;
+  toStatus: string;
+  projectId: string;
+  projectTitle: string;
+  responsibleAgencyId: string | null;
+  createdByWorkHistoryId: string | null;
+  planName: string | null;
+  reason: string | null;
+  actorUserId: string | null;
+  actorWorkHistoryId: string | null;
+};
+
 class BulkSubmitRowError extends Error {
   constructor(
     public readonly code:
@@ -183,6 +224,18 @@ export class TrackingStatusService {
     // format for the baseline snapshot's `classification.reportFormat`
     // field. Read-only.
     private readonly bookFormatResolver: BookFormatResolver,
+    // Wave wave-print-merge-scale-statuschange / BE-01 (2026-06-04).
+    // Source of truth for the scope-driven promote-Verified row
+    // selection. The promote endpoint reuses
+    // `findVerifiedProjectGroupIdsByScope` so the list predicate is NOT
+    // forked. ProjectGroupsModule does not import TrackingStatusModule,
+    // so the dependency is one-directional (no circular).
+    private readonly projectGroupsService: ProjectGroupsService,
+    // BE-03 (Wave wave-print-merge-scale-statuschange) — reuse the
+    // verified-supplement list finder for the scope-driven promote-verified
+    // selection. No circular dependency: SupplementProjectGroupModule does
+    // not import TrackingStatusModule.
+    private readonly supplementProjectGroupService: SupplementProjectGroupService,
   ) { }
 
   /**
@@ -1136,6 +1189,136 @@ export class TrackingStatusService {
   }
 
   /**
+   * Wave wave-print-merge-scale-statuschange / BE-01 (2026-06-04).
+   *
+   * Scope-driven staff promotion: move EVERY main-plan `ProjectGroup`
+   * whose latest status is `Verified` under the supplied
+   * `developmentPlanId` (with the agency/authority origin discriminator)
+   * to `Pending_Approval`, in ONE transaction, returning `{ movedCount }`.
+   *
+   * Replaces the FE-driven `POST /tracking-status/bulk` array move — the
+   * endpoint accepts NO id list / page / limit; the row set is re-derived
+   * server-side via `ProjectGroupsService.findVerifiedProjectGroupIdsByScope`
+   * (the SAME predicate as the list finders — §10 scope binding, not a
+   * global latest).
+   *
+   * Authority (§3 / §4.1): staff-controlled transition — role ∈
+   * {staff, admin, super-admin} + `workStatus = approved`. Ownership is
+   * NOT the gate. Area-responsibility filtering MIRRORS the list finders
+   * (`findByStatusVerifiedAgency` / `findProjectsByStatusInAuthority`),
+   * which scope by `developmentPlanId` only and apply NO amphoe filter —
+   * so none is applied here, matching them byte-for-spirit.
+   *
+   * §12 audit: one `TrackingStatus` per promoted PG — prior latest
+   * demoted to `isLatest = false`, new `Pending_Approval` row
+   * `isLatest = true`, `createdBy` = caller WorkHistory. No hard delete,
+   * no silent overwrite.
+   *
+   * §17.4: NO AI baseline snapshot — staff transition is not an authoring
+   * surface (Wave 11). §18: NO orphan cascade — that fires only on book
+   * cancel / finalize.
+   *
+   * Concurrency: the latest status is RE-READ inside the tx; rows that
+   * are no longer `Verified` at promotion time are skipped (idempotent
+   * under concurrent moves). All-or-nothing — a thrown error rolls back
+   * the whole batch. No 200-row cap (unbounded scope is the point).
+   */
+  async promoteVerifiedProjectGroupsByScope(
+    dto: PromoteVerifiedScopeDto,
+    userId: string,
+  ): Promise<{ movedCount: number }> {
+    try {
+      const workHistory = await this.workHistoryRepo.findOne({
+        where: { user: { id: userId }, isCurrent: true },
+        relations: ['role', 'workStatus', 'user'],
+      });
+
+      if (!workHistory) {
+        throw new NotFoundException(`WorkHistory for user ${userId} not found`);
+      }
+      if (workHistory.workStatus?.name !== 'approved') {
+        throw new UnauthorizedException(
+          'คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)',
+        );
+      }
+
+      // Staff-led only (§3 / §4.1).
+      const allowedRoles = ['staff', 'admin', 'super-admin'];
+      if (!allowedRoles.includes(workHistory.role?.name)) {
+        throw new ForbiddenException(
+          'เฉพาะเจ้าหน้าที่ (staff/admin/super-admin) เท่านั้นที่สามารถใช้งาน endpoint นี้ได้',
+        );
+      }
+
+      const origin = dto.origin ?? 'agency';
+
+      const movedCount = await this.dataSource.transaction(async (manager) => {
+        // Resolve target status once.
+        const pendingApprovalStatus = await manager.findOne(Status, {
+          where: { name: 'Pending_Approval' },
+        });
+        if (!pendingApprovalStatus) {
+          throw new NotFoundException('ไม่พบสถานะ Pending_Approval');
+        }
+
+        // §3 / §4.1 staff area-responsibility — staff may only promote PGs
+        // in their own amphoe(s); admin / super-admin bypass (undefined).
+        const responsibleAmphoeIds =
+          workHistory.role?.name === 'staff'
+            ? await this.getStaffResponsibleAmphoeIds(manager, workHistory.id)
+            : undefined;
+
+        // Re-derive the row set server-side via the shared list predicate
+        // (§10 scope binding). Runs inside the tx for a consistent read.
+        const candidateIds =
+          await this.projectGroupsService.findVerifiedProjectGroupIdsByScope(
+            {
+              developmentPlanId: dto.developmentPlanId,
+              origin,
+              responsibleAmphoeIds,
+            },
+            manager,
+          );
+
+        let moved = 0;
+        for (const projectId of candidateIds) {
+          // §12 + concurrency — re-read the latest status inside the tx.
+          const currentTracking = await manager.findOne(TrackingStatus, {
+            where: { projectGroupId: { id: projectId }, isLatest: true },
+            relations: ['statusId'],
+          });
+          // Skip rows that raced out of Verified since selection.
+          if (currentTracking?.statusId?.name !== 'Verified') {
+            continue;
+          }
+
+          // Demote prior latest (no hard delete — §12).
+          await manager.update(
+            TrackingStatus,
+            { projectGroupId: { id: projectId } },
+            { isLatest: false },
+          );
+
+          const tracking = manager.create(TrackingStatus, {
+            createdBy: workHistory,
+            projectGroupId: { id: projectId },
+            statusId: { id: pendingApprovalStatus.id },
+            isLatest: true,
+          });
+          await manager.save(TrackingStatus, tracking);
+          moved += 1;
+        }
+
+        return moved;
+      });
+
+      return { movedCount };
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
    * W105-BE-PR1 — Owner-scoped bulk Ready → Pending transition for
    * MAIN-PLAN ProjectGroup rows.
    *
@@ -1771,18 +1954,6 @@ export class TrackingStatusService {
       // Post-commit emit descriptors — collect inside the tx; dispatch after
       // the transaction callback resolves so a notification failure CANNOT
       // roll back the SQL transition (§4.1, §17.2).
-      type BulkSpgEmitCtx = {
-        fromStatus: string;
-        toStatus: string;
-        projectId: string;
-        projectTitle: string;
-        responsibleAgencyId: string | null;
-        createdByWorkHistoryId: string | null;
-        planName: string | null;
-        reason: string | null;
-        actorUserId: string | null;
-        actorWorkHistoryId: string | null;
-      };
       const bulkSpgEmits: BulkSpgEmitCtx[] = [];
 
       const results = await this.dataSource.transaction(async (manager) => {
@@ -1798,149 +1969,24 @@ export class TrackingStatusService {
               'ต้องระบุ supplementProjectGroupId หรือ projectId',
             );
           }
-          const { statusId } = dto;
 
-          // Load SPG with full scope chain (parent plan + supplement round +
-          // responsibleAgency + createdBy). Mirrors the single-row method's
-          // staff branch.
-          const spg = await manager.findOne(SupplementProjectGroup, {
-            where: { id: spgId },
-            relations: [
-              'createdBy',
-              'developmentPlanSupplement',
-              'developmentPlanSupplement.developmentPlan',
-              'responsibleAgency',
-            ],
-          });
-          if (!spg) {
-            throw new NotFoundException(
-              `SPG_NOT_FOUND: SupplementProjectGroup with ID ${spgId} not found (offendingId=${spgId})`,
-            );
-          }
-
-          const targetStatus = await manager.findOne(Status, {
-            where: { id: statusId },
-          });
-          if (!targetStatus) {
-            throw new NotFoundException(
-              `Status with ID ${statusId} not found (offendingId=${spgId})`,
-            );
-          }
-
-          // Scope binding — parent plan + supplement round.
-          // (Mirrors the staff branch of `createBySupplementProjectGroup`.)
-          const dps = spg.developmentPlanSupplement;
-          if (!dps) {
-            throw new ForbiddenException(
-              `ไม่พบรอบเพิ่มเติมของโครงการ ไม่สามารถดำเนินการได้ (offendingId=${spgId})`,
-            );
-          }
-          const dp = dps.developmentPlan;
-          if (!dp?.isLatest) {
-            throw new ForbiddenException(
-              `แผนพัฒนาฯ ที่เชื่อมโยงกับโครงการนี้ไม่ใช่แผนปัจจุบัน (offendingId=${spgId})`,
-            );
-          }
-          // DevelopmentPlan.isBooked is NOT a gate for supplement actions;
-          // parent plan being booked is the EXPECTED state for the
-          // supplement workflow (2026-05-12 single-row note).
-          if (!dps.isLatest) {
-            throw new ForbiddenException(
-              `BOOK_HAS_NEWER_REVISION: รอบเพิ่มเติมนี้ไม่ใช่รอบปัจจุบัน (offendingId=${spgId})`,
-            );
-          }
-          if (dps.isBooked) {
-            throw new ForbiddenException(
-              `BOOK_HAS_NEWER_REVISION: รอบเพิ่มเติมถูกรวมเล่มแล้ว (offendingId=${spgId})`,
-            );
-          }
-
-          // Q3 — AGENCY-BASED staff responsibility (mirrors single-row).
-          // Admin / super-admin bypass.
-          if (userRole === 'staff') {
-            const projectAgencyId = spg.responsibleAgency?.id;
-            if (!projectAgencyId) {
-              throw new BadRequestException(
-                `โครงการนี้ยังไม่มีการกำหนดหน่วยงานรับผิดชอบ (offendingId=${spgId})`,
-              );
-            }
-            const hasResponsibility = await manager.findOne(
-              WorkHistoryGovernmentAgencyResponsibility,
-              {
-                where: {
-                  workHistory: { id: workHistory.id },
-                  governmentAgency: { id: projectAgencyId },
-                },
-              },
-            );
-            if (!hasResponsibility) {
-              throw new ForbiddenException(
-                `คุณไม่มีสิทธิ์ดำเนินการกับโครงการนี้ (ไม่ได้รับผิดชอบหน่วยงานของโครงการ) (offendingId=${spgId})`,
-              );
-            }
-          }
-
-          // Load current latest TrackingStatus + enforce transition map.
-          const currentTracking = await manager.findOne(TrackingStatus, {
-            where: {
-              supplementProjectGroupId: { id: spgId },
-              isLatest: true,
+          // Per-row transition logic is SHARED with the scope-driven
+          // promote-verified endpoint (BE-03) via `applySpgStaffTransition`
+          // — guards, §12 audit, and emit-context build are NOT duplicated.
+          const { tracking, emit } = await this.applySpgStaffTransition(
+            manager,
+            {
+              spgId,
+              statusId: dto.statusId,
+              staffRemark: dto.staffRemark ?? null,
+              comment: dto.comment,
             },
-            relations: ['statusId'],
-          });
-          if (!currentTracking) {
-            throw new BadRequestException(
-              `ไม่พบสถานะปัจจุบันของโครงการ (offendingId=${spgId})`,
-            );
-          }
-          const currentStatusName = currentTracking.statusId?.name;
-          if (!currentStatusName) {
-            throw new BadRequestException(
-              `ไม่สามารถอ่านสถานะปัจจุบันของโครงการ (offendingId=${spgId})`,
-            );
-          }
-
-          const allowedDestination = staffAllowedTransitions[currentStatusName];
-          if (!allowedDestination || allowedDestination !== targetStatus.name) {
-            throw new ForbiddenException(
-              `INVALID_TRANSITION: ไม่อนุญาตให้เปลี่ยนสถานะจาก "${currentStatusName}" เป็น "${targetStatus.name}" ` +
-                `(offendingId=${spgId}, เส้นทางที่อนุญาต: ${currentStatusName} → ${allowedDestination ?? 'ไม่มี'})`,
-            );
-          }
-
-          // Audit (§12) — flip prior latest to false, insert new latest.
-          await manager.update(
-            TrackingStatus,
-            { supplementProjectGroupId: { id: spgId } },
-            { isLatest: false },
+            workHistory,
+            userRole,
+            staffAllowedTransitions,
           );
-
-          // createManySupplementProjectGroup is staff-only (enforced above);
-          // staffRemark is always eligible.
-          const tracking = manager.create(TrackingStatus, {
-            createdBy: workHistory,
-            supplementProjectGroupId: { id: spgId },
-            statusId: { id: statusId },
-            staffRemark: dto.staffRemark ?? null,
-            comment: dto.comment,
-            isLatest: true,
-          });
-
-          const savedTracking = await manager.save(TrackingStatus, tracking);
-          inner.push(savedTracking);
-
-          bulkSpgEmits.push({
-            fromStatus: currentStatusName,
-            toStatus: targetStatus.name,
-            projectId: spg.id,
-            projectTitle: spg.title ?? '',
-            responsibleAgencyId: spg.responsibleAgency?.id ?? null,
-            createdByWorkHistoryId: spg.createdBy?.id ?? null,
-            planName: dps?.developmentPlan?.name ?? null,
-            reason: dto.staffRemark ?? null,
-            actorUserId: workHistory.user?.id ?? null,
-            actorWorkHistoryId: workHistory.id ?? null,
-          });
+          inner.push(tracking);
+          bulkSpgEmits.push(emit);
         }
 
         return inner;
@@ -1981,6 +2027,804 @@ export class TrackingStatusService {
     } catch (error) {
       handleException(this.logger, error);
     }
+  }
+
+  /**
+   * BE-03 (Wave wave-print-merge-scale-statuschange, 2026-06-04) —
+   * scope-driven promote-verified for SupplementProjectGroup.
+   *
+   * Promotes EVERY SPG whose latest status is `Verified` under the supplied
+   * (developmentPlanId + developmentPlanSupplementId) scope to
+   * `Pending_Approval` in ONE transaction. Returns `{ movedCount }`.
+   *
+   * This is the PRIMARY correctness fix for the broken supplement
+   * print-presentation page: the page-based bulk endpoint
+   * (`POST /tracking-status/bulk/supplement-project-group`) HARD-CAPS at 200
+   * (`BULK_TOO_LARGE`) and rolls back the whole batch, so a scope with >200
+   * verified SPGs moves ZERO rows. This endpoint is a SET operation, not a
+   * page — there is NO row cap.
+   *
+   * Reuse:
+   *   - Selection predicate is the SAME finder behind
+   *     `GET /supplement-project-group/by-status-verified-supplement`
+   *     (`SupplementProjectGroupService.findByStatusForStaff('Verified', …)`),
+   *     scoped to the supplied supplement round. This carries the §2
+   *     workStatus gate, the §3 / §4.1 staff role gate, AND the per-staff
+   *     agency-responsibility filter (admin / super-admin bypass), so the
+   *     promoted set is EXACTLY what the caller sees in the list.
+   *   - Per-row transition (guards + §12 audit + emit-context build) is the
+   *     SAME `applySpgStaffTransition` helper used by the capped bulk path.
+   *
+   * §10 — bound to the supplied supplement; never a global open round.
+   * §15.4 — the per-row helper rejects a non-latest / booked supplement with
+   * the canonical `BOOK_HAS_NEWER_REVISION` lock error BEFORE moving any row
+   * (defense in depth — mirrors the FE `isBookActionable` gate). Because the
+   * transaction is atomic, a single locked row aborts the whole promote and
+   * zero rows move.
+   * §17.4 — no AI baseline snapshot (staff transition, not authoring).
+   * §18 — no cascade (fires only on book cancel / finalize).
+   * SPG is agency-origin only by construction — no `responsibleAgency`
+   * clearing applies here; the helper never touches it.
+   */
+  async promoteVerifiedSupplementProjectGroupsByScope(
+    dto: PromoteVerifiedSupplementScopeDto,
+    userId: string,
+  ): Promise<{ movedCount: number }> {
+    try {
+      // Selection — reuse the verified-supplement list finder. This re-runs
+      // the §2 workStatus, §3 / §4.1 staff role, and per-staff agency
+      // responsibility gates server-side; a non-staff or unauthorized caller
+      // is rejected here before any write.
+      const selected = (await this.supplementProjectGroupService.findByStatusForStaff(
+        'Verified',
+        {
+          userId,
+          developmentPlanId: dto.developmentPlanId,
+          developmentPlanSupplementId: dto.developmentPlanSupplementId,
+        },
+      )) as SupplementProjectGroup[];
+
+      const verifiedSpgIds = selected.map((spg) => spg.id);
+      if (verifiedSpgIds.length === 0) {
+        return { movedCount: 0 };
+      }
+
+      // Re-resolve the actor WorkHistory (the finder validated it but does
+      // not return it). Eager-load `user` for the notification actor audit.
+      const workHistory = await this.workHistoryRepo.findOne({
+        where: { user: { id: userId }, isCurrent: true },
+        relations: ['role', 'workStatus', 'user'],
+      });
+      if (!workHistory) {
+        throw new NotFoundException(`WorkHistory for user ${userId} not found`);
+      }
+      const userRole = workHistory.role?.name;
+
+      // Staff-led only (§3 / §4.1) — promote is a WRITE. The list finder
+      // above also admits `c-level` for read; re-assert the write gate here
+      // so a c-level reader cannot move rows (mirrors the PG promote sibling
+      // `promoteVerifiedProjectGroupsByScope`).
+      const allowedRoles = ['staff', 'admin', 'super-admin'];
+      if (!allowedRoles.includes(userRole)) {
+        throw new ForbiddenException(
+          'เฉพาะเจ้าหน้าที่ (staff/admin/super-admin) เท่านั้นที่สามารถใช้งาน endpoint นี้ได้',
+        );
+      }
+
+      // Resolve the canonical Pending_Approval status id once.
+      const pendingApprovalStatus = await this.statusRepo.findOne({
+        where: { name: 'Pending_Approval' },
+      });
+      if (!pendingApprovalStatus) {
+        throw new NotFoundException('Status "Pending_Approval" not found');
+      }
+
+      // Same strict forward transition map as the capped bulk path. Only
+      // Verified → Pending_Approval is exercised here, but the map is reused
+      // so the helper's transition guard behaves identically.
+      const staffAllowedTransitions: Record<string, string> = {
+        Pending: 'Verified',
+        Verified: 'Pending_Approval',
+        Pending_Approval: 'Approved',
+      };
+
+      const scopeSpgEmits: BulkSpgEmitCtx[] = [];
+
+      // ONE transaction, NO row cap. Any per-row failure (e.g. §15.4 lock)
+      // rolls back the whole promote so zero rows move.
+      const results = await this.dataSource.transaction(async (manager) => {
+        const inner: TrackingStatus[] = [];
+        for (const spgId of verifiedSpgIds) {
+          const { tracking, emit } = await this.applySpgStaffTransition(
+            manager,
+            {
+              spgId,
+              statusId: pendingApprovalStatus.id,
+              staffRemark: null,
+              comment: undefined,
+            },
+            workHistory,
+            userRole,
+            staffAllowedTransitions,
+          );
+          inner.push(tracking);
+          scopeSpgEmits.push(emit);
+        }
+        return inner;
+      });
+
+      // POST-COMMIT notification dispatch — mirrors the capped bulk path.
+      // Failures log but do NOT roll back (§4.1, §17.2). No §17.4 baseline,
+      // no §18 cascade.
+      for (const ctx of scopeSpgEmits) {
+        const eventTypes = this.resolveNotificationEventTypes(
+          ctx.fromStatus,
+          ctx.toStatus,
+        );
+        for (const eventType of eventTypes) {
+          await this.dispatchPhaseOneNotification({
+            eventType,
+            fromStatus: ctx.fromStatus,
+            toStatus: ctx.toStatus,
+            projectId: ctx.projectId,
+            projectKind: 'supplement-project-group',
+            projectTitle: ctx.projectTitle,
+            projectResponsibleAgencyId: ctx.responsibleAgencyId,
+            createdByWorkHistoryId: ctx.createdByWorkHistoryId,
+            reason: ctx.reason,
+            planName: ctx.planName,
+            actorUserId: ctx.actorUserId,
+            actorWorkHistoryId: ctx.actorWorkHistoryId,
+          });
+        }
+      }
+
+      return { movedCount: results.length };
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  // ====================================================================
+  //  Wave wave-print-merge-scale-statuschange / BE-04 (2026-06-04)
+  //  Scope-driven "promote every Verified equipment row → Pending_Approval"
+  //  for EquipmentProjectGroup (EPG) and RevisedEquipmentProjectGroup
+  //  (RELPG). Replaces the FE per-id `Promise.allSettled` storm + the
+  //  `@Max(200)` paginate-all workaround: the row set is re-derived
+  //  server-side from status + scope (§10), no id list / page / limit is
+  //  accepted, and the whole set moves in ONE transaction.
+  //
+  //  Per §3 / §4.1 / §5.3 staff workflow transitions are NOT agency-gated
+  //  (the agency-only rule is authoring-scoped); authority is staff role +
+  //  workStatus=approved + area responsibility. Per §14.4 forward
+  //  transitions are NOT blocked by the lineage lock (no descendant guard).
+  //  Per §12 each promoted row writes ONE TrackingStatus and demotes the
+  //  prior latest. Per §17.4 a Verified → Pending_Approval promotion is NOT
+  //  an authoring surface — NO `no-ai-baseline` snapshot is fired. Per §18
+  //  no cascade is triggered.
+  // ====================================================================
+
+  /**
+   * EPG — promote every `Verified` EquipmentProjectGroup under the supplied
+   * `developmentPlanId` (§10 main-plan scope) to `Pending_Approval`.
+   *
+   * Row selection reuses the SAME predicate as the staff verified-equipment
+   * list finder (`EquipmentProjectGroupService.findAll` with
+   * `status='Verified'`): `deletedAt IS NULL` AND latest tracking status =
+   * Verified AND `developmentPlan.id = :planId`, but as a SET query with no
+   * `@Max(200)` paging cap.
+   *
+   * Per-row guards mirror the staff branch of
+   * `createByEquipmentProjectGroup` byte-for-byte: parent plan
+   * `isLatest=true` / `isBooked=false`, amphoe-based area responsibility for
+   * `staff` (admin / super-admin bypass), and the strict
+   * `Verified → Pending_Approval` transition map.
+   */
+  async promoteVerifiedEquipmentByScope(
+    dto: PromoteVerifiedEquipmentScopeDto,
+    userId: string,
+  ): Promise<{ movedCount: number }> {
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        // 1-3. WorkHistory + workStatus.
+        const workHistory = await manager.findOne(WorkHistory, {
+          where: { user: { id: userId }, isCurrent: true },
+          relations: ['role', 'workStatus'],
+        });
+        if (!workHistory) {
+          throw new NotFoundException(
+            `WorkHistory for user ${userId} not found`,
+          );
+        }
+        if (workHistory.workStatus?.name !== 'approved') {
+          throw new UnauthorizedException(
+            'คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)',
+          );
+        }
+
+        // 4. Staff-lead only (§4.1) — NOT agency-gated (§5.3).
+        const userRole = workHistory.role?.name;
+        if (!['staff', 'admin', 'super-admin'].includes(userRole)) {
+          throw new ForbiddenException(
+            'เฉพาะเจ้าหน้าที่ (staff/admin/super-admin) เท่านั้นที่สามารถใช้งาน endpoint นี้ได้',
+          );
+        }
+
+        // 5. Verified-equipment finder predicate as a SET query (§10 scope
+        //    binding — bound to the supplied developmentPlanId, never global).
+        const qb = manager
+          .createQueryBuilder(EquipmentProjectGroup, 'equipment')
+          .leftJoinAndSelect('equipment.developmentPlan', 'developmentPlan')
+          .leftJoinAndSelect('equipment.amphoe', 'amphoe')
+          .where('equipment.deletedAt IS NULL')
+          .andWhere('developmentPlan.id = :planId', {
+            planId: dto.developmentPlanId,
+          })
+          .andWhere(
+            'EXISTS (SELECT 1 FROM tracking_status ts ' +
+              ' INNER JOIN status s ON s.id = ts.status_id ' +
+              ' WHERE ts.equipment_project_group_id = equipment.id ' +
+              '   AND ts.is_latest = true ' +
+              '   AND s.name = :verifiedName)',
+            { verifiedName: STATUS_NAMES.VERIFIED },
+          );
+
+        // Area responsibility for `staff` role (admin / super-admin bypass) —
+        // identical semantics to the per-row `createByEquipmentProjectGroup`
+        // staff branch (amphoe-based via WorkHistoryAmphoeResponsibility).
+        if (userRole === 'staff') {
+          const responsibleAmphoeIds =
+            await this.getStaffResponsibleAmphoeIds(manager, workHistory.id);
+          if (responsibleAmphoeIds.length === 0) {
+            return { movedCount: 0 };
+          }
+          qb.andWhere('amphoe.id IN (:...responsibleAmphoeIds)', {
+            responsibleAmphoeIds,
+          });
+        }
+
+        const rows = await qb.getMany();
+        if (rows.length === 0) {
+          return { movedCount: 0 };
+        }
+
+        const pendingApprovalStatus = await manager.findOne(Status, {
+          where: { name: STATUS_NAMES.PENDING_APPROVAL },
+        });
+        if (!pendingApprovalStatus) {
+          throw new NotFoundException(
+            `ไม่พบสถานะ "${STATUS_NAMES.PENDING_APPROVAL}" ในระบบ`,
+          );
+        }
+
+        let movedCount = 0;
+        for (const equipment of rows) {
+          // §10 scope binding — re-assert the parent plan is still the active
+          // main-plan round (mirror of the per-row staff branch).
+          const dp = equipment.developmentPlan;
+          if (!dp?.isLatest) {
+            throw new ForbiddenException(
+              'แผนพัฒนาฯ ที่เชื่อมโยงกับรายการครุภัณฑ์นี้ไม่ใช่แผนปัจจุบัน ไม่สามารถดำเนินการได้',
+            );
+          }
+          if (dp?.isBooked) {
+            throw new ForbiddenException(
+              'แผนพัฒนาฯ ที่เชื่อมโยงกับรายการครุภัณฑ์นี้ถูกรวมเล่มแล้ว ไม่สามารถดำเนินการได้',
+            );
+          }
+
+          // §12 audit — demote prior latest, insert the new status row.
+          await manager.update(
+            TrackingStatus,
+            { equipmentProjectGroupId: { id: equipment.id } },
+            { isLatest: false },
+          );
+          const tracking = manager.create(TrackingStatus, {
+            createdBy: workHistory,
+            equipmentProjectGroupId: equipment,
+            statusId: pendingApprovalStatus,
+            isLatest: true,
+          });
+          await manager.save(TrackingStatus, tracking);
+          movedCount += 1;
+        }
+
+        this.logger.log(
+          `Promote-verified EPG by scope planId=${dto.developmentPlanId} ` +
+            `moved=${movedCount} by=${workHistory.id} (role=${userRole})`,
+        );
+        return { movedCount };
+      });
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * RELPG — promote every `Verified` RevisedEquipmentProjectGroup under the
+   * supplied `developmentPlanRevisionId` (§10 DPR scope) to
+   * `Pending_Approval`.
+   *
+   * Row selection reuses the SAME predicate as the RELPG staff verified
+   * queue (`RevisedEquipmentProjectGroupService.findStaffVerified`):
+   * `deletedAt IS NULL` AND latest tracking status = Verified AND
+   * `developmentPlanRevision.id = :dprId`, but as a SET query with no
+   * `@Max(200)` paging cap.
+   *
+   * Per-row guards mirror
+   * `RevisedEquipmentProjectGroupService.staffTransition` (the core behind
+   * `moveToApprovalByStaff`): the RELPG's OWN DPR must be `isLatest=true` /
+   * `isBooked=false` (§10), agency-based area responsibility for `staff`
+   * (admin / super-admin bypass), and the strict
+   * `Verified → Pending_Approval` transition map.
+   */
+  async promoteVerifiedRelpgByScope(
+    dto: PromoteVerifiedRevisedEquipmentScopeDto,
+    userId: string,
+  ): Promise<{ movedCount: number }> {
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        // 1-3. WorkHistory + workStatus.
+        const workHistory = await manager.findOne(WorkHistory, {
+          where: { user: { id: userId }, isCurrent: true },
+          relations: ['role', 'workStatus'],
+        });
+        if (!workHistory) {
+          throw new NotFoundException(
+            `WorkHistory for user ${userId} not found`,
+          );
+        }
+        if (workHistory.workStatus?.name !== 'approved') {
+          throw new UnauthorizedException(
+            'คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)',
+          );
+        }
+
+        // 4. Staff-lead only (§4.1) — NOT agency-gated (§5.3).
+        const userRole = workHistory.role?.name;
+        if (!['staff', 'admin', 'super-admin'].includes(userRole)) {
+          throw new ForbiddenException(
+            'เฉพาะเจ้าหน้าที่ (staff/admin/super-admin) เท่านั้นที่สามารถใช้งาน endpoint นี้ได้',
+          );
+        }
+
+        // 5. RELPG verified-queue predicate as a SET query (§10 scope binding
+        //    — bound to the supplied DPR, never a global latest lookup).
+        const qb = manager
+          .createQueryBuilder(RevisedEquipmentProjectGroup, 'relpg')
+          .leftJoinAndSelect(
+            'relpg.developmentPlanRevision',
+            'developmentPlanRevision',
+          )
+          .leftJoinAndSelect('relpg.responsibleAgency', 'responsibleAgency')
+          .where('relpg.deletedAt IS NULL')
+          .andWhere('developmentPlanRevision.id = :dprId', {
+            dprId: dto.developmentPlanRevisionId,
+          })
+          .andWhere(
+            'EXISTS (SELECT 1 FROM tracking_status ts ' +
+              ' INNER JOIN status s ON s.id = ts.status_id ' +
+              ' WHERE ts.revised_equipment_project_group_id = relpg.id ' +
+              '   AND ts.is_latest = true ' +
+              '   AND s.name = :verifiedName)',
+            { verifiedName: STATUS_NAMES.VERIFIED },
+          );
+
+        // Area responsibility for `staff` role (admin / super-admin bypass) —
+        // identical semantics to
+        // `staffTransition.assertStaffAreaResponsibility` (agency-based via
+        // WorkHistoryGovernmentAgencyResponsibility).
+        if (userRole === 'staff') {
+          const responsibleAgencyIds =
+            await this.getStaffResponsibleAgencyIds(manager, workHistory.id);
+          if (responsibleAgencyIds.length === 0) {
+            return { movedCount: 0 };
+          }
+          qb.andWhere('responsibleAgency.id IN (:...responsibleAgencyIds)', {
+            responsibleAgencyIds,
+          });
+        }
+
+        const rows = await qb.getMany();
+        if (rows.length === 0) {
+          return { movedCount: 0 };
+        }
+
+        const pendingApprovalStatus = await manager.findOne(Status, {
+          where: { name: STATUS_NAMES.PENDING_APPROVAL },
+        });
+        if (!pendingApprovalStatus) {
+          throw new NotFoundException(
+            `ไม่พบสถานะ "${STATUS_NAMES.PENDING_APPROVAL}" ในระบบ`,
+          );
+        }
+
+        let movedCount = 0;
+        for (const relpg of rows) {
+          // §10 scope binding — re-assert the RELPG's OWN DPR is the active
+          // round (mirror of `assertRevisionActiveForStaff`).
+          const dpr = relpg.developmentPlanRevision;
+          if (!dpr?.isLatest) {
+            throw new BadRequestException(
+              'รอบการแก้ไข/เปลี่ยนแปลงนี้ไม่ใช่รอบปัจจุบัน ไม่สามารถดำเนินการได้',
+            );
+          }
+          if (dpr?.isBooked) {
+            throw new BadRequestException(
+              'รอบการแก้ไข/เปลี่ยนแปลงถูกรวมเล่มแล้ว ไม่สามารถดำเนินการได้',
+            );
+          }
+
+          // §12 audit — demote prior latest, insert the new status row.
+          await manager.update(
+            TrackingStatus,
+            { revisedEquipmentProjectGroupId: { id: relpg.id } },
+            { isLatest: false },
+          );
+          const tracking = manager.create(TrackingStatus, {
+            createdBy: workHistory,
+            revisedEquipmentProjectGroupId: relpg,
+            statusId: pendingApprovalStatus,
+            isLatest: true,
+          });
+          await manager.save(TrackingStatus, tracking);
+          movedCount += 1;
+        }
+
+        this.logger.log(
+          `Promote-verified RELPG by scope dprId=${dto.developmentPlanRevisionId} ` +
+            `moved=${movedCount} by=${workHistory.id} (role=${userRole})`,
+        );
+        return { movedCount };
+      });
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * Scope-driven APPROVE for RevisedEquipmentProjectGroup (ผ.03
+   * revision/change). Sibling of `promoteVerifiedRelpgByScope`, but moves
+   * `Pending_Approval → Approved` (the "อนุมัติทั้งหมด" action on the
+   * ready-to-approved pages) instead of `Verified → Pending_Approval`.
+   *
+   * Promotes EVERY RELPG whose latest status is `Pending_Approval` under the
+   * supplied `developmentPlanRevisionId` (§10 DPR scope) to `Approved` in ONE
+   * transaction and returns `{ movedCount }`. SET operation — no row cap, no
+   * id list (scale-safe, mirrors the §12.1 promote-verified family).
+   *
+   * Staff-only (§3 / §4.1 — NOT agency-gated per §5.3); agency-based area
+   * responsibility for `staff` (admin / super-admin bypass); §12 audit per
+   * row; §14.4 forward transition (no lineage descendant guard); §17.4
+   * baseline NOT fired; §18 cascade NOT triggered.
+   */
+  async approvePendingApprovalRelpgByScope(
+    dto: PromoteVerifiedRevisedEquipmentScopeDto,
+    userId: string,
+  ): Promise<{ movedCount: number }> {
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        // 1-3. WorkHistory + workStatus.
+        const workHistory = await manager.findOne(WorkHistory, {
+          where: { user: { id: userId }, isCurrent: true },
+          relations: ['role', 'workStatus'],
+        });
+        if (!workHistory) {
+          throw new NotFoundException(
+            `WorkHistory for user ${userId} not found`,
+          );
+        }
+        if (workHistory.workStatus?.name !== 'approved') {
+          throw new UnauthorizedException(
+            'คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)',
+          );
+        }
+
+        // 4. Staff-lead only (§4.1) — NOT agency-gated (§5.3).
+        const userRole = workHistory.role?.name;
+        if (!['staff', 'admin', 'super-admin'].includes(userRole)) {
+          throw new ForbiddenException(
+            'เฉพาะเจ้าหน้าที่ (staff/admin/super-admin) เท่านั้นที่สามารถใช้งาน endpoint นี้ได้',
+          );
+        }
+
+        // 5. RELPG pending-approval-queue predicate as a SET query (§10 scope
+        //    binding — bound to the supplied DPR, never a global lookup).
+        const qb = manager
+          .createQueryBuilder(RevisedEquipmentProjectGroup, 'relpg')
+          .leftJoinAndSelect(
+            'relpg.developmentPlanRevision',
+            'developmentPlanRevision',
+          )
+          .leftJoinAndSelect('relpg.responsibleAgency', 'responsibleAgency')
+          .where('relpg.deletedAt IS NULL')
+          .andWhere('developmentPlanRevision.id = :dprId', {
+            dprId: dto.developmentPlanRevisionId,
+          })
+          .andWhere(
+            'EXISTS (SELECT 1 FROM tracking_status ts ' +
+              ' INNER JOIN status s ON s.id = ts.status_id ' +
+              ' WHERE ts.revised_equipment_project_group_id = relpg.id ' +
+              '   AND ts.is_latest = true ' +
+              '   AND s.name = :pendingApprovalName)',
+            { pendingApprovalName: STATUS_NAMES.PENDING_APPROVAL },
+          );
+
+        // Area responsibility for `staff` role (admin / super-admin bypass).
+        if (userRole === 'staff') {
+          const responsibleAgencyIds =
+            await this.getStaffResponsibleAgencyIds(manager, workHistory.id);
+          if (responsibleAgencyIds.length === 0) {
+            return { movedCount: 0 };
+          }
+          qb.andWhere('responsibleAgency.id IN (:...responsibleAgencyIds)', {
+            responsibleAgencyIds,
+          });
+        }
+
+        const rows = await qb.getMany();
+        if (rows.length === 0) {
+          return { movedCount: 0 };
+        }
+
+        const approvedStatus = await manager.findOne(Status, {
+          where: { name: STATUS_NAMES.APPROVED },
+        });
+        if (!approvedStatus) {
+          throw new NotFoundException(
+            `ไม่พบสถานะ "${STATUS_NAMES.APPROVED}" ในระบบ`,
+          );
+        }
+
+        let movedCount = 0;
+        for (const relpg of rows) {
+          // §10 scope binding — re-assert the RELPG's OWN DPR is the active
+          // round (mirror of `assertRevisionActiveForStaff`).
+          const dpr = relpg.developmentPlanRevision;
+          if (!dpr?.isLatest) {
+            throw new BadRequestException(
+              'รอบการแก้ไข/เปลี่ยนแปลงนี้ไม่ใช่รอบปัจจุบัน ไม่สามารถดำเนินการได้',
+            );
+          }
+          if (dpr?.isBooked) {
+            throw new BadRequestException(
+              'รอบการแก้ไข/เปลี่ยนแปลงถูกรวมเล่มแล้ว ไม่สามารถดำเนินการได้',
+            );
+          }
+
+          // §12 audit — demote prior latest, insert the new status row.
+          await manager.update(
+            TrackingStatus,
+            { revisedEquipmentProjectGroupId: { id: relpg.id } },
+            { isLatest: false },
+          );
+          const tracking = manager.create(TrackingStatus, {
+            createdBy: workHistory,
+            revisedEquipmentProjectGroupId: relpg,
+            statusId: approvedStatus,
+            isLatest: true,
+          });
+          await manager.save(TrackingStatus, tracking);
+          movedCount += 1;
+        }
+
+        this.logger.log(
+          `Approve Pending_Approval→Approved RELPG by scope dprId=${dto.developmentPlanRevisionId} ` +
+            `moved=${movedCount} by=${workHistory.id} (role=${userRole})`,
+        );
+        return { movedCount };
+      });
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * Resolve the set of Amphoe ids the `staff` requester is responsible for
+   * (used by `promoteVerifiedEquipmentByScope` to scope the SET query — admin
+   * / super-admin bypass this filter). Mirrors the amphoe-based
+   * `WorkHistoryAmphoeResponsibility` check in the per-row EPG staff branch.
+   */
+  private async getStaffResponsibleAmphoeIds(
+    manager: EntityManager,
+    workHistoryId: string,
+  ): Promise<string[]> {
+    const rows = await manager.find(WorkHistoryAmphoeResponsibility, {
+      where: { workHistory: { id: workHistoryId } },
+      relations: ['amphoe'],
+    });
+    return rows.map((r) => r.amphoe?.id).filter((v): v is string => !!v);
+  }
+
+  /**
+   * Resolve the set of GovernmentAgency ids the `staff` requester is
+   * responsible for (used by `promoteVerifiedRelpgByScope` to scope the SET
+   * query — admin / super-admin bypass this filter). Mirrors the agency-based
+   * `WorkHistoryGovernmentAgencyResponsibility` check in the RELPG per-row
+   * staff transition.
+   */
+  private async getStaffResponsibleAgencyIds(
+    manager: EntityManager,
+    workHistoryId: string,
+  ): Promise<string[]> {
+    const rows = await manager.find(
+      WorkHistoryGovernmentAgencyResponsibility,
+      {
+        where: { workHistory: { id: workHistoryId } },
+        relations: ['governmentAgency'],
+      },
+    );
+    return rows
+      .map((r) => r.governmentAgency?.id)
+      .filter((v): v is string => !!v);
+  }
+
+  /**
+   * Shared per-row staff transition for SupplementProjectGroup. Extracted
+   * from `createManySupplementProjectGroup` so the capped page-based bulk
+   * path AND the unbounded scope-driven promote-verified path (BE-03) run
+   * the IDENTICAL guards + §12 audit without duplication.
+   *
+   * Runs inside the caller's `EntityManager` transaction. Throws on any
+   * guard failure (§15.4 lock, scope, responsibility, transition map) so
+   * the caller's transaction rolls back. Returns the saved TrackingStatus
+   * plus the post-commit notification emit context.
+   *
+   * Callers MUST have already validated the actor WorkHistory
+   * (`workStatus = approved`, staff role) — this helper assumes a staff
+   * actor and does NOT re-run those top-level gates.
+   */
+  private async applySpgStaffTransition(
+    manager: EntityManager,
+    row: {
+      spgId: string;
+      statusId: string;
+      staffRemark: string | null;
+      comment?: string;
+    },
+    workHistory: WorkHistory,
+    userRole: string,
+    staffAllowedTransitions: Record<string, string>,
+  ): Promise<{ tracking: TrackingStatus; emit: BulkSpgEmitCtx }> {
+    const { spgId, statusId } = row;
+
+    // Load SPG with full scope chain (parent plan + supplement round +
+    // responsibleAgency + createdBy). Mirrors the single-row staff branch.
+    const spg = await manager.findOne(SupplementProjectGroup, {
+      where: { id: spgId },
+      relations: [
+        'createdBy',
+        'developmentPlanSupplement',
+        'developmentPlanSupplement.developmentPlan',
+        'responsibleAgency',
+      ],
+    });
+    if (!spg) {
+      throw new NotFoundException(
+        `SPG_NOT_FOUND: SupplementProjectGroup with ID ${spgId} not found (offendingId=${spgId})`,
+      );
+    }
+
+    const targetStatus = await manager.findOne(Status, {
+      where: { id: statusId },
+    });
+    if (!targetStatus) {
+      throw new NotFoundException(
+        `Status with ID ${statusId} not found (offendingId=${spgId})`,
+      );
+    }
+
+    // Scope binding — parent plan + supplement round (§10).
+    const dps = spg.developmentPlanSupplement;
+    if (!dps) {
+      throw new ForbiddenException(
+        `ไม่พบรอบเพิ่มเติมของโครงการ ไม่สามารถดำเนินการได้ (offendingId=${spgId})`,
+      );
+    }
+    const dp = dps.developmentPlan;
+    if (!dp?.isLatest) {
+      throw new ForbiddenException(
+        `แผนพัฒนาฯ ที่เชื่อมโยงกับโครงการนี้ไม่ใช่แผนปัจจุบัน (offendingId=${spgId})`,
+      );
+    }
+    // §15.4 — supplement book lock. DevelopmentPlan.isBooked is NOT a gate
+    // for supplement actions (parent plan being booked is EXPECTED). A
+    // non-latest or booked supplement is the §15 LOCKED case.
+    if (!dps.isLatest) {
+      throw new ForbiddenException(
+        `BOOK_HAS_NEWER_REVISION: รอบเพิ่มเติมนี้ไม่ใช่รอบปัจจุบัน (offendingId=${spgId})`,
+      );
+    }
+    if (dps.isBooked) {
+      throw new ForbiddenException(
+        `BOOK_HAS_NEWER_REVISION: รอบเพิ่มเติมถูกรวมเล่มแล้ว (offendingId=${spgId})`,
+      );
+    }
+
+    // Q3 — AGENCY-BASED staff responsibility. Admin / super-admin bypass.
+    if (userRole === 'staff') {
+      const projectAgencyId = spg.responsibleAgency?.id;
+      if (!projectAgencyId) {
+        throw new BadRequestException(
+          `โครงการนี้ยังไม่มีการกำหนดหน่วยงานรับผิดชอบ (offendingId=${spgId})`,
+        );
+      }
+      const hasResponsibility = await manager.findOne(
+        WorkHistoryGovernmentAgencyResponsibility,
+        {
+          where: {
+            workHistory: { id: workHistory.id },
+            governmentAgency: { id: projectAgencyId },
+          },
+        },
+      );
+      if (!hasResponsibility) {
+        throw new ForbiddenException(
+          `คุณไม่มีสิทธิ์ดำเนินการกับโครงการนี้ (ไม่ได้รับผิดชอบหน่วยงานของโครงการ) (offendingId=${spgId})`,
+        );
+      }
+    }
+
+    // Load current latest TrackingStatus + enforce transition map.
+    const currentTracking = await manager.findOne(TrackingStatus, {
+      where: {
+        supplementProjectGroupId: { id: spgId },
+        isLatest: true,
+      },
+      relations: ['statusId'],
+    });
+    if (!currentTracking) {
+      throw new BadRequestException(
+        `ไม่พบสถานะปัจจุบันของโครงการ (offendingId=${spgId})`,
+      );
+    }
+    const currentStatusName = currentTracking.statusId?.name;
+    if (!currentStatusName) {
+      throw new BadRequestException(
+        `ไม่สามารถอ่านสถานะปัจจุบันของโครงการ (offendingId=${spgId})`,
+      );
+    }
+
+    const allowedDestination = staffAllowedTransitions[currentStatusName];
+    if (!allowedDestination || allowedDestination !== targetStatus.name) {
+      throw new ForbiddenException(
+        `INVALID_TRANSITION: ไม่อนุญาตให้เปลี่ยนสถานะจาก "${currentStatusName}" เป็น "${targetStatus.name}" ` +
+          `(offendingId=${spgId}, เส้นทางที่อนุญาต: ${currentStatusName} → ${allowedDestination ?? 'ไม่มี'})`,
+      );
+    }
+
+    // Audit (§12) — flip prior latest to false, insert new latest.
+    await manager.update(
+      TrackingStatus,
+      { supplementProjectGroupId: { id: spgId } },
+      { isLatest: false },
+    );
+
+    // Caller is staff-only; staffRemark is always eligible.
+    const tracking = manager.create(TrackingStatus, {
+      createdBy: workHistory,
+      supplementProjectGroupId: { id: spgId },
+      statusId: { id: statusId },
+      staffRemark: row.staffRemark ?? null,
+      comment: row.comment,
+      isLatest: true,
+    });
+    const savedTracking = await manager.save(TrackingStatus, tracking);
+
+    const emit: BulkSpgEmitCtx = {
+      fromStatus: currentStatusName,
+      toStatus: targetStatus.name,
+      projectId: spg.id,
+      projectTitle: spg.title ?? '',
+      responsibleAgencyId: spg.responsibleAgency?.id ?? null,
+      createdByWorkHistoryId: spg.createdBy?.id ?? null,
+      planName: dps?.developmentPlan?.name ?? null,
+      reason: row.staffRemark ?? null,
+      actorUserId: workHistory.user?.id ?? null,
+      actorWorkHistoryId: workHistory.id ?? null,
+    };
+
+    return { tracking: savedTracking, emit };
   }
 
 
@@ -2689,16 +3533,16 @@ export class TrackingStatusService {
         await manager.delete(TrackingStatus, { id: currentTracking.id });
         await manager.update(TrackingStatus, { id: previousTracking.id }, { isLatest: true });
 
-        // 11. CLAUDE.md §14.6 — Rollback Ghost-Descendant Fix (BEHAVIORAL CHANGE).
-        // Hard-delete the rolled-back RevisedProjectGroup row itself so the
-        // upstream parent (either a ProjectGroup or a previous
-        // RevisedProjectGroup in the chain) unlocks automatically under §14.
-        // The lineage-lock guard at step 6.5 already confirmed this row has
-        // no non-deleted child descendants. The cascade FK on
-        // tracking_status.revised_project_group_id removes any remaining
-        // older tracking rows as part of the same transaction — the
-        // intentional rollback audit exception (§12 + STAFF-LED ROLLBACK RULE).
-        await manager.delete(RevisedProjectGroup, { id: revisionProjectGroupId });
+        // 11. NATURAL rollback semantics — the RevisedProjectGroup row is
+        // INTENTIONALLY KEPT (status revert only), mirroring the equipment
+        // (RELPG) and supplement (SPG) rollback paths in this service.
+        // §14.6's prior ghost-descendant hard-delete of the RPG row was
+        // removed (user direction 2026-06-03): "ย้อนสถานะ" is a workflow
+        // status correction, NOT a fork-undo, so destroying the revision
+        // was data loss. Because the row is kept, any upstream parent it was
+        // forked from correctly STAYS §14-locked (the revision still exists).
+        // The leaf-only lineage guard at step 6.5 still blocks rollback of a
+        // row that has its own live descendant.
 
         return { message: `ย้อนสถานะสำเร็จ (กลับไปเป็น "${previousTracking.statusId.name}")`, status: 'success' };
       });
@@ -4710,6 +5554,223 @@ export class TrackingStatusService {
       // handleException always throws; this is unreachable but satisfies
       // the type checker.
       throw error;
+    }
+  }
+
+  /**
+   * BE-02 — Scope-driven promote: move EVERY RevisedProjectGroup whose
+   * latest status is `Verified` under the supplied DPR scope to
+   * `Pending_Approval` in ONE transaction. Returns `{ movedCount }`.
+   *
+   * Replaces the FE-driven `POST /tracking-status/bulk/revised-project-group`
+   * array move on the staff verify pages 3 (edit) and 4 (change).
+   *
+   * Row selection is re-derived SERVER-SIDE using the SAME predicate as the
+   * `GET /revised-project-group/tracking/{edit,change}/verify` list finders
+   * (`RevisedProjectGroupService.findVerify{Revision,Supplement}Projects`):
+   *   - latest TrackingStatus is `Verified`
+   *   - `dpr.isLatest = true` AND `dpr.isBooked = false` (§9 revision-round
+   *     activation honored via the same gates as the list finder)
+   *   - `dp.id = developmentPlanId` AND `dpr.id = developmentPlanRevisionId`
+   *     (§10 scope binding — bound to the supplied DPR, never a global open
+   *     revision)
+   *   - `revisionType.name` = 'แก้ไข' (edit) / 'เปลี่ยนแปลง' (change), or
+   *     BOTH when `revisionType` is omitted.
+   * No id list is accepted; concurrency is re-read inside the transaction.
+   *
+   * §3 / §4.1 — staff-lead only (staff/admin/super-admin) + `workStatus =
+   * approved`; ownership is NOT the gate. Area responsibility: `staff` must
+   * be responsible for each RPG's `responsibleAgency` via
+   * `WorkHistoryGovernmentAgencyResponsibility`; admin/super-admin bypass
+   * (mirrors `createByRevisedProjectGroup` / `createManyRevisedProjectGroup`).
+   *
+   * §12 — one TrackingStatus per promoted RPG (demote prior latest + insert
+   * new `Pending_Approval`).
+   * §14.4 — forward transition is NOT blocked by the lineage lock; no
+   * descendant guard here (only rollback has one).
+   * §17.4 — no AI baseline snapshot. §18 — no cascade. No row cap.
+   */
+  async promoteVerifiedRevisedProjectGroupsByScope(
+    dto: PromoteVerifiedRevisedScopeDto,
+    userId: string,
+  ): Promise<{ movedCount: number }> {
+    try {
+      const workHistory = await this.workHistoryRepo.findOne({
+        where: { user: { id: userId }, isCurrent: true },
+        relations: ['role', 'workStatus', 'user'],
+      });
+      if (!workHistory) {
+        throw new NotFoundException(`WorkHistory for user ${userId} not found`);
+      }
+      if (workHistory.workStatus?.name !== 'approved') {
+        throw new UnauthorizedException(
+          'คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)',
+        );
+      }
+
+      // §3 / §4.1 — staff-lead only.
+      const allowedRoles = ['staff', 'admin', 'super-admin'];
+      const userRole = workHistory.role?.name;
+      if (!allowedRoles.includes(userRole)) {
+        throw new ForbiddenException(
+          'เฉพาะเจ้าหน้าที่ (staff/admin/super-admin) เท่านั้นที่สามารถใช้งาน endpoint นี้ได้',
+        );
+      }
+
+      // Map the API `revisionType` discriminator to the Thai revisionType.name
+      // used by the verify list finders. Omitted → both rounds.
+      const revisionTypeNames: string[] = [];
+      if (dto.revisionType === 'edit') {
+        revisionTypeNames.push('แก้ไข');
+      } else if (dto.revisionType === 'change') {
+        revisionTypeNames.push('เปลี่ยนแปลง');
+      } else {
+        revisionTypeNames.push('แก้ไข', 'เปลี่ยนแปลง');
+      }
+
+      // Wave 21 N4 — collect post-commit emit descriptors.
+      type PromoteEmitCtx = {
+        fromStatus: string;
+        toStatus: string;
+        projectId: string;
+        projectTitle: string;
+        responsibleAgencyId: string | null;
+        createdByWorkHistoryId: string | null;
+        planName: string | null;
+        actorUserId: string | null;
+        actorWorkHistoryId: string | null;
+      };
+      const emits: PromoteEmitCtx[] = [];
+
+      const movedCount = await this.dataSource.transaction(async (manager) => {
+        const pendingApprovalStatus = await manager.findOne(Status, {
+          where: { name: 'Pending_Approval' },
+        });
+        if (!pendingApprovalStatus) {
+          throw new InternalServerErrorException(
+            'ไม่พบสถานะ Pending_Approval ในระบบ',
+          );
+        }
+
+        // Re-derive the verify row set INSIDE the transaction using the SAME
+        // predicate as findVerify{Revision,Supplement}Projects, scoped to the
+        // supplied DPR (concurrency re-read).
+        const candidates = await manager
+          .createQueryBuilder(RevisedProjectGroup, 'rpg')
+          .leftJoinAndSelect('rpg.developmentPlanRevision', 'dpr')
+          .leftJoinAndSelect('dpr.revisionType', 'rt')
+          .leftJoinAndSelect('dpr.developmentPlan', 'dp')
+          .leftJoinAndSelect('rpg.responsibleAgency', 'responsibleAgency')
+          .leftJoinAndSelect('rpg.createdBy', 'createdBy')
+          .innerJoin(
+            'rpg.trackingStatus',
+            'latestTrackingStatus',
+            'latestTrackingStatus.isLatest = :isLatest',
+            { isLatest: true },
+          )
+          .innerJoin(
+            'latestTrackingStatus.statusId',
+            'latestStatus',
+            'latestStatus.name = :statusName',
+            { statusName: 'Verified' },
+          )
+          .where('rt.name IN (:...revisionTypeNames)', { revisionTypeNames })
+          .andWhere('dpr.isLatest = :isLatestRevision', {
+            isLatestRevision: true,
+          })
+          .andWhere('dpr.isBooked = :isBooked', { isBooked: false })
+          .andWhere('dp.id = :developmentPlanId', {
+            developmentPlanId: dto.developmentPlanId,
+          })
+          .andWhere('dpr.id = :developmentPlanRevisionId', {
+            developmentPlanRevisionId: dto.developmentPlanRevisionId,
+          })
+          .getMany();
+
+        for (const rpg of candidates) {
+          // Area responsibility — staff must be responsible for the RPG's
+          // responsibleAgency. Admin/super-admin bypass.
+          if (userRole === 'staff') {
+            const projectAgencyId = rpg.responsibleAgency?.id;
+            if (!projectAgencyId) {
+              throw new BadRequestException(
+                `โครงการนี้ยังไม่มีการกำหนดหน่วยงานรับผิดชอบ ไม่สามารถตรวจสอบสิทธิ์ได้ (โครงการ ID: ${rpg.id})`,
+              );
+            }
+            const hasResponsibility = await manager.findOne(
+              WorkHistoryGovernmentAgencyResponsibility,
+              {
+                where: {
+                  workHistory: { id: workHistory.id },
+                  governmentAgency: { id: projectAgencyId },
+                },
+              },
+            );
+            if (!hasResponsibility) {
+              throw new ForbiddenException(
+                `คุณไม่มีสิทธิ์ดำเนินการกับโครงการนี้ (ไม่ได้รับผิดชอบหน่วยงานของโครงการ ID: ${rpg.id})`,
+              );
+            }
+          }
+
+          // §12 — demote prior latest, insert new Pending_Approval row.
+          await manager.update(
+            TrackingStatus,
+            { revisedProjectGroupId: { id: rpg.id } },
+            { isLatest: false },
+          );
+
+          const tracking = manager.create(TrackingStatus, {
+            createdBy: workHistory,
+            revisedProjectGroupId: { id: rpg.id },
+            statusId: { id: pendingApprovalStatus.id },
+            isLatest: true,
+          });
+          await manager.save(TrackingStatus, tracking);
+
+          emits.push({
+            fromStatus: 'Verified',
+            toStatus: 'Pending_Approval',
+            projectId: rpg.id,
+            projectTitle: rpg.title ?? '',
+            responsibleAgencyId: rpg.responsibleAgency?.id ?? null,
+            createdByWorkHistoryId: rpg.createdBy?.id ?? null,
+            planName: rpg.developmentPlanRevision?.developmentPlan?.name ?? null,
+            actorUserId: workHistory.user?.id ?? null,
+            actorWorkHistoryId: workHistory.id ?? null,
+          });
+        }
+
+        return candidates.length;
+      });
+
+      // POST-COMMIT emits — mirror createManyRevisedProjectGroup.
+      for (const ctx of emits) {
+        const eventTypes = this.resolveNotificationEventTypes(
+          ctx.fromStatus,
+          ctx.toStatus,
+        );
+        for (const eventType of eventTypes) {
+          await this.dispatchPhaseOneNotification({
+            eventType,
+            fromStatus: ctx.fromStatus,
+            toStatus: ctx.toStatus,
+            projectId: ctx.projectId,
+            projectKind: 'revised-project-group',
+            projectTitle: ctx.projectTitle,
+            projectResponsibleAgencyId: ctx.responsibleAgencyId,
+            createdByWorkHistoryId: ctx.createdByWorkHistoryId,
+            reason: null,
+            planName: ctx.planName,
+            actorUserId: ctx.actorUserId,
+            actorWorkHistoryId: ctx.actorWorkHistoryId,
+          });
+        }
+      }
+
+      return { movedCount };
+    } catch (error) {
+      handleException(this.logger, error);
     }
   }
 }

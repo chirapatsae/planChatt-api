@@ -1599,6 +1599,97 @@ export class ProjectGroupsService {
 
   }
 
+  /**
+   * Wave wave-print-merge-scale-statuschange / BE-01 (2026-06-04).
+   *
+   * Shared, lean (ID-only) row-selection source of truth for the
+   * scope-driven "promote Verified → Pending_Approval" endpoint
+   * (`POST /tracking-status/promote-verified/project-group`).
+   *
+   * Returns the IDs of every main-plan ProjectGroup whose LATEST status
+   * is `Verified` under the supplied `developmentPlanId`, using the
+   * EXACT same WHERE predicate as the list finders this replaces:
+   *   - `origin = 'agency'`    → `findByStatusVerifiedAgency`
+   *     (`originAgencyId IS NULL AND responsibleAgency IS NOT NULL`)
+   *   - `origin = 'authority'` → `findProjectsByStatusInAuthority`
+   *     (`originAgencyId IS NOT NULL`)
+   * plus the common clauses shared by both finders: `isDraft = false`,
+   * latest tracking status name = `Verified`, `developmentPlan.id` bound
+   * to the supplied scope (§10), and `developmentPlan.isBooked = false`.
+   *
+   * NOT forked — the predicate clauses are byte-for-byte the same as the
+   * two finders above; this method only drops the eager relation joins,
+   * masking, and `getMany()` materialization that the list views need
+   * but the promote loop does not.
+   *
+   * Accepts an optional `EntityManager` so the caller can run the
+   * selection inside its own transaction (the promote endpoint does).
+   */
+  async findVerifiedProjectGroupIdsByScope(
+    options: {
+      developmentPlanId: string;
+      origin: 'agency' | 'authority';
+      /**
+       * §3 / §4.1 — when provided (staff role), restrict the SET to PGs whose
+       * `amphoe` is one the caller is responsible for. `undefined` = no amphoe
+       * filter (admin / super-admin bypass). An EMPTY array means "responsible
+       * for nothing" → returns zero rows (fail-closed).
+       */
+      responsibleAmphoeIds?: string[];
+    },
+    manager?: EntityManager,
+  ): Promise<string[]> {
+    const { developmentPlanId, origin, responsibleAmphoeIds } = options;
+    const repo = manager
+      ? manager.getRepository(ProjectGroup)
+      : this.projectGroupRepo;
+
+    const query = repo
+      .createQueryBuilder('projectGroup')
+      .select('projectGroup.id', 'id')
+      .innerJoin('projectGroup.developmentPlan', 'developmentPlan')
+      .innerJoin(
+        'projectGroup.trackingStatus',
+        'latestTrackingStatus',
+        'latestTrackingStatus.isLatest = :isLatest',
+        { isLatest: true },
+      )
+      .innerJoin(
+        'latestTrackingStatus.statusId',
+        'latestStatus',
+        'latestStatus.name = :statusName',
+        { statusName: 'Verified' },
+      )
+      .where('projectGroup.isDraft = :isDraft', { isDraft: false })
+      .andWhere('developmentPlan.id = :developmentPlanId', {
+        developmentPlanId,
+      })
+      .andWhere('developmentPlan.isBooked = :isBooked', { isBooked: false });
+
+    if (origin === 'agency') {
+      // Mirror `findByStatusVerifiedAgency` selection.
+      query
+        .andWhere('projectGroup.originAgencyId IS NULL')
+        .andWhere('projectGroup.responsibleAgency IS NOT NULL');
+    } else {
+      // Mirror `findProjectsByStatusInAuthority` selection.
+      query.andWhere('projectGroup.originAgencyId IS NOT NULL');
+    }
+
+    // §3 / §4.1 staff area-responsibility — restrict to the caller's amphoes.
+    if (responsibleAmphoeIds !== undefined) {
+      if (responsibleAmphoeIds.length === 0) return []; // fail-closed
+      query
+        .leftJoin('projectGroup.amphoe', 'amphoe')
+        .andWhere('amphoe.id IN (:...amphoeIds)', {
+          amphoeIds: responsibleAmphoeIds,
+        });
+    }
+
+    const rows = await query.getRawMany<{ id: string }>();
+    return rows.map((r) => r.id);
+  }
+
   async findByStatusApprovedCoordinate(option: {
     userId: string;
     countOnly?: boolean;

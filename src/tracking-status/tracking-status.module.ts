@@ -44,6 +44,20 @@ import { UsersModule } from 'src/users/users.module';
 // snapshot DTO.
 import { AiModule } from 'src/ai/ai.module';
 import { ProjectClassificationModule } from 'src/common/project-classification/project-classification.module';
+// Wave wave-print-merge-scale-statuschange / BE-01 (2026-06-04).
+// `ProjectGroupsService` exports the shared list-finder predicate
+// (`findVerifiedProjectGroupIdsByScope`) reused by the scope-driven
+// promote endpoint so the selection logic is NOT forked.
+// ProjectGroupsModule does NOT import TrackingStatusModule, so this is
+// not a circular dependency.
+import { ProjectGroupsModule } from 'src/project-groups/project-groups.module';
+// Wave wave-print-merge-scale-statuschange / BE-03 (2026-06-04).
+// `SupplementProjectGroupService` exports the verified-supplement list
+// finder (`findByStatusForStaff`) reused by the scope-driven
+// promote-verified-by-supplement endpoint so the selection predicate is
+// NOT forked. SupplementProjectGroupModule does NOT import
+// TrackingStatusModule, so this is not a circular dependency.
+import { SupplementProjectGroupModule } from 'src/supplement-project-group/supplement-project-group.module';
 
 @Module({
   imports: [
@@ -76,6 +90,11 @@ import { ProjectClassificationModule } from 'src/common/project-classification/p
     // `ProjectClassificationModule` exports `BookFormatResolver`.
     AiModule,
     ProjectClassificationModule,
+    // BE-01 — exposes ProjectGroupsService for the shared promote predicate.
+    ProjectGroupsModule,
+    // BE-03 — exposes SupplementProjectGroupService for the shared
+    // verified-supplement promote predicate.
+    SupplementProjectGroupModule,
   ],
   controllers: [TrackingStatusController],
   providers: [TrackingStatusService, DigestDispatcherService],

@@ -7,6 +7,8 @@ import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { Status } from 'src/status/entities/status.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { Comment } from 'src/comments/entities/comment.entity';
+import { ProjectGroupsService } from 'src/project-groups/project-groups.service';
+import { SupplementProjectGroupService } from 'src/supplement-project-group/supplement-project-group.service';
 import { CreateTrackingStatusDto } from './dto/create-tracking-status.dto';
 import { UpdateTrackingStatusDto } from './dto/update-tracking-status.dto';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
@@ -51,6 +53,18 @@ describe('TrackingStatusService', () => {
     transaction: jest.fn(),
   };
 
+  // Wave wave-print-merge-scale-statuschange / BE-01 — shared list-finder
+  // predicate reused by `promoteVerifiedProjectGroupsByScope`.
+  const mockProjectGroupsService = {
+    findVerifiedProjectGroupIdsByScope: jest.fn(),
+  };
+
+  // Wave wave-print-merge-scale-statuschange / BE-03 — verified-supplement
+  // list finder reused by `promoteVerifiedSupplementProjectGroupsByScope`.
+  const mockSupplementProjectGroupService = {
+    findByStatusForStaff: jest.fn(),
+  };
+
   const mockTransactionManager = {
     findOne: jest.fn(),
     update: jest.fn(),
@@ -85,6 +99,14 @@ describe('TrackingStatusService', () => {
         {
           provide: DataSource,
           useValue: mockDataSource,
+        },
+        {
+          provide: ProjectGroupsService,
+          useValue: mockProjectGroupsService,
+        },
+        {
+          provide: SupplementProjectGroupService,
+          useValue: mockSupplementProjectGroupService,
         },
       ],
     }).compile();

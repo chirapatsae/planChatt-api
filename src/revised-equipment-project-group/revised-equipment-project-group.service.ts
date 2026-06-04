@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, DeepPartial, EntityManager, Repository } from 'typeorm';
@@ -1187,7 +1188,8 @@ export class RevisedEquipmentProjectGroupService {
       }
 
       // §7.4 step 7 — hard-delete current latest, restore previous to latest
-      // (rollback audit exception per §12 / STAFF-LED ROLLBACK RULE).
+      // (rollback audit exception per §12 / STAFF-LED ROLLBACK RULE). This is
+      // the ONLY hard-delete rollback performs.
       await manager.delete(TrackingStatus, { id: currentTracking.id });
       await manager.update(
         TrackingStatus,
@@ -1195,13 +1197,14 @@ export class RevisedEquipmentProjectGroupService {
         { isLatest: true },
       );
 
-      // §14.6 — hard-delete the rolled-back RELPG row itself as the FINAL
-      // step so the upstream parent (EPG, or a previous RELPG in the chain)
-      // unlocks automatically under §14. The leaf guard at step 5 already
-      // confirmed this row has no non-deleted descendant. The cascade FK on
-      // tracking_status.revised_equipment_project_group_id removes any
-      // remaining older tracking rows in the same transaction.
-      await manager.delete(RevisedEquipmentProjectGroup, { id });
+      // §14.6 (REVISED 2026-06-03) — NATURAL rollback semantics: the RELPG
+      // row is KEPT (status revert only), mirroring PG / RPG / SPG. The prior
+      // "ghost-descendant hard-delete" of the row was REMOVED because
+      // "ย้อนสถานะ" is a workflow status correction, NOT a fork-undo —
+      // destroying the whole revision on every rollback was data loss. The
+      // leaf-only guard at step 5 still blocks rolling back a non-leaf row;
+      // an upstream parent it was forked from correctly STAYS §14-locked
+      // because the revision still exists at its reverted status.
 
       this.logger.log(
         `Staff rollback RELPG id=${id} ${currentStatusName} → ${previousTracking.statusId.name} ` +
@@ -1233,6 +1236,78 @@ export class RevisedEquipmentProjectGroupService {
       message: `ย้อนสถานะสำเร็จ (กลับไปเป็น "${result.previousStatusName}")`,
       status: 'success',
     };
+  }
+
+  /**
+   * §4.1 staff round-reassignment — move a RELPG to a DIFFERENT revision
+   * round of the SAME plan, so staff can fix a wrong edit↔change
+   * submission. Mirrors the project equivalent
+   * (`RevisedProjectGroupService.updateChangeDevelopmentPlanRevision`),
+   * which only repoints the `developmentPlanRevision` FK.
+   *
+   * §10 scope binding — the target DPR MUST belong to the RELPG's OWN plan
+   * AND be open (`isOpen = true`) AND not yet assembled
+   * (`isBooked = false`). Other plans' rounds, closed rounds, and booked
+   * rounds are rejected with `BadRequestException('INVALID_TARGET_REVISION')`.
+   *
+   * §17.2 — this is workflow data correction, NOT a status transition: it
+   * does NOT write a `TrackingStatus` row (parity with the project
+   * version, which only updates the FK).
+   */
+  async changeDevelopmentPlanRevision(
+    id: string,
+    developmentPlanRevisionId: string,
+    userId: string,
+  ): Promise<RevisedEquipmentProjectGroup> {
+    return this.dataSource.transaction(async (manager) => {
+      const workHistory = await this.workHistoryLookup.getCurrent(
+        manager,
+        userId,
+      );
+      this.workHistoryLookup.assertWorkStatusApproved(workHistory);
+      this.assertStaffLead(workHistory);
+
+      // 1. Load the RELPG (with plan + current revision). 404 if missing.
+      const relpg = await manager.findOne(RevisedEquipmentProjectGroup, {
+        where: { id },
+        relations: ['developmentPlan', 'developmentPlanRevision'],
+      });
+      if (!relpg) {
+        throw new NotFoundException(`RELPG not found: ${id}`);
+      }
+
+      // 2. Load the target DPR (with its plan). 404 if missing.
+      const targetDpr = await manager.findOne(DevelopmentPlanRevision, {
+        where: { id: developmentPlanRevisionId },
+        relations: ['developmentPlan'],
+      });
+      if (!targetDpr) {
+        throw new NotFoundException(
+          `DevelopmentPlanRevision not found: ${developmentPlanRevisionId}`,
+        );
+      }
+
+      // 3. §10 — target round MUST be in the SAME plan, OPEN, and un-booked.
+      const samePlan =
+        targetDpr.developmentPlan?.id === relpg.developmentPlan?.id &&
+        !!relpg.developmentPlan?.id;
+      if (!samePlan || !targetDpr.isOpen || targetDpr.isBooked) {
+        throw new BadRequestException('INVALID_TARGET_REVISION');
+      }
+
+      // 4. Repoint the FK only (no status transition — §17.2).
+      await manager.update(RevisedEquipmentProjectGroup, id, {
+        developmentPlanRevision: { id: developmentPlanRevisionId } as any,
+      });
+
+      this.logger.log(
+        `Staff reassigned RELPG id=${id} → DPR=${developmentPlanRevisionId} ` +
+          `by=${workHistory.id} (role=${workHistory.role?.name})`,
+      );
+
+      // 5. Return the updated RELPG (same shape as getRelpg / findOne).
+      return this.findOneInternal(manager, id);
+    });
   }
 
   // ====================================================================
@@ -1782,6 +1857,202 @@ export class RevisedEquipmentProjectGroupService {
     );
   }
 
+  // ====================================================================
+  //  VERSION CHAIN ("ประวัติการแก้ไข") — read-only (§17.2)
+  // ====================================================================
+
+  /**
+   * Equipment-revision lineage chain — the ผ.03 analog of
+   * `RevisedProjectGroupService.findAllVersions`.
+   *
+   * The requested `id` may be EITHER an `EquipmentProjectGroup` (EPG, the
+   * lineage root per §14) OR a `RevisedEquipmentProjectGroup` (RELPG). We
+   * resolve the EPG root, then walk the `(prevProjectId, prevProjectType)`
+   * lineage forward to collect every live RELPG descendant.
+   *
+   * Lineage edges (§14, Phase 3):
+   *   - `prev_project_type = 'equipment'`         → parent is the EPG root
+   *   - `prev_project_type = 'revised_equipment'` → parent is another RELPG
+   *
+   * Read-only — NO writes, NO TrackingStatus, NO status changes. Reads are
+   * unrestricted per §5.3 (NO agency-only gate); we still require an
+   * `approved` workStatus + an allowed role, mirroring the project method.
+   *
+   * Return envelope is byte-for-shape identical to the project method so the
+   * FE can reuse the same component:
+   *   `{ original, current, currentId, revisions: [root, ...oldest→newest] }`
+   */
+  async findAllVersions(id: string, userId: string): Promise<any> {
+    const manager = this.relpgRepo.manager;
+
+    // 1-3. Auth → WorkHistory → workStatus=approved → allowed role.
+    const workHistory = await manager.findOne(WorkHistory, {
+      where: { user: { id: userId }, isCurrent: true },
+      relations: ['workStatus', 'role'],
+    });
+    if (!workHistory) {
+      throw new UnauthorizedException('User not found');
+    }
+    if (workHistory.workStatus?.name !== 'approved') {
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+    }
+    const allowedRoles = ['user', 'staff', 'admin', 'super-admin', 'c-level'];
+    if (!allowedRoles.includes(workHistory.role?.name)) {
+      throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
+    }
+
+    // 4. Resolve the requested row — try EPG (root) first, then RELPG.
+    const epgRelations = [
+      'createdBy',
+      'createdBy.user',
+      'developmentPlan',
+      'strategy',
+      'tactic',
+      'plan',
+      'developmentIssue',
+      'equipmentCategory',
+      'responsibleAgency',
+      'amphoe',
+      'localAdministrativeOrganization',
+      'budgets',
+      'trackingStatus',
+      'trackingStatus.statusId',
+      'trackingStatus.comments',
+      'trackingStatus.createdBy',
+      'trackingStatus.createdBy.user',
+    ];
+    const relpgRelations = [
+      'createdBy',
+      'createdBy.user',
+      'developmentPlan',
+      'developmentPlanRevision',
+      'developmentPlanRevision.revisionType',
+      'developmentPlanRevision.developmentPlan',
+      'equipmentProjectGroup',
+      'strategy',
+      'tactic',
+      'plan',
+      'developmentIssue',
+      'equipmentCategory',
+      'responsibleAgency',
+      'amphoe',
+      'localAdministrativeOrganization',
+      'budgets',
+      'trackingStatus',
+      'trackingStatus.statusId',
+      'trackingStatus.comments',
+      'trackingStatus.createdBy',
+      'trackingStatus.createdBy.user',
+    ];
+
+    let epgRoot = await manager.findOne(EquipmentProjectGroup, {
+      where: { id },
+      relations: epgRelations,
+    });
+
+    let requestedRelpg: RevisedEquipmentProjectGroup | null = null;
+    const requestedIsRoot = !!epgRoot;
+
+    if (!epgRoot) {
+      // The requested id is a RELPG — walk BACKWARD to find the EPG root.
+      requestedRelpg = await manager.findOne(RevisedEquipmentProjectGroup, {
+        where: { id },
+        relations: relpgRelations,
+      });
+      if (!requestedRelpg) {
+        throw new NotFoundException('ไม่พบโครงการ');
+      }
+
+      let cursor: RevisedEquipmentProjectGroup | null = requestedRelpg;
+      const guard = new Set<string>(); // cycle guard
+      while (
+        cursor &&
+        cursor.prevProjectType === PrevEquipmentProjectType.REVISED_EQUIPMENT &&
+        cursor.prevProjectId
+      ) {
+        if (guard.has(cursor.prevProjectId)) break;
+        guard.add(cursor.prevProjectId);
+        const parent: RevisedEquipmentProjectGroup | null =
+          await manager.findOne(RevisedEquipmentProjectGroup, {
+            where: { id: cursor.prevProjectId },
+            relations: relpgRelations,
+          });
+        if (!parent) break;
+        cursor = parent;
+      }
+
+      // `cursor` is now the first-fork RELPG (prevProjectType='equipment').
+      const rootEpgId =
+        cursor?.prevProjectType === PrevEquipmentProjectType.EQUIPMENT
+          ? cursor.prevProjectId
+          : cursor?.equipmentProjectGroup?.id ?? null;
+
+      if (rootEpgId) {
+        epgRoot = await manager.findOne(EquipmentProjectGroup, {
+          where: { id: rootEpgId },
+          relations: epgRelations,
+        });
+      }
+      if (!epgRoot) {
+        throw new NotFoundException('ไม่พบโครงการต้นฉบับของรายการแก้ไขนี้');
+      }
+    }
+
+    // 5. Walk FORWARD from the EPG root, collecting live RELPG descendants
+    //    in oldest→newest order. Lineage is linear in practice; if multiple
+    //    live children exist at a node, pick the earliest by createdAt and
+    //    stop (DAG-tolerant per §14.1 — do NOT crash).
+    const chainRelpgs: RevisedEquipmentProjectGroup[] = [];
+    const visited = new Set<string>();
+    let parentId: string = epgRoot.id;
+    let parentType: PrevEquipmentProjectType = PrevEquipmentProjectType.EQUIPMENT;
+
+    // Loop: find the earliest live child whose (prevProjectId, prevProjectType)
+    // points at the current node.
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const children = await manager.find(RevisedEquipmentProjectGroup, {
+        where: {
+          prevProjectId: parentId,
+          prevProjectType: parentType,
+        },
+        relations: relpgRelations,
+        order: { createdAt: 'ASC' },
+      });
+      // `find` already excludes soft-deleted rows (DeleteDateColumn).
+      const next = children[0];
+      if (!next || visited.has(next.id)) break;
+      visited.add(next.id);
+      chainRelpgs.push(next);
+      parentId = next.id;
+      parentType = PrevEquipmentProjectType.REVISED_EQUIPMENT;
+    }
+
+    // 6. PII mask every node BEFORE returning (§ W100 parity).
+    await this.maskCreatedByUserOnRelpg(chainRelpgs);
+    await this.maskCreatedByUserOnRelpg([epgRoot as any]);
+    this.projectLatestStatusOnRelpg(chainRelpgs);
+    this.projectLatestStatusOnRelpg([epgRoot as any]);
+
+    // 7. Resolve `current` — either the EPG root or the requested RELPG.
+    let current: any;
+    if (requestedIsRoot) {
+      current = epgRoot;
+    } else {
+      current = chainRelpgs.find((r) => r.id === id) ?? requestedRelpg;
+    }
+
+    // 8. Ordered chain: [EPG root, ...RELPGs oldest→newest].
+    const revisions = [epgRoot, ...chainRelpgs];
+
+    return {
+      original: epgRoot,
+      current,
+      currentId: id,
+      revisions,
+    };
+  }
+
   private async findOneInternal(
     manager: EntityManager,
     id: string,
@@ -1808,6 +2079,8 @@ export class RevisedEquipmentProjectGroupService {
         'trackingStatus.comments',
         'trackingStatus.createdBy',
         'trackingStatus.createdBy.user',
+        'trackingStatus.createdBy.amphoe',
+        'trackingStatus.createdBy.localAdministrativeOrganization',
       ],
     });
     if (!row) {
@@ -1848,6 +2121,24 @@ export class RevisedEquipmentProjectGroupService {
               name?: string;
               th_name?: string;
             } | null;
+            createdBy?: {
+              id?: string;
+              createdAt?: Date | string | null;
+              user?: {
+                id?: string;
+                firstname?: string;
+                lastname?: string;
+                email?: string;
+                phone?: string;
+                role?: string;
+                profileImageUrl?: string;
+              } | null;
+              amphoe?: { id?: number | string; name?: string } | null;
+              localAdministrativeOrganization?: {
+                id?: string;
+                name?: string;
+              } | null;
+            } | null;
           }>;
         }
       ).trackingStatus;
@@ -1855,6 +2146,7 @@ export class RevisedEquipmentProjectGroupService {
         ? (tracking.find((t) => t?.isLatest) ?? null)
         : null;
       const status = latest?.statusId ?? null;
+      const cb = latest?.createdBy ?? null;
       (item as unknown as { latestStatus: unknown }).latestStatus = latest
         ? {
             id: latest.id,
@@ -1864,6 +2156,33 @@ export class RevisedEquipmentProjectGroupService {
             createdAt: latest.createAt ?? null,
             status: status
               ? { id: status.id, name: status.name, th_name: status.th_name }
+              : null,
+            createdBy: cb
+              ? {
+                  id: cb.id,
+                  createdAt: cb.createdAt ?? null,
+                  user: cb.user
+                    ? {
+                        id: cb.user.id,
+                        firstname: cb.user.firstname,
+                        lastname: cb.user.lastname,
+                        email: cb.user.email,
+                        phone: cb.user.phone,
+                        role: cb.user.role,
+                        profileImageUrl: cb.user.profileImageUrl,
+                      }
+                    : null,
+                  amphoe: cb.amphoe
+                    ? { id: cb.amphoe.id, name: cb.amphoe.name }
+                    : null,
+                  localAdministrativeOrganization:
+                    cb.localAdministrativeOrganization
+                      ? {
+                          id: cb.localAdministrativeOrganization.id,
+                          name: cb.localAdministrativeOrganization.name,
+                        }
+                      : null,
+                }
               : null,
           }
         : null;

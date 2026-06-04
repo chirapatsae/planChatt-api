@@ -22,6 +22,7 @@ import { ListRevisedEquipmentProjectGroupsQueryDto } from './dto/list-revised-eq
 import { StaffTransitionRevisedEquipmentProjectGroupDto } from './dto/staff-transition-revised-equipment-project-group.dto';
 import { RollbackRevisedEquipmentProjectGroupDto } from './dto/rollback-revised-equipment-project-group.dto';
 import { PullBackRevisedEquipmentProjectGroupDto } from './dto/pull-back-revised-equipment-project-group.dto';
+import { ChangeDevelopmentPlanRevisionDto } from './dto/change-development-plan-revision.dto';
 
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
@@ -189,6 +190,30 @@ export class RevisedEquipmentProjectGroupController {
     return this.service.rollbackByStaff(id, dto, req.user.userId);
   }
 
+  /**
+   * §4.1 staff round-reassignment — move a RELPG to a DIFFERENT revision
+   * round of the SAME plan (fix a wrong edit↔change submission). Mirrors
+   * the project equivalent
+   * (`@Patch('change/developmentPlanRevision/:id')` on the RPG controller).
+   *
+   * Staff-lead gated, NO `AgencyOnlyGuard` (§4.1 — staff workflow action,
+   * orthogonal to agency-only authoring; same as verify / approve above).
+   * Literal sub-segment so it wins route resolution against `@Patch(':id')`.
+   */
+  @Patch(':id/change-development-plan-revision')
+  @Roles(...STAFF_LEAD)
+  async changeDevelopmentPlanRevision(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: ChangeDevelopmentPlanRevisionDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    return this.service.changeDevelopmentPlanRevision(
+      id,
+      dto.developmentPlanRevisionId,
+      req.user.userId,
+    );
+  }
+
   // ──────────────────────────────────────────────────────────────────
   //  READ — LAO users allowed (§5.3)
   // ──────────────────────────────────────────────────────────────────
@@ -282,6 +307,25 @@ export class RevisedEquipmentProjectGroupController {
     @Req() req: Request & { user: JwtPayloadUser },
   ) {
     return this.service.findStaffReturned(query, req.user.userId);
+  }
+
+  /**
+   * ดูประวัติการแก้ไขทั้งหมดของครุภัณฑ์ (EPG root + RELPG revisions).
+   *
+   * Equipment-revision lineage chain — the ผ.03 analog of the project
+   * `@Get(':id/versions')` route on the RPG controller. Read-only (§17.2),
+   * reads unrestricted (§5.3 — NO AgencyOnlyGuard; LAO callers allowed).
+   * The `id` may be EITHER an EPG (root) or a RELPG.
+   *
+   * MUST be declared ABOVE `@Get(':id')` to win NestJS route resolution
+   * (same ordering rule as `counts-by-status` / `staff/*`).
+   */
+  @Get(':id/versions')
+  async findAllVersions(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    return this.service.findAllVersions(id, req.user.userId);
   }
 
   @Get(':id')

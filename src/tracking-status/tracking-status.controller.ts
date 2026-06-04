@@ -20,6 +20,20 @@ import { BulkSubmitDto } from './dto/bulk-submit.dto';
 // Owner-scoped read-side aggregator over §18-cascade `tracking_status`
 // rows (FROZEN reason patterns per §18.6). Sanctioned by §18.13.
 import { OrphanCleanupHistoryQueryDto } from './dto/orphan-cleanup-history.dto';
+// Wave wave-print-merge-scale-statuschange / BE-01 (2026-06-04) —
+// scope-driven promote-Verified request body.
+import { PromoteVerifiedScopeDto } from './dto/promote-verified-scope.dto';
+// Wave wave-print-merge-scale-statuschange / BE-02 (2026-06-04) —
+// scope-driven promote-Verified request body for RevisedProjectGroup.
+import { PromoteVerifiedRevisedScopeDto } from './dto/promote-verified-revised-scope.dto';
+// Wave wave-print-merge-scale-statuschange / BE-03 (2026-06-04) —
+// scope-driven promote-Verified request body for SupplementProjectGroup.
+import { PromoteVerifiedSupplementScopeDto } from './dto/promote-verified-supplement-scope.dto';
+// Wave wave-print-merge-scale-statuschange / BE-04 (2026-06-04) —
+// scope-driven promote-Verified request bodies for EquipmentProjectGroup
+// (EPG) and RevisedEquipmentProjectGroup (RELPG).
+import { PromoteVerifiedEquipmentScopeDto } from './dto/promote-verified-equipment-scope.dto';
+import { PromoteVerifiedRevisedEquipmentScopeDto } from './dto/promote-verified-revised-equipment-scope.dto';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 
@@ -165,6 +179,181 @@ export class TrackingStatusController {
     );
     return this.trackingStatusService.createManySupplementProjectGroup(
       dtos,
+      req.user.userId,
+    );
+  }
+
+  /**
+   * Wave wave-print-merge-scale-statuschange / BE-01 (2026-06-04).
+   *
+   * Scope-driven staff promotion: move EVERY main-plan ProjectGroup
+   * whose latest status is `Verified` under the supplied
+   * `developmentPlanId` (agency vs authority/coordinate origin) to
+   * `Pending_Approval` in ONE transaction. Returns `{ movedCount }`.
+   *
+   * Replaces the FE-driven `POST /tracking-status/bulk` array move on the
+   * agency + coordinate review pages. The body carries ONLY scope keys —
+   * NO id list, NO page/limit. The row set is re-derived server-side from
+   * the same list-finder predicate (§10). Staff-only (§3 / §4.1); §17.4
+   * baseline NOT fired; §18 cascade NOT triggered.
+   */
+  @Post('promote-verified/project-group')
+  promoteVerifiedProjectGroup(
+    @Body() dto: PromoteVerifiedScopeDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    this.logger.log(
+      `Request to promote Verified→Pending_Approval (plan=${dto.developmentPlanId}, origin=${dto.origin ?? 'agency'})`,
+    );
+    return this.trackingStatusService.promoteVerifiedProjectGroupsByScope(
+      dto,
+      req.user.userId,
+    );
+  }
+
+  /**
+   * BE-02 (Wave wave-print-merge-scale-statuschange, 2026-06-04) —
+   * scope-driven promote-Verified for RevisedProjectGroup (edit + change).
+   *
+   * Scope-driven staff promotion: move EVERY RevisedProjectGroup whose
+   * latest status is `Verified` under the supplied
+   * `developmentPlanId` + `developmentPlanRevisionId` (+ optional
+   * `revisionType` edit/change discriminator) to `Pending_Approval` in ONE
+   * transaction. Returns `{ movedCount }`.
+   *
+   * Replaces the FE-driven `POST /tracking-status/bulk/revised-project-group`
+   * array move on the staff verify pages 3 (edit) and 4 (change). The body
+   * carries ONLY scope keys — NO id list, NO page/limit. The row set is
+   * re-derived server-side from the same edit/change verify list-finder
+   * predicate (§9 / §10). Staff-only (§3 / §4.1, RPG area responsibility =
+   * `responsibleAgency`); §17.4 baseline NOT fired; §18 cascade NOT
+   * triggered.
+   */
+  @Post('promote-verified/revised-project-group')
+  promoteVerifiedRevisedProjectGroup(
+    @Body() dto: PromoteVerifiedRevisedScopeDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    this.logger.log(
+      `Request to promote Verified→Pending_Approval RPGs (plan=${dto.developmentPlanId}, revision=${dto.developmentPlanRevisionId}, revisionType=${dto.revisionType ?? 'both'})`,
+    );
+    return this.trackingStatusService.promoteVerifiedRevisedProjectGroupsByScope(
+      dto,
+      req.user.userId,
+    );
+  }
+
+  /**
+   * BE-03 (Wave wave-print-merge-scale-statuschange, 2026-06-04) —
+   * scope-driven promote-Verified for SupplementProjectGroup.
+   *
+   * Promotes EVERY SPG whose latest status is `Verified` under the supplied
+   * (developmentPlanId + developmentPlanSupplementId) scope to
+   * `Pending_Approval` in ONE transaction and returns `{ movedCount }`.
+   *
+   * PRIMARY correctness fix: the page-based bulk endpoint
+   * (`POST /tracking-status/bulk/supplement-project-group`) HARD-CAPS at 200
+   * (`BULK_TOO_LARGE`) and rolls back the whole batch, so a supplement round
+   * with >200 verified SPGs moves ZERO rows on page 5. This endpoint is a
+   * SET operation, not a page — NO row cap. The capped endpoint is retained.
+   *
+   * Selection reuses the verified-supplement list finder
+   * (`findByStatusForStaff`); per-row transition reuses the shared SPG
+   * staff-transition helper. Staff-only (§3 / §4.1); §15.4 supplement book
+   * lock honored before any move; §17.4 baseline NOT fired; §18 cascade NOT
+   * triggered.
+   */
+  @Post('promote-verified/supplement-project-group')
+  promoteVerifiedSupplementProjectGroup(
+    @Body() dto: PromoteVerifiedSupplementScopeDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    this.logger.log(
+      `Request to promote Verified→Pending_Approval SPGs (plan=${dto.developmentPlanId}, supplement=${dto.developmentPlanSupplementId})`,
+    );
+    return this.trackingStatusService.promoteVerifiedSupplementProjectGroupsByScope(
+      dto,
+      req.user.userId,
+    );
+  }
+
+  /**
+   * BE-04 (Wave wave-print-merge-scale-statuschange, 2026-06-04) —
+   * scope-driven promote-Verified for EquipmentProjectGroup (ผ.03, page 1).
+   *
+   * Promotes EVERY EPG whose latest status is `Verified` under the supplied
+   * `developmentPlanId` (§10 main-plan scope) to `Pending_Approval` in ONE
+   * transaction and returns `{ movedCount }`. Replaces the FE per-id
+   * `Promise.allSettled` storm — SET operation, no row cap, no id list.
+   *
+   * Staff-only (§3 / §4.1 — NOT agency-gated per §5.3); amphoe-based area
+   * responsibility for `staff` (admin / super-admin bypass); §12 audit per
+   * row; §14.4 forward transition (no lineage descendant guard); §17.4
+   * baseline NOT fired (Verified → Pending_Approval is not authoring); §18
+   * cascade NOT triggered.
+   */
+  @Post('promote-verified/equipment-project-group')
+  promoteVerifiedEquipmentProjectGroup(
+    @Body() dto: PromoteVerifiedEquipmentScopeDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    this.logger.log(
+      `Request to promote Verified→Pending_Approval EPGs (plan=${dto.developmentPlanId})`,
+    );
+    return this.trackingStatusService.promoteVerifiedEquipmentByScope(
+      dto,
+      req.user.userId,
+    );
+  }
+
+  /**
+   * BE-04 (Wave wave-print-merge-scale-statuschange, 2026-06-04) —
+   * scope-driven promote-Verified for RevisedEquipmentProjectGroup
+   * (ผ.03 revision/change, pages 3/4).
+   *
+   * Promotes EVERY RELPG whose latest status is `Verified` under the
+   * supplied `developmentPlanRevisionId` (§10 DPR scope) to
+   * `Pending_Approval` in ONE transaction and returns `{ movedCount }`.
+   * Replaces the FE per-id `Promise.allSettled` storm + the `@Max(200)`
+   * paginate-all loop on pages 1/3/4 — SET operation, no row cap, no id
+   * list.
+   *
+   * Staff-only (§3 / §4.1 — NOT agency-gated per §5.3); agency-based area
+   * responsibility for `staff` (admin / super-admin bypass); §12 audit per
+   * row; §14.4 forward transition (no lineage descendant guard); §17.4
+   * baseline NOT fired; §18 cascade NOT triggered.
+   */
+  @Post('promote-verified/revised-equipment-project-group')
+  promoteVerifiedRevisedEquipmentProjectGroup(
+    @Body() dto: PromoteVerifiedRevisedEquipmentScopeDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    this.logger.log(
+      `Request to promote Verified→Pending_Approval RELPGs (revision=${dto.developmentPlanRevisionId})`,
+    );
+    return this.trackingStatusService.promoteVerifiedRelpgByScope(
+      dto,
+      req.user.userId,
+    );
+  }
+
+  /**
+   * scope-driven APPROVE for RevisedEquipmentProjectGroup — moves EVERY
+   * `Pending_Approval` RELPG under the supplied `developmentPlanRevisionId`
+   * to `Approved` in ONE transaction (the equipment half of the
+   * "อนุมัติทั้งหมด" action on the ready-to-approved pages). Sibling of
+   * promote-verified; same scope-key-only contract (§12.1), no id list.
+   */
+  @Post('approve-pending-approval/revised-equipment-project-group')
+  approvePendingApprovalRevisedEquipmentProjectGroup(
+    @Body() dto: PromoteVerifiedRevisedEquipmentScopeDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    this.logger.log(
+      `Request to approve Pending_Approval→Approved RELPGs (revision=${dto.developmentPlanRevisionId})`,
+    );
+    return this.trackingStatusService.approvePendingApprovalRelpgByScope(
+      dto,
       req.user.userId,
     );
   }
