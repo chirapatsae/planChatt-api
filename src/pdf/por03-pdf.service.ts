@@ -769,6 +769,200 @@ export class Por03PdfService {
     return this.pdfService.mergePdfBuffers([dividerBuffer, detailBuffer]);
   }
 
+  /**
+   * APPROVED + offset-aware revision ผ.03 render core — the revision
+   * analog of `renderApprovedPlanScopedPor03Buffer`, for the EDIT /
+   * CHANGE §20 BookAssembly merge + preview append
+   * (wave-edit-change-assembly-por03-append, 2026-06-04).
+   *
+   * Differs from `renderRevisionScopedPor03Buffer` (the print/draft
+   * sibling) in exactly three ways — everything else (row-resolution,
+   * STRATEGY filter, parent-plan/year resolution, OLD-vs-NEW pairing +
+   * grouping, doc-definition) is SHARED, NOT duplicated:
+   *   (a) status filter = `Approved` ONLY (the formal booked set,
+   *       mirroring MAIN's `renderApprovedPlanScopedPor03Buffer`) instead
+   *       of `{ Verified, Pending_Approval }`;
+   *   (b) accepts a `pageOffset` so the ผ.03 footers continue the merged
+   *       book's running page count (§21.3 parity);
+   *   (c) returns `{ buffer, equipmentIds, pageMap }` (the MAIN approved
+   *       variant's shape) via a GROUP-LEVEL render loop.
+   *
+   * STRATEGY_BASED-only (§16.5 / §5.3 Phase 2.5): non-STRATEGY-shaped
+   * RELPG rows are SILENT-SKIPPED (logged), NOT a loud throw — the ผ.02
+   * EDIT/CHANGE book must never fail over an equipment edge case (mirror
+   * of the Phase 2.6 draft-append contract).
+   *
+   * Degrades to `null` (NEVER throws) when: the DPR is missing, the
+   * parent plan is missing or has no startYear/endYear window, there are
+   * zero qualifying RELPG rows after the STRATEGY filter, or zero
+   * renderable groups.
+   *
+   * Read-only (§17.2): NO ownership check, NO agency-only assertion, NO
+   * cooldown, NO audit / AI / TrackingStatus writes. §10 scope binding is
+   * via the passed `developmentPlanRevisionId` ONLY (never a global
+   * open-revision lookup).
+   */
+  async renderApprovedRevisionScopedPor03Buffer(
+    developmentPlanRevisionId: string,
+    pageOffset: number = 0,
+  ): Promise<{
+    buffer: Buffer;
+    equipmentIds: string[];
+    pageMap: Map<string, number>;
+  } | null> {
+    // DPR-scoped RELPG fetch. Mirrors `renderRevisionScopedPor03Buffer`
+    // relations EXACTLY; differs ONLY in the status set — FORMAL book is
+    // `Approved`-only (the published set), not `{ Verified,
+    // Pending_Approval }`. §10 — bound to the passed DPR.
+    const rows = await this.revisedEquipmentRepo
+      .createQueryBuilder('relpg')
+      .leftJoinAndSelect('relpg.developmentPlanRevision', 'developmentPlanRevision')
+      .leftJoinAndSelect('developmentPlanRevision.developmentPlan', 'dprPlan')
+      .leftJoinAndSelect('relpg.developmentPlan', 'developmentPlan')
+      .leftJoinAndSelect('relpg.equipmentProjectGroup', 'equipmentProjectGroup')
+      .leftJoinAndSelect('relpg.equipmentCategory', 'equipmentCategory')
+      .leftJoinAndSelect('relpg.tactic', 'tactic')
+      .leftJoinAndSelect('relpg.plan', 'plan')
+      .leftJoinAndSelect('relpg.strategy', 'strategy')
+      .leftJoinAndSelect('relpg.developmentIssue', 'developmentIssue')
+      .leftJoinAndSelect('relpg.responsibleAgency', 'responsibleAgency')
+      .leftJoinAndSelect('relpg.budgets', 'budgets')
+      .leftJoinAndSelect('relpg.createdBy', 'createdBy')
+      .where('developmentPlanRevision.id = :dprId', {
+        dprId: developmentPlanRevisionId,
+      })
+      .andWhere('relpg.deletedAt IS NULL')
+      .andWhere(
+        'EXISTS (SELECT 1 FROM tracking_status ts ' +
+          ' INNER JOIN status s ON s.id = ts.status_id ' +
+          ' WHERE ts.revised_equipment_project_group_id = relpg.id ' +
+          '   AND ts.is_latest = true ' +
+          '   AND s.name = :statusName)',
+        { statusName: 'Approved' },
+      )
+      .getMany();
+
+    this.logger.log(
+      `renderApprovedRevisionScopedPor03Buffer: DPR ${developmentPlanRevisionId} — ${rows.length} Approved RELPG row(s)`,
+    );
+
+    if (rows.length === 0) {
+      this.logger.warn(
+        `renderApprovedRevisionScopedPor03Buffer: DPR ${developmentPlanRevisionId} — 0 Approved RELPG rows; skipping ผ.03 section`,
+      );
+      return null;
+    }
+
+    // STRATEGY_BASED-only narrowing (§16.5) — silent skip mis-shaped rows.
+    const filteredRows = rows.filter((r) => {
+      const isStrategyShape =
+        !!r.strategy && !!r.tactic && !!r.plan && !r.developmentIssue;
+      if (!isStrategyShape) {
+        this.logger.warn(
+          `renderApprovedRevisionScopedPor03Buffer: RELPG ${r.id} under DPR ${developmentPlanRevisionId} is not STRATEGY_BASED-shaped; skipping row`,
+        );
+      }
+      return isStrategyShape;
+    });
+
+    if (filteredRows.length === 0) {
+      this.logger.warn(
+        `renderApprovedRevisionScopedPor03Buffer: DPR ${developmentPlanRevisionId} — 0 STRATEGY_BASED-shaped Approved RELPG rows after filter (matched=${rows.length}); skipping ผ.03 section`,
+      );
+      return null;
+    }
+
+    // Resolve the parent plan via the DPR (or the RELPG denorm FK as a
+    // fallback). §10: never a global latest plan lookup.
+    const firstRow = filteredRows[0];
+    const parentPlan =
+      firstRow.developmentPlanRevision?.developmentPlan ??
+      firstRow.developmentPlan;
+    if (!parentPlan || !parentPlan.startYear || !parentPlan.endYear) {
+      this.logger.warn(
+        `renderApprovedRevisionScopedPor03Buffer: DPR ${developmentPlanRevisionId} parent plan missing or has no startYear/endYear; skipping ผ.03 section`,
+      );
+      return null;
+    }
+
+    // §16.5 year axis — derive from the parent plan window. Coerce to
+    // Number defensively (string-hydrated columns would string-concat).
+    const startYear = Number(parentPlan.startYear);
+    const endYear = Number(parentPlan.endYear);
+    const years = Array.from(
+      { length: endYear - startYear + 1 },
+      (_, i) => startYear + i,
+    );
+
+    // OLD/NEW pairs — reuse the owner-path lineage resolver + grouping
+    // (SHARED with `renderRevisionScopedPor03Buffer`).
+    const pairs = await Promise.all(
+      filteredRows.map((current) => this.resolveEquipmentComparison(current)),
+    );
+    const groups = this.groupRevisionPairs(pairs);
+
+    const fonts = this.pdfService.getPdfFonts();
+    const newWord = this.pdfService.newWord.bind(this.pdfService);
+
+    const developmentPlanLine = parentPlan.name?.trim()
+      ? parentPlan.name
+      : `แผนพัฒนาท้องถิ่น พ.ศ. ${parentPlan.startYear}-${parentPlan.endYear}`;
+
+    // ── GROUP-LEVEL page tracking (mirror of
+    // `renderApprovedPlanScopedPor03Buffer`) ────────────────────────────
+    // Render the divider buffer first, then EACH GROUP as its own buffer,
+    // accumulating a running `localOffset`. Each group footer renders
+    // `currentPage + (pageOffset + localOffset)` so the ผ.03 pages
+    // continue the merged book's absolute count (§21.3). Every RELPG row
+    // in a group shares the group's first 1-based LOCAL page.
+    const dividerDoc = createPor03SectionDividerDocDefinition();
+    const dividerBuffer = await this.pdfService.createPdfBuffer(
+      dividerDoc,
+      fonts,
+    );
+
+    const pageMap = new Map<string, number>();
+    const groupBuffers: Buffer[] = [];
+    const includedIds: string[] = [];
+
+    let localOffset = (await PDFDocument.load(dividerBuffer)).getPageCount();
+
+    for (let i = 0; i < groups.length; i += 1) {
+      const group = groups[i];
+      const groupDoc = createPor03RevisionDetailDocDefinition({
+        developmentPlanName: developmentPlanLine,
+        groups: [group],
+        years,
+        newWord,
+        includeCoverBlock: i === 0,
+        pageOffset: pageOffset + localOffset,
+      });
+      if (!groupDoc) continue;
+      const groupBuffer = await this.pdfService.createPdfBuffer(
+        groupDoc,
+        fonts,
+      );
+      for (const pair of group.pairs) {
+        const id = pair.current.id;
+        pageMap.set(id, localOffset + 1);
+        includedIds.push(id);
+      }
+      groupBuffers.push(groupBuffer);
+      localOffset += (await PDFDocument.load(groupBuffer)).getPageCount();
+    }
+
+    if (groupBuffers.length === 0) {
+      return null;
+    }
+
+    const buffer = await this.pdfService.mergePdfBuffers([
+      dividerBuffer,
+      ...groupBuffers,
+    ]);
+
+    return { buffer, equipmentIds: includedIds, pageMap };
+  }
+
   // ──────────────────────────────────────────────────────────────────
   // Shared render core (BE-01, wave-staff-draftbook-por03-append)
   // ──────────────────────────────────────────────────────────────────

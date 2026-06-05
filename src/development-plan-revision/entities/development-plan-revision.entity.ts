@@ -29,6 +29,32 @@ export class DevelopmentPlanRevision {
   @JoinColumn({ name: 'revision_type_id' })
   revisionType: RevisionType;
 
+  /**
+   * AUTHORING-ORDER counter — assigned at create time, per-plan, CROSS-type.
+   *
+   * Computed as `MAX(revisionNumber) + 1` over ALL revisions of the plan
+   * INCLUDING soft-deleted rows (development-plan-revision.service.ts), so
+   * แก้ไข and เปลี่ยนแปลง share ONE sequence and a deleted/gapped number is
+   * never reused. (Previously `length + 1`, which could re-issue a number
+   * after a mid-chain soft-delete.) This is the order rounds were CREATED,
+   * NOT the order books were published/booked.
+   *
+   * Decoupling from the §15 publication timeline is DELIBERATE:
+   *   - §15.2 / §15.11: the book lineage timeline is ordered by `bookedAt`
+   *     (strict `>`), and MUST NOT be ordered by `revisionNumber` or
+   *     `createdAt`. BookLockService never reads this field.
+   *   - The printed "ครั้งที่ N" is re-derived PER-TYPE at print time via
+   *     `PdfService.calculateRevisionCountByType` (pdf.service.ts), so the
+   *     absolute value here is not printed directly — only its ordering matters.
+   *   - `MAX(revisionNumber)` IS used to pick the latest revised version per
+   *     project (revised-project-group.service.ts). Because of this, and per
+   *     §11/§12 immutability (the value is snapshotted into printed/booked
+   *     PDFs as editNo/changeNo), `revisionNumber` MUST NOT be reassigned or
+   *     mutated after creation.
+   *
+   * Do NOT "fix" this into publication order — that would re-violate §15.11,
+   * break latest-version selection, and rewrite booked history.
+   */
   @Column({ name: 'revision_number', type: 'int' })
   revisionNumber: number;
 
@@ -103,10 +129,13 @@ export class DevelopmentPlanRevision {
    *   2. TypeScript understands the field exists on the entity and
    *      downstream callers no longer need `as any` casts.
    *
-   * `true` when ANY other non-soft-deleted revision or supplement of the
-   * same `DevelopmentPlan` has a strictly-newer `createdAt` — OQ-2=(B)
-   * global timeline across BOTH collections. The write paths enforce the
-   * invariant via `BookLockService.assertEditable`; this flag only
+   * `true` when ANY other non-soft-deleted, BOOKED (`bookedAt IS NOT NULL`)
+   * revision or supplement of the same `DevelopmentPlan` has a strictly-newer
+   * `bookedAt` — §15.2/§15.11 LINEAR CHAIN ACROSS CATEGORIES, ordered by
+   * `bookedAt` (strict `>`). Drafts (`bookedAt IS NULL`) are excluded from the
+   * chain. NOTE: ordering is by `bookedAt`, NOT `createdAt` — see
+   * `BookLockService.hasStrictlyNewerBookedSibling`. The write paths enforce
+   * the invariant via `BookLockService.assertEditable`; this flag only
    * surfaces the state to the UI (disable "แก้ไขเล่ม" / "ยกเลิกเล่ม",
    * show the "เล่มเก่า (ถูกล็อก)" badge).
    */

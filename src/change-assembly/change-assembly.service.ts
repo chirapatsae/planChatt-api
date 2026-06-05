@@ -117,6 +117,7 @@ import { UnifiedProjectMapper } from 'src/project-groups/dto/unified-project-dis
 
 import { UsersService } from 'src/users/users.service';
 import { PdfService } from 'src/pdf/pdf.service';
+import { Por03PdfService } from 'src/pdf/por03-pdf.service';
 import { WebsocketService } from 'src/websocket/websocket/websocket.service';
 import { BookLockService } from 'src/common/book-lock/book-lock.service';
 import { OrphanCleanupService } from 'src/orphan-cleanup/orphan-cleanup.service';
@@ -200,6 +201,10 @@ export class ChangeAssemblyService {
 
     private readonly usersService: UsersService,
     private readonly pdfService: PdfService,
+    // wave-edit-change-assembly-por03-append (2026-06-04) — Approved-only
+    // revision ผ.03 (RELPG OLD-vs-NEW) render core for the merge/preview
+    // append. PdfModule (already imported) exports Por03PdfService.
+    private readonly por03Service: Por03PdfService,
     private readonly websocketService: WebsocketService,
     private readonly fileService: BookAssemblyFileService,
     private readonly storagePathService: StoragePathService,
@@ -236,7 +241,10 @@ export class ChangeAssemblyService {
       .where('plan.is_latest = :planLatest', { planLatest: true })
       .andWhere('rt.name = :revisionType', { revisionType: 'เปลี่ยนแปลง' })
       .andWhere('r.is_latest = :isLatest', { isLatest: true })
-      .andWhere('r.is_open = :isOpen', { isOpen: true })
+      // 2026-06-04 — DROPPED `r.is_open = true` (twin of the EDIT change):
+      // assembly is a POST-close step; gating on is_open made the "รวมเล่ม"
+      // badge vanish right when assembly becomes due. Counts on is_booked =
+      // false (open OR closed), mirroring MAIN_PLAN. See EditAssemblyService.
       .andWhere('r.is_booked = :isBooked', { isBooked: false })
       .andWhere(
         `NOT EXISTS (
@@ -733,7 +741,24 @@ export class ChangeAssemblyService {
     const part1 = this.fileService.readPartFileByStored(draft.part1FilePath);
     const part2 = this.fileService.readPartFileByStored(draft.part2FilePath);
     const part3 = this.fileService.readPartFileByStored(draft.part3FilePath);
-    return this.mergePdfBuffers([part1, part2, part3]);
+
+    // wave-edit-change-assembly-por03-append (§5.3 Phase 3 / §21.3 /
+    // §17.2) — append the formal ผ.03 revision section (RELPG OLD-vs-NEW),
+    // Approved-only + STRATEGY_BASED-only, read-only. Offset continues the
+    // absolute page count past part1+part2+part3 so ผ.03 footers number
+    // correctly within the previewed PDF. Degrades to null when no
+    // Approved RELPG exists → ผ.02 book is produced verbatim.
+    const por03Offset =
+      (await PDFDocument.load(part1)).getPageCount() +
+      (await PDFDocument.load(part2)).getPageCount() +
+      (await PDFDocument.load(part3)).getPageCount();
+    const por03 = await this.por03Service.renderApprovedRevisionScopedPor03Buffer(
+      developmentPlanRevisionId,
+      por03Offset,
+    );
+    return this.mergePdfBuffers(
+      por03 ? [part1, part2, part3, por03.buffer] : [part1, part2, part3],
+    );
   }
 
   /**
@@ -790,8 +815,27 @@ export class ChangeAssemblyService {
 
       await this.notifyProgress(userId, developmentPlanRevisionId, 30, 'merging', 'กำลังรวมไฟล์ PDF...');
 
-      // 3. Merge.
-      const mergedBuffer = await this.mergePdfBuffers([part1, part2, part3]);
+      // 3. Merge — append the formal ผ.03 revision section (§5.3 Phase 3,
+      // §21.3). Approved-only, STRATEGY_BASED-only, read-only (§17.2 — NO
+      // tracking/AI/audit writes). The render degrades to null when no
+      // Approved RELPG exists, in which case the ผ.02 book is produced
+      // verbatim (no behavior change). The offset continues the absolute
+      // page count past part1+part2+part3 so ผ.03 footers number correctly
+      // within the merged PDF. `equipmentIds`/`pageMap` are intentionally
+      // discarded — no RELPG booking-state stamping or equipment snapshot
+      // this wave (deferred per §20.2).
+      const por03Offset =
+        (await PDFDocument.load(part1)).getPageCount() +
+        (await PDFDocument.load(part2)).getPageCount() +
+        (await PDFDocument.load(part3)).getPageCount();
+      const por03 =
+        await this.por03Service.renderApprovedRevisionScopedPor03Buffer(
+          developmentPlanRevisionId,
+          por03Offset,
+        );
+      const mergedBuffer = await this.mergePdfBuffers(
+        por03 ? [part1, part2, part3, por03.buffer] : [part1, part2, part3],
+      );
       const mergedPdf = await PDFDocument.load(mergedBuffer);
       const totalPages = mergedPdf.getPageCount();
 
@@ -941,9 +985,15 @@ export class ChangeAssemblyService {
    *      plan that was locked by this row.
    *   8. Restore parent leaf in `change_project_lineage` for every RPG
    *      in the cancelled snapshot.
-   *   9. §18.2.1 cancel cascade — invoke
-   *      `OrphanCleanupService.cascadeOnBookCancel(revision,
-   *      'REVISION', manager)` INSIDE the same transaction.
+   *
+   * Cancel un-books children WITHOUT destroying them (cancel-no-destroy,
+   * 2026-06-05). Per CLAUDE.md §18.2, the §18 `cascadeOnBookCancel`
+   * applies ONLY to (A) BOOK softRemove (the whole revision round is
+   * deleted). This is (B) an assembly VERSION cancel that REOPENS the
+   * revision for rework — steps 5-7 un-book the snapshot RPGs and restore
+   * lineage, leaving the RPG rows LIVE and reusable (mirrors
+   * CORRECTION_PART3 and the SupplementAssembly precedent). It does NOT
+   * fire the §18 cascade.
    *
    * NOTE on deprecation audit log: the legacy
    * `BookAssemblyService.cancel` writes a `DeprecationAuditLog` row.
@@ -1045,22 +1095,15 @@ export class ChangeAssemblyService {
         manager,
       );
 
-      // 8. §18.2.1 cancel cascade — INSIDE the same transaction so a
-      //    cascade throw rolls back the deprecate + reset writes.
-      const refreshedRevision = await manager
-        .getRepository(DevelopmentPlanRevision)
-        .findOne({ where: { id: developmentPlanRevisionId } });
-      if (refreshedRevision) {
-        const cascadeResult = await this.orphanCleanupService.cascadeOnBookCancel(
-          refreshedRevision,
-          'REVISION',
-          manager,
-          userId,
-        );
-        this.logger.log(
-          `[ChangeAssembly] cancel cascade revision=${developmentPlanRevisionId} pg=${cascadeResult.pgCount} rpg=${cascadeResult.rpgCount}`,
-        );
-      }
+      // NOTE (cancel-no-destroy, 2026-06-05): version cancel does NOT fire
+      // the §18 `cascadeOnBookCancel`. Per CLAUDE.md §18.2, the §18 cancel
+      // cascade is reserved for (A) BOOK softRemove (the whole revision round
+      // is deleted → children genuinely orphaned). This is (B) — an assembly
+      // VERSION cancel that REOPENS the revision (step 6, isOpen=true) for
+      // rework. Steps 5-7 already un-book the snapshot RPGs and restore lineage,
+      // leaving the RPG rows LIVE and reusable (mirrors the CORRECTION_PART3
+      // full reset and the SupplementAssembly precedent). Soft-deleting the
+      // children here would force agencies to re-add projects from scratch.
 
       this.logger.log(
         `[ChangeAssembly] cancelPublishedVersion revision=${developmentPlanRevisionId} v${currentVersion.versionNumber} by user=${userId}`,

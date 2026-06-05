@@ -72,9 +72,11 @@ export class DevelopmentPlanRevisionService {
       }
 
       // Validate relations exist
+      // revisionNumber is now derived via a dedicated MAX(+withDeleted) query
+      // below, so the full `developmentPlanRevision` relation no longer needs
+      // eager-loading here.
       const developmentPlan = await this.developmentPlanRepository.findOne({
         where: { id: createDto.developmentPlanId },
-        relations:['developmentPlanRevision']
       });
       if (!developmentPlan) {
         throw new NotFoundException(
@@ -131,7 +133,20 @@ export class DevelopmentPlanRevisionService {
           { isLatest: false },
         );
       }
-      const nextVersion  = developmentPlan.developmentPlanRevision.length + 1;
+      // revisionNumber = AUTHORING ORDER (per-plan, cross-type) — see §15
+      // (timeline orders by bookedAt, NEVER revisionNumber). Generated as
+      // MAX(revisionNumber)+1 over ALL revisions of this plan INCLUDING
+      // soft-deleted rows (`withDeleted`), so a deleted / gapped number is
+      // NEVER reused. The prior `length + 1` counted only live rows, so a
+      // mid-chain soft-delete shrank the count and could re-issue a number
+      // already printed on a booked book (§11/§12 immutability hazard).
+      const maxRow = await this.revisionRepository
+        .createQueryBuilder('r')
+        .withDeleted()
+        .select('MAX(r.revisionNumber)', 'max')
+        .where('r.development_plan_id = :planId', { planId: developmentPlan.id })
+        .getRawOne<{ max: number | string | null }>();
+      const nextVersion = (Number(maxRow?.max) || 0) + 1;
 
       const revision = this.revisionRepository.create({
         developmentPlan,

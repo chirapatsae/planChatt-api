@@ -65,6 +65,21 @@ export interface Por03RevisionDetailDocParams {
   groups: EquipmentRevisionTableGroup[];
   years: number[];
   newWord: (text: string) => any;
+  /**
+   * Phase (2026-06-04, wave-edit-change-assembly-por03-append):
+   * continuous absolute-page offset (sum of ผ.01 + ผ.02 + ผ.02-Part3
+   * page counts). When set, the footer renders `currentPage + pageOffset`
+   * in the ผ.02 style so the appended ผ.03 revision section continues the
+   * merged-book page sequence. When omitted (Phase 2.5/2.6 print /
+   * staff-draft surfaces) the footer returns null per the locked decision.
+   */
+  pageOffset?: number;
+  /**
+   * When false, suppress the centered cover block so per-group buffers do
+   * not repeat it (used by the GROUP-LEVEL render loop in
+   * `renderApprovedRevisionScopedPor03Buffer`). Default true.
+   */
+  includeCoverBlock?: boolean;
 }
 
 const PAGE_MARGINS: [number, number, number, number] = [15, 60, 15, 40];
@@ -164,7 +179,13 @@ const calculateRevisionColumnWidths = (years: number[]): string[] => {
 export const createPor03RevisionDetailDocDefinition = (
   params: Por03RevisionDetailDocParams,
 ): TDocumentDefinitions | null => {
-  const { developmentPlanName, groups, years, newWord } = params;
+  const {
+    developmentPlanName,
+    groups,
+    years,
+    newWord,
+    includeCoverBlock = true,
+  } = params;
 
   if (groups.length === 0) {
     return null;
@@ -185,19 +206,24 @@ export const createPor03RevisionDetailDocDefinition = (
   // Identical to the standard ผ.03 cover (`por03-table.part.ts:232-246`)
   // — the OLD/NEW comparison nature is conveyed by the table body
   // (stacked เดิม/ใหม่ rows + bold-on-change), not by the title.
-  content.push({
-    text: [
-      { text: 'บัญชีครุภัณฑ์\n' },
-      'สำหรับที่ไม่ได้จัดทำเป็นโครงการพัฒนาท้องถิ่น\n',
-      developmentPlanName + '\n',
-      POR03_COVER_AGENCY_LINE + '\n',
-    ],
-    alignment: 'center',
-    margin: [0, 0, 0, 10],
-    fontSize: 12,
-    bold: true,
-    style: 'tableHeader',
-  });
+  // Gated on `includeCoverBlock` so the GROUP-LEVEL render loop (one
+  // group per buffer) emits the cover ONLY on the first group's buffer
+  // (mirror of `por03-table.part.ts:232`).
+  if (includeCoverBlock) {
+    content.push({
+      text: [
+        { text: 'บัญชีครุภัณฑ์\n' },
+        'สำหรับที่ไม่ได้จัดทำเป็นโครงการพัฒนาท้องถิ่น\n',
+        developmentPlanName + '\n',
+        POR03_COVER_AGENCY_LINE + '\n',
+      ],
+      alignment: 'center',
+      margin: [0, 0, 0, 10],
+      fontSize: 12,
+      bold: true,
+      style: 'tableHeader',
+    });
+  }
 
   groups.forEach((group, groupIndex) => {
     const tableBody: any[] = [];
@@ -474,11 +500,45 @@ export const createPor03RevisionDetailDocDefinition = (
         margin: [0, 40, 20, 0],
       };
     },
-    // NO page numbers (footer returns null) — same locked decision as
-    // the Phase 2.5 print surface (README §12 / §5.3 Phase 2.5).
-    footer: function () {
-      return null;
-    },
+    // Phase (2026-06-04) — when `pageOffset` is set (assembly merge/preview
+    // append), render the ผ.02-style footer (centered plan name +
+    // right-aligned continuous page number) so the ผ.03 revision pages
+    // continue the merged-book page sequence (§21.3 parity). When omitted
+    // (Phase 2.5 print / Phase 2.6 staff-draft surfaces) the footer stays
+    // null per the locked decision (README §12 / §5.3 Phase 2.5). Mirror
+    // of `por03-table.part.ts:455-483`.
+    footer:
+      typeof params.pageOffset === 'number'
+        ? function (currentPage: number) {
+            const footerText = params.newWord
+              ? params.newWord(params.developmentPlanName)
+              : params.developmentPlanName;
+            const pageNumber = currentPage + (params.pageOffset ?? 0);
+            return {
+              columns: [
+                { text: '', width: '*' },
+                {
+                  text: footerText,
+                  alignment: 'center',
+                  width: 'auto',
+                  fontSize: 12,
+                  bold: true,
+                },
+                {
+                  text: String(pageNumber),
+                  alignment: 'right',
+                  width: '*',
+                  margin: [0, 0, 20, 0],
+                  fontSize: 12,
+                  bold: true,
+                },
+              ],
+              margin: [15, 0, 15, 20],
+            };
+          }
+        : function () {
+            return null;
+          },
     content,
     pageSize: 'A4',
     pageOrientation: PAGE_ORIENTATION,
