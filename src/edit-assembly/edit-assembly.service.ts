@@ -118,6 +118,7 @@ import { Por03PdfService } from 'src/pdf/por03-pdf.service';
 import { WebsocketService } from 'src/websocket/websocket/websocket.service';
 import { BookLockService } from 'src/common/book-lock/book-lock.service';
 import { OrphanCleanupService } from 'src/orphan-cleanup/orphan-cleanup.service';
+import { LineageLockService } from 'src/common/lineage-lock/lineage-lock.service';
 import { StoragePathService } from 'src/storage/storage-path.service';
 import {
   BookAssemblyFileService,
@@ -206,6 +207,10 @@ export class EditAssemblyService {
     private readonly storagePathService: StoragePathService,
     private readonly bookLockService: BookLockService,
     private readonly orphanCleanupService: OrphanCleanupService,
+    // §14.11 — cancel-time descendant guard. Reuses the canonical
+    // §14 lineage machinery (no parallel query) to block a version
+    // cancel when any snapshot project was forked into a later book.
+    private readonly lineageLockService: LineageLockService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -760,14 +765,11 @@ export class EditAssemblyService {
 
     // wave-edit-change-assembly-por03-append (§5.3 Phase 3 / §21.3 /
     // §17.2) — append the formal ผ.03 revision section (RELPG OLD-vs-NEW),
-    // Approved-only + STRATEGY_BASED-only, read-only. Offset continues the
-    // absolute page count past part1+part2+part3 so ผ.03 footers number
-    // correctly within the previewed PDF. Degrades to null when no
+    // Approved-only + STRATEGY_BASED-only, read-only. ผ.02 Part 3 ของ
+    // EDIT/CHANGE เริ่มนับหน้า 1 ใหม่ (§21.3.4) — ผ.03 ต่อจาก Part 3
+    // จึง offset = pageCount(part3) เท่านั้น (ไม่รวม part1/part2). Degrades to null when no
     // Approved RELPG exists → ผ.02 book is produced verbatim.
-    const por03Offset =
-      (await PDFDocument.load(part1)).getPageCount() +
-      (await PDFDocument.load(part2)).getPageCount() +
-      (await PDFDocument.load(part3)).getPageCount();
+    const por03Offset = (await PDFDocument.load(part3)).getPageCount();
     const por03 = await this.por03Service.renderApprovedRevisionScopedPor03Buffer(
       developmentPlanRevisionId,
       por03Offset,
@@ -840,10 +842,7 @@ export class EditAssemblyService {
       // within the merged PDF. `equipmentIds`/`pageMap` are intentionally
       // discarded — no RELPG booking-state stamping or equipment snapshot
       // this wave (deferred per §20.2).
-      const por03Offset =
-        (await PDFDocument.load(part1)).getPageCount() +
-        (await PDFDocument.load(part2)).getPageCount() +
-        (await PDFDocument.load(part3)).getPageCount();
+      const por03Offset = (await PDFDocument.load(part3)).getPageCount();
       const por03 =
         await this.por03Service.renderApprovedRevisionScopedPor03Buffer(
           developmentPlanRevisionId,
@@ -990,6 +989,14 @@ export class EditAssemblyService {
    *   4. Descendant guard — block if any child lineage row references
    *      this version as a `parentEditAssemblyVersionId` AND is still
    *      a current leaf.
+   *   4b. §14.11 cancel-time descendant guard — block if any RPG in the
+   *      version snapshot was forked into a LATER book (live §14
+   *      descendant, prev_project_type='revised'). Throws
+   *      `409 BOOK_PROJECTS_REFERENCED_DOWNSTREAM` listing the blocking
+   *      project ids; the operator must remove the downstream fork first.
+   *      This extends §14 descendant-immutability to the book-cancel
+   *      operation and prevents the orphaned/ambiguous source the
+   *      cancel-no-destroy un-book would otherwise create.
    *   5. Mark version DEPRECATED + persist deprecation audit fields.
    *   6. Reset every RPG in the snapshot: `isBooked=false`,
    *      `bookedAt=null`, `pageNumber=null`.
@@ -1075,6 +1082,35 @@ export class EditAssemblyService {
         });
       }
 
+      const snapshotIds = currentVersion.part3ProjectSnapshot ?? [];
+
+      // 3b. §14.11 cancel-time descendant guard. Block cancel if ANY RPG
+      //     in this version's snapshot was forked into a LATER book (i.e.
+      //     has a live §14 descendant referencing it via
+      //     prev_project_type='revised'). Cancelling here would un-book the
+      //     forked source while the downstream fork still points at it,
+      //     leaving the source permanently §14-locked and the lineage
+      //     "ขาดช่วง" (orphaned/ambiguous source). The operator must remove
+      //     the downstream fork first. Reuses the shared
+      //     collectDownstreamForkIds helper — the SAME source of truth as the
+      //     read-side hasDownstreamFork DTO flag, so the pre-emptive FE disable
+      //     can never disagree with this throw. Runs INSIDE the transaction,
+      //     BEFORE the deprecate write (atomic precondition).
+      const blockingProjectIds = await this.collectDownstreamForkIds(
+        snapshotIds,
+        manager,
+      );
+      if (blockingProjectIds.length > 0) {
+        throw new ConflictException({
+          code: 'BOOK_PROJECTS_REFERENCED_DOWNSTREAM',
+          message:
+            'ไม่สามารถยกเลิกเล่มนี้ได้ เนื่องจากมีโครงการในเล่มนี้ถูกนำไปใช้ต่อ (fork) ในเล่มอื่นที่ออกภายหลัง ' +
+            'กรุณาลบรายการที่อ้างอิงในเล่มถัดไปก่อน แล้วจึงยกเลิกเล่มนี้ได้ ' +
+            `(โครงการที่ถูกอ้างอิง: ${blockingProjectIds.join(', ')})`,
+          blockingProjectIds,
+        });
+      }
+
       // 4. Deprecate the version row.
       await manager.update(EditAssemblyVersion, currentVersion.id, {
         status: EditAssemblyVersionStatus.DEPRECATED,
@@ -1082,8 +1118,6 @@ export class EditAssemblyService {
         deprecatedById: workHistory.id,
         deprecationReason: dto.reason,
       });
-
-      const snapshotIds = currentVersion.part3ProjectSnapshot ?? [];
 
       // 5. Reset RPG booking on every RPG in the cancelled snapshot.
       if (snapshotIds.length > 0) {
@@ -1223,6 +1257,38 @@ export class EditAssemblyService {
         });
       }
 
+      const isFullReset =
+        dto.correctionMode === EditAssemblyCorrectionMode.CORRECTION_PART3;
+
+      // 3c. §14.11 correction-time descendant guard (parity with the
+      //     cancel guard above). CORRECTION_PART3 un-books every RPG in
+      //     the deprecated version's snapshot (step 5a). If ANY of those
+      //     RPGs was forked into a LATER book (live §14 descendant,
+      //     prev_project_type='revised'), un-booking it here would strand
+      //     the forked source: the downstream fork still points at it, so
+      //     the source stays permanently §14-locked while its booked
+      //     standing is gone ("ขาดช่วง"). Block exactly as cancel does.
+      //     Reuses LineageLockService — no parallel query. Runs INSIDE the
+      //     transaction, BEFORE the deprecate/un-book writes. PART1/PART2
+      //     leave RPGs booked, so they are NOT guarded.
+      if (isFullReset) {
+        const snapshotIds = currentVersion.part3ProjectSnapshot ?? [];
+        const blockingProjectIds = await this.collectDownstreamForkIds(
+          snapshotIds,
+          manager,
+        );
+        if (blockingProjectIds.length > 0) {
+          throw new ConflictException({
+            code: 'BOOK_PROJECTS_REFERENCED_DOWNSTREAM',
+            message:
+              'ไม่สามารถยกเลิกเล่มนี้ได้ เนื่องจากมีโครงการในเล่มนี้ถูกนำไปใช้ต่อ (fork) ในเล่มอื่นที่ออกภายหลัง ' +
+              'กรุณาลบรายการที่อ้างอิงในเล่มถัดไปก่อน แล้วจึงยกเลิกเล่มนี้ได้ ' +
+              `(โครงการที่ถูกอ้างอิง: ${blockingProjectIds.join(', ')})`,
+            blockingProjectIds,
+          });
+        }
+      }
+
       // 4. Deprecate current version.
       await manager.update(EditAssemblyVersion, currentVersion.id, {
         status: EditAssemblyVersionStatus.DEPRECATED,
@@ -1230,9 +1296,6 @@ export class EditAssemblyService {
         deprecatedById: workHistory.id,
         deprecationReason: dto.reason,
       });
-
-      const isFullReset =
-        dto.correctionMode === EditAssemblyCorrectionMode.CORRECTION_PART3;
 
       // 5. CORRECTION_PART3 full reset (§20 parity with MAIN).
       if (isFullReset) {
@@ -1402,7 +1465,7 @@ export class EditAssemblyService {
       },
       relations: ['createdBy', 'createdBy.user'],
     });
-    if (completed) return this.toVersionDto(completed);
+    if (completed) return this.enrichWithDownstreamFork(completed);
 
     // Step 2 — DEPRECATED via active draft's previousVersionId.
     const activeDraft = await this.draftRepo.findOne({
@@ -1419,10 +1482,26 @@ export class EditAssemblyService {
         where: { id: activeDraft.previousVersionId },
         relations: ['createdBy', 'createdBy.user'],
       });
-      if (previous) return this.toVersionDto(previous);
+      if (previous) return this.enrichWithDownstreamFork(previous);
     }
 
     return null;
+  }
+
+  /**
+   * §14.11 (read-side) — wrap toVersionDto and set the advisory
+   * hasDownstreamFork flag (§17.2). Current-version / version-by-number reads
+   * only; never on the list endpoint (avoids N×snapshot exists() queries).
+   */
+  private async enrichWithDownstreamFork(
+    v: EditAssemblyVersion,
+  ): Promise<EditAssemblyVersionDto> {
+    const dto = this.toVersionDto(v);
+    dto.hasDownstreamFork = await this.computeHasDownstreamFork(
+      v.part3ProjectSnapshot ?? [],
+      this.dataSource.manager,
+    );
+    return dto;
   }
 
   async getVersionByNumber(
@@ -1440,7 +1519,7 @@ export class EditAssemblyService {
         `ไม่พบเวอร์ชัน v${versionNumber} สำหรับเล่มฉบับแก้ไขนี้`,
       );
     }
-    return this.toVersionDto(version);
+    return this.enrichWithDownstreamFork(version);
   }
 
   // ===================================================================
@@ -2107,6 +2186,53 @@ export class EditAssemblyService {
           }
         : undefined,
     };
+  }
+
+  /**
+   * §14.11 — collect the snapshot project ids that have a live (non-soft-
+   * deleted) downstream fork (prev_project_type='revised'). SINGLE source of
+   * truth shared by the cancel + CORRECTION_PART3 throw-guards (which surface
+   * the ids in the 409 body) AND the read-side hasDownstreamFork flag, so the
+   * pre-emptive FE disable can never disagree with the throw. Reuses
+   * LineageLockService — no parallel query.
+   */
+  private async collectDownstreamForkIds(
+    snapshotIds: string[],
+    manager: EntityManager,
+  ): Promise<string[]> {
+    const blocking: string[] = [];
+    for (const projectId of snapshotIds) {
+      const forked = await this.lineageLockService.hasNonDeletedDescendant(
+        projectId,
+        'revised',
+        manager,
+      );
+      if (forked) blocking.push(projectId);
+    }
+    return blocking;
+  }
+
+  /**
+   * §14.11 (read-side) — boolean form of collectDownstreamForkIds, short-
+   * circuiting on the first fork. Populates the advisory hasDownstreamFork DTO
+   * flag (§17.2) on the current-version reads only.
+   */
+  private async computeHasDownstreamFork(
+    snapshotIds: string[],
+    manager: EntityManager,
+  ): Promise<boolean> {
+    for (const projectId of snapshotIds) {
+      if (
+        await this.lineageLockService.hasNonDeletedDescendant(
+          projectId,
+          'revised',
+          manager,
+        )
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private toVersionDto(v: EditAssemblyVersion): EditAssemblyVersionDto {

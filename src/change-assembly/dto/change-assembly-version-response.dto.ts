@@ -71,4 +71,14 @@ export interface ChangeAssemblyVersionDto {
   part1DownloadUrl: string;
   part2DownloadUrl: string;
   part3DownloadUrl: string;
+
+  /**
+   * §14.11 (read-side) — true when this version's snapshot projects have a
+   * live downstream fork (the SAME condition the cancel / CORRECTION_PART3
+   * guards throw `BOOK_PROJECTS_REFERENCED_DOWNSTREAM` on). Advisory display
+   * flag per §17.2; populated ONLY on the current-version + version-by-number
+   * reads, never on the list endpoint. The FE uses it to pre-emptively disable
+   * the cancel button + the CORRECTION_PART3 option.
+   */
+  hasDownstreamFork?: boolean;
 }

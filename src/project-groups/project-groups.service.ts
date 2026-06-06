@@ -2402,15 +2402,18 @@ export class ProjectGroupsService {
       );
     };
 
-    let totalCount = 0;
-    const allLatestRevised: RevisedProjectGroup[] = [];
-    const allOriginal: ProjectGroup[] = [];
+    let allLatestRevised: RevisedProjectGroup[] = [];
+    let allOriginal: ProjectGroup[] = [];
 
     for (const dp of developmentPlans) {
       const developmentPlanId = dp.id;
 
-      // ดึง revision ล่าสุดของแต่ละ ProjectGroup ในแผนนี้ (ไม่กรอง status)
-      const latestRevisedAll = await this.findLatestRevisedProjects(
+      // §14.1/§14.2/§14.7 — surface the lineage LEAF (no live `'revised'`
+      // descendant) per lineage, ANY status. MUST NOT use the MAX(revisionNumber)
+      // loader: it can return a mid-lineage node for multi-round chains (CHANGE
+      // then EDIT), which the §14 exclusion below would then drop, making the
+      // whole lineage vanish (the bug this wave fixes).
+      const latestRevisedAll = await this.findLineageLeafRevisedProjects(
         developmentPlanId,
       );
       const latestRevised = latestRevisedAll.filter(filterByUserAgency);
@@ -2421,29 +2424,42 @@ export class ProjectGroupsService {
       );
       const original = originalAll.filter(filterByUserAgency);
 
-      if (countOnly) {
-        totalCount += latestRevised.length + original.length;
-      } else {
-        allLatestRevised.push(...latestRevised);
-        allOriginal.push(...original);
-      }
+      // Aggregate across plans regardless of countOnly; the head-of-lineage
+      // exclusion below must run for BOTH the list and the countOnly path so
+      // the count matches the rendered set.
+      allLatestRevised.push(...latestRevised);
+      allOriginal.push(...original);
     }
 
-    if (countOnly) return totalCount;
+    // CLAUDE.md §10 + §11 + §14.1/§14.2/§14.7 — the `/project` list shows the
+    // HEAD-OF-LINEAGE TIP, ONE row per lineage. The revised set is already the
+    // lineage LEAF (no live `'revised'` descendant — `findLineageLeafRevisedProjects`),
+    // so it needs NO further RPG exclusion. The PG side still drops any original
+    // that has a live `'original'` descendant (its leaf is now guaranteed present
+    // in `allLatestRevised`), so the FE never renders the "เวอร์ชันเก่า (ถูกล็อก)"
+    // §14.10 badge on this list and the lineage never disappears.
+    //
+    // The §14 detection keys on `prev_project_id` (the lineage edge), whereas
+    // `findOriginal` drops PGs on `project_group_id` (the FK). These keys
+    // diverge for SPG-source / key-divergent forks, so a forked PG can survive
+    // `findOriginal` yet still be a descendant-having ancestor; the §14-keyed
+    // exclusion removes it uniformly.
+    const lockedPgIds = await this.findProjectGroupIdsWithDescendants(
+      allOriginal.map((p) => p.id),
+    );
 
-    // CLAUDE.md §14 — batched lineage-lock lookups for both sides (aggregated
-    // across all plans in one round-trip each).
-    const [lockedPgIds, lockedRpgIds] = await Promise.all([
-      this.findProjectGroupIdsWithDescendants(allOriginal.map((p) => p.id)),
-      this.findRevisedProjectGroupIdsWithDescendants(allLatestRevised.map((r) => r.id)),
-    ]);
+    allOriginal = allOriginal.filter((p) => !lockedPgIds.has(p.id));
 
+    if (countOnly) return allLatestRevised.length + allOriginal.length;
+
+    // Surviving rows are head-of-lineage by construction (filtered above), so
+    // `hasDescendant` is always false on the resulting DTOs.
     const unified = [
       ...allLatestRevised.map((x) =>
-        UnifiedProjectMapper.fromRevisedProjectGroup(x, lockedRpgIds.has(x.id))
+        UnifiedProjectMapper.fromRevisedProjectGroup(x, false)
       ),
       ...allOriginal.map((x) =>
-        UnifiedProjectMapper.fromProjectGroup(x, lockedPgIds.has(x.id))
+        UnifiedProjectMapper.fromProjectGroup(x, false)
       ),
     ];
 
@@ -2614,12 +2630,17 @@ export class ProjectGroupsService {
       }
     }
 
-    if (countOnly)
-      return latestRevised.length + original.length + approvedSupplement.length;
-
-    // CLAUDE.md §14 — batched lineage-lock lookups. This endpoint powers the
-    // Revision picker; an approved PG/RPG/SPG that already has a descendant
-    // must surface as locked so FE-LOCK-06 can disable fork actions.
+    // CLAUDE.md §11 + §14.1/§14.2 — the revision/change fork POOL must show
+    // ONLY head-of-lineage Approved rows. A PG/RPG/SPG that already has a
+    // live (non-soft-deleted) descendant fork is LOCKED and MUST be EXCLUDED
+    // from the pool entirely (one fork per lineage), so a forked project
+    // disappears and cannot be re-forked. This MIRRORS the equipment fork
+    // pool (`AddRevisionEquipmentPage.tsx` `!hasDescendant` filter +
+    // `equipment-project-group.service.ts` `hasDescendant` decoration).
+    // Soft-deleted descendants do NOT lock (the helpers filter
+    // `deleted_at IS NULL` per §14.7), so a cancelled fork re-opens its
+    // parent for revision. Computed before the `countOnly` branch so the
+    // count reflects the deduped set.
     const [lockedPgIds, lockedRpgIds, lockedSpgIds] = await Promise.all([
       this.findProjectGroupIdsWithDescendants(original.map((p) => p.id)),
       this.findRevisedProjectGroupIdsWithDescendants(latestRevised.map((r) => r.id)),
@@ -2628,19 +2649,30 @@ export class ProjectGroupsService {
       ),
     ]);
 
+    original = original.filter((p) => !lockedPgIds.has(p.id));
+    latestRevised = latestRevised.filter((r) => !lockedRpgIds.has(r.id));
+    approvedSupplement = approvedSupplement.filter(
+      (s) => !lockedSpgIds.has(s.id),
+    );
+
+    if (countOnly)
+      return latestRevised.length + original.length + approvedSupplement.length;
+
     // Mask PII on SPG rows before they leave the boundary (PG/RPG already
     // masked inside their respective query helpers — keep parity).
     await this.maskCreatedByUserOnProjects(approvedSupplement as any);
 
+    // Surviving rows are head-of-lineage by construction (filtered above),
+    // so `hasDescendant` is always false on the pool DTO.
     const unified = [
       ...latestRevised.map((x) =>
-        UnifiedProjectMapper.fromRevisedProjectGroup(x, lockedRpgIds.has(x.id))
+        UnifiedProjectMapper.fromRevisedProjectGroup(x, false),
       ),
       ...original.map((x) =>
-        UnifiedProjectMapper.fromProjectGroup(x, lockedPgIds.has(x.id))
+        UnifiedProjectMapper.fromProjectGroup(x, false),
       ),
       ...approvedSupplement.map((x) =>
-        UnifiedProjectMapper.fromSupplementProjectGroup(x, lockedSpgIds.has(x.id)),
+        UnifiedProjectMapper.fromSupplementProjectGroup(x, false),
       ),
     ];
 
@@ -2900,6 +2932,77 @@ export class ProjectGroupsService {
     if (status) {
       query.andWhere('status.name = :statusName', { statusName: status });
     }
+
+    const projects = await query.getMany();
+    // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
+    await this.maskCreatedByUserOnProjects(projects);
+    return projects;
+  }
+
+  /**
+   * CLAUDE.md §14.1/§14.2/§14.7 — returns the §14 lineage LEAF RevisedProjectGroup
+   * per lineage under a plan: the RPG that has NO live (`deleted_at IS NULL`)
+   * `prev_project_type='revised'` descendant. This is the head-of-lineage TIP
+   * for the `/project` owner home list.
+   *
+   * WHY NOT `findLatestRevisedProjects` (MAX revisionNumber): `revisionNumber` is
+   * a per-`DevelopmentPlanRevision` counter, NOT lineage depth. A PG forked into
+   * a CHANGE round then re-forked into an EDIT round produces two RPGs sharing
+   * one `project_group_id` in two different revision rounds; MAX(revisionNumber)
+   * can return the MID-lineage node instead of the leaf, which the §14 exclusion
+   * then drops — making the whole lineage vanish. Keying on the §14 edge
+   * (`prev_project_id`) selects the true leaf regardless of round counters.
+   *
+   * No status filter — the leaf surfaces with its CURRENT status (Approved or
+   * in-progress), per the §14.10 "เวอร์ชันล่าสุด + สถานะล่าสุด" requirement.
+   * `trackingStatus.isLatest = true` is kept so each row carries its latest
+   * status row only.
+   */
+  private async findLineageLeafRevisedProjects(
+    developmentPlanId: string,
+  ): Promise<RevisedProjectGroup[]> {
+    const query = this.revisedProjectGroupRepo
+      .createQueryBuilder('revisedProject')
+      .leftJoinAndSelect('revisedProject.developmentPlanRevision', 'developmentPlanRevision')
+      .leftJoinAndSelect('developmentPlanRevision.revisionType', 'revisionType')
+      .leftJoinAndSelect('revisedProject.developmentPlan', 'developmentPlan')
+      .leftJoinAndSelect('revisedProject.projectGroup', 'originalProject')
+      .leftJoinAndSelect('revisedProject.createdBy', 'createdBy')
+      .leftJoinAndSelect('createdBy.user', 'createdByUser')
+      .leftJoinAndSelect('createdBy.amphoe', 'amphoe')
+      .leftJoinAndSelect('createdBy.localAdministrativeOrganization', 'localAdministrativeOrganization')
+      .leftJoinAndSelect('revisedProject.amphoe', 'revisedAmphoe')
+      .leftJoinAndSelect('revisedProject.localAdministrativeOrganization', 'revisedLocalAdministrativeOrganization')
+      .leftJoinAndSelect('revisedProject.strategy', 'strategy')
+      .leftJoinAndSelect('revisedProject.tactic', 'tactic')
+      .leftJoinAndSelect('revisedProject.plan', 'plan')
+      .leftJoinAndSelect('revisedProject.developmentIssue', 'revisedDevelopmentIssue')
+      .leftJoinAndSelect('revisedProject.budgets', 'budgets')
+      .leftJoinAndSelect('revisedProject.trackingStatus', 'trackingStatus')
+      .leftJoinAndSelect('trackingStatus.statusId', 'status')
+      .leftJoinAndSelect('trackingStatus.comments', 'comments')
+      .leftJoinAndSelect('trackingStatus.createdBy', 'workHistory')
+      .leftJoinAndSelect('workHistory.user', 'user')
+      .leftJoinAndSelect('workHistory.localAdministrativeOrganization', 'localAdministrativeOrganizationWorkHistory')
+      .leftJoinAndSelect('workHistory.governmentAgencies', 'governmentAgencies')
+      .leftJoinAndSelect('workHistory.workStatus', 'workStatus')
+      .leftJoinAndSelect('revisedProject.responsibleAgency', 'responsibleAgency')
+      .leftJoinAndSelect('revisedProject.originAgencyId', 'originAgencyId')
+      .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
+      .leftJoinAndSelect('revisedProject.favorites', 'favorites')
+      .leftJoinAndSelect('favorites.userId', 'userId')
+      .leftJoinAndSelect('revisedProject.attachments', 'attachments')
+      .andWhere('revisedProject.development_plan_id = :developmentPlanId', { developmentPlanId })
+      .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+      // §14 LEAF: no live `'revised'` descendant references this row.
+      .andWhere(
+        `NOT EXISTS (
+          SELECT 1 FROM revised_project_groups child
+          WHERE child.prev_project_id = "revisedProject".id
+            AND child.prev_project_type = 'revised'
+            AND child.deleted_at IS NULL
+        )`,
+      );
 
     const projects = await query.getMany();
     // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).

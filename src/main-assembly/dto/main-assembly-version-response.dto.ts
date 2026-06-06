@@ -92,4 +92,15 @@ export interface MainAssemblyVersionDto {
    * "ข้อมูลครุภัณฑ์ของเวอร์ชันนี้ไม่พร้อมใช้งาน" sub-line.
    */
   equipmentSnapshotMissing?: boolean;
+
+  /**
+   * §14.11 (read-side) — true when this version's PG snapshot has a live
+   * downstream fork (the SAME condition the CORRECTION_PART3 guard throws
+   * `BOOK_PROJECTS_REFERENCED_DOWNSTREAM` on). Advisory display flag per §17.2;
+   * populated ONLY on the current-version + version-by-number reads, never on
+   * the list endpoint. The FE uses it to pre-emptively disable the
+   * CORRECTION_PART3 option. MAIN cancel is §20.4 EXEMPT (already hidden), so
+   * the flag is consumed only by the correction surface on MAIN.
+   */
+  hasDownstreamFork?: boolean;
 }

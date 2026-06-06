@@ -46,10 +46,28 @@ export class CreateRevisedEquipmentProjectGroupDto {
   @IsUUID()
   developmentPlanRevisionId: string;
 
-  /** Source EPG to fork. Becomes `prevProjectId` (`prev_project_type='equipment'`). */
-  @IsNotEmpty()
+  /**
+   * Source EPG to fork. Becomes `prevProjectId`
+   * (`prev_project_type='equipment'`).
+   *
+   * EXACTLY ONE of `equipmentProjectGroupId` /
+   * `revisedEquipmentProjectGroupId` MUST be supplied — the service rejects
+   * both/neither with 400. Optional at the DTO layer so the alternate
+   * RELPG-source path validates; the service enforces the XOR.
+   */
+  @IsOptional()
   @IsUUID()
-  equipmentProjectGroupId: string;
+  equipmentProjectGroupId?: string;
+
+  /**
+   * Alternate source — a head-of-lineage Approved RELPG (the lineage tip when
+   * an approved-revised equipment is revised AGAIN). Becomes `prevProjectId`
+   * with `prev_project_type='revised_equipment'` (§14.1/§14.7 Phase 3,
+   * RELPG→RELPG chain). Mutually exclusive with `equipmentProjectGroupId`.
+   */
+  @IsOptional()
+  @IsUUID()
+  revisedEquipmentProjectGroupId?: string;
 
   // Classification — STRATEGY_BASED slots (natural-key strings like
   // 'TACT004' / 'PLAN003'). Mutually exclusive with `developmentIssueId`.

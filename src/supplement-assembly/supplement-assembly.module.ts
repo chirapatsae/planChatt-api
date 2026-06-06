@@ -51,6 +51,9 @@ import { UsersModule } from 'src/users/users.module';
 import { WebsocketModule } from 'src/websocket/websocket.module';
 import { BookLockModule } from 'src/common/book-lock/book-lock.module';
 import { OrphanCleanupModule } from 'src/orphan-cleanup/orphan-cleanup.module';
+// §14.11 — cancel-time descendant guard reuses the canonical
+// LineageLockService (stateless; no circular-dep risk).
+import { LineageLockModule } from 'src/common/lineage-lock/lineage-lock.module';
 
 @Module({
   imports: [
@@ -75,6 +78,7 @@ import { OrphanCleanupModule } from 'src/orphan-cleanup/orphan-cleanup.module';
     // finalize trigger surface; cascade fires INSIDE the same
     // transaction, BEFORE `DevelopmentPlanSupplement.isBooked = true`.
     OrphanCleanupModule,
+    LineageLockModule,
   ],
   controllers: [SupplementAssemblyController],
   providers: [SupplementAssemblyService, SupplementAssemblyFileService],

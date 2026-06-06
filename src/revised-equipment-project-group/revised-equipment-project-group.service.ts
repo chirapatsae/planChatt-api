@@ -158,22 +158,83 @@ export class RevisedEquipmentProjectGroupService {
       // 4-5. §1 classification + agency-only gate (Layer-2 defense).
       this.assertAgencyWorkHistory(workHistory);
 
-      // 6a. Load source EPG (lineage root). Must exist, not soft-deleted,
-      //     latest status = Approved (§7.2 step 2).
-      const epg = await manager.findOne(EquipmentProjectGroup, {
-        where: { id: dto.equipmentProjectGroupId },
-        relations: ['developmentPlan'],
-      });
-      if (!epg) {
-        throw new NotFoundException(
-          `EquipmentProjectGroup (source) not found: ${dto.equipmentProjectGroupId}`,
+      // 6a. Resolve the lineage source. EXACTLY ONE of the two source ids is
+      //     accepted (§14.1/§14.7 Phase 3):
+      //       - `equipmentProjectGroupId`        → fork an EPG root
+      //         (`prev_project_type='equipment'`).
+      //       - `revisedEquipmentProjectGroupId` → fork an Approved RELPG tip
+      //         (`prev_project_type='revised_equipment'`, RELPG→RELPG chain).
+      const hasEpgSource = !!dto.equipmentProjectGroupId;
+      const hasRelpgSource = !!dto.revisedEquipmentProjectGroupId;
+      if (hasEpgSource === hasRelpgSource) {
+        throw new BadRequestException(
+          'Exactly one of equipmentProjectGroupId / revisedEquipmentProjectGroupId must be supplied',
         );
       }
-      await this.assertEpgApproved(manager, epg.id);
 
-      // 6b. §14 lineage lock — reject if the EPG already has a live RELPG
-      //     descendant. MUST run BEFORE any write (§14.9).
-      await this.lineageLockService.assertEditable(epg.id, 'equipment', manager);
+      // The lineage-root EPG (FK kept populated on the new RELPG regardless of
+      // source kind) and the §14 lineage edge the new RELPG points at.
+      let rootEpg: EquipmentProjectGroup;
+      let prevProjectId: string;
+      let prevProjectType: PrevEquipmentProjectType;
+
+      if (hasEpgSource) {
+        // Load source EPG (lineage root). Must exist, not soft-deleted,
+        // latest status = Approved (§7.2 step 2).
+        const epg = await manager.findOne(EquipmentProjectGroup, {
+          where: { id: dto.equipmentProjectGroupId },
+          relations: ['developmentPlan'],
+        });
+        if (!epg) {
+          throw new NotFoundException(
+            `EquipmentProjectGroup (source) not found: ${dto.equipmentProjectGroupId}`,
+          );
+        }
+        await this.assertEpgApproved(manager, epg.id);
+
+        // §14 lineage lock — reject if the EPG already has a live RELPG
+        // descendant. MUST run BEFORE any write (§14.9).
+        await this.lineageLockService.assertEditable(
+          epg.id,
+          'equipment',
+          manager,
+        );
+
+        rootEpg = epg;
+        prevProjectId = epg.id;
+        prevProjectType = PrevEquipmentProjectType.EQUIPMENT;
+      } else {
+        // Load source RELPG tip. Must exist, not soft-deleted, latest status =
+        // Approved. Its own `equipmentProjectGroup` is the lineage-root EPG.
+        const srcRelpg = await manager.findOne(RevisedEquipmentProjectGroup, {
+          where: { id: dto.revisedEquipmentProjectGroupId },
+          relations: ['equipmentProjectGroup', 'equipmentProjectGroup.developmentPlan'],
+        });
+        if (!srcRelpg) {
+          throw new NotFoundException(
+            `RevisedEquipmentProjectGroup (source) not found: ${dto.revisedEquipmentProjectGroupId}`,
+          );
+        }
+        await this.assertRelpgApproved(manager, srcRelpg.id);
+
+        // §14 lineage lock — reject if the source RELPG already has a live
+        // `revised_equipment` descendant. MUST run BEFORE any write (§14.9).
+        await this.lineageLockService.assertEditable(
+          srcRelpg.id,
+          'revised_equipment',
+          manager,
+        );
+
+        if (!srcRelpg.equipmentProjectGroup) {
+          throw new NotFoundException(
+            `Lineage-root EquipmentProjectGroup not found for RELPG ${srcRelpg.id}`,
+          );
+        }
+        rootEpg = srcRelpg.equipmentProjectGroup;
+        prevProjectId = srcRelpg.id;
+        prevProjectType = PrevEquipmentProjectType.REVISED_EQUIPMENT;
+      }
+      const epg = rootEpg;
 
       // 7. Load DPR + §9 / §10 scope binding (isOpen = true). Scope is
       //    bound to the RELPG's OWN DPR — never a global latest lookup.
@@ -262,10 +323,12 @@ export class RevisedEquipmentProjectGroupService {
       const entity = manager.create(RevisedEquipmentProjectGroup, {
         developmentPlanRevision: dpr,
         developmentPlan,
+        // FK kept on the lineage-root EPG regardless of source kind.
         equipmentProjectGroup: epg,
-        // §14 lineage edge — first-generation fork points at the EPG.
-        prevProjectId: epg.id,
-        prevProjectType: PrevEquipmentProjectType.EQUIPMENT,
+        // §14 lineage edge — EPG source → 'equipment'; RELPG source →
+        // 'revised_equipment' (§14.1/§14.7 Phase 3 chain).
+        prevProjectId,
+        prevProjectType,
         equipmentName: dto.equipmentName,
         targetOutput: dto.targetOutput,
         expectedResults: dto.expectedResults,
@@ -834,6 +897,105 @@ export class RevisedEquipmentProjectGroupService {
     limit: number;
   }> {
     return this.findAll({ ...query, mineOnly: true }, userId);
+  }
+
+  /**
+   * Wave equipment-revision-pool-lineage-tip-fix — BE-01.
+   *
+   * Returns the Approved RELPG lineage LEAVES under a plan: each RELPG whose
+   * latest status is `Approved`, `deletedAt IS NULL`, and that has NO live
+   * `revised_equipment` descendant (i.e. it is the head-of-lineage tip). This
+   * is the equipment analog of `project-groups.service.ts`
+   * `findLineageLeafRevisedProjects` — it lets the revision/change equipment
+   * wizard offer a lineage whose head is now an RELPG (the locked-ancestor EPG
+   * is excluded from the EPG list via its `hasDescendant` flag; without this
+   * method the whole lineage would vanish from the pool).
+   *
+   * §10 scope binding — filtered by the RELPG's OWN `developmentPlan`. §5.3 —
+   * read surface, no agency-only gate. Scale-safe: ONE list query + ONE
+   * batched descendant lookup (no N+1).
+   */
+  async findApprovedLineageLeafSources(
+    developmentPlanId: string,
+    userId: string,
+  ): Promise<{ items: RevisedEquipmentProjectGroup[] }> {
+    if (!developmentPlanId) {
+      throw new BadRequestException('developmentPlanId is required');
+    }
+
+    // Resolve + assert the caller's workStatus (§2). Read surface — no
+    // agency-only gate (§5.3 reads unrestricted).
+    const workHistory = await this.workHistoryLookup.getCurrent(
+      this.relpgRepo.manager,
+      userId,
+    );
+    this.workHistoryLookup.assertWorkStatusApproved(workHistory);
+
+    const items = await this.relpgRepo
+      .createQueryBuilder('relpg')
+      .leftJoinAndSelect('relpg.createdBy', 'createdBy')
+      .leftJoinAndSelect('createdBy.user', 'createdByUser')
+      .leftJoinAndSelect('createdBy.amphoe', 'createdByAmphoe')
+      .leftJoinAndSelect(
+        'createdBy.localAdministrativeOrganization',
+        'createdByLao',
+      )
+      .leftJoinAndSelect('relpg.developmentPlan', 'developmentPlan')
+      .leftJoinAndSelect(
+        'relpg.developmentPlanRevision',
+        'developmentPlanRevision',
+      )
+      // Source-book badge (parity with project pool) needs the revisionType
+      // name (แก้ไข / เปลี่ยนแปลง) so the FE can label which round the RELPG
+      // leaf came from. Without this join `revisionType` is undefined and the
+      // FE falls back to "เล่มแก้ไข" for every RELPG.
+      .leftJoinAndSelect('developmentPlanRevision.revisionType', 'revisionType')
+      .leftJoinAndSelect('relpg.equipmentProjectGroup', 'equipmentProjectGroup')
+      .leftJoinAndSelect('relpg.strategy', 'strategy')
+      .leftJoinAndSelect('relpg.tactic', 'tactic')
+      .leftJoinAndSelect('relpg.plan', 'plan')
+      .leftJoinAndSelect('relpg.developmentIssue', 'developmentIssue')
+      .leftJoinAndSelect('relpg.equipmentCategory', 'equipmentCategory')
+      .leftJoinAndSelect('relpg.responsibleAgency', 'responsibleAgency')
+      .leftJoinAndSelect('relpg.amphoe', 'amphoe')
+      .leftJoinAndSelect('relpg.localAdministrativeOrganization', 'lao')
+      .leftJoinAndSelect('relpg.budgets', 'budgets')
+      .leftJoinAndSelect('relpg.trackingStatus', 'trackingStatus')
+      .leftJoinAndSelect('trackingStatus.statusId', 'status')
+      .where('relpg.deletedAt IS NULL')
+      // §10 — scope to the RELPG's own parent plan.
+      .andWhere('developmentPlan.id = :planId', { planId: developmentPlanId })
+      // Latest status = Approved (mirror `findAll` status EXISTS clause).
+      .andWhere(
+        'EXISTS (SELECT 1 FROM tracking_status ts ' +
+          ' INNER JOIN status s ON s.id = ts.status_id ' +
+          ' WHERE ts.revised_equipment_project_group_id = relpg.id ' +
+          '   AND ts.is_latest = true ' +
+          "   AND s.name = 'Approved')",
+      )
+      // §14.2/§14.7 head-of-lineage — exclude RELPGs that already have a live
+      // `revised_equipment` child. The alias is quoted ("relpg".id) so
+      // Postgres does NOT lowercase it (avoids 42P01 — the lesson from the
+      // project-pool fix).
+      .andWhere(
+        'NOT EXISTS (SELECT 1 FROM revised_equipment_project_groups child ' +
+          '  WHERE child.prev_project_id = "relpg".id ' +
+          "    AND child.prev_project_type = 'revised_equipment' " +
+          '    AND child.deleted_at IS NULL)',
+      )
+      .orderBy('relpg.createdAt', 'DESC')
+      .getMany();
+
+    await this.maskCreatedByUserOnRelpg(items);
+    this.projectLatestStatusOnRelpg(items);
+
+    // They are leaves by construction — decorate `hasDescendant=false` so the
+    // FE `!hasDescendant` safety filter is a no-op.
+    items.forEach((i) => {
+      (i as unknown as { hasDescendant: boolean }).hasDescendant = false;
+    });
+
+    return { items };
   }
 
   /**
@@ -1419,7 +1581,13 @@ export class RevisedEquipmentProjectGroupService {
           '   AND ts.is_latest = true ' +
           '   AND s.name = :statusName)',
         { statusName },
-      );
+      )
+      // เข้าเล่มแล้ว (round booked) → RELPG ออกจากคิวรีวิวของ staff เหมือนฝั่ง
+      // โครงการ (revised-project-group ใช้ `dpr.isBooked = false` ทุกคิว). พอ
+      // เล่มถูก finalize/booked รายการไม่ควรค้างในหน้า ready-to-approved อีก.
+      .andWhere('developmentPlanRevision.isBooked = :dprNotBooked', {
+        dprNotBooked: false,
+      });
 
     // §10 scope binding — optional DPR / plan narrowing.
     if (query.developmentPlanRevisionId) {
@@ -1430,6 +1598,20 @@ export class RevisedEquipmentProjectGroupService {
     if (query.developmentPlanId) {
       qb.andWhere('developmentPlan.id = :planId', {
         planId: query.developmentPlanId,
+      });
+    }
+
+    // §10 — revision-type scope. Edit vs change RELPGs share a plan; a
+    // ready-to-approved page whose round is not currently open passes only
+    // the plan id (no DPR id). Without this, the queue would surface the
+    // OTHER book type's rows (e.g. an edit-round RELPG appearing on the
+    // change page). `revisionType` is joined for filtering only.
+    if (query.revisionType) {
+      qb.leftJoin(
+        'developmentPlanRevision.revisionType',
+        'revisionType',
+      ).andWhere('revisionType.name = :revType', {
+        revType: query.revisionType,
       });
     }
 
@@ -1596,6 +1778,26 @@ export class RevisedEquipmentProjectGroupService {
   ): Promise<void> {
     const latest = await manager.findOne(TrackingStatus, {
       where: { equipmentProjectGroupId: { id: epgId }, isLatest: true },
+      relations: ['statusId'],
+    });
+    if (!latest || latest.statusId?.name !== STATUS_NAMES.APPROVED) {
+      throw new BadRequestException(
+        'รายการครุภัณฑ์ต้นฉบับต้องมีสถานะ Approved เท่านั้นจึงจะสามารถยื่นขอแก้ไขหรือเปลี่ยนแปลงได้',
+      );
+    }
+  }
+
+  /**
+   * RELPG-source variant of `assertEpgApproved` — the source RELPG tip must be
+   * Approved before it can be forked again (§11 equipment-revision; the
+   * RELPG→RELPG chain reuses the same versioning rule as EPG→RELPG).
+   */
+  private async assertRelpgApproved(
+    manager: EntityManager,
+    relpgId: string,
+  ): Promise<void> {
+    const latest = await manager.findOne(TrackingStatus, {
+      where: { revisedEquipmentProjectGroupId: { id: relpgId }, isLatest: true },
       relations: ['statusId'],
     });
     if (!latest || latest.statusId?.name !== STATUS_NAMES.APPROVED) {

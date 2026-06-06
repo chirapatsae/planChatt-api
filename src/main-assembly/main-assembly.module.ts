@@ -62,6 +62,9 @@ import { UsersModule } from 'src/users/users.module';
 import { PdfModule } from 'src/pdf/pdf.module';
 import { WebsocketModule } from 'src/websocket/websocket.module';
 import { BookLockModule } from 'src/common/book-lock/book-lock.module';
+// §14.11 correction-time descendant guard — MAIN correct(CORRECTION_PART3)
+// un-books PGs that may have live RPG/SPG forks (prev_project_type='original').
+import { LineageLockModule } from 'src/common/lineage-lock/lineage-lock.module';
 import { OrphanCleanupModule } from 'src/orphan-cleanup/orphan-cleanup.module';
 // Note: `StorageModule` is `@Global()` and registered in `AppModule`,
 // so we don't import it here — `StoragePathService` resolves via the
@@ -93,6 +96,7 @@ import { BookAssemblyModule } from 'src/book-assembly/book-assembly.module';
     PdfModule,
     WebsocketModule,
     BookLockModule,
+    LineageLockModule,
     // Wave A1 / BE-01 — merge() is the NEW MAIN_PLAN finalize trigger
     // surface; cascade fires INSIDE the same transaction, BEFORE
     // `DevelopmentPlan.isBooked = true`. CLAUDE.md §18.2.1.

@@ -92,6 +92,7 @@ import {
 import { SupplementPdfService } from 'src/pdf/supplement-pdf.service';
 import { BookLockService } from 'src/common/book-lock/book-lock.service';
 import { OrphanCleanupService } from 'src/orphan-cleanup/orphan-cleanup.service';
+import { LineageLockService } from 'src/common/lineage-lock/lineage-lock.service';
 import { UsersService } from 'src/users/users.service';
 
 /** Roles permitted to perform supplement-assembly write actions (§4.1 / §18.3). */
@@ -182,6 +183,10 @@ export class SupplementAssemblyService {
     // decrypted `citizenId` (the column is encrypted at rest per W89).
     // Loading via the User repo directly would return ciphertext.
     private readonly usersService: UsersService,
+    // §14.11 — cancel-time descendant guard (reuses canonical §14
+    // lineage machinery; SPG descendants are RPG rows with
+    // prev_project_type='supplement', discriminator 'supplement').
+    private readonly lineageLockService: LineageLockService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -655,6 +660,34 @@ export class SupplementAssemblyService {
         });
       }
 
+      // Step 3b — §14.11 cancel-time descendant guard. Block cancel if
+      // ANY SPG in this version's snapshot was forked into a LATER book
+      // (live §14 descendant referencing it via
+      // prev_project_type='supplement', §14.7). Cancelling here would
+      // un-book the forked source while the downstream fork still points
+      // at it, leaving the source permanently §14-locked and the lineage
+      // "ขาดช่วง". The operator must remove the downstream fork first.
+      // Reuses the shared collectDownstreamForkIds helper — the SAME source
+      // of truth as the read-side hasDownstreamFork DTO flag, so the
+      // pre-emptive FE disable can never disagree with this throw. Runs INSIDE
+      // the transaction, BEFORE the deprecate write. (Today supplement→RPG
+      // forks are rare, but the §20.7 parity invariant must hold.)
+      const supplementSnapshotIds = version.part3ProjectSnapshot ?? [];
+      const blockingProjectIds = await this.collectDownstreamForkIds(
+        supplementSnapshotIds,
+        manager,
+      );
+      if (blockingProjectIds.length > 0) {
+        throw new ConflictException({
+          code: 'BOOK_PROJECTS_REFERENCED_DOWNSTREAM',
+          message:
+            'ไม่สามารถยกเลิกเล่มนี้ได้ เนื่องจากมีโครงการในเล่มนี้ถูกนำไปใช้ต่อ (fork) ในเล่มอื่นที่ออกภายหลัง ' +
+            'กรุณาลบรายการที่อ้างอิงในเล่มถัดไปก่อน แล้วจึงยกเลิกเล่มนี้ได้ ' +
+            `(โครงการที่ถูกอ้างอิง: ${blockingProjectIds.join(', ')})`,
+          blockingProjectIds,
+        });
+      }
+
       // Step 4 — Deprecate the version row.
       await manager.update(SupplementAssemblyVersion, version.id, {
         status: SupplementAssemblyVersionStatus.DEPRECATED,
@@ -841,6 +874,39 @@ export class SupplementAssemblyService {
         });
       }
 
+      const isFullReset =
+        dto.correctionMode ===
+        SupplementAssemblyCorrectionMode.CORRECTION_PART3;
+
+      // Step 3c — §14.11 correction-time descendant guard (parity with
+      // the cancel guard above). CORRECTION_PART3 un-books every SPG in
+      // the deprecated version's snapshot (Step 5 resetSupplementProjectBooking).
+      // If ANY of those SPGs was forked into a LATER book (live §14
+      // descendant, prev_project_type='supplement', §14.7), un-booking it
+      // here would strand the forked source: the downstream fork still
+      // points at it, so the source stays permanently §14-locked while its
+      // booked standing is gone ("ขาดช่วง"). Block exactly as cancel does.
+      // Reuses LineageLockService — no parallel query. Runs INSIDE the
+      // transaction, BEFORE the deprecate/un-book writes. PART1/PART2 leave
+      // SPGs booked, so they are NOT guarded.
+      if (isFullReset) {
+        const snapshotIds = currentVersion.part3ProjectSnapshot ?? [];
+        const blockingProjectIds = await this.collectDownstreamForkIds(
+          snapshotIds,
+          manager,
+        );
+        if (blockingProjectIds.length > 0) {
+          throw new ConflictException({
+            code: 'BOOK_PROJECTS_REFERENCED_DOWNSTREAM',
+            message:
+              'ไม่สามารถยกเลิกเล่มนี้ได้ เนื่องจากมีโครงการในเล่มนี้ถูกนำไปใช้ต่อ (fork) ในเล่มอื่นที่ออกภายหลัง ' +
+              'กรุณาลบรายการที่อ้างอิงในเล่มถัดไปก่อน แล้วจึงยกเลิกเล่มนี้ได้ ' +
+              `(โครงการที่ถูกอ้างอิง: ${blockingProjectIds.join(', ')})`,
+            blockingProjectIds,
+          });
+        }
+      }
+
       // Step 4 — deprecate the current version.
       await manager.update(SupplementAssemblyVersion, currentVersion.id, {
         status: SupplementAssemblyVersionStatus.DEPRECATED,
@@ -848,10 +914,6 @@ export class SupplementAssemblyService {
         deprecatedById: workHistory.id,
         deprecationReason: dto.reason,
       });
-
-      const isFullReset =
-        dto.correctionMode ===
-        SupplementAssemblyCorrectionMode.CORRECTION_PART3;
 
       // Step 5 — Q1=a full reset side-effects (Part 3 correction only).
       // The cascade is NOT a §18 orphan cleanup — it is a data-rollback
@@ -1997,7 +2059,7 @@ export class SupplementAssemblyService {
       ],
     });
     if (completed) {
-      return this.toVersionDto(completed);
+      return this.enrichWithDownstreamFork(completed);
     }
     // Step 2 — active-draft fallback to the previous (DEPRECATED) row.
     const activeDraft = await this.draftRepo.findOne({
@@ -2023,11 +2085,73 @@ export class SupplementAssemblyService {
         ],
       });
       if (previous) {
-        return this.toVersionDto(previous);
+        return this.enrichWithDownstreamFork(previous);
       }
     }
     // Step 3 — no row at all.
     return null;
+  }
+
+  /**
+   * §14.11 (read-side) — wrap toVersionDto and set the advisory
+   * hasDownstreamFork flag (§17.2). Current-version / version-by-number reads
+   * only; never on the list endpoint (avoids N×snapshot exists() queries).
+   */
+  private async enrichWithDownstreamFork(
+    v: SupplementAssemblyVersion,
+  ): Promise<SupplementAssemblyVersionDto> {
+    const dto = this.toVersionDto(v);
+    dto.hasDownstreamFork = await this.computeHasDownstreamFork(
+      v.part3ProjectSnapshot ?? [],
+      this.dataSource.manager,
+    );
+    return dto;
+  }
+
+  /**
+   * §14.11 — collect the snapshot project ids that have a live (non-soft-
+   * deleted) downstream fork (prev_project_type='supplement', §14.7). SINGLE
+   * source of truth shared by the cancel + CORRECTION_PART3 throw-guards (which
+   * surface the ids in the 409 body) AND the read-side hasDownstreamFork flag,
+   * so the pre-emptive FE disable can never disagree with the throw. Reuses
+   * LineageLockService — no parallel query.
+   */
+  private async collectDownstreamForkIds(
+    snapshotIds: string[],
+    manager: EntityManager,
+  ): Promise<string[]> {
+    const blocking: string[] = [];
+    for (const projectId of snapshotIds) {
+      const forked = await this.lineageLockService.hasNonDeletedDescendant(
+        projectId,
+        'supplement',
+        manager,
+      );
+      if (forked) blocking.push(projectId);
+    }
+    return blocking;
+  }
+
+  /**
+   * §14.11 (read-side) — boolean form of collectDownstreamForkIds, short-
+   * circuiting on the first fork.
+   */
+  private async computeHasDownstreamFork(
+    snapshotIds: string[],
+    manager: EntityManager,
+  ): Promise<boolean> {
+    for (const projectId of snapshotIds) {
+      if (
+        await this.lineageLockService.hasNonDeletedDescendant(
+          projectId,
+          'supplement',
+          manager,
+        )
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -2061,7 +2185,7 @@ export class SupplementAssemblyService {
         `ไม่พบเวอร์ชัน v${versionNumber} ของรอบเพิ่มเติมนี้`,
       );
     }
-    return this.toVersionDto(row);
+    return this.enrichWithDownstreamFork(row);
   }
 
   /**

@@ -235,6 +235,32 @@ export class RevisedEquipmentProjectGroupController {
   }
 
   /**
+   * Wave equipment-revision-pool-lineage-tip-fix — BE-01.
+   *
+   * Source pool for the revision/change equipment authoring wizard: the
+   * Approved RELPG lineage LEAVES (head-of-lineage, NO live
+   * `revised_equipment` descendant) under a plan. The wizard merges these
+   * with the Approved EPG leaves so a lineage whose head is now an RELPG can
+   * be revised again (§14.2/§14.7 Phase 3 — the leaf, never the locked
+   * ancestor, never zero rows for a live lineage).
+   *
+   * Read-only (§17.2). Agency-only is NOT mounted — reads are unrestricted
+   * per §5.3; the WRITE/fork path enforces agency-only.
+   *
+   * MUST be declared ABOVE `@Get(':id')` to win route resolution.
+   */
+  @Get('sources')
+  async findApprovedLineageLeafSources(
+    @Query('developmentPlanId') developmentPlanId: string,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    return this.service.findApprovedLineageLeafSources(
+      developmentPlanId,
+      req.user.userId,
+    );
+  }
+
+  /**
    * §7.10 — owner-scoped per-status counts for FE-03 sidebar badges.
    *
    * `AgencyOnlyGuard` is INTENTIONALLY NOT mounted — the classification

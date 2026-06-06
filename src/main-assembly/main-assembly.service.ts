@@ -107,6 +107,8 @@ import {
   BookLockService,
   BOOK_HAS_NEWER_REVISION,
 } from 'src/common/book-lock/book-lock.service';
+// §14.11 — correction-time descendant guard for CORRECTION_PART3.
+import { LineageLockService } from 'src/common/lineage-lock/lineage-lock.service';
 import { OrphanCleanupService } from 'src/orphan-cleanup/orphan-cleanup.service';
 import { StoragePathService } from 'src/storage/storage-path.service';
 import {
@@ -201,6 +203,7 @@ export class MainAssemblyService {
     private readonly fileService: BookAssemblyFileService,
     private readonly storagePathService: StoragePathService,
     private readonly bookLockService: BookLockService,
+    private readonly lineageLockService: LineageLockService,
     private readonly orphanCleanupService: OrphanCleanupService,
     private readonly dataSource: DataSource,
   ) {}
@@ -1246,6 +1249,40 @@ export class MainAssemblyService {
         });
       }
 
+      const isFullReset =
+        dto.correctionMode === MainAssemblyCorrectionMode.CORRECTION_PART3;
+
+      // 3c. §14.11 correction-time descendant guard. CORRECTION_PART3
+      //     un-books every PG in the deprecated version's snapshot
+      //     (step 5a). If ANY of those PGs was forked into a LATER book
+      //     (live §14 descendant, prev_project_type='original' — an RPG
+      //     under a revision/change/supplement round), un-booking it here
+      //     would strand the forked source: the downstream fork still
+      //     points at it, so the source stays permanently §14-locked while
+      //     its booked standing is gone ("ขาดช่วง"). MAIN cancel is §20.4
+      //     EXEMPT (returns 403 MAIN_BOOK_CANNOT_ROLLBACK), so this is the
+      //     only un-book path on MAIN that needs the guard. Reuses
+      //     LineageLockService — no parallel query. Runs INSIDE the
+      //     transaction, BEFORE the deprecate/un-book writes. PART1/PART2
+      //     leave PGs booked, so they are NOT guarded.
+      if (isFullReset) {
+        const snapshotIds = currentVersion.part3ProjectSnapshot ?? [];
+        const blockingProjectIds = await this.collectDownstreamForkIds(
+          snapshotIds,
+          manager,
+        );
+        if (blockingProjectIds.length > 0) {
+          throw new ConflictException({
+            code: 'BOOK_PROJECTS_REFERENCED_DOWNSTREAM',
+            message:
+              'ไม่สามารถยกเลิกเล่มนี้ได้ เนื่องจากมีโครงการในเล่มนี้ถูกนำไปใช้ต่อ (fork) ในเล่มอื่นที่ออกภายหลัง ' +
+              'กรุณาลบรายการที่อ้างอิงในเล่มถัดไปก่อน แล้วจึงยกเลิกเล่มนี้ได้ ' +
+              `(โครงการที่ถูกอ้างอิง: ${blockingProjectIds.join(', ')})`,
+            blockingProjectIds,
+          });
+        }
+      }
+
       // 4. Deprecate current version.
       await manager.update(MainAssemblyVersion, currentVersion.id, {
         status: MainAssemblyVersionStatus.DEPRECATED,
@@ -1253,9 +1290,6 @@ export class MainAssemblyService {
         deprecatedById: workHistory.id,
         deprecationReason: dto.reason,
       });
-
-      const isFullReset =
-        dto.correctionMode === MainAssemblyCorrectionMode.CORRECTION_PART3;
 
       // 5. CORRECTION_PART3 full reset (§20 parity).
       if (isFullReset) {
@@ -2542,6 +2576,16 @@ export class MainAssemblyService {
         part3RemovedEquipmentCount >
       0;
 
+    // §14.11 (read-side) — advisory downstream-fork flag (§17.2). Matches the
+    // CORRECTION_PART3 guard exactly: only the PG snapshot + 'original'
+    // discriminator (MAIN cancel is §20.4 EXEMPT; the equipment snapshot has
+    // no §14 fork relevance in the MAIN correction path). Used by the FE to
+    // pre-emptively disable the CORRECTION_PART3 option.
+    const hasDownstreamFork = await this.computeHasDownstreamFork(
+      v.part3ProjectSnapshot ?? [],
+      this.dataSource.manager,
+    );
+
     return {
       ...dto,
       part3StaleProjectCount,
@@ -2550,7 +2594,54 @@ export class MainAssemblyService {
       part3RemovedEquipmentCount,
       isPart3Stale,
       equipmentSnapshotMissing,
+      hasDownstreamFork,
     };
+  }
+
+  /**
+   * §14.11 — collect the snapshot PG ids that have a live (non-soft-deleted)
+   * downstream fork (prev_project_type='original'). SINGLE source of truth
+   * shared by the CORRECTION_PART3 throw-guard (which surfaces the ids in the
+   * 409 body) AND the read-side hasDownstreamFork flag, so the pre-emptive FE
+   * disable can never disagree with the throw. Reuses LineageLockService — no
+   * parallel query.
+   */
+  private async collectDownstreamForkIds(
+    snapshotIds: string[],
+    manager: EntityManager,
+  ): Promise<string[]> {
+    const blocking: string[] = [];
+    for (const projectId of snapshotIds) {
+      const forked = await this.lineageLockService.hasNonDeletedDescendant(
+        projectId,
+        'original',
+        manager,
+      );
+      if (forked) blocking.push(projectId);
+    }
+    return blocking;
+  }
+
+  /**
+   * §14.11 (read-side) — boolean form of collectDownstreamForkIds, short-
+   * circuiting on the first fork.
+   */
+  private async computeHasDownstreamFork(
+    snapshotIds: string[],
+    manager: EntityManager,
+  ): Promise<boolean> {
+    for (const projectId of snapshotIds) {
+      if (
+        await this.lineageLockService.hasNonDeletedDescendant(
+          projectId,
+          'original',
+          manager,
+        )
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

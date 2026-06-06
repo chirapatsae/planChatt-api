@@ -27,6 +27,17 @@ export class ListRevisedEquipmentProjectGroupsQueryDto {
   @IsUUID()
   developmentPlanId?: string;
 
+  /**
+   * §10 — narrow the staff queue to RELPGs whose parent DPR has this
+   * revision type name (`แก้ไข` / `เปลี่ยนแปลง`). Without this filter a
+   * caller that omits `developmentPlanRevisionId` (e.g. a ready-to-approved
+   * page whose round is not currently open) would receive RELPGs from the
+   * OTHER book type. Matched against `revisionType.name`.
+   */
+  @IsOptional()
+  @IsString()
+  revisionType?: string;
+
   /** Canonical status name (e.g., 'Ready', 'Pending', 'Approved'). */
   @IsOptional()
   @IsString()

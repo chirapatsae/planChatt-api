@@ -65,6 +65,9 @@ import { PdfModule } from 'src/pdf/pdf.module';
 import { WebsocketModule } from 'src/websocket/websocket.module';
 import { BookLockModule } from 'src/common/book-lock/book-lock.module';
 import { OrphanCleanupModule } from 'src/orphan-cleanup/orphan-cleanup.module';
+// §14.11 — cancel-time descendant guard reuses the canonical
+// LineageLockService (stateless; no circular-dep risk).
+import { LineageLockModule } from 'src/common/lineage-lock/lineage-lock.module';
 // Note: `StorageModule` is `@Global()` and registered in `AppModule`,
 // so we don't import it here — `StoragePathService` resolves via the
 // global container.
@@ -98,6 +101,7 @@ import { BookAssemblyModule } from 'src/book-assembly/book-assembly.module';
     // fires INSIDE the cancel transaction, BEFORE the deprecate write
     // commits. CLAUDE.md §18.2.1.
     OrphanCleanupModule,
+    LineageLockModule,
     BookAssemblyModule,
   ],
   controllers: [ChangeAssemblyController],
