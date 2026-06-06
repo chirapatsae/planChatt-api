@@ -98,6 +98,18 @@ interface RowEnrichment {
    */
   isBooked: boolean;
   bookedAt: string | null;
+  /** Page number in the published book PDF; null on legacy/unbooked rows. */
+  pageNumber: number | null;
+  /** Free-form content fields surfaced for the executive Excel export. */
+  objective: string;
+  goal: string;
+  expected: string;
+  /** Classification display names (STRATEGY_BASED) for the export grouping. */
+  strategyName: string | null;
+  tacticName: string | null;
+  planName: string | null;
+  /** ISSUE_BASED classification display name. */
+  developmentIssueName: string | null;
 }
 
 @Injectable()
@@ -160,6 +172,10 @@ export class UnifiedProjectEnricherService {
           where: { id: In(mainIds) },
           relations: {
             developmentPlan: true,
+            strategy: true,
+            tactic: true,
+            plan: true,
+            developmentIssue: true,
             budgets: true,
             trackingStatus: { statusId: true },
             createdBy: {
@@ -178,6 +194,10 @@ export class UnifiedProjectEnricherService {
               developmentPlan: true,
               revisionType: true,
             },
+            strategy: true,
+            tactic: true,
+            plan: true,
+            developmentIssue: true,
             budgets: true,
             trackingStatus: { statusId: true },
             createdBy: {
@@ -193,6 +213,10 @@ export class UnifiedProjectEnricherService {
           where: { id: In(supplementIds) },
           relations: {
             developmentPlanSupplement: { developmentPlan: true },
+            strategy: true,
+            tactic: true,
+            plan: true,
+            developmentIssue: true,
             budgets: true,
             trackingStatus: { statusId: true },
             createdBy: {
@@ -263,6 +287,14 @@ export class UnifiedProjectEnricherService {
         createdBy: enrichment.createdBy,
         isBooked: enrichment.isBooked,
         bookedAt: enrichment.bookedAt,
+        pageNumber: enrichment.pageNumber,
+        objective: enrichment.objective,
+        goal: enrichment.goal,
+        expected: enrichment.expected,
+        strategyName: enrichment.strategyName,
+        tacticName: enrichment.tacticName,
+        planName: enrichment.planName,
+        developmentIssueName: enrichment.developmentIssueName,
       });
     }
     return out;
@@ -316,6 +348,14 @@ export class UnifiedProjectEnricherService {
       hasDescendant,
       isBooked: Boolean(pg.isBooked),
       bookedAt: toNullableIsoString(pg.bookedAt),
+      pageNumber: pg.pageNumber ?? null,
+      objective: pg.objective ?? '',
+      goal: pg.goal ?? '',
+      expected: pg.expected ?? '',
+      strategyName: pg.strategy?.name ?? null,
+      tacticName: pg.tactic?.name ?? null,
+      planName: pg.plan?.name ?? null,
+      developmentIssueName: pg.developmentIssue?.name ?? null,
     };
   }
 
@@ -350,6 +390,14 @@ export class UnifiedProjectEnricherService {
       hasDescendant,
       isBooked: Boolean(rpg.isBooked),
       bookedAt: toNullableIsoString(rpg.bookedAt),
+      pageNumber: rpg.pageNumber ?? null,
+      objective: rpg.objective ?? '',
+      goal: rpg.goal ?? '',
+      expected: rpg.expected ?? '',
+      strategyName: rpg.strategy?.name ?? null,
+      tacticName: rpg.tactic?.name ?? null,
+      planName: rpg.plan?.name ?? null,
+      developmentIssueName: rpg.developmentIssue?.name ?? null,
     };
   }
 
@@ -388,6 +436,14 @@ export class UnifiedProjectEnricherService {
       // SUPPLEMENT-ROUND booked state with the per-SPG booked state.
       isBooked: Boolean(spg.isBooked),
       bookedAt: toNullableIsoString(spg.bookedAt),
+      pageNumber: spg.pageNumber ?? null,
+      objective: spg.objective ?? '',
+      goal: spg.goal ?? '',
+      expected: spg.expected ?? '',
+      strategyName: spg.strategy?.name ?? null,
+      tacticName: spg.tactic?.name ?? null,
+      planName: spg.plan?.name ?? null,
+      developmentIssueName: spg.developmentIssue?.name ?? null,
     };
   }
 }

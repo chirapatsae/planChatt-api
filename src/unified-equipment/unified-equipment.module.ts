@@ -6,6 +6,7 @@ import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-grou
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 
 import { WorkStatusApprovedGuard } from 'src/auth/work-status-approved.guard';
+import { RolesGuard } from 'src/auth/roles.guard';
 
 import { UnifiedEquipmentController } from './unified-equipment.controller';
 import { UnifiedEquipmentService } from './unified-equipment.service';
@@ -48,10 +49,12 @@ import { UnifiedEquipmentService } from './unified-equipment.service';
   controllers: [UnifiedEquipmentController],
   providers: [
     UnifiedEquipmentService,
-    // `WorkStatusApprovedGuard` injects a `Repository<WorkHistory>`;
-    // registered here so the controller's `@UseGuards` chain resolves it
-    // without leaning on the owning auth module (mirrors
-    // `UnifiedProjectsModule`).
+    // Guards used by the controller's `@UseGuards(...)` chain. Registered
+    // here so DI resolves them without leaning on the owning auth module
+    // (mirrors `UnifiedProjectsModule`). `WorkStatusApprovedGuard` injects
+    // a `Repository<WorkHistory>`; `RolesGuard` enforces the
+    // `@Roles(...EXEC_READ)` gate on the executive-list route.
+    RolesGuard,
     WorkStatusApprovedGuard,
   ],
 })

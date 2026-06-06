@@ -5,6 +5,10 @@ import { Repository } from 'typeorm';
 import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
+import {
+  EXECUTIVE_EXCLUDED_STATUS_NAMES,
+  mapToExecutiveStatusGroup,
+} from 'src/ai-executive-chat/aggregation/constants/executive-status-groups';
 
 import { ListUnifiedEquipmentQueryDto } from './dto/list-unified-equipment-query.dto';
 import type {
@@ -74,9 +78,71 @@ export class UnifiedEquipmentService {
       ownerWorkHistoryId = wh.id;
     }
 
+    return this.loadMergedHeadRows(query.developmentPlanId, ownerWorkHistoryId);
+  }
+
+  /**
+   * Executive-facing unified equipment list. The executive analog of
+   * `UnifiedProjectsService.executiveList`. System-wide (NO owner filter),
+   * plan-scoped by `developmentPlanId` (§10), with the W67 executive
+   * post-processing applied on top of the SAME EPG+RELPG HEAD-of-lineage
+   * merge used by `ownerList`:
+   *
+   *   1. EXCLUDE rows whose latest canonical status is in
+   *      `EXECUTIVE_EXCLUDED_STATUS_NAMES` (Ready / Pull_Back /
+   *      Returned_For_Revision) — parity with the project executive-list.
+   *   2. TAG each surviving row with `executiveStatusGroup =
+   *      mapToExecutiveStatusGroup(row.status.name)` (W67 4-group rollup).
+   *      A residual `null` group (would imply an excluded status slipped
+   *      through) is dropped defensively.
+   *
+   * §17.2 advisory / READ-ONLY — zero writes. §W67 — the exclusion set and
+   * group mapping are consumed from the canonical constants module; never
+   * re-derived here. §14.2 HEAD anti-join is inherited from the loaders.
+   *
+   * Authority: enforced at the controller via `@Roles(...EXEC_READ)` —
+   * the SAME gate as `unified-projects/executive-list`, NOT the owner gate
+   * and NOT the §5.3 equipment agency-only write gate.
+   */
+  async executiveList(
+    query: { developmentPlanId?: string },
+  ): Promise<UnifiedEquipmentRow[]> {
+    // System-wide: NO ownerWorkHistoryId filter.
+    const merged = await this.loadMergedHeadRows(
+      query.developmentPlanId,
+      null,
+    );
+
+    const excluded = new Set<string>(EXECUTIVE_EXCLUDED_STATUS_NAMES);
+
+    const result: UnifiedEquipmentRow[] = [];
+    for (const row of merged) {
+      // §3 W67 — strip in-flight authoring states server-side.
+      if (excluded.has(row.status.name)) continue;
+      const group = mapToExecutiveStatusGroup(row.status.name);
+      // Defensive: a row that maps to null had an excluded status and
+      // should already be filtered; drop any residual null-group row so
+      // the executive path never emits an untagged row.
+      if (!group) continue;
+      result.push({ ...row, executiveStatusGroup: group });
+    }
+
+    return result;
+  }
+
+  /**
+   * Shared EPG+RELPG HEAD-of-lineage merge + newest-first sort, reused by
+   * BOTH `ownerList` and `executiveList`. Pass `ownerWorkHistoryId = null`
+   * for the system-wide (executive) read; pass a resolved WH id for the
+   * owner-scoped read.
+   */
+  private async loadMergedHeadRows(
+    developmentPlanId: string | undefined,
+    ownerWorkHistoryId: string | null,
+  ): Promise<UnifiedEquipmentRow[]> {
     const [epgRows, relpgRows] = await Promise.all([
-      this.loadEpgHeadRows(query.developmentPlanId, ownerWorkHistoryId),
-      this.loadRelpgHeadRows(query.developmentPlanId, ownerWorkHistoryId),
+      this.loadEpgHeadRows(developmentPlanId, ownerWorkHistoryId),
+      this.loadRelpgHeadRows(developmentPlanId, ownerWorkHistoryId),
     ]);
 
     const merged = [...epgRows, ...relpgRows];

@@ -29,6 +29,16 @@
  *  convention used elsewhere for equipment snapshots. */
 export type UnifiedEquipmentKind = 'equipment' | 'revised-equipment';
 
+/**
+ * W67 executive view 4-group rollup. Imported + RE-EXPORTED from the
+ * canonical constants module so the executive-list contract speaks the
+ * same status vocabulary as the project executive-list — no re-derivation
+ * (§W67). See
+ * `backend/src/ai-executive-chat/aggregation/constants/executive-status-groups.ts`.
+ */
+import type { ExecutiveStatusGroup } from 'src/ai-executive-chat/aggregation/constants/executive-status-groups';
+export type { ExecutiveStatusGroup };
+
 /** §12 structured status block — canonical English + Thai display + ISO. */
 export interface UnifiedEquipmentStatus {
   /** Canonical English status name (e.g. 'Approved') — workflow logic. */
@@ -156,4 +166,18 @@ export interface UnifiedEquipmentRow {
 
   /** Row's own `createdAt` ISO — used for timeline sort (newest first). */
   createdAt: string;
+
+  /**
+   * W67 executive view group (`pending_review` | `awaiting_approval` |
+   * `approved` | `rejected`). Populated ONLY on the executive-list path
+   * (`GET /v1/unified-equipment/executive-list`); left `undefined` on the
+   * owner-list path (which does not exclude in-flight statuses). Non-null
+   * by construction on the executive path — rows whose status maps to
+   * `null` (the W67 excluded set) are filtered out server-side before
+   * tagging. §17.2 advisory — MUST NOT gate any workflow action.
+   *
+   * Type alias from the canonical constants module
+   * (`executive-status-groups.ts`) — no re-derivation (§W67).
+   */
+  executiveStatusGroup?: ExecutiveStatusGroup;
 }

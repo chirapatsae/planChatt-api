@@ -224,4 +224,31 @@ export interface EnrichedUnifiedProject extends UnifiedProject {
    * and is set by the same merge() path that flips `isBooked = true`.
    */
   bookedAt: string | null;
+
+  /**
+   * Page number in the published book PDF; `null` on legacy / not-yet-
+   * booked rows. Mirrors `ProjectGroup.pageNumber` /
+   * `RevisedProjectGroup.pageNumber` / `SupplementProjectGroup.pageNumber`.
+   */
+  pageNumber: number | null;
+
+  /**
+   * Free-form content fields (วัตถุประสงค์ / เป้าหมาย / ผลที่คาดหวัง),
+   * forwarded from the owning entity so the executive Excel export can
+   * render them. Empty string when unset.
+   */
+  objective: string;
+  goal: string;
+  expected: string;
+
+  /**
+   * Classification display names, resolved from the owning entity's
+   * strategy / tactic / plan / developmentIssue relations. Surfaced so the
+   * executive Excel export can group by ยุทธศาสตร์ / กลยุทธ์ / แผนงาน
+   * (the lean aggregator row carries only ids). `null` when unset.
+   */
+  strategyName: string | null;
+  tacticName: string | null;
+  planName: string | null;
+  developmentIssueName: string | null;
 }
