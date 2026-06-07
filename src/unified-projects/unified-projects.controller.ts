@@ -37,7 +37,7 @@ import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 import { RolesGuard } from 'src/auth/roles.guard';
 import { WorkStatusApprovedGuard } from 'src/auth/work-status-approved.guard';
 import { Roles } from 'src/auth/roles.decorator';
-import { EXEC_READ } from 'src/auth/role-groups';
+import { EXEC_READ, STAFF_LEAD } from 'src/auth/role-groups';
 
 import {
   parseCountOnly,
@@ -97,6 +97,46 @@ export class UnifiedProjectsController {
     @Query('countOnly') countOnlyRaw?: string,
   ): Promise<EnrichedUnifiedProject[] | UnifiedProjectsCountEnvelope> {
     return this.service.executiveList({
+      developmentPlanId,
+      countOnly: parseCountOnly(countOnlyRaw),
+    });
+  }
+
+  /**
+   * GET /v1/unified-projects/staff-list
+   *
+   * Staff-workspace, AREA-SCOPED analog of `executive-list`. Response
+   * shape is BYTE-IDENTICAL to `executive-list` (`EnrichedUnifiedProject[]`
+   * or the W67 count envelope) so the FE shared list component renders
+   * both via one adapter.
+   *
+   * Query:
+   *   - `developmentPlanId?: UUID` — §10 plan-scope filter.
+   *   - `countOnly?: boolean` — W67 4-group rollup envelope instead of
+   *      the row list.
+   *
+   * Area scope (§1 / §3 / §4.1) is resolved in the service layer from
+   * the caller's current WorkHistory responsibilities (same mechanism
+   * as `StaffHomeService`): `staff` see ONLY their responsible amphoes
+   * (PG) + agencies (RPG/SPG); `admin` / `super-admin` bypass to
+   * system-wide; plain `staff` with zero responsibilities fail-closed
+   * to `[]`.
+   *
+   * Roles: STAFF_LEAD — staff + admin + super-admin (NOT `EXEC_READ`;
+   * `c-level` is an executive read role, not a staff workspace role).
+   *
+   * §17.2 / §18.13 — strictly advisory, read-side aggregator: zero
+   * `tracking_status` / AI / notification writes.
+   */
+  @Get('staff-list')
+  @Roles(...STAFF_LEAD)
+  staffList(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('developmentPlanId', new ParseUUIDPipe({ optional: true }))
+    developmentPlanId: string | undefined,
+    @Query('countOnly') countOnlyRaw?: string,
+  ): Promise<EnrichedUnifiedProject[] | UnifiedProjectsCountEnvelope> {
+    return this.service.staffList(req.user.userId, {
       developmentPlanId,
       countOnly: parseCountOnly(countOnlyRaw),
     });

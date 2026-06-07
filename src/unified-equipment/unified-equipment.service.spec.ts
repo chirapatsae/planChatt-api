@@ -161,7 +161,151 @@ describe('UnifiedEquipmentService.executiveList', () => {
 
     await service.executiveList({ developmentPlanId: 'plan-7' });
 
-    expect(epgSpy).toHaveBeenCalledWith('plan-7', null);
-    expect(relpgSpy).toHaveBeenCalledWith('plan-7', null);
+    // System-wide executive read → null owner + null area scope on both
+    // dimensions (loaders receive a 3rd null scope arg post-staff-list).
+    expect(epgSpy).toHaveBeenCalledWith('plan-7', null, null);
+    expect(relpgSpy).toHaveBeenCalledWith('plan-7', null, null);
+  });
+});
+
+/**
+ * Wave staff-home-lists — BE-01 equipment area-scope spec (§1/§3/§4.1).
+ *
+ * Proves `UnifiedEquipmentService.staffList`:
+ *   1. plain staff → EPG scoped to responsible amphoe ids, RELPG scoped to
+ *      responsible agency ids (OR across dimensions); subset of system-wide.
+ *   2. admin / super-admin → BYPASS (null scope, identical to executiveList).
+ *   3. plain staff with ZERO responsibilities → fail-closed `[]` (the
+ *      head-row loaders are still called but with EMPTY id arrays → `1 = 0`
+ *      no-match; no global scan).
+ */
+describe('UnifiedEquipmentService.staffList — area scope (§1/§3/§4.1)', () => {
+  let service: UnifiedEquipmentService;
+  let whRepo: { findOne: jest.Mock };
+
+  beforeEach(async () => {
+    whRepo = { findOne: jest.fn() };
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        UnifiedEquipmentService,
+        { provide: getRepositoryToken(EquipmentProjectGroup), useValue: {} },
+        {
+          provide: getRepositoryToken(RevisedEquipmentProjectGroup),
+          useValue: {},
+        },
+        { provide: getRepositoryToken(WorkHistory), useValue: whRepo },
+      ],
+    }).compile();
+    service = moduleRef.get(UnifiedEquipmentService);
+  });
+
+  it('scopes plain staff: EPG by amphoeIds, RELPG by agencyIds; result is a subset', async () => {
+    whRepo.findOne.mockResolvedValue({
+      id: 'wh-staff',
+      role: { name: 'staff' },
+      workStatus: { name: 'approved' },
+      workHistoryResponsibleAmphoe: [{ amphoe: { id: 'amp-1' } }],
+      workHistoryResponsibleGovernmentAgency: [
+        { governmentAgency: { id: '77' } },
+      ],
+    });
+
+    const epgSpy = jest
+      .spyOn(service as any, 'loadEpgHeadRows')
+      .mockResolvedValue([makeRow({ statusName: 'Pending', id: 'epg-in' })]);
+    const relpgSpy = jest
+      .spyOn(service as any, 'loadRelpgHeadRows')
+      .mockResolvedValue([
+        makeRow({
+          statusName: 'Verified',
+          id: 'relpg-in',
+          kind: 'revised-equipment',
+        }),
+      ]);
+
+    const out = await service.staffList('user-1', {
+      developmentPlanId: 'plan-1',
+    });
+
+    // EPG loader received the amphoe ids; RELPG loader received the agency ids.
+    expect(epgSpy).toHaveBeenCalledWith('plan-1', null, ['amp-1']);
+    expect(relpgSpy).toHaveBeenCalledWith('plan-1', null, ['77']);
+    expect(out.map((r) => r.id).sort()).toEqual(['epg-in', 'relpg-in']);
+  });
+
+  it('admin bypasses → null area scope on both loaders (parity with executiveList)', async () => {
+    whRepo.findOne.mockResolvedValue({
+      id: 'wh-admin',
+      role: { name: 'admin' },
+      workStatus: { name: 'approved' },
+      workHistoryResponsibleAmphoe: [],
+      workHistoryResponsibleGovernmentAgency: [],
+    });
+    const epgSpy = jest
+      .spyOn(service as any, 'loadEpgHeadRows')
+      .mockResolvedValue([]);
+    const relpgSpy = jest
+      .spyOn(service as any, 'loadRelpgHeadRows')
+      .mockResolvedValue([]);
+
+    await service.staffList('admin-user', { developmentPlanId: 'plan-1' });
+
+    expect(epgSpy).toHaveBeenCalledWith('plan-1', null, null);
+    expect(relpgSpy).toHaveBeenCalledWith('plan-1', null, null);
+  });
+
+  it('fail-closed: plain staff with zero responsibilities → [] without loader calls', async () => {
+    whRepo.findOne.mockResolvedValue({
+      id: 'wh-empty',
+      role: { name: 'staff' },
+      workStatus: { name: 'approved' },
+      workHistoryResponsibleAmphoe: [],
+      workHistoryResponsibleGovernmentAgency: [],
+    });
+    const epgSpy = jest
+      .spyOn(service as any, 'loadEpgHeadRows')
+      .mockResolvedValue([]);
+    const relpgSpy = jest
+      .spyOn(service as any, 'loadRelpgHeadRows')
+      .mockResolvedValue([]);
+
+    const out = await service.staffList('staff-empty', {
+      developmentPlanId: 'plan-1',
+    });
+
+    expect(out).toEqual([]);
+    expect(epgSpy).not.toHaveBeenCalled();
+    expect(relpgSpy).not.toHaveBeenCalled();
+  });
+
+  it('no current WorkHistory → graceful []', async () => {
+    whRepo.findOne.mockResolvedValue(null);
+    const out = await service.staffList('ghost', {
+      developmentPlanId: 'plan-1',
+    });
+    expect(out).toEqual([]);
+  });
+
+  it('staff with amphoes but no agencies → EPG amphoe-scoped, RELPG empty-array (fail-closed no-match, not global)', async () => {
+    whRepo.findOne.mockResolvedValue({
+      id: 'wh-amp-only',
+      role: { name: 'staff' },
+      workStatus: { name: 'approved' },
+      workHistoryResponsibleAmphoe: [{ amphoe: { id: 'amp-9' } }],
+      workHistoryResponsibleGovernmentAgency: [],
+    });
+    const epgSpy = jest
+      .spyOn(service as any, 'loadEpgHeadRows')
+      .mockResolvedValue([]);
+    const relpgSpy = jest
+      .spyOn(service as any, 'loadRelpgHeadRows')
+      .mockResolvedValue([]);
+
+    await service.staffList('amp-only', { developmentPlanId: 'plan-1' });
+
+    expect(epgSpy).toHaveBeenCalledWith('plan-1', null, ['amp-9']);
+    // RELPG gets an EMPTY array (not null) → loader emits `1 = 0`, never a
+    // system-wide scan.
+    expect(relpgSpy).toHaveBeenCalledWith('plan-1', null, []);
   });
 });

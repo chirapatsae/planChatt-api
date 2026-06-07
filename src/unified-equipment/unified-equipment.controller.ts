@@ -12,7 +12,7 @@ import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 import { WorkStatusApprovedGuard } from 'src/auth/work-status-approved.guard';
 import { RolesGuard } from 'src/auth/roles.guard';
 import { Roles } from 'src/auth/roles.decorator';
-import { EXEC_READ } from 'src/auth/role-groups';
+import { EXEC_READ, STAFF_LEAD } from 'src/auth/role-groups';
 
 import { UnifiedEquipmentService } from './unified-equipment.service';
 import { ListUnifiedEquipmentQueryDto } from './dto/list-unified-equipment-query.dto';
@@ -106,5 +106,41 @@ export class UnifiedEquipmentController {
     developmentPlanId: string | undefined,
   ): Promise<UnifiedEquipmentRow[]> {
     return this.service.executiveList({ developmentPlanId });
+  }
+
+  /**
+   * GET /v1/unified-equipment/staff-list
+   *
+   * Staff-workspace, AREA-SCOPED analog of `executive-list`. Response
+   * shape is BYTE-IDENTICAL to `executive-list` (`UnifiedEquipmentRow[]`
+   * with the W67 exclusion + `executiveStatusGroup` tag) so the FE
+   * shared list component renders both via one mapping.
+   *
+   * Query:
+   *   - `developmentPlanId?: UUID` — §10 plan-scope filter.
+   *
+   * Area scope (§1 / §3 / §4.1) is resolved in the service layer from
+   * the caller's current WorkHistory responsibilities (same mechanism
+   * as `StaffHomeService`): `staff` see ONLY EPGs in their responsible
+   * amphoes + RELPGs in their responsible agencies; `admin` /
+   * `super-admin` bypass to system-wide; plain `staff` with zero
+   * responsibilities fail-closed to `[]`.
+   *
+   * Roles: STAFF_LEAD — staff + admin + super-admin (NOT `EXEC_READ`;
+   * `c-level` is an executive read role, not a staff workspace role).
+   * The §5.3 equipment agency-only rule is a WRITE gate and does NOT
+   * apply to this READ surface.
+   *
+   * §17.2 / §18.13 — strictly advisory, read-side aggregator: zero
+   * `tracking_status` / AI / notification writes.
+   */
+  @Get('staff-list')
+  @Roles(...STAFF_LEAD)
+  staffList(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('developmentPlanId', new ParseUUIDPipe({ optional: true }))
+    developmentPlanId: string | undefined,
+  ): Promise<UnifiedEquipmentRow[]> {
+    return this.service.staffList(req.user.userId, { developmentPlanId });
   }
 }

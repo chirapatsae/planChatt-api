@@ -16,6 +16,7 @@ import { StatusModule } from './status/status.module';
 import { Status } from './status/entities/status.entity';
 import { TrackingStatusModule } from './tracking-status/tracking-status.module';
 import { TrackingStatus } from './tracking-status/entities/tracking-status.entity';
+import { StaffHomeModule } from './staff-home/staff-home.module';
 import { DevelopmentPlanModule } from './development-plan/development-plan.module';
 import { DevelopmentPlan } from './development-plan/entities/development-plan.entity';
 import { ProjectGroupsModule } from './project-groups/project-groups.module';
@@ -631,6 +632,7 @@ import { UnifiedEquipmentModule } from './unified-equipment/unified-equipment.mo
     LocalAdministrativeOrganizationsModule,
     StatusModule,
     TrackingStatusModule,
+    StaffHomeModule,
     DevelopmentPlanModule,
     ProjectGroupsModule,
     BudgetModule,

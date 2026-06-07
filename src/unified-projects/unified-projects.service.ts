@@ -211,18 +211,176 @@ export class UnifiedProjectsService {
   async executiveList(
     query: UnifiedProjectsListQuery,
   ): Promise<EnrichedUnifiedProject[] | UnifiedProjectsCountEnvelope> {
-    const scope: UnifiedProjectQuery['scope'] = [
-      'main',
-      'revised',
-      'supplement',
-    ];
+    // Executive read = system-wide, NO area scope (null filters).
+    return this.executiveListWithScope(query, null);
+  }
 
+  /**
+   * Staff-scoped area-bounded list — the staff-workspace analog of
+   * `executiveList`. Response shape is BYTE-IDENTICAL to `executiveList`
+   * (same `EnrichedUnifiedProject[]`, same W67 exclusion + tagging) so
+   * the FE renders both with one code path; the ONLY difference is the
+   * AREA SCOPE applied to the aggregator query.
+   *
+   * Area scope (§1 / §3 / §4.1) is resolved EXACTLY as
+   * `StaffHomeService.getOverdue` does:
+   *   - PG (`main`) rows → `filters.amphoeIds` = caller's responsible
+   *     amphoe ids (`WorkHistoryAmphoeResponsibility`).
+   *   - RPG (`revised`) + SPG (`supplement`) rows → `filters.agencyIds`
+   *     = caller's responsible agency ids
+   *     (`WorkHistoryGovernmentAgencyResponsibility`).
+   *   - `admin` / `super-admin` → BYPASS the area filter (system-wide,
+   *     matching the overdue aggregator + rollback bypass rules).
+   *   - plain `staff` with ZERO responsibilities → FAIL-CLOSED `[]`.
+   *     Never a global scan (the single most important security
+   *     invariant of this endpoint).
+   *
+   * Validation order (CLAUDE.md VALIDATION ORDER): authed (guard) →
+   * current WH (absent → `[]`) → `workStatus = approved` (else 401) →
+   * role staff-lead (RolesGuard) → resolve area scope → aggregate →
+   * enrich → W67 strip + tag → return.
+   *
+   * §17.2 / §18.13 — strictly advisory, read-side aggregator: ZERO
+   * `tracking_status` writes, ZERO AI writes, ZERO notifications. SELECT
+   * only. This is a §18.13-compliant staff-scoped read aggregator.
+   */
+  async staffList(
+    userId: string,
+    query: UnifiedProjectsListQuery,
+  ): Promise<EnrichedUnifiedProject[] | UnifiedProjectsCountEnvelope> {
+    const wh = await this.loadStaffWorkHistory(userId);
+    // No current WorkHistory → graceful empty (mirrors StaffHomeService).
+    if (!wh) {
+      return query.countOnly ? rollupExecutiveGroups([]) : [];
+    }
+
+    const role = wh.role?.name;
+    const bypassAreaFilter = role === 'admin' || role === 'super-admin';
+
+    // admin / super-admin → system-wide (null scope, identical to
+    // `executiveList`).
+    if (bypassAreaFilter) {
+      return this.executiveListWithScope(query, null);
+    }
+
+    // §3 / §4.1 area scope — same mechanism as the overdue aggregator.
+    const amphoeIds = (wh.workHistoryResponsibleAmphoe ?? [])
+      .map((r) => r.amphoe?.id)
+      .filter((id): id is string => !!id);
+    const agencyIds = (wh.workHistoryResponsibleGovernmentAgency ?? [])
+      .map((r) => r.governmentAgency?.id)
+      .filter((id): id is string => !!id);
+
+    // Fail-closed: plain staff with zero responsibilities sees nothing.
+    // NEVER fall through to a system-wide (null-scope) aggregator call.
+    if (amphoeIds.length === 0 && agencyIds.length === 0) {
+      return query.countOnly ? rollupExecutiveGroups([]) : [];
+    }
+
+    return this.executiveListWithScope(query, { amphoeIds, agencyIds });
+  }
+
+  /**
+   * Shared executive-list pipeline, parameterised by an optional area
+   * scope. `executiveList` (no scope → system-wide) and `staffList`
+   * (area scope) both delegate here so the enrich + W67 strip/tag path
+   * is single-sourced and the two responses are byte-identical except
+   * for the rows the scope filter admits.
+   *
+   * `areaScope = null` → no `filters` → ONE system-wide aggregator call
+   *   across all three kinds (executive behaviour, UNCHANGED).
+   *
+   * `areaScope` set → the scope is split by KIND, because the aggregator
+   *   ANDs `filters.amphoeIds` and `filters.agencyIds` within a SINGLE
+   *   kind's query (every kind carries both `amphoe_id` and
+   *   `responsible_agency_id` columns). Passing both filters in one call
+   *   would wrongly require PG rows to match amphoe AND agency. The §3 /
+   *   §4.1 rule is an OR ACROSS dimensions: PG by amphoe, RPG/SPG by
+   *   agency (identical to `StaffHomeService`). We therefore issue two
+   *   scoped calls and merge:
+   *     - `scope=['main']`             + `filters.amphoeIds`
+   *     - `scope=['revised','supplement']` + `filters.agencyIds`
+   *   A dimension with zero ids is simply not queried (no global scan).
+   */
+  private async executiveListWithScope(
+    query: UnifiedProjectsListQuery,
+    areaScope: { amphoeIds: string[]; agencyIds: string[] } | null,
+  ): Promise<EnrichedUnifiedProject[] | UnifiedProjectsCountEnvelope> {
+    if (!areaScope) {
+      // System-wide (executive) — single call across all three kinds.
+      return this.runScopedPipeline(
+        query,
+        ['main', 'revised', 'supplement'],
+        undefined,
+      );
+    }
+
+    // Area-scoped (staff) — split PG (amphoe) from RPG/SPG (agency) so
+    // the per-dimension filters never AND across kinds.
+    const calls: Array<{
+      scope: UnifiedProjectQuery['scope'];
+      filters: UnifiedProjectQuery['filters'];
+    }> = [];
+    if (areaScope.amphoeIds.length > 0) {
+      calls.push({ scope: ['main'], filters: { amphoeIds: areaScope.amphoeIds } });
+    }
+    if (areaScope.agencyIds.length > 0) {
+      calls.push({
+        scope: ['revised', 'supplement'],
+        filters: { agencyIds: areaScope.agencyIds },
+      });
+    }
+
+    if (query.countOnly) {
+      const envelope: UnifiedProjectsCountEnvelope = {
+        pending_review: 0,
+        awaiting_approval: 0,
+        approved: 0,
+        rejected: 0,
+      };
+      for (const c of calls) {
+        const part = (await this.runScopedPipeline(
+          query,
+          c.scope,
+          c.filters,
+        )) as UnifiedProjectsCountEnvelope;
+        envelope.pending_review += part.pending_review;
+        envelope.awaiting_approval += part.awaiting_approval;
+        envelope.approved += part.approved;
+        envelope.rejected += part.rejected;
+      }
+      return envelope;
+    }
+
+    const merged: EnrichedUnifiedProject[] = [];
+    for (const c of calls) {
+      const part = (await this.runScopedPipeline(
+        query,
+        c.scope,
+        c.filters,
+      )) as EnrichedUnifiedProject[];
+      merged.push(...part);
+    }
+    return merged;
+  }
+
+  /**
+   * Single aggregator call → enrich → W67 strip/tag (or unbounded
+   * count). The atomic unit reused by both the system-wide executive
+   * path and each per-dimension staff call.
+   */
+  private async runScopedPipeline(
+    query: UnifiedProjectsListQuery,
+    scope: UnifiedProjectQuery['scope'],
+    filters: UnifiedProjectQuery['filters'] | undefined,
+  ): Promise<EnrichedUnifiedProject[] | UnifiedProjectsCountEnvelope> {
     if (query.countOnly) {
       // BE-01c — unbounded count via the aggregator's direct-DB
       // GROUP BY. Re-key the result into the FE's snake_case envelope.
       const counts = await this.aggregator.countExecutiveStatusBreakdown({
         scope,
         planId: query.developmentPlanId,
+        filters,
       });
       return {
         pending_review: counts.pendingReviewCount,
@@ -235,13 +393,14 @@ export class UnifiedProjectsService {
     const leanRows = await this.aggregator.listUnifiedProjects({
       scope,
       planId: query.developmentPlanId,
+      filters,
       limit: HTTP_AGGREGATOR_LIMIT,
     });
     let enriched = await this.enricher.enrich(leanRows);
 
-    // §3 W67 — exclude in-flight authoring states from the executive
-    // list path. (The count path uses the aggregator's unbounded
-    // breakdown, which excludes the same statuses at the SQL level.)
+    // §3 W67 — exclude in-flight authoring states from the list path.
+    // (The count path uses the aggregator's unbounded breakdown, which
+    // excludes the same statuses at the SQL level.)
     enriched = enriched.filter(
       (r) => !EXECUTIVE_EXCLUDED_SET.has(r.status.name),
     );
@@ -273,6 +432,37 @@ export class UnifiedProjectsService {
       throw new UnauthorizedException('NO_CURRENT_WORK_HISTORY');
     }
     return wh;
+  }
+
+  /**
+   * Load the caller's current WorkHistory with the responsibility +
+   * role relations needed for the §3 / §4.1 staff area-scope resolution.
+   * Mirrors the relation set used by `StaffHomeService.getOverdue`
+   * VERBATIM so the scoping rule is single-sourced (do not invent a new
+   * resolution).
+   *
+   * Returns `null` (graceful empty, mirrors `StaffHomeService`) when the
+   * user has no current WorkHistory. The `workStatus = approved` gate is
+   * enforced by `WorkStatusApprovedGuard` at the controller; the
+   * staff-lead role gate is enforced by `RolesGuard` + `@Roles(...)`.
+   */
+  private async loadStaffWorkHistory(
+    userId: string,
+  ): Promise<WorkHistory | null> {
+    if (!userId) {
+      throw new UnauthorizedException('UNAUTHENTICATED');
+    }
+    return this.workHistoryRepo.findOne({
+      where: { user: { id: userId }, isCurrent: true },
+      relations: [
+        'role',
+        'workStatus',
+        'workHistoryResponsibleAmphoe',
+        'workHistoryResponsibleAmphoe.amphoe',
+        'workHistoryResponsibleGovernmentAgency',
+        'workHistoryResponsibleGovernmentAgency.governmentAgency',
+      ],
+    });
   }
 }
 

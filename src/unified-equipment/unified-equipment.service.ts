@@ -107,10 +107,89 @@ export class UnifiedEquipmentService {
   async executiveList(
     query: { developmentPlanId?: string },
   ): Promise<UnifiedEquipmentRow[]> {
-    // System-wide: NO ownerWorkHistoryId filter.
+    // System-wide: NO area scope (null).
+    return this.executiveListWithScope(query, null);
+  }
+
+  /**
+   * Staff-workspace, AREA-SCOPED analog of `executiveList`. Response
+   * shape is BYTE-IDENTICAL to `executiveList` (`UnifiedEquipmentRow[]`
+   * with the same W67 exclusion + `executiveStatusGroup` tag) so the FE
+   * shared list component renders both via one mapping; the ONLY
+   * difference is the AREA SCOPE.
+   *
+   * Area scope (§1 / §3 / §4.1) is resolved EXACTLY as
+   * `StaffHomeService.getOverdue` does:
+   *   - EPG (เล่มหลัก, agency-origin by §5.3) → scoped by the caller's
+   *     responsible amphoe ids (`WorkHistoryAmphoeResponsibility`,
+   *     `epg.amphoe_id`).
+   *   - RELPG (เล่มแก้ไข) → scoped by the caller's responsible agency ids
+   *     (`WorkHistoryGovernmentAgencyResponsibility`,
+   *     `relpg.responsible_agency_id`).
+   *   - `admin` / `super-admin` → BYPASS the area filter (system-wide).
+   *   - plain `staff` with ZERO responsibilities → FAIL-CLOSED `[]`.
+   *     Never a global scan.
+   *
+   * Authority gate: STAFF_LEAD (staff / admin / super-admin) +
+   * `workStatus = approved` is enforced at the controller. The §5.3
+   * equipment agency-only rule is a WRITE gate and does NOT apply to
+   * this READ surface.
+   *
+   * §17.2 / §18.13 — strictly advisory, read-side aggregator: ZERO
+   * TrackingStatus / AI / notification writes. SELECT only.
+   */
+  async staffList(
+    userId: string,
+    query: { developmentPlanId?: string },
+  ): Promise<UnifiedEquipmentRow[]> {
+    const wh = await this.loadStaffWorkHistory(userId);
+    // No current WorkHistory → graceful empty (mirrors StaffHomeService).
+    if (!wh) return [];
+
+    const role = wh.role?.name;
+    const bypassAreaFilter = role === 'admin' || role === 'super-admin';
+
+    // admin / super-admin → system-wide (null scope, identical to
+    // `executiveList`).
+    if (bypassAreaFilter) {
+      return this.executiveListWithScope(query, null);
+    }
+
+    const amphoeIds = (wh.workHistoryResponsibleAmphoe ?? [])
+      .map((r) => r.amphoe?.id)
+      .filter((id): id is string => !!id);
+    const agencyIds = (wh.workHistoryResponsibleGovernmentAgency ?? [])
+      .map((r) => r.governmentAgency?.id)
+      .filter((id): id is string => !!id);
+
+    // Fail-closed: plain staff with zero responsibilities sees nothing.
+    if (amphoeIds.length === 0 && agencyIds.length === 0) {
+      return [];
+    }
+
+    return this.executiveListWithScope(query, { amphoeIds, agencyIds });
+  }
+
+  /**
+   * Shared executive-list pipeline parameterised by an optional area
+   * scope. `executiveList` (null → system-wide) and `staffList` (area
+   * scope) both delegate here so the W67 strip/tag post-processing is
+   * single-sourced and the two responses are byte-identical except for
+   * the rows the scope admits.
+   *
+   * `areaScope = null` → loaders run with no extra WHERE (system-wide).
+   * `areaScope` set → EPG scoped by `amphoeIds`, RELPG scoped by
+   * `agencyIds` (OR across dimensions, NOT AND — EPG is amphoe-bound,
+   * RELPG is agency-bound, matching the §3 / §4.1 staff rule).
+   */
+  private async executiveListWithScope(
+    query: { developmentPlanId?: string },
+    areaScope: { amphoeIds: string[]; agencyIds: string[] } | null,
+  ): Promise<UnifiedEquipmentRow[]> {
     const merged = await this.loadMergedHeadRows(
       query.developmentPlanId,
       null,
+      areaScope,
     );
 
     const excluded = new Set<string>(EXECUTIVE_EXCLUDED_STATUS_NAMES);
@@ -139,10 +218,21 @@ export class UnifiedEquipmentService {
   private async loadMergedHeadRows(
     developmentPlanId: string | undefined,
     ownerWorkHistoryId: string | null,
+    areaScope: { amphoeIds: string[]; agencyIds: string[] } | null = null,
   ): Promise<UnifiedEquipmentRow[]> {
+    // EPG is amphoe-bound; RELPG is agency-bound (§3 / §4.1). A dimension
+    // with zero ids under an active area scope yields no rows for that
+    // kind (fail-closed) — the loader receives an empty id array and
+    // emits the no-match `1 = 0` guard.
+    const epgAmphoeIds = areaScope ? areaScope.amphoeIds : null;
+    const relpgAgencyIds = areaScope ? areaScope.agencyIds : null;
     const [epgRows, relpgRows] = await Promise.all([
-      this.loadEpgHeadRows(developmentPlanId, ownerWorkHistoryId),
-      this.loadRelpgHeadRows(developmentPlanId, ownerWorkHistoryId),
+      this.loadEpgHeadRows(developmentPlanId, ownerWorkHistoryId, epgAmphoeIds),
+      this.loadRelpgHeadRows(
+        developmentPlanId,
+        ownerWorkHistoryId,
+        relpgAgencyIds,
+      ),
     ]);
 
     const merged = [...epgRows, ...relpgRows];
@@ -172,6 +262,13 @@ export class UnifiedEquipmentService {
   private async loadEpgHeadRows(
     developmentPlanId: string | undefined,
     ownerWorkHistoryId: string | null,
+    /**
+     * §3 / §4.1 area scope. `null` → no amphoe filter (system-wide /
+     * admin bypass). A non-null (possibly empty) array → scope EPGs to
+     * `epg.amphoe_id IN (...)`; an EMPTY array is the fail-closed
+     * no-match (`1 = 0`), never a global scan.
+     */
+    amphoeIds: string[] | null = null,
   ): Promise<UnifiedEquipmentRow[]> {
     const qb = this.epgRepo
       .createQueryBuilder('epg')
@@ -206,6 +303,14 @@ export class UnifiedEquipmentService {
     if (ownerWorkHistoryId) {
       qb.andWhere('createdBy.id = :ownerId', { ownerId: ownerWorkHistoryId });
     }
+    if (amphoeIds !== null) {
+      if (amphoeIds.length === 0) {
+        // Fail-closed: staff with no responsible amphoes sees no EPGs.
+        qb.andWhere('1 = 0');
+      } else {
+        qb.andWhere('epg.amphoe_id IN (:...amphoeIds)', { amphoeIds });
+      }
+    }
 
     const rows = await qb.getMany();
     return rows.map((epg) => this.projectEpg(epg));
@@ -220,6 +325,13 @@ export class UnifiedEquipmentService {
   private async loadRelpgHeadRows(
     developmentPlanId: string | undefined,
     ownerWorkHistoryId: string | null,
+    /**
+     * §3 / §4.1 area scope. `null` → no agency filter (system-wide /
+     * admin bypass). A non-null (possibly empty) array → scope RELPGs to
+     * `relpg.responsible_agency_id IN (...)`; an EMPTY array is the
+     * fail-closed no-match (`1 = 0`), never a global scan.
+     */
+    agencyIds: string[] | null = null,
   ): Promise<UnifiedEquipmentRow[]> {
     const qb = this.relpgRepo
       .createQueryBuilder('relpg')
@@ -271,6 +383,16 @@ export class UnifiedEquipmentService {
     }
     if (ownerWorkHistoryId) {
       qb.andWhere('createdBy.id = :ownerId', { ownerId: ownerWorkHistoryId });
+    }
+    if (agencyIds !== null) {
+      if (agencyIds.length === 0) {
+        // Fail-closed: staff with no responsible agencies sees no RELPGs.
+        qb.andWhere('1 = 0');
+      } else {
+        qb.andWhere('relpg.responsible_agency_id IN (:...agencyIds)', {
+          agencyIds,
+        });
+      }
     }
 
     const rows = await qb.getMany();
@@ -491,5 +613,31 @@ export class UnifiedEquipmentService {
       throw new UnauthorizedException('NO_CURRENT_WORK_HISTORY');
     }
     return wh;
+  }
+
+  /**
+   * Load the caller's current WorkHistory with the role + responsibility
+   * relations needed for the §3 / §4.1 staff area-scope resolution.
+   * Relation set is VERBATIM the one used by `StaffHomeService.getOverdue`
+   * (single-sourced scoping rule). Returns `null` (graceful empty) when
+   * the user has no current WorkHistory.
+   */
+  private async loadStaffWorkHistory(
+    userId: string,
+  ): Promise<WorkHistory | null> {
+    if (!userId) {
+      throw new UnauthorizedException('UNAUTHENTICATED');
+    }
+    return this.workHistoryRepo.findOne({
+      where: { user: { id: userId }, isCurrent: true },
+      relations: [
+        'role',
+        'workStatus',
+        'workHistoryResponsibleAmphoe',
+        'workHistoryResponsibleAmphoe.amphoe',
+        'workHistoryResponsibleGovernmentAgency',
+        'workHistoryResponsibleGovernmentAgency.governmentAgency',
+      ],
+    });
   }
 }
