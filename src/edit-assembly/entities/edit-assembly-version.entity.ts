@@ -145,6 +145,16 @@ export class EditAssemblyVersion {
   @Column({ name: 'part3_project_count', type: 'int' })
   part3ProjectCount: number;
 
+  // wave-equipment-booking-stamp-completeness / BE-02 — nullable jsonb
+  // metadata bag. Populated at `merge()` with
+  // `{ approvedRelpgIds: string[] }` — the set of RELPG (ผ.03 revision)
+  // ids the merge step stamped `isBooked` on — so the cancel / correct
+  // un-stamp path (BE-01) can UUID-key the reset. Mirrors the supplement
+  // precedent `SupplementAssemblyVersion.metadataJson`. NULL on
+  // pre-wave rows (which never stamped equipment — nothing to un-stamp).
+  @Column({ name: 'metadata_json', type: 'jsonb', nullable: true })
+  metadataJson: Record<string, unknown> | null;
+
   // Merged output
 
   @Exclude()

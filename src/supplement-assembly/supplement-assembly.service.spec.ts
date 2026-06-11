@@ -36,13 +36,16 @@ import { SupplementProjectLineage } from './entities/supplement-project-lineage.
 
 import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entities/development-plan-supplement.entity';
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
+import { SupplementEquipmentProjectGroup } from 'src/supplement-equipment-project-group/entities/supplement-equipment-project-group.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { User } from 'src/users/entities/user.entity';
 
 import { SupplementAssemblyFileService } from './supplement-assembly-file.service';
 import { SupplementPdfService } from 'src/pdf/supplement-pdf.service';
+import { Por03PdfService } from 'src/pdf/por03-pdf.service';
 import { BookLockService } from 'src/common/book-lock/book-lock.service';
 import { OrphanCleanupService } from 'src/orphan-cleanup/orphan-cleanup.service';
+import { LineageLockService } from 'src/common/lineage-lock/lineage-lock.service';
 import { UsersService } from 'src/users/users.service';
 import { STATUS_NAMES } from 'src/common/status-names';
 import { SupplementBookDisplayStateEnum } from './dto/supplement-book-display-state.dto';
@@ -100,6 +103,7 @@ describe('SupplementAssemblyService.getReadiness', () => {
   let service: SupplementAssemblyService;
   let supplementRepo: jest.Mocked<Repository<DevelopmentPlanSupplement>>;
   let spgRepo: jest.Mocked<Repository<SupplementProjectGroup>>;
+  let sepgRepo: jest.Mocked<Repository<SupplementEquipmentProjectGroup>>;
   let workHistoryRepo: jest.Mocked<Repository<WorkHistory>>;
 
   const SUPP_ID = 'supp-uuid-1';
@@ -108,6 +112,15 @@ describe('SupplementAssemblyService.getReadiness', () => {
   beforeEach(async () => {
     supplementRepo = createMockRepository<DevelopmentPlanSupplement>();
     spgRepo = createMockRepository<SupplementProjectGroup>();
+    sepgRepo = createMockRepository<SupplementEquipmentProjectGroup>();
+    // getReadiness() issues an Approved-SEPG count via the equipment repo's
+    // query builder (approvedEquipmentCount, §17.2 advisory — not a gate on
+    // SUPPLEMENT per §21.2.3). Default to a valid getCount=0 stub so the
+    // interleaved sepg call never returns undefined; the SPG-count
+    // assertions use a separate mock.
+    (sepgRepo.createQueryBuilder as jest.Mock).mockImplementation(() =>
+      buildQbStub({ getCount: 0 }),
+    );
     workHistoryRepo = createMockRepository<WorkHistory>();
 
     const moduleRef: TestingModule = await Test.createTestingModule({
@@ -134,6 +147,10 @@ describe('SupplementAssemblyService.getReadiness', () => {
           useValue: spgRepo,
         },
         {
+          provide: getRepositoryToken(SupplementEquipmentProjectGroup),
+          useValue: sepgRepo,
+        },
+        {
           provide: getRepositoryToken(WorkHistory),
           useValue: workHistoryRepo,
         },
@@ -143,6 +160,15 @@ describe('SupplementAssemblyService.getReadiness', () => {
         },
         { provide: SupplementAssemblyFileService, useValue: {} },
         { provide: SupplementPdfService, useValue: {} },
+        {
+          provide: Por03PdfService,
+          useValue: {
+            renderApprovedSupplementScopedPor03Buffer: jest
+              .fn()
+              .mockResolvedValue(null),
+          },
+        },
+        { provide: LineageLockService, useValue: { hasNonDeletedDescendant: jest.fn().mockResolvedValue(false) } },
         { provide: BookLockService, useValue: {} },
         { provide: OrphanCleanupService, useValue: {} },
         { provide: UsersService, useValue: { findOne: jest.fn() } },
@@ -327,6 +353,10 @@ describe('SupplementAssemblyService.getBookDisplayState', () => {
           useValue: createMockRepository<SupplementProjectGroup>(),
         },
         {
+          provide: getRepositoryToken(SupplementEquipmentProjectGroup),
+          useValue: createMockRepository<SupplementEquipmentProjectGroup>(),
+        },
+        {
           provide: getRepositoryToken(WorkHistory),
           useValue: workHistoryRepo,
         },
@@ -336,6 +366,15 @@ describe('SupplementAssemblyService.getBookDisplayState', () => {
         },
         { provide: SupplementAssemblyFileService, useValue: {} },
         { provide: SupplementPdfService, useValue: {} },
+        {
+          provide: Por03PdfService,
+          useValue: {
+            renderApprovedSupplementScopedPor03Buffer: jest
+              .fn()
+              .mockResolvedValue(null),
+          },
+        },
+        { provide: LineageLockService, useValue: { hasNonDeletedDescendant: jest.fn().mockResolvedValue(false) } },
         { provide: BookLockService, useValue: bookLockService },
         { provide: OrphanCleanupService, useValue: {} },
         { provide: UsersService, useValue: { findOne: jest.fn() } },
@@ -583,6 +622,10 @@ describe('SupplementAssemblyService.cancelPublishedVersion', () => {
           useValue: createMockRepository<SupplementProjectGroup>(),
         },
         {
+          provide: getRepositoryToken(SupplementEquipmentProjectGroup),
+          useValue: createMockRepository<SupplementEquipmentProjectGroup>(),
+        },
+        {
           provide: getRepositoryToken(WorkHistory),
           useValue: workHistoryRepo,
         },
@@ -592,6 +635,15 @@ describe('SupplementAssemblyService.cancelPublishedVersion', () => {
         },
         { provide: SupplementAssemblyFileService, useValue: {} },
         { provide: SupplementPdfService, useValue: {} },
+        {
+          provide: Por03PdfService,
+          useValue: {
+            renderApprovedSupplementScopedPor03Buffer: jest
+              .fn()
+              .mockResolvedValue(null),
+          },
+        },
+        { provide: LineageLockService, useValue: { hasNonDeletedDescendant: jest.fn().mockResolvedValue(false) } },
         { provide: BookLockService, useValue: bookLockService },
         { provide: OrphanCleanupService, useValue: {} },
         { provide: UsersService, useValue: usersService },
@@ -793,6 +845,127 @@ describe('SupplementAssemblyService.cancelPublishedVersion', () => {
 });
 
 // -------------------------------------------------------------------
+// Equipment (SEPG) booking un-stamp (cancel / CORRECTION_PART3)
+// wave-equipment-booking-stamp-completeness / QA-01
+// -------------------------------------------------------------------
+//
+// Coverage of the §20.3 Invariant 1 equipment-stamp state machine on
+// the un-stamp side for SUPPLEMENT (SEPG). The merge stamp requires the
+// full pdf-lib / file-service transaction harness and is exercised by
+// integration tests; here we drive the private `resetSepgBooking`
+// helper directly (reflective access — same pattern as the M4 lineage
+// helper specs above):
+//   - un-stamp issues the raw SQL UPDATE on supplement_equipment_project_groups
+//     when the version's metadataJson.approvedSepgIds is present
+//   - legacy version (no metadata key) is a silent no-op
+//   - §17.2 — pure column flip; NO tracking_status / ai_* write
+
+describe('SupplementAssemblyService SEPG booking un-stamp (cancel / CORRECTION_PART3)', () => {
+  let service: SupplementAssemblyService;
+
+  beforeEach(async () => {
+    const moduleRef: TestingModule = await Test.createTestingModule({
+      providers: [
+        SupplementAssemblyService,
+        {
+          provide: getRepositoryToken(SupplementAssemblyDraft),
+          useValue: createMockRepository<SupplementAssemblyDraft>(),
+        },
+        {
+          provide: getRepositoryToken(SupplementAssemblyVersion),
+          useValue: createMockRepository<SupplementAssemblyVersion>(),
+        },
+        {
+          provide: getRepositoryToken(SupplementAssemblyVersionProject),
+          useValue: createMockRepository<SupplementAssemblyVersionProject>(),
+        },
+        {
+          provide: getRepositoryToken(DevelopmentPlanSupplement),
+          useValue: createMockRepository<DevelopmentPlanSupplement>(),
+        },
+        {
+          provide: getRepositoryToken(SupplementProjectGroup),
+          useValue: createMockRepository<SupplementProjectGroup>(),
+        },
+        {
+          provide: getRepositoryToken(SupplementEquipmentProjectGroup),
+          useValue: createMockRepository<SupplementEquipmentProjectGroup>(),
+        },
+        {
+          provide: getRepositoryToken(WorkHistory),
+          useValue: createMockRepository<WorkHistory>(),
+        },
+        {
+          provide: getRepositoryToken(User),
+          useValue: createMockRepository<User>(),
+        },
+        { provide: SupplementAssemblyFileService, useValue: {} },
+        { provide: SupplementPdfService, useValue: {} },
+        {
+          provide: Por03PdfService,
+          useValue: {
+            renderApprovedSupplementScopedPor03Buffer: jest
+              .fn()
+              .mockResolvedValue(null),
+          },
+        },
+        { provide: LineageLockService, useValue: { hasNonDeletedDescendant: jest.fn().mockResolvedValue(false) } },
+        { provide: BookLockService, useValue: {} },
+        { provide: OrphanCleanupService, useValue: {} },
+        { provide: UsersService, useValue: { findOne: jest.fn() } },
+        { provide: DataSource, useValue: {} },
+      ],
+    }).compile();
+
+    service = moduleRef.get(SupplementAssemblyService);
+  });
+
+  it('resetSepgBooking issues the un-stamp UPDATE on supplement_equipment_project_groups', async () => {
+    const queryMock = jest.fn().mockResolvedValue(undefined);
+    const trackingSave = jest.fn();
+    const manager = {
+      query: queryMock,
+      getRepository: jest.fn(() => ({ save: trackingSave, insert: jest.fn() })),
+    } as any;
+
+    const version = {
+      id: 'v-1',
+      metadataJson: { approvedSepgIds: ['sepg-1', 'sepg-2'] },
+    } as any;
+
+    await (service as any).resetSepgBooking(version, manager);
+
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    const [sql, params] = queryMock.mock.calls[0];
+    expect(sql).toMatch(/UPDATE supplement_equipment_project_groups/);
+    expect(sql).toMatch(/is_booked = false/);
+    expect(sql).toMatch(/booked_at = NULL/);
+    expect(sql).toMatch(/page_number = NULL/);
+    expect(params).toEqual([['sepg-1', 'sepg-2']]);
+    // §17.2 — NO tracking_status / ai_* write from the un-stamp helper.
+    expect(trackingSave).not.toHaveBeenCalled();
+  });
+
+  it('resetSepgBooking is a silent no-op on a legacy version (no approvedSepgIds key)', async () => {
+    const queryMock = jest.fn().mockResolvedValue(undefined);
+    const manager = { query: queryMock, getRepository: jest.fn() } as any;
+
+    // Legacy version: metadataJson null OR present but without the key.
+    await (service as any).resetSepgBooking({ id: 'v-legacy', metadataJson: null } as any, manager);
+    await (service as any).resetSepgBooking(
+      { id: 'v-spg-only', metadataJson: { approvedSpgIds: ['spg-1'] } } as any,
+      manager,
+    );
+    await (service as any).resetSepgBooking(
+      { id: 'v-empty', metadataJson: { approvedSepgIds: [] } } as any,
+      manager,
+    );
+
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+});
+
+// -------------------------------------------------------------------
 // Multi-version reads (getCurrentVersion / getVersions / toVersionDto)
 // wave-supplement-convergence-milestone-3-multi-version / BE-01
 // -------------------------------------------------------------------
@@ -847,6 +1020,10 @@ describe('SupplementAssemblyService multi-version reads', () => {
           useValue: createMockRepository<SupplementProjectGroup>(),
         },
         {
+          provide: getRepositoryToken(SupplementEquipmentProjectGroup),
+          useValue: createMockRepository<SupplementEquipmentProjectGroup>(),
+        },
+        {
           provide: getRepositoryToken(WorkHistory),
           useValue: workHistoryRepo,
         },
@@ -862,6 +1039,15 @@ describe('SupplementAssemblyService multi-version reads', () => {
           useValue: { validateVersionNumber: jest.fn() },
         },
         { provide: SupplementPdfService, useValue: {} },
+        {
+          provide: Por03PdfService,
+          useValue: {
+            renderApprovedSupplementScopedPor03Buffer: jest
+              .fn()
+              .mockResolvedValue(null),
+          },
+        },
+        { provide: LineageLockService, useValue: { hasNonDeletedDescendant: jest.fn().mockResolvedValue(false) } },
         { provide: BookLockService, useValue: {} },
         { provide: OrphanCleanupService, useValue: {} },
         { provide: UsersService, useValue: { findOne: jest.fn() } },
@@ -1269,6 +1455,10 @@ describe('SupplementAssemblyService lineage helpers (M4 / BE-01)', () => {
           useValue: createMockRepository<SupplementProjectGroup>(),
         },
         {
+          provide: getRepositoryToken(SupplementEquipmentProjectGroup),
+          useValue: createMockRepository<SupplementEquipmentProjectGroup>(),
+        },
+        {
           provide: getRepositoryToken(WorkHistory),
           useValue: workHistoryRepo,
         },
@@ -1278,6 +1468,15 @@ describe('SupplementAssemblyService lineage helpers (M4 / BE-01)', () => {
         },
         { provide: SupplementAssemblyFileService, useValue: {} },
         { provide: SupplementPdfService, useValue: {} },
+        {
+          provide: Por03PdfService,
+          useValue: {
+            renderApprovedSupplementScopedPor03Buffer: jest
+              .fn()
+              .mockResolvedValue(null),
+          },
+        },
+        { provide: LineageLockService, useValue: { hasNonDeletedDescendant: jest.fn().mockResolvedValue(false) } },
         { provide: BookLockService, useValue: {} },
         { provide: OrphanCleanupService, useValue: {} },
         { provide: UsersService, useValue: { findOne: jest.fn() } },

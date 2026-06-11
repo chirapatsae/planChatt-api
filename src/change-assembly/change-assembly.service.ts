@@ -954,6 +954,19 @@ export class ChangeAssemblyService {
       });
       const savedVersion = await manager.save(ChangeAssemblyVersion, versionRow);
 
+      // 8b. Snapshot the stamped RELPG id set onto the version row's
+      //     metadataJson so the cancel / correct un-stamp path (BE-01)
+      //     can UUID-key the reset. Mirrors the supplement
+      //     `metadataJson.approvedSpgIds` precedent. §17.2 — this is a
+      //     pure read-of-render-result; no TrackingStatus / ai_* write.
+      if (por03 && por03.equipmentIds.length > 0) {
+        const currentMeta =
+          (savedVersion.metadataJson as Record<string, unknown>) ?? {};
+        await manager.update(ChangeAssemblyVersion, savedVersion.id, {
+          metadataJson: { ...currentMeta, approvedRelpgIds: por03.equipmentIds },
+        });
+      }
+
       // 9. Write the version-projects join (Wave A3 page_map
       // denormalization — replaces the legacy inline JSONB).
       const joinRepo = manager.getRepository(ChangeAssemblyVersionProject);
@@ -1135,6 +1148,15 @@ export class ChangeAssemblyService {
         );
       }
 
+      // 5b. Equipment (ผ.03 revision) un-stamp — symmetric to the
+      //     merge-time RELPG stamp. Clears is_booked / booked_at /
+      //     page_number on the RELPG ids recorded on this version's
+      //     metadataJson.approvedRelpgIds (written by BE-02 at merge).
+      //     Raw SQL keeps `RevisedEquipmentProjectGroup` out of the
+      //     change-assembly module per §20.10.3. §17.2 — pure column
+      //     flip; NO TrackingStatus / ai_* write.
+      await this.resetRelpgBooking(currentVersion, manager);
+
       // 6. Reset revision state — clear isBooked + bookedAt (removes
       //    the row from §15.3 strict-`>` sibling probe; releases older
       //    siblings under the same plan that were locked by this row)
@@ -1315,6 +1337,11 @@ export class ChangeAssemblyService {
             { isBooked: false, bookedAt: null, pageNumber: null },
           );
         }
+        // 5a-ii. Equipment (ผ.03 revision) un-stamp — CORRECTION_PART3
+        //     full-reset only (PART1/PART2 leave stamps intact).
+        //     Clears RELPG booking via metadataJson.approvedRelpgIds.
+        //     §20.10.3 raw SQL; §17.2 — no TrackingStatus / ai_* write.
+        await this.resetRelpgBooking(currentVersion, manager);
         // 5b. Reset revision state (clear bookedAt + re-open so §15
         //     chain releases and staff can rework).
         await manager.getRepository(DevelopmentPlanRevision).update(
@@ -1428,6 +1455,42 @@ export class ChangeAssemblyService {
       });
       return this.toDraftDto(full ?? saved);
     });
+  }
+
+  /**
+   * Un-stamp the RELPG (ผ.03 revision equipment) booking columns recorded
+   * on a cancelled / fully-reset version's `metadataJson.approvedRelpgIds`
+   * (written by BE-02 at merge time). Symmetric to the merge-time stamp;
+   * clears `is_booked` / `booked_at` / `page_number` so the equipment
+   * rows are not stranded booked under a deprecated version.
+   *
+   * §20.10.3 — raw SQL via `manager.query`, NEVER importing
+   * `RevisedEquipmentProjectGroup` into the change-assembly module.
+   * §17.2 — pure column flip; NO `tracking_status` row, NO `ai_*` write,
+   * NO notification dispatch.
+   *
+   * Legacy version rows have no `approvedRelpgIds` key (they never
+   * stamped equipment), so `Array.isArray` short-circuits to a silent
+   * no-op — nothing to clear.
+   */
+  private async resetRelpgBooking(
+    version: ChangeAssemblyVersion,
+    manager: EntityManager,
+  ): Promise<void> {
+    const meta = (version.metadataJson as Record<string, unknown> | null) ?? {};
+    const ids = meta['approvedRelpgIds'];
+    if (!Array.isArray(ids) || ids.length === 0) return;
+    await manager.query(
+      `UPDATE revised_equipment_project_groups
+         SET is_booked = false,
+             booked_at = NULL,
+             page_number = NULL
+       WHERE id = ANY($1::uuid[])`,
+      [ids],
+    );
+    this.logger.log(
+      `[ChangeAssembly] reset ${ids.length} RELPG row(s) version=${version.id}`,
+    );
   }
 
   // ===================================================================

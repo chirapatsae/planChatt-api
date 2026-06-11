@@ -721,6 +721,15 @@ export class SupplementAssemblyService {
         version,
       );
 
+      // Step 5b — Equipment (ผ.03 supplement / SEPG) un-stamp —
+      // symmetric to the merge-time SEPG stamp. Clears is_booked /
+      // booked_at / page_number on the SEPG ids recorded on this
+      // version's metadataJson.approvedSepgIds (written by BE-02 at
+      // merge). Raw SQL keeps `SupplementEquipmentProjectGroup` out of
+      // the supplement-assembly module per §20.10.3. §17.2 — pure
+      // column flip; NO TrackingStatus / ai_* write.
+      await this.resetSepgBooking(version, manager);
+
       // Step 6 — Reset supplement state: `isBooked=false` +
       // `bookedAt=null`. Clearing bookedAt removes this supplement
       // from the §15 linear-chain predicate so older siblings unlock.
@@ -938,6 +947,11 @@ export class SupplementAssemblyService {
           manager,
           currentVersion,
         );
+        // Equipment (ผ.03 supplement / SEPG) un-stamp — CORRECTION_PART3
+        // full-reset only (PART1/PART2 leave SEPG stamps intact). Clears
+        // SEPG booking via metadataJson.approvedSepgIds. §20.10.3 raw
+        // SQL; §17.2 — no TrackingStatus / ai_* write.
+        await this.resetSepgBooking(currentVersion, manager);
         await this.resetSupplementState(supplementId, manager);
         // wave-supplement-convergence-milestone-4-lineage / BE-01
         // (2026-05-25). Roll the SPG-lineage leaf pointers back to
@@ -1934,6 +1948,15 @@ export class SupplementAssemblyService {
         totalPages: mergedPageCount,
         metadataJson: {
           approvedSpgIds: approvedProjects.map((p) => p.id),
+          // wave-equipment-booking-stamp-completeness / BE-02 — snapshot
+          // the stamped SEPG id set so the cancel / correct un-stamp path
+          // (BE-01) can UUID-key the reset. ONLY written when the ผ.03
+          // section actually rendered equipment; the key is omitted
+          // entirely (no clobber) when `por03` is null. §17.2 — pure
+          // read-of-render-result; no TrackingStatus / ai_* write.
+          ...(por03 && por03.equipmentIds.length > 0
+            ? { approvedSepgIds: por03.equipmentIds }
+            : {}),
           parts: {
             part1: {
               source: draft.part1Source,
@@ -2813,6 +2836,43 @@ export class SupplementAssemblyService {
     await repo.update(
       { title: In(snapshot) },
       { isBooked: false, bookedAt: null, pageNumber: null },
+    );
+  }
+
+  /**
+   * Un-stamp the SEPG (ผ.03 supplement equipment) booking columns
+   * recorded on a cancelled / fully-reset version's
+   * `metadataJson.approvedSepgIds` (written by BE-02 at merge time).
+   * Symmetric to the merge-time SEPG stamp; clears `is_booked` /
+   * `booked_at` / `page_number` so the equipment rows are not stranded
+   * booked under a deprecated version.
+   *
+   * §20.10.3 — raw SQL via `manager.query`, NEVER importing
+   * `SupplementEquipmentProjectGroup` into the supplement-assembly
+   * module. §17.2 — pure column flip; NO `tracking_status` row, NO
+   * `ai_*` write, NO notification dispatch.
+   *
+   * Legacy version rows have no `approvedSepgIds` key (they never
+   * stamped equipment), so `Array.isArray` short-circuits to a silent
+   * no-op — nothing to clear.
+   */
+  private async resetSepgBooking(
+    version: SupplementAssemblyVersion,
+    manager: EntityManager,
+  ): Promise<void> {
+    const meta = (version.metadataJson as Record<string, unknown> | null) ?? {};
+    const ids = meta['approvedSepgIds'];
+    if (!Array.isArray(ids) || ids.length === 0) return;
+    await manager.query(
+      `UPDATE supplement_equipment_project_groups
+         SET is_booked = false,
+             booked_at = NULL,
+             page_number = NULL
+       WHERE id = ANY($1::uuid[])`,
+      [ids],
+    );
+    this.logger.log(
+      `[SupplementAssembly] reset ${ids.length} SEPG row(s) version=${version.id}`,
     );
   }
 
