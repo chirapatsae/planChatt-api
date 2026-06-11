@@ -48,6 +48,13 @@ import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entit
 // clear is a NO-OP — equipment is agency-only by construction so
 // there is no LAO-origin scenario).
 import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
+// Wave wave-supplement-equipment-por03 — BE-B2 (2026-06-08). SEPG is the
+// ครุภัณฑ์ ผ.03 sub-type of เล่มเพิ่มเติม. It runs the full canonical
+// status machine like SPG (supplement-scoped: parent =
+// DevelopmentPlanSupplement, staff responsibility is AGENCY-based via
+// `WorkHistoryGovernmentAgencyResponsibility`, §9 supplement-round
+// activation). §14 lineage is VACUOUS in v1 (OQ-B3 — no prev_project_id).
+import { SupplementEquipmentProjectGroup } from 'src/supplement-equipment-project-group/entities/supplement-equipment-project-group.entity';
 import { handleException } from 'src/util/handleException';
 import { AnnouncementsService } from 'src/announcements/announcements.service';
 import { Role } from 'src/roles/entities/role.entity';
@@ -90,6 +97,10 @@ import { PromoteVerifiedScopeDto } from './dto/promote-verified-scope.dto';
 import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
 import { PromoteVerifiedEquipmentScopeDto } from './dto/promote-verified-equipment-scope.dto';
 import { PromoteVerifiedRevisedEquipmentScopeDto } from './dto/promote-verified-revised-equipment-scope.dto';
+// Wave wave-supplement-equipment-por03 — promote-verified SEPG (2026-06-10).
+// Scope-driven promote-Verified request body for
+// SupplementEquipmentProjectGroup (the 6th §12.1 member).
+import { PromoteVerifiedSupplementEquipmentScopeDto } from './dto/promote-verified-supplement-equipment-scope.dto';
 import { STATUS_NAMES } from 'src/common/status-names';
 
 /**
@@ -2610,6 +2621,328 @@ export class TrackingStatusService {
 
         this.logger.log(
           `Approve Pending_Approval→Approved RELPG by scope dprId=${dto.developmentPlanRevisionId} ` +
+            `moved=${movedCount} by=${workHistory.id} (role=${userRole})`,
+        );
+        return { movedCount };
+      });
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * SEPG — promote every `Verified` SupplementEquipmentProjectGroup
+   * (ครุภัณฑ์ ผ.03 ของเล่มเพิ่มเติม) under the supplied
+   * `developmentPlanSupplementId` (§10 supplement scope) to
+   * `Pending_Approval`. The 6th member of the §12.1 "Scope-Based Verified
+   * Promotion Endpoints" family, and the equipment sibling of
+   * `promoteVerifiedSupplementProjectGroupsByScope` (SPG) — so the supplement
+   * staff "พิมพ์เล่มร่าง" action can move BOTH the SPG AND the SEPG sets
+   * forward, exactly like the change-print page promotes both RPG and RELPG.
+   *
+   * Row selection mirrors `promoteVerifiedRelpgByScope` but over
+   * `SupplementEquipmentProjectGroup`, scoped by the SUPPLEMENT key (parent =
+   * `DevelopmentPlanSupplement`, NOT a main-plan `DevelopmentPlan`):
+   * `deletedAt IS NULL` AND `developmentPlanSupplement.id = :supplementId`
+   * AND latest tracking status = Verified, as a SET query with no id list /
+   * page / limit.
+   *
+   * Authority + scope mirror the per-row SEPG staff transition
+   * (`createBySupplementEquipmentProjectGroup` staff branch):
+   *   - §2 workStatus = approved.
+   *   - §3 / §4.1 staff-lead only (`staff` / `admin` / `super-admin`); the
+   *     §5.3 agency-only AUTHORING gate does NOT apply to staff transitions.
+   *   - AGENCY-based area responsibility for `staff` (admin / super-admin
+   *     bypass) via `getStaffResponsibleAgencyIds` — SEPG is supplement-book
+   *     agency-scoped (like SPG / RELPG), NOT amphoe-based. Zero responsible
+   *     agencies → `{ movedCount: 0 }`.
+   *   - §15.4 — `assertSepgSupplementScopeOpen` re-asserts the parent
+   *     `DevelopmentPlanSupplement` is still actionable (latest, open, not
+   *     booked) BEFORE each write, identical to the per-row contract. Because
+   *     the transaction is atomic, a single locked / booked supplement aborts
+   *     the whole promote and zero rows move.
+   *
+   * Per §12 each promoted row demotes its prior latest TrackingStatus and
+   * inserts a new `Pending_Approval` row. Per §17.4 a Verified →
+   * Pending_Approval promotion is NOT an authoring surface — NO
+   * `no-ai-baseline` snapshot is fired. Per §18 no cascade is triggered.
+   * SEPG is agency-origin only by construction (§5.3) so no
+   * `responsibleAgency` clearing applies.
+   */
+  async promoteVerifiedSupplementEquipmentByScope(
+    dto: PromoteVerifiedSupplementEquipmentScopeDto,
+    userId: string,
+  ): Promise<{ movedCount: number }> {
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        // 1-3. WorkHistory + workStatus.
+        const workHistory = await manager.findOne(WorkHistory, {
+          where: { user: { id: userId }, isCurrent: true },
+          relations: ['role', 'workStatus'],
+        });
+        if (!workHistory) {
+          throw new NotFoundException(
+            `WorkHistory for user ${userId} not found`,
+          );
+        }
+        if (workHistory.workStatus?.name !== 'approved') {
+          throw new UnauthorizedException(
+            'คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)',
+          );
+        }
+
+        // 4. Staff-lead only (§3 / §4.1) — NOT agency-gated (§5.3 authoring
+        //    gate does not apply to staff transitions).
+        const userRole = workHistory.role?.name;
+        if (!['staff', 'admin', 'super-admin'].includes(userRole)) {
+          throw new ForbiddenException(
+            'เฉพาะเจ้าหน้าที่ (staff/admin/super-admin) เท่านั้นที่สามารถใช้งาน endpoint นี้ได้',
+          );
+        }
+
+        // 5. Verified-SEPG predicate as a SET query (§10 scope binding —
+        //    bound to the supplied supplement, never a global open round).
+        const qb = manager
+          .createQueryBuilder(SupplementEquipmentProjectGroup, 'sepg')
+          .leftJoinAndSelect(
+            'sepg.developmentPlanSupplement',
+            'developmentPlanSupplement',
+          )
+          .leftJoinAndSelect(
+            'developmentPlanSupplement.developmentPlan',
+            'developmentPlan',
+          )
+          .leftJoinAndSelect('sepg.responsibleAgency', 'responsibleAgency')
+          .where('sepg.deletedAt IS NULL')
+          .andWhere('developmentPlanSupplement.id = :supplementId', {
+            supplementId: dto.developmentPlanSupplementId,
+          })
+          .andWhere(
+            'EXISTS (SELECT 1 FROM tracking_status ts ' +
+              ' INNER JOIN status s ON s.id = ts.status_id ' +
+              ' WHERE ts.supplement_equipment_project_group_id = sepg.id ' +
+              '   AND ts.is_latest = true ' +
+              '   AND s.name = :verifiedName)',
+            { verifiedName: STATUS_NAMES.VERIFIED },
+          );
+
+        // Area responsibility for `staff` role (admin / super-admin bypass) —
+        // AGENCY-based (mirrors the SEPG per-row staff branch and the
+        // SPG / RELPG promote siblings), reusing the shared
+        // `getStaffResponsibleAgencyIds` helper.
+        if (userRole === 'staff') {
+          const responsibleAgencyIds =
+            await this.getStaffResponsibleAgencyIds(manager, workHistory.id);
+          if (responsibleAgencyIds.length === 0) {
+            return { movedCount: 0 };
+          }
+          qb.andWhere('responsibleAgency.id IN (:...responsibleAgencyIds)', {
+            responsibleAgencyIds,
+          });
+        }
+
+        const rows = await qb.getMany();
+        if (rows.length === 0) {
+          return { movedCount: 0 };
+        }
+
+        const pendingApprovalStatus = await manager.findOne(Status, {
+          where: { name: STATUS_NAMES.PENDING_APPROVAL },
+        });
+        if (!pendingApprovalStatus) {
+          throw new NotFoundException(
+            `ไม่พบสถานะ "${STATUS_NAMES.PENDING_APPROVAL}" ในระบบ`,
+          );
+        }
+
+        let movedCount = 0;
+        for (const sepg of rows) {
+          // §15.4 — re-assert the parent supplement is still actionable
+          // (latest / open / not booked) BEFORE the write, reusing the SAME
+          // helper the per-row SEPG staff transition calls. A locked / booked
+          // supplement aborts the whole atomic promote.
+          this.assertSepgSupplementScopeOpen(sepg, 'ดำเนินการ');
+
+          // §12 audit — demote prior latest, insert the new status row.
+          await manager.update(
+            TrackingStatus,
+            { supplementEquipmentProjectGroupId: { id: sepg.id } },
+            { isLatest: false },
+          );
+          const tracking = manager.create(TrackingStatus, {
+            createdBy: workHistory,
+            supplementEquipmentProjectGroupId: sepg,
+            statusId: pendingApprovalStatus,
+            isLatest: true,
+          });
+          await manager.save(TrackingStatus, tracking);
+          movedCount += 1;
+        }
+
+        this.logger.log(
+          `Promote-verified SEPG by scope supplementId=${dto.developmentPlanSupplementId} ` +
+            `moved=${movedCount} by=${workHistory.id} (role=${userRole})`,
+        );
+        return { movedCount };
+      });
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * SEPG — APPROVE every `Pending_Approval` SupplementEquipmentProjectGroup
+   * (ครุภัณฑ์ ผ.03 ของเล่มเพิ่มเติม) under the supplied
+   * `developmentPlanSupplementId` (§10 supplement scope) to `Approved`. The
+   * equipment half of the supplement "อนุมัติทั้งหมด" Stage-3 action — the
+   * APPROVE sibling of `promoteVerifiedSupplementEquipmentByScope` (which
+   * does the Verified → Pending_Approval move) and the SEPG analog of
+   * `approvePendingApprovalRelpgByScope` (RELPG).
+   *
+   * Structurally IDENTICAL to `promoteVerifiedSupplementEquipmentByScope`
+   * EXCEPT it selects SEPG whose latest tracking status is
+   * `Pending_Approval` (not `Verified`) and inserts the new status
+   * `Approved` (not `Pending_Approval`).
+   *
+   * Row selection over `SupplementEquipmentProjectGroup`, scoped by the
+   * SUPPLEMENT key (parent = `DevelopmentPlanSupplement`, NOT a main-plan
+   * `DevelopmentPlan`): `deletedAt IS NULL` AND
+   * `developmentPlanSupplement.id = :supplementId` AND latest tracking
+   * status = `Pending_Approval`, as a SET query with no id list / page /
+   * limit.
+   *
+   * Authority + scope mirror the promote sibling:
+   *   - §2 workStatus = approved.
+   *   - §3 / §4.1 staff-lead only (`staff` / `admin` / `super-admin`); the
+   *     §5.3 agency-only AUTHORING gate does NOT apply to staff transitions.
+   *   - AGENCY-based area responsibility for `staff` (admin / super-admin
+   *     bypass) via `getStaffResponsibleAgencyIds`. Zero responsible
+   *     agencies → `{ movedCount: 0 }`.
+   *   - §15.4 — `assertSepgSupplementScopeOpen` re-asserts the parent
+   *     `DevelopmentPlanSupplement` is still actionable (latest, open, not
+   *     booked) BEFORE each write. The transaction is atomic, so a single
+   *     locked / booked supplement aborts the whole approve.
+   *
+   * Per §12 each approved row demotes its prior latest TrackingStatus and
+   * inserts a new `Approved` row. Per §17.4 a Pending_Approval → Approved
+   * approval is NOT an authoring surface — NO `no-ai-baseline` snapshot is
+   * fired. Per §18 no cascade is triggered (finalize, not book-finalize).
+   * SEPG is agency-origin only by construction (§5.3) so no
+   * `responsibleAgency` clearing applies.
+   */
+  async approvePendingApprovalSupplementEquipmentByScope(
+    dto: PromoteVerifiedSupplementEquipmentScopeDto,
+    userId: string,
+  ): Promise<{ movedCount: number }> {
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        // 1-3. WorkHistory + workStatus.
+        const workHistory = await manager.findOne(WorkHistory, {
+          where: { user: { id: userId }, isCurrent: true },
+          relations: ['role', 'workStatus'],
+        });
+        if (!workHistory) {
+          throw new NotFoundException(
+            `WorkHistory for user ${userId} not found`,
+          );
+        }
+        if (workHistory.workStatus?.name !== 'approved') {
+          throw new UnauthorizedException(
+            'คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)',
+          );
+        }
+
+        // 4. Staff-lead only (§3 / §4.1) — NOT agency-gated (§5.3 authoring
+        //    gate does not apply to staff transitions).
+        const userRole = workHistory.role?.name;
+        if (!['staff', 'admin', 'super-admin'].includes(userRole)) {
+          throw new ForbiddenException(
+            'เฉพาะเจ้าหน้าที่ (staff/admin/super-admin) เท่านั้นที่สามารถใช้งาน endpoint นี้ได้',
+          );
+        }
+
+        // 5. Pending_Approval-SEPG predicate as a SET query (§10 scope
+        //    binding — bound to the supplied supplement, never a global
+        //    open round).
+        const qb = manager
+          .createQueryBuilder(SupplementEquipmentProjectGroup, 'sepg')
+          .leftJoinAndSelect(
+            'sepg.developmentPlanSupplement',
+            'developmentPlanSupplement',
+          )
+          .leftJoinAndSelect(
+            'developmentPlanSupplement.developmentPlan',
+            'developmentPlan',
+          )
+          .leftJoinAndSelect('sepg.responsibleAgency', 'responsibleAgency')
+          .where('sepg.deletedAt IS NULL')
+          .andWhere('developmentPlanSupplement.id = :supplementId', {
+            supplementId: dto.developmentPlanSupplementId,
+          })
+          .andWhere(
+            'EXISTS (SELECT 1 FROM tracking_status ts ' +
+              ' INNER JOIN status s ON s.id = ts.status_id ' +
+              ' WHERE ts.supplement_equipment_project_group_id = sepg.id ' +
+              '   AND ts.is_latest = true ' +
+              '   AND s.name = :pendingApprovalName)',
+            { pendingApprovalName: STATUS_NAMES.PENDING_APPROVAL },
+          );
+
+        // Area responsibility for `staff` role (admin / super-admin bypass) —
+        // AGENCY-based (mirrors the SEPG per-row staff branch and the
+        // SPG / RELPG siblings), reusing the shared
+        // `getStaffResponsibleAgencyIds` helper.
+        if (userRole === 'staff') {
+          const responsibleAgencyIds =
+            await this.getStaffResponsibleAgencyIds(manager, workHistory.id);
+          if (responsibleAgencyIds.length === 0) {
+            return { movedCount: 0 };
+          }
+          qb.andWhere('responsibleAgency.id IN (:...responsibleAgencyIds)', {
+            responsibleAgencyIds,
+          });
+        }
+
+        const rows = await qb.getMany();
+        if (rows.length === 0) {
+          return { movedCount: 0 };
+        }
+
+        const approvedStatus = await manager.findOne(Status, {
+          where: { name: STATUS_NAMES.APPROVED },
+        });
+        if (!approvedStatus) {
+          throw new NotFoundException(
+            `ไม่พบสถานะ "${STATUS_NAMES.APPROVED}" ในระบบ`,
+          );
+        }
+
+        let movedCount = 0;
+        for (const sepg of rows) {
+          // §15.4 — re-assert the parent supplement is still actionable
+          // (latest / open / not booked) BEFORE the write, reusing the SAME
+          // helper the per-row SEPG staff transition calls. A locked / booked
+          // supplement aborts the whole atomic approve.
+          this.assertSepgSupplementScopeOpen(sepg, 'ดำเนินการ');
+
+          // §12 audit — demote prior latest, insert the new status row.
+          await manager.update(
+            TrackingStatus,
+            { supplementEquipmentProjectGroupId: { id: sepg.id } },
+            { isLatest: false },
+          );
+          const tracking = manager.create(TrackingStatus, {
+            createdBy: workHistory,
+            supplementEquipmentProjectGroupId: sepg,
+            statusId: approvedStatus,
+            isLatest: true,
+          });
+          await manager.save(TrackingStatus, tracking);
+          movedCount += 1;
+        }
+
+        this.logger.log(
+          `Approve Pending_Approval→Approved SEPG by scope supplementId=${dto.developmentPlanSupplementId} ` +
             `moved=${movedCount} by=${workHistory.id} (role=${userRole})`,
         );
         return { movedCount };
@@ -5166,6 +5499,538 @@ export class TrackingStatusService {
     }
   }
 
+  // ===========================================================================
+  // Wave wave-supplement-equipment-por03 — BE-B2 (2026-06-08).
+  // SupplementEquipmentProjectGroup (SEPG) transition + rollback support.
+  //
+  // SEPG is the ครุภัณฑ์ ผ.03 sub-type of เล่มเพิ่มเติม and runs the full
+  // canonical status machine (Ready → Pending → Verified →
+  // Pending_Approval → Approved + Pull_Back + Returned_For_Revision +
+  // Rejected). SEPG mirrors SPG (NOT EPG) for the scope + responsibility
+  // axis because:
+  //   - SEPG is supplement-scoped (parent = DevelopmentPlanSupplement,
+  //     not a main-plan DevelopmentPlan).
+  //   - Staff responsibility is AGENCY-based via
+  //     `WorkHistoryGovernmentAgencyResponsibility` (NOT amphoe).
+  //   - §9 supplement-round activation (`dps.isLatest`, `dps.isOpen`,
+  //     `dps.isBooked=false`) applies. Parent `DevelopmentPlan.isBooked`
+  //     is the EXPECTED state (supplements ride a finalized plan) and is
+  //     NOT a gate (mirrors the SPG rationale).
+  //
+  // STRUCTURAL NOTES:
+  //   1. §14 lineage descendant guard is VACUOUS — SEPG has no
+  //      `prev_project_id` / `prev_project_type` columns (OQ-B3 v1, no
+  //      revision/change of supplement equipment). The §14.6 rollback
+  //      hard-delete of the SEPG row itself is INTENTIONALLY NOT applied
+  //      (revert-only; the SEPG row is KEPT).
+  //   2. `clearResponsibleAgency` is inapplicable — SEPG is agency-only by
+  //      construction (BE-B1 enforces at create), so §7.2/§7.3 LAO-origin
+  //      clearing is unreachable. The flag is silently ignored.
+  //   3. The §17.4 `no-ai-baseline` snapshot for SEPG is fired at
+  //      create-time in `SupplementEquipmentProjectGroupService.create`
+  //      (mirroring EPG), NOT here — so this method writes NO snapshot.
+  //   4. §4.1 — the §5.3 agency-only AUTHORING gate MUST NOT apply to
+  //      staff transitions. This method gates staff by role + workStatus
+  //      + agency responsibility only.
+  // ===========================================================================
+
+  async createBySupplementEquipmentProjectGroup(
+    dto: CreateTrackingStatusDto,
+    userId: string,
+  ): Promise<TrackingStatus> {
+    try {
+      // Accept the SEPG id via explicit `supplementEquipmentProjectGroupId`
+      // OR the legacy `projectId` mirror. Prefer explicit when both present.
+      const sepgId = dto.supplementEquipmentProjectGroupId ?? dto.projectId;
+      if (!sepgId) {
+        throw new BadRequestException(
+          'ต้องระบุ supplementEquipmentProjectGroupId หรือ projectId',
+        );
+      }
+
+      return await this.dataSource.transaction(async (manager) => {
+        // 1-3. WorkHistory + workStatus.
+        const workHistory = await manager.findOne(WorkHistory, {
+          where: { user: { id: userId }, isCurrent: true },
+          relations: [
+            'user',
+            'role',
+            'workStatus',
+            'amphoe',
+            'localAdministrativeOrganization',
+          ],
+        });
+        if (!workHistory) {
+          throw new NotFoundException(
+            `WorkHistory for user ${userId} not found`,
+          );
+        }
+        if (workHistory.workStatus?.name !== 'approved') {
+          throw new UnauthorizedException(
+            'คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)',
+          );
+        }
+
+        // 4. Load target SEPG with full scope chain.
+        const sepg = await manager.findOne(SupplementEquipmentProjectGroup, {
+          where: { id: sepgId },
+          relations: [
+            'createdBy',
+            'developmentPlanSupplement',
+            'developmentPlanSupplement.developmentPlan',
+            'responsibleAgency',
+          ],
+        });
+        if (!sepg) {
+          throw new NotFoundException(
+            `SupplementEquipmentProjectGroup with ID ${sepgId} not found`,
+          );
+        }
+
+        // Resolve target Status.
+        const status = await manager.findOne(Status, {
+          where: { id: dto.statusId },
+        });
+        if (!status) {
+          throw new NotFoundException(
+            `Status with ID ${dto.statusId} not found`,
+          );
+        }
+
+        // --- RBAC & Ownership Check ---
+        const allowedRoles = ['staff', 'admin', 'super-admin'];
+        const userRole = workHistory.role?.name;
+
+        if (!allowedRoles.includes(userRole)) {
+          if (userRole === 'user') {
+            const currentTracking = await manager.findOne(TrackingStatus, {
+              where: {
+                supplementEquipmentProjectGroupId: { id: sepg.id },
+                isLatest: true,
+              },
+              relations: ['statusId'],
+            });
+            const currentStatusName: string =
+              currentTracking?.statusId?.name ?? '';
+
+            if (status.name === 'Pull_Back') {
+              // §4 ownership: createdBy.id === workHistory.id.
+              if (sepg.createdBy?.id !== workHistory.id) {
+                throw new ForbiddenException(
+                  'คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะรายการครุภัณฑ์นี้',
+                );
+              }
+              // Pull_Back allowed only from Pending or Verified.
+              if (
+                currentStatusName !== 'Pending' &&
+                currentStatusName !== 'Verified'
+              ) {
+                throw new BadRequestException(
+                  `ไม่สามารถดึงกลับได้จากสถานะ "${currentStatusName}"`,
+                );
+              }
+              this.assertSepgSupplementScopeOpen(sepg, 'ดึงกลับ');
+            } else if (status.name === 'Pending') {
+              // Owner submission / resubmission to Pending.
+              const allowedSources = [
+                'Ready',
+                'Pull_Back',
+                'Returned_For_Revision',
+              ];
+              if (!allowedSources.includes(currentStatusName)) {
+                throw new BadRequestException(
+                  `ไม่สามารถส่งรายการครุภัณฑ์ได้จากสถานะ "${currentStatusName}" ` +
+                    `(ต้องอยู่ในสถานะ Ready, Pull_Back หรือ Returned_For_Revision)`,
+                );
+              }
+              // SEPG is agency-origin only (§5.3); enforce strict
+              // ownership for ALL resubmission sources.
+              if (sepg.createdBy?.id !== workHistory.id) {
+                throw new ForbiddenException(
+                  'คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะรายการครุภัณฑ์นี้',
+                );
+              }
+              this.assertSepgSupplementScopeOpen(sepg, 'ส่ง');
+            } else {
+              throw new ForbiddenException(
+                'คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะรายการครุภัณฑ์นี้ ' +
+                  '(อนุญาตเฉพาะ Pull_Back และ Pending เท่านั้น)',
+              );
+            }
+          } else {
+            throw new ForbiddenException(
+              'คุณไม่มีสิทธิ์ในการเปลี่ยนสถานะรายการครุภัณฑ์',
+            );
+          }
+        } else {
+          // ----- Staff / Admin / Super-Admin branch (§3, §4.1) ----------
+          // Ownership is NOT required for staff-controlled transitions
+          // (§4.1). The §5.3 agency-only AUTHORING gate does NOT apply.
+          const dps = sepg.developmentPlanSupplement;
+          if (!dps) {
+            throw new ForbiddenException(
+              'ไม่พบรอบเพิ่มเติมของรายการครุภัณฑ์ ไม่สามารถดำเนินการได้',
+            );
+          }
+          const dp = dps.developmentPlan;
+          if (!dp?.isLatest) {
+            throw new ForbiddenException(
+              'แผนพัฒนาฯ ที่เชื่อมโยงกับรายการครุภัณฑ์นี้ไม่ใช่แผนปัจจุบัน ไม่สามารถดำเนินการได้',
+            );
+          }
+          if (!dps.isLatest) {
+            throw new ForbiddenException(
+              'รอบเพิ่มเติมนี้ไม่ใช่รอบปัจจุบัน ไม่สามารถดำเนินการได้',
+            );
+          }
+          if (dps.isBooked) {
+            throw new ForbiddenException(
+              'รอบเพิ่มเติมถูกรวมเล่มแล้ว ไม่สามารถดำเนินการได้',
+            );
+          }
+
+          // AGENCY-BASED responsibility check (mirrors SPG). Admin and
+          // super-admin bypass.
+          if (userRole === 'staff') {
+            const projectAgencyId = sepg.responsibleAgency?.id;
+            if (!projectAgencyId) {
+              throw new BadRequestException(
+                'รายการครุภัณฑ์นี้ยังไม่มีการกำหนดหน่วยงานรับผิดชอบ ไม่สามารถตรวจสอบสิทธิ์ได้',
+              );
+            }
+            const hasResponsibility = await manager.findOne(
+              WorkHistoryGovernmentAgencyResponsibility,
+              {
+                where: {
+                  workHistory: { id: workHistory.id },
+                  governmentAgency: { id: projectAgencyId },
+                },
+              },
+            );
+            if (!hasResponsibility) {
+              throw new ForbiddenException(
+                'คุณไม่มีสิทธิ์ดำเนินการกับรายการครุภัณฑ์นี้ (ไม่ได้รับผิดชอบหน่วยงานของรายการ)',
+              );
+            }
+          }
+
+          // Current latest TrackingStatus + strict transition map.
+          const staffCurrentTracking = await manager.findOne(TrackingStatus, {
+            where: {
+              supplementEquipmentProjectGroupId: { id: sepg.id },
+              isLatest: true,
+            },
+            relations: ['statusId'],
+          });
+          if (!staffCurrentTracking) {
+            throw new InternalServerErrorException(
+              'ไม่พบสถานะปัจจุบันของรายการครุภัณฑ์ ข้อมูลสถานะอาจไม่สมบูรณ์',
+            );
+          }
+          const staffCurrentStatusName = staffCurrentTracking.statusId?.name;
+          if (!staffCurrentStatusName) {
+            throw new InternalServerErrorException(
+              'ไม่สามารถอ่านชื่อสถานะปัจจุบันของรายการครุภัณฑ์ได้',
+            );
+          }
+
+          // Same strict staff transition map as PG / SPG (+ Rejected exit
+          // per W67/W68 — equipment can also be "เกินศักยภาพ").
+          const staffAllowedTransitions: Record<string, string[]> = {
+            Pending: ['Verified', 'Returned_For_Revision', 'Rejected'],
+            Verified: ['Pending_Approval', 'Returned_For_Revision', 'Rejected'],
+            Pending_Approval: ['Approved', 'Rejected'],
+          };
+          const allowedDestinations =
+            staffAllowedTransitions[staffCurrentStatusName];
+          if (
+            !allowedDestinations ||
+            !allowedDestinations.includes(status.name)
+          ) {
+            throw new ForbiddenException(
+              `ไม่อนุญาตให้เปลี่ยนสถานะจาก "${staffCurrentStatusName}" เป็น "${status.name}" ` +
+                `(เส้นทางที่อนุญาต: ${staffCurrentStatusName} → ${allowedDestinations?.join(', ') ?? 'ไม่มี'})`,
+            );
+          }
+        }
+
+        // §12 Audit — flip prior latest, insert new row.
+        await manager.update(
+          TrackingStatus,
+          { supplementEquipmentProjectGroupId: { id: sepg.id } },
+          { isLatest: false },
+        );
+
+        // Only staff-lead may set staffRemark. User submissions strip null.
+        const staffLeadRoles = ['staff', 'admin', 'super-admin'];
+        const resolvedStaffRemark = staffLeadRoles.includes(
+          workHistory.role?.name,
+        )
+          ? (dto.staffRemark ?? null)
+          : null;
+
+        const tracking = manager.create(TrackingStatus, {
+          createdBy: workHistory,
+          supplementEquipmentProjectGroupId: sepg,
+          comment: dto.comment,
+          staffRemark: resolvedStaffRemark,
+          statusId: status,
+          isLatest: true,
+        });
+        const savedTracking = await manager.save(TrackingStatus, tracking);
+
+        if (dto.comments?.length) {
+          const commentEntities = dto.comments.map((c) =>
+            manager.create(Comment, {
+              step: c.step,
+              detail: c.detail,
+              trackingStatusId: savedTracking,
+            }),
+          );
+          await manager.save(Comment, commentEntities);
+        }
+
+        if (status.name === 'Pull_Back') {
+          try {
+            const staffRole = await manager.findOne(Role, {
+              where: { name: 'staff' },
+            });
+            if (staffRole) {
+              await this.announcementsService.create(
+                {
+                  title: 'มีการขอดึงกลับรายการครุภัณฑ์ (เล่มเพิ่มเติม)',
+                  description:
+                    `รายการครุภัณฑ์ "${sepg.equipmentName}" ขอดึงกลับโดย ` +
+                    `${workHistory.user?.firstname} ${workHistory.user?.lastname}`,
+                  type: NotificationType.PROJECT,
+                  status: AnnouncementStatus.PUBLISHED,
+                  roleIds: [staffRole.id],
+                },
+                userId,
+              );
+            }
+          } catch (err) {
+            this.logger.error(
+              'Failed to send SEPG pull back announcement',
+              err,
+            );
+          }
+        }
+
+        // §17.4 — NO snapshot here. The SEPG `no-ai-baseline` row is
+        // fired at create-time in
+        // `SupplementEquipmentProjectGroupService.create` (publish path),
+        // mirroring EPG. Firing again on the transition would duplicate
+        // the authoring-time trigger.
+
+        return savedTracking;
+      });
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * Wave wave-supplement-equipment-por03 — BE-B2 (2026-06-08).
+   * Staff-led rollback for SupplementEquipmentProjectGroup. Mirrors
+   * `rollbackSupplementProjectGroupStatus` (SPG) — AGENCY-based
+   * responsibility, supplement-round scope — with TWO deletions:
+   *   1. §14 descendant guard is VACUOUS — SEPG has no `prev_project_id`
+   *      (OQ-B3 v1). No `LineageLockService` call.
+   *   2. §14.6 hard-delete of the SEPG row is INTENTIONALLY NOT applied
+   *      (revert-only; the SEPG row is KEPT — no data-loss bug).
+   *
+   * `clearResponsibleAgency` is inapplicable — SEPG is agency-only by
+   * construction. The flag is silently ignored.
+   */
+  async rollbackSupplementEquipmentProjectGroupStatus(
+    supplementEquipmentProjectGroupId: string,
+    userId: string,
+    _clearResponsibleAgency?: boolean,
+  ): Promise<{ message: string; status: string }> {
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        // 1-2. WorkHistory + workStatus.
+        const workHistory = await manager.findOne(WorkHistory, {
+          where: { user: { id: userId }, isCurrent: true },
+          relations: ['role', 'workStatus'],
+        });
+        if (!workHistory) {
+          throw new NotFoundException(
+            `WorkHistory for user ${userId} not found`,
+          );
+        }
+        if (workHistory.workStatus?.name !== 'approved') {
+          throw new UnauthorizedException(
+            'คุณยังไม่ได้รับสิทธิ์ในการดำเนินการ (workStatus ต้องเป็น approved)',
+          );
+        }
+
+        // 3. RBAC — staff-lead only.
+        const allowedRoles = ['staff', 'admin', 'super-admin'];
+        const userRole = workHistory.role?.name;
+        if (!allowedRoles.includes(userRole)) {
+          throw new ForbiddenException(
+            'เฉพาะเจ้าหน้าที่ (staff/admin/super-admin) เท่านั้นที่สามารถดึงกลับรายการครุภัณฑ์ได้',
+          );
+        }
+
+        // 4. Load SEPG with scope chain.
+        const sepg = await manager.findOne(SupplementEquipmentProjectGroup, {
+          where: { id: supplementEquipmentProjectGroupId },
+          relations: [
+            'createdBy',
+            'developmentPlanSupplement',
+            'developmentPlanSupplement.developmentPlan',
+            'responsibleAgency',
+          ],
+        });
+        if (!sepg) {
+          throw new NotFoundException(
+            `SupplementEquipmentProjectGroup with ID ${supplementEquipmentProjectGroupId} not found`,
+          );
+        }
+
+        // 5. AGENCY-BASED staff responsibility check. Admin/super-admin
+        //    bypass.
+        if (userRole === 'staff') {
+          const projectAgencyId = sepg.responsibleAgency?.id;
+          if (!projectAgencyId) {
+            throw new BadRequestException(
+              'รายการครุภัณฑ์นี้ยังไม่มีการกำหนดหน่วยงานรับผิดชอบ ไม่สามารถตรวจสอบสิทธิ์ได้',
+            );
+          }
+          const hasResponsibility = await manager.findOne(
+            WorkHistoryGovernmentAgencyResponsibility,
+            {
+              where: {
+                workHistory: { id: workHistory.id },
+                governmentAgency: { id: projectAgencyId },
+              },
+            },
+          );
+          if (!hasResponsibility) {
+            throw new ForbiddenException(
+              'คุณไม่มีสิทธิ์ดึงกลับรายการครุภัณฑ์นี้ (ไม่ได้รับผิดชอบหน่วยงานของรายการ)',
+            );
+          }
+        }
+
+        // 6. Scope binding — parent plan + supplement round must be active.
+        const dps = sepg.developmentPlanSupplement;
+        if (!dps) {
+          throw new BadRequestException(
+            'ไม่พบรอบเพิ่มเติมของรายการครุภัณฑ์ ไม่สามารถดึงกลับได้',
+          );
+        }
+        if (!dps.isLatest) {
+          throw new BadRequestException(
+            'รอบเพิ่มเติมนี้ไม่ใช่รอบปัจจุบัน ไม่สามารถดึงกลับได้',
+          );
+        }
+        if (dps.isBooked) {
+          throw new BadRequestException(
+            'รอบเพิ่มเติมถูกรวมเล่มแล้ว ไม่สามารถดึงกลับได้',
+          );
+        }
+
+        // 6.5 §14 descendant guard — VACUOUS for SEPG (OQ-B3, no
+        //     prev_project_id edge). Skipped intentionally.
+
+        // 7. Status constraint — cannot rollback from Pull_Back or Ready.
+        const currentTracking = await manager.findOne(TrackingStatus, {
+          where: {
+            supplementEquipmentProjectGroupId: {
+              id: supplementEquipmentProjectGroupId,
+            },
+            isLatest: true,
+          },
+          relations: ['statusId'],
+        });
+        if (!currentTracking) {
+          throw new NotFoundException('ไม่พบสถานะปัจจุบันของรายการครุภัณฑ์');
+        }
+        const currentStatusName = currentTracking.statusId?.name;
+        const disallowedStatuses = ['Pull_Back', 'Ready'];
+        if (disallowedStatuses.includes(currentStatusName)) {
+          throw new BadRequestException(
+            `ไม่สามารถดึงกลับได้จากสถานะ "${currentStatusName}"`,
+          );
+        }
+
+        // 8. clearResponsibleAgency inapplicable — SEPG is agency-only.
+        void _clearResponsibleAgency;
+
+        // 9. Find previous status (most recent non-latest).
+        const previousTracking = await manager.findOne(TrackingStatus, {
+          where: {
+            supplementEquipmentProjectGroupId: {
+              id: supplementEquipmentProjectGroupId,
+            },
+            isLatest: false,
+          },
+          relations: ['statusId'],
+          order: { createAt: 'DESC' },
+        });
+        if (!previousTracking?.statusId) {
+          throw new BadRequestException(
+            'ไม่พบสถานะก่อนหน้า ไม่สามารถย้อนกลับได้',
+          );
+        }
+
+        // 10. True rollback — hard-delete current latest, restore previous.
+        //     §12 audit rollback exception. The SEPG row is KEPT (§14.6
+        //     revert-only).
+        await manager.delete(TrackingStatus, { id: currentTracking.id });
+        await manager.update(
+          TrackingStatus,
+          { id: previousTracking.id },
+          { isLatest: true },
+        );
+
+        return {
+          message: `ย้อนสถานะสำเร็จ (กลับไปเป็น "${previousTracking.statusId.name}")`,
+          status: 'success',
+        };
+      });
+    } catch (error) {
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * §9 supplement-round activation gate shared by the SEPG owner
+   * Pull_Back / Pending paths. Mirrors the SPG owner-branch scope
+   * checks. `verb` is interpolated into the closed-round error message
+   * (e.g. "ดึงกลับ" / "ส่ง").
+   */
+  private assertSepgSupplementScopeOpen(
+    sepg: SupplementEquipmentProjectGroup,
+    verb: string,
+  ): void {
+    const dps = sepg.developmentPlanSupplement;
+    if (!dps) {
+      throw new BadRequestException(
+        'ไม่พบรอบเพิ่มเติม (DevelopmentPlanSupplement) ของรายการครุภัณฑ์',
+      );
+    }
+    const dp = dps.developmentPlan;
+    if (!dp?.isLatest) {
+      throw new BadRequestException('แผนพัฒนาฯ ไม่ใช่แผนปัจจุบัน');
+    }
+    if (!dps.isLatest) {
+      throw new BadRequestException('รอบเพิ่มเติมนี้ไม่ใช่รอบปัจจุบัน');
+    }
+    if (dps.isBooked) {
+      throw new BadRequestException('รอบเพิ่มเติมถูกรวมเล่มแล้ว');
+    }
+    if (!dps.isOpen) {
+      throw new BadRequestException(
+        `รอบเพิ่มเติมปิดแล้ว ไม่สามารถ${verb}ได้`,
+      );
+    }
+  }
+
   /**
    * Wave wave-orphan-cleanup-history / BE-01 (2026-06-01).
    *
@@ -5212,7 +6077,8 @@ export class TrackingStatusService {
         | 'revised-project-group'
         | 'supplement-project-group'
         | 'equipment-project-group'
-        | 'revised-equipment-project-group';
+        | 'revised-equipment-project-group'
+        | 'supplement-equipment-project-group';
       projectTitle: string | null;
       resetAt: string;
       reason: string;
@@ -5266,12 +6132,18 @@ export class TrackingStatusService {
         // history aggregator (§18.13) must surface them too.
         .leftJoin('ts.revisedEquipmentProjectGroupId', 'relpg')
         .leftJoin('relpg.createdBy', 'relpgCreatedBy')
+        // Wave wave-supplement-equipment-por03 — BE-B2 (2026-06-08). Sixth
+        // polymorphic FK — SEPG (SupplementEquipmentProjectGroup) rows are
+        // owner-created by agency users, so the owner-scoped cleanup
+        // history aggregator (§18.13) must surface them too.
+        .leftJoin('ts.supplementEquipmentProjectGroupId', 'sepg')
+        .leftJoin('sepg.createdBy', 'sepgCreatedBy')
         .leftJoin('ts.statusId', 'st');
 
-      // Owner-scope (§4). One of the five FK joins must point at a row
+      // Owner-scope (§4). One of the six FK joins must point at a row
       // whose creator WorkHistory id equals the caller's WH id.
       qb.where(
-        `(pgCreatedBy.id = :whId OR rpgCreatedBy.id = :whId OR spgCreatedBy.id = :whId OR eqCreatedBy.id = :whId OR relpgCreatedBy.id = :whId)`,
+        `(pgCreatedBy.id = :whId OR rpgCreatedBy.id = :whId OR spgCreatedBy.id = :whId OR eqCreatedBy.id = :whId OR relpgCreatedBy.id = :whId OR sepgCreatedBy.id = :whId)`,
         { whId: workHistory.id },
       );
 
@@ -5332,6 +6204,8 @@ export class TrackingStatusService {
         'eq.equipment_name AS "eqTitle"',
         'relpg.id AS "relpgId"',
         'relpg.equipment_name AS "relpgTitle"',
+        'sepg.id AS "sepgId"',
+        'sepg.equipment_name AS "sepgTitle"',
       ]);
 
       qb.orderBy('ts.create_at', 'DESC');
@@ -5354,6 +6228,8 @@ export class TrackingStatusService {
         eqTitle: string | null;
         relpgId: string | null;
         relpgTitle: string | null;
+        sepgId: string | null;
+        sepgTitle: string | null;
       }>();
 
       // Resolve previousStatus per row in a single batched query per kind.
@@ -5365,7 +6241,8 @@ export class TrackingStatusService {
           | 'revised-project-group'
           | 'supplement-project-group'
           | 'equipment-project-group'
-          | 'revised-equipment-project-group';
+          | 'revised-equipment-project-group'
+          | 'supplement-equipment-project-group';
         projectId: string;
         projectTitle: string | null;
         tsId: string;
@@ -5405,10 +6282,19 @@ export class TrackingStatusService {
             tsCreateAt: r.tsCreateAt,
           };
         // Wave Equipment Revision Management — BE-01 (Phase 3).
+        if (r.relpgId)
+          return {
+            kind: 'revised-equipment-project-group' as const,
+            projectId: r.relpgId,
+            projectTitle: r.relpgTitle,
+            tsId: r.tsId,
+            tsCreateAt: r.tsCreateAt,
+          };
+        // Wave wave-supplement-equipment-por03 — BE-B2 (2026-06-08).
         return {
-          kind: 'revised-equipment-project-group' as const,
-          projectId: r.relpgId ?? '',
-          projectTitle: r.relpgTitle,
+          kind: 'supplement-equipment-project-group' as const,
+          projectId: r.sepgId ?? '',
+          projectTitle: r.sepgTitle,
           tsId: r.tsId,
           tsCreateAt: r.tsCreateAt,
         };
@@ -5425,7 +6311,8 @@ export class TrackingStatusService {
           | 'revisedProjectGroupId'
           | 'supplementProjectGroupId'
           | 'equipmentProjectGroupId'
-          | 'revisedEquipmentProjectGroupId',
+          | 'revisedEquipmentProjectGroupId'
+          | 'supplementEquipmentProjectGroupId',
         scopedRefs: ProjectRef[],
       ) => {
         if (scopedRefs.length === 0) return;
@@ -5507,6 +6394,11 @@ export class TrackingStatusService {
       await resolvePrior(
         'revisedEquipmentProjectGroupId',
         refs.filter((r) => r.kind === 'revised-equipment-project-group'),
+      );
+      // Wave wave-supplement-equipment-por03 — BE-B2 (2026-06-08).
+      await resolvePrior(
+        'supplementEquipmentProjectGroupId',
+        refs.filter((r) => r.kind === 'supplement-equipment-project-group'),
       );
 
       const classifyReason = (

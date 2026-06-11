@@ -401,6 +401,20 @@ import { EquipmentProjectGroupModule } from './equipment-project-group/equipment
 // needs no extra root registration. Service/controller deferred to BE-01.
 import { RevisedEquipmentProjectGroup } from './revised-equipment-project-group/entities/revised-equipment-project-group.entity';
 import { RevisedEquipmentProjectGroupModule } from './revised-equipment-project-group/revised-equipment-project-group.module';
+// Wave wave-supplement-equipment-por03 — DB-B1 (2026-06-08). SEPG is the
+// ครุภัณฑ์ ผ.03 sub-type of เล่มเพิ่มเติม: a sibling of EquipmentProjectGroup
+// whose book parent is DevelopmentPlanSupplement (not DevelopmentPlan).
+// Same Wave 41 footgun as every other entity — the metadata MUST be in
+// the root `entities[]` list below or TypeORM throws
+// `EntityMetadataNotFoundError` at boot. Budget + tracking_status
+// polymorphic extension is on the existing entities and needs no extra
+// root registration. Service/controller/module deferred to BE-B1.
+import { SupplementEquipmentProjectGroup } from './supplement-equipment-project-group/entities/supplement-equipment-project-group.entity';
+// Wave wave-supplement-equipment-por03 — BE-B1 (2026-06-08). CRUD +
+// staff-workflow integration surface for SEPG (ครุภัณฑ์ ผ.03 under
+// เล่มเพิ่มเติม). Mirrors EquipmentProjectGroupModule, book parent =
+// DevelopmentPlanSupplement.
+import { SupplementEquipmentProjectGroupModule } from './supplement-equipment-project-group/supplement-equipment-project-group.module';
 // Wave Unified Equipment Tab — BE-01. Read-only unified equipment
 // projection (EPG + RELPG, §14.2 HEAD-of-lineage REPLACE semantic) for
 // the `/project?tab=equipment` surface. No new @Entity — reads the
@@ -619,6 +633,11 @@ import { UnifiedEquipmentModule } from './unified-equipment/unified-equipment.mo
         // Wave Equipment Revision Management — attachment support for RELPG
         // (clone of the RPG attachment table; FK → revised_equipment_project_groups).
         AttachmentRevisedEquipmentProjectGroup,
+        // Wave wave-supplement-equipment-por03 — DB-B1 (see import note).
+        // SEPG — ครุภัณฑ์ ผ.03 sibling of EquipmentProjectGroup, parented to
+        // DevelopmentPlanSupplement. §12 audit via the new (6th)
+        // `supplement_equipment_project_group_id` FK on tracking_status.
+        SupplementEquipmentProjectGroup,
       ],
       synchronize: true,
       extra: {
@@ -793,6 +812,9 @@ import { UnifiedEquipmentModule } from './unified-equipment/unified-equipment.mo
     // Wave Equipment Revision Management — DB-01 (Phase 3). Entity-only
     // skeleton; service/controller deferred to BE-01. Order irrelevant.
     RevisedEquipmentProjectGroupModule,
+    // Wave wave-supplement-equipment-por03 — BE-B1 (2026-06-08). SEPG
+    // CRUD + staff-workflow surface. Order irrelevant; no cyclical dep.
+    SupplementEquipmentProjectGroupModule,
     // Wave Unified Equipment Tab — BE-01. Read-only unified equipment
     // (EPG + RELPG) projection for `/project?tab=equipment`.
     UnifiedEquipmentModule,

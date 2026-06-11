@@ -28,6 +28,9 @@ import { AgencyOnlyGuard } from 'src/common/guards/agency-only.guard';
 // (2026-06-03). Equipment revision/change OLD-vs-NEW print endpoint +
 // DTO. Sibling of `generate-por03` (NOT a discriminator on it).
 import { GenerateRevisionPor03Dto } from './dto/generate-revision-por03.dto';
+// Wave Supplement Equipment ผ.03 Standalone Print — BE-01 (2026-06-09).
+// SEPG user-side print endpoint + DTO. Sibling of `generate-por03`.
+import { GenerateSupplementPor03Dto } from './dto/generate-supplement-por03.dto';
 
 // SUPP_PRINT_BE_03 — supplement-PDF endpoints.
 import { SupplementPdfService } from './supplement-pdf.service';
@@ -291,6 +294,51 @@ export class PdfController {
       'Content-Type': 'application/pdf',
       'Content-Disposition':
         'attachment; filename="por03-revision-equipment.pdf"',
+    });
+    res.end(pdfBuffer);
+  }
+
+  // ============================================
+  // Wave Supplement Equipment ผ.03 Standalone Print — BE-01 (2026-06-09)
+  //
+  // SEPG user-side print: ผ.03 column layout for supplement equipment
+  // (ครุภัณฑ์ under DevelopmentPlanSupplement). Sibling of `generate-por03`;
+  // selection is a set of SEPG ids.
+  //
+  // Defense-in-depth (§5.3):
+  //   - Controller: JwtAuthGuard (class) + AgencyOnlyGuard (LAO callers
+  //     rejected `403 EQUIPMENT_AGENCY_ONLY`).
+  //   - Service: `Por03PdfService.generateSupplementPor03` re-asserts
+  //     `isAgencyWorkHistory(callerWh)`, per-row owner check (§4 — WH id),
+  //     per-row STRATEGY_BASED shape, single-supplement, plan window.
+  //
+  // §17.11 — NO super-admin bypass. The agency-only check ignores role.
+  // §17.2 — read-only: NO TrackingStatus / AI snapshot / audit / any DB write.
+  // §17.8 — distinct cooldown key `print-por03-supplement` (10s,
+  //   2xx arms / 5xx no-arm, 429 PRINT_COOLDOWN_ACTIVE { retryAfterSeconds }),
+  //   independent from the `print-por03` / `print-por03-revision` windows.
+  // ============================================
+  @Post('generate-supplement-por03')
+  @UseGuards(AgencyOnlyGuard)
+  async generateSupplementPor03Pdf(
+    @Body() body: GenerateSupplementPor03Dto,
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Res() res: Response,
+  ) {
+    const userId = req.user?.userId;
+    if (!userId) {
+      throw new UnauthorizedException('UNAUTHENTICATED');
+    }
+
+    const pdfBuffer = await this.por03PdfService.generateSupplementPor03(
+      userId,
+      body.supplementEquipmentIds,
+    );
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition':
+        'attachment; filename="por03-supplement-equipment.pdf"',
     });
     res.end(pdfBuffer);
   }
@@ -1083,14 +1131,15 @@ export class PdfController {
     @Req() req: Request & { user: JwtPayloadUser },
   ) {
     await this.assertAgencyClassificationForUserRole(req);
-    const meta = await this.supplementPdfService.getLatestSupplementDraftMeta(
+    // Return null (200) when no draft has been generated yet — matches the
+    // agency meta contract (`getLatestDraftAgencyMetaForPlan`) so a
+    // first-visit "no draft" state is NOT a console 404. The FE
+    // (`getSupplementDraftMeta`) already treats null as "no draft → show
+    // พิมพ์เล่มร่าง".
+    return this.supplementPdfService.getLatestSupplementDraftMeta(
       developmentPlanId,
       developmentPlanSupplementId,
     );
-    if (!meta) {
-      throw new NotFoundException('Supplement draft PDF not found');
-    }
-    return meta;
   }
 
   /**
@@ -1183,6 +1232,56 @@ export class PdfController {
     const stream = draft.stream;
     stream.pipe(res);
     stream.on('error', () => res.end());
+  }
+
+  /**
+   * Endpoint 7 — POST scoped on-demand download of the LATEST supplement
+   * draft. SEPG analog of `POST /draft/agency/:id/download`
+   * (`downloadScopedDraftAgency`) and the revision analogs.
+   *
+   * Body: `{ scope?, selectedColumns? }`, scope ∈
+   * {combined, project, equipment}, default 'combined'.
+   *   - 'project'   → ผ.02 only (custom columns)
+   *   - 'equipment' → ผ.03 (SEPG) only (Approved/STRATEGY-only)
+   *   - 'combined'  → ผ.02 (columns) + ผ.03 appended, merged
+   *
+   * Read-only (§17.2): renders fresh, writes NO version row / NO audit /
+   * NO AI. §10 scope: bound to the passed
+   * (developmentPlanId, developmentPlanSupplementId) ONLY. Authorization
+   * is identical to the sibling supplement-draft endpoints —
+   * `RolesGuard` + `WorkStatusApprovedGuard` + the §1 agency-class gate
+   * via `assertAgencyClassificationForUserRole` (no-op for staff/admin/
+   * super-admin). Old versions are NOT served here — the FE streams
+   * those via the existing `:version/stream` route.
+   */
+  @Post('supplement-draft/:developmentPlanId/:developmentPlanSupplementId/download')
+  @UseGuards(RolesGuard, WorkStatusApprovedGuard)
+  @Roles(Role.USER, Role.STAFF, Role.ADMIN, Role.SUPER_ADMIN)
+  async downloadScopedSupplementDraft(
+    @Param('developmentPlanId') developmentPlanId: string,
+    @Param('developmentPlanSupplementId') developmentPlanSupplementId: string,
+    @Body()
+    body: {
+      scope?: 'combined' | 'project' | 'equipment';
+      selectedColumns?: string[];
+    },
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Res() res: Response,
+  ) {
+    await this.assertAgencyClassificationForUserRole(req);
+    const scope = body?.scope ?? 'combined';
+    const pdfBuffer =
+      await this.supplementPdfService.generateScopedSupplementDraftDownload(
+        developmentPlanId,
+        developmentPlanSupplementId,
+        scope,
+        body?.selectedColumns,
+      );
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="supplement-draft-${scope}.pdf"`,
+    });
+    res.end(pdfBuffer);
   }
 
   // ===================================================================

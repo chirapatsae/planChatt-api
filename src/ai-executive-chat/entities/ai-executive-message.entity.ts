@@ -279,6 +279,11 @@ export class AiExecutiveMessage {
       // `ai_target_kind` PG type) or synchronize:true loops the
       // enum-rename cycle on every boot.
       'revised-equipment-project-group',
+      // Wave wave-supplement-equipment-por03 — BE-B1 (2026-06-08). MUST
+      // mirror AbstractAiResult + AiStaffReviewRun exactly (shared
+      // `ai_target_kind` PG type) or synchronize:true crashes with
+      // `cannot drop type ai_target_kind_old because other objects depend on it`.
+      'supplement-equipment-project-group',
     ] as AiResultTargetKind[],
     enumName: 'ai_target_kind',
     nullable: true,

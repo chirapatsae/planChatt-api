@@ -127,6 +127,13 @@ export class StaffHomeService {
       Verified: '/revise/edit/admin/print',
       Pending_Approval: '/revise/edit/admin/ready-to-approved',
     },
+    'supplement-equipment': {
+      // SEPG (ผ.03 เล่มเพิ่มเติม) — folded onto the supplement admin queue
+      // (the SEPG staff review tab lives on the supplement admin pages).
+      Pending: '/supplement/admin/pending',
+      Verified: '/supplement/admin/print-presentation',
+      Pending_Approval: '/supplement/admin/ready-to-approved',
+    },
   };
 
   private static readonly STAFF_LEAD_ROLES = ['staff', 'admin', 'super-admin'];
@@ -200,19 +207,9 @@ export class StaffHomeService {
         bookJoin: 'plan',
       }),
       await this.aggregateRevisionLane(responsibleAgencyIds, bypassAreaFilter),
-      await this.aggregateLane(
-        'supplement',
-        'supplementProjectGroupId',
-        'supplement_project_groups',
-        {
-          scopeColumn: 'responsible_agency_id',
-          scopeIds: responsibleAgencyIds,
-          bypassAreaFilter,
-          titleColumn: 'title',
-          excludeDraft: true,
-          bookKind: 'supplement',
-          bookJoin: 'supplement',
-        },
+      await this.aggregateSupplementLane(
+        responsibleAgencyIds,
+        bypassAreaFilter,
       ),
       await this.aggregateLane(
         'equipment',
@@ -293,6 +290,47 @@ export class StaffHomeService {
   }
 
   /**
+   * The `supplement` lane folds SPG + SEPG into one lane (both supplement-book
+   * agency-scoped per §5.3 SEPG). Aggregate each then merge stage-by-stage.
+   * SPG → `supplement`; SEPG → `supplement-equipment` (ผ.03 เล่มเพิ่มเติม),
+   * each keeping its OWN `bookKind` / `actionRoute`.
+   */
+  private async aggregateSupplementLane(
+    responsibleAgencyIds: string[],
+    bypassAreaFilter: boolean,
+  ): Promise<StaffOverdueLaneEntry> {
+    const spg = await this.aggregateLane(
+      'supplement',
+      'supplementProjectGroupId',
+      'supplement_project_groups',
+      {
+        scopeColumn: 'responsible_agency_id',
+        scopeIds: responsibleAgencyIds,
+        bypassAreaFilter,
+        titleColumn: 'title',
+        excludeDraft: true,
+        bookKind: 'supplement',
+        bookJoin: 'supplement',
+      },
+    );
+    const sepg = await this.aggregateLane(
+      'supplement',
+      'supplementEquipmentProjectGroupId',
+      'supplement_equipment_project_groups',
+      {
+        scopeColumn: 'responsible_agency_id',
+        scopeIds: responsibleAgencyIds,
+        bypassAreaFilter,
+        titleColumn: 'equipment_name',
+        excludeDraft: false,
+        bookKind: 'supplement-equipment',
+        bookJoin: 'supplement',
+      },
+    );
+    return this.mergeLanes(spg, sepg);
+  }
+
+  /**
    * Aggregate a single project sub-type into a lane entry.
    *
    * Issues ONLY SELECTs against `tracking_status` joined to the target table
@@ -307,7 +345,8 @@ export class StaffHomeService {
       | 'revisedProjectGroupId'
       | 'supplementProjectGroupId'
       | 'equipmentProjectGroupId'
-      | 'revisedEquipmentProjectGroupId',
+      | 'revisedEquipmentProjectGroupId'
+      | 'supplementEquipmentProjectGroupId',
     tableName: string,
     opts: {
       scopeColumn: 'amphoe_id' | 'responsible_agency_id';
@@ -351,7 +390,8 @@ export class StaffHomeService {
     // those two tables.
     const isEquipmentTable =
       tableName === 'equipment_project_groups' ||
-      tableName === 'revised_equipment_project_groups';
+      tableName === 'revised_equipment_project_groups' ||
+      tableName === 'supplement_equipment_project_groups';
     if (isEquipmentTable) {
       qb.addSelect('proj.is_booked', 'isbooked');
       // pageNumber intentionally NOT selected (DOCS-01 §7.4 → emit null).
@@ -416,6 +456,8 @@ export class StaffHomeService {
         return 'equipment_project_group_id';
       case 'revisedEquipmentProjectGroupId':
         return 'revised_equipment_project_group_id';
+      case 'supplementEquipmentProjectGroupId':
+        return 'supplement_equipment_project_group_id';
       default:
         // Unreachable — fkProperty is a closed union at the call sites.
         throw new Error(`Unknown FK property: ${fkProperty}`);
@@ -467,7 +509,8 @@ export class StaffHomeService {
           row.revisiontypename === 'เปลี่ยนแปลง' ? 'เปลี่ยนแปลง' : 'แก้ไข';
         return `${base} · ${prefix} ครั้งที่ ${row.revisionnumber ?? '-'}`;
       }
-      case 'supplement': {
+      case 'supplement':
+      case 'supplement-equipment': {
         const base = planName ?? StaffHomeService.LANE_LABEL_TH.supplement;
         return `${base} · ฉบับเพิ่มเติม ครั้งที่ ${row.supplementnumber ?? '-'}`;
       }

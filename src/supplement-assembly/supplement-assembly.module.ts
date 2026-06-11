@@ -42,6 +42,7 @@ import { SupplementProjectLineage } from './entities/supplement-project-lineage.
 // Dependency entities — repositories injected by SupplementAssemblyService.
 import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entities/development-plan-supplement.entity';
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
+import { SupplementEquipmentProjectGroup } from 'src/supplement-equipment-project-group/entities/supplement-equipment-project-group.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { User } from 'src/users/entities/user.entity';
 
@@ -67,6 +68,7 @@ import { LineageLockModule } from 'src/common/lineage-lock/lineage-lock.module';
       // Dependency entities (read by BE_02 service via @InjectRepository)
       DevelopmentPlanSupplement,
       SupplementProjectGroup,
+      SupplementEquipmentProjectGroup,
       WorkHistory,
       User,
     ]),

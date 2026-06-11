@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
+import { SupplementEquipmentProjectGroup } from 'src/supplement-equipment-project-group/entities/supplement-equipment-project-group.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 
 import { WorkStatusApprovedGuard } from 'src/auth/work-status-approved.guard';
@@ -43,6 +44,7 @@ import { UnifiedEquipmentService } from './unified-equipment.service';
     TypeOrmModule.forFeature([
       EquipmentProjectGroup,
       RevisedEquipmentProjectGroup,
+      SupplementEquipmentProjectGroup,
       WorkHistory,
     ]),
   ],

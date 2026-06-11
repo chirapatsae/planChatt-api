@@ -82,6 +82,7 @@ import { STATUS_NAMES } from 'src/common/status-names';
 import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entities/development-plan-supplement.entity';
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
+import { SupplementEquipmentProjectGroup } from 'src/supplement-equipment-project-group/entities/supplement-equipment-project-group.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { User } from 'src/users/entities/user.entity';
 
@@ -90,6 +91,10 @@ import {
   SupplementLocation,
 } from './supplement-assembly-file.service';
 import { SupplementPdfService } from 'src/pdf/supplement-pdf.service';
+// wave-supplement-equipment-por03 / BE-B5 (2026-06-08) — Approved-only,
+// STRATEGY_BASED-only SEPG ผ.03 render core for the merge/preview append.
+// PdfModule (already imported) exports Por03PdfService.
+import { Por03PdfService } from 'src/pdf/por03-pdf.service';
 import { BookLockService } from 'src/common/book-lock/book-lock.service';
 import { OrphanCleanupService } from 'src/orphan-cleanup/orphan-cleanup.service';
 import { LineageLockService } from 'src/common/lineage-lock/lineage-lock.service';
@@ -168,6 +173,9 @@ export class SupplementAssemblyService {
     @InjectRepository(SupplementProjectGroup)
     private readonly spgRepo: Repository<SupplementProjectGroup>,
 
+    @InjectRepository(SupplementEquipmentProjectGroup)
+    private readonly sepgRepo: Repository<SupplementEquipmentProjectGroup>,
+
     @InjectRepository(WorkHistory)
     private readonly workHistoryRepo: Repository<WorkHistory>,
 
@@ -176,6 +184,11 @@ export class SupplementAssemblyService {
 
     private readonly fileService: SupplementAssemblyFileService,
     private readonly pdfService: SupplementPdfService,
+    // wave-supplement-equipment-por03 / BE-B5 (2026-06-08) — SEPG ผ.03
+    // append at preview()/merge(). Render core is STRATEGY-only +
+    // silent-skip + pageOffset-aware; this service just passes the
+    // supplementId + offset and treats null as "no ผ.03 section".
+    private readonly por03Service: Por03PdfService,
     private readonly bookLockService: BookLockService,
     private readonly orphanCleanupService: OrphanCleanupService,
     // wave-supplement-correction-workflow / BE-01 — UsersService is used
@@ -1181,6 +1194,24 @@ export class SupplementAssemblyService {
       })
       .getCount();
 
+    // Approved SEPG (ครุภัณฑ์ ผ.03) under this supplement — surfaced as the
+    // ผ.03 line in the readiness bar. Approved-only to mirror the §20.2
+    // supplement ผ.03 append (the formal booked set) + stay on the same
+    // "อนุมัติแล้ว" basis as approvedCount above. Same join shape as the SPG
+    // counts (relation alias `trackingStatus` → `statusId`); the SEPG FK on
+    // tracking_status is `supplement_equipment_project_group_id` (§12).
+    const approvedEquipmentCount = await this.sepgRepo
+      .createQueryBuilder('sepg')
+      .innerJoin('sepg.trackingStatus', 'ts')
+      .innerJoin('ts.statusId', 'status')
+      .where('sepg.developmentPlanSupplement = :supplementId', { supplementId })
+      .andWhere('sepg.deletedAt IS NULL')
+      .andWhere('ts.isLatest = :isLatest', { isLatest: true })
+      .andWhere('status.name = :statusName', {
+        statusName: STATUS_NAMES.APPROVED,
+      })
+      .getCount();
+
     const hasOpenPhase = supplement.isOpen === true;
     const isReady =
       approvedCount === totalCount && totalCount > 0 && !hasOpenPhase;
@@ -1237,6 +1268,7 @@ export class SupplementAssemblyService {
       pullBackCount: statusMap[STATUS_NAMES.PULL_BACK] ?? 0,
       rejectedCount: statusMap[STATUS_NAMES.REJECTED] ?? 0,
       totalCount,
+      approvedEquipmentCount,
     };
 
     this.logger.log(
@@ -1620,7 +1652,28 @@ export class SupplementAssemblyService {
     const part1 = this.fileService.readPart(previewLocation, targetVersion, 1);
     const part2 = this.fileService.readPart(previewLocation, targetVersion, 2);
     const part3 = this.fileService.readPart(previewLocation, targetVersion, 3);
-    return this.mergePdfBuffers([part1, part2, part3]);
+
+    // wave-supplement-equipment-por03 / BE-B5 (§5.3 / §21.3 / §17.2) —
+    // append the SEPG ผ.03 section (Approved-only + STRATEGY_BASED-only,
+    // read-only — NO TrackingStatus/AI/audit writes). The render degrades
+    // to null when no Approved STRATEGY-shaped SEPG exists OR the parent
+    // plan is ISSUE_BASED → the ผ.02 book is produced verbatim, never
+    // blocked. §21.3.4 OFFSET: supplement ผ.02 Part 3 RESTARTS its footer
+    // numbering at 1 (`generateSupplementPdfBuffer` takes no pageOffset,
+    // same as EDIT/CHANGE — NOT MAIN's re-render). The ผ.03 section
+    // continues THAT restarted Part-3 sequence, so offset =
+    // pageCount(part3) ONLY (NOT part1+part2+part3 — that would over-count
+    // and produce the §21.3.4 visible-jump bug). `equipmentIds`/`pageMap`
+    // are intentionally discarded — no SEPG booking-state stamping this
+    // wave (deferred per §20.2, mirroring EDIT/CHANGE).
+    const por03Offset = (await PDFDocument.load(part3)).getPageCount();
+    const por03 = await this.por03Service.renderApprovedSupplementScopedPor03Buffer(
+      supplementId,
+      por03Offset,
+    );
+    return this.mergePdfBuffers(
+      por03 ? [part1, part2, part3, por03.buffer] : [part1, part2, part3],
+    );
   }
 
   // ===================================================================
@@ -1796,18 +1849,35 @@ export class SupplementAssemblyService {
         nextVersion,
         3,
       );
+      // wave-supplement-equipment-por03 / BE-B5 (§5.3 / §21.3 / §17.2) —
+      // append the SEPG ผ.03 section into the finalized book buffer.
+      // Approved-only + STRATEGY_BASED-only, read-only (NO TrackingStatus/
+      // AI/audit writes). Degrades to null when no Approved STRATEGY-shaped
+      // SEPG exists OR the parent plan is ISSUE_BASED → the ผ.02 book is
+      // finalized verbatim, never blocked. §21.3.4 OFFSET: supplement ผ.02
+      // Part 3 RESTARTS at 1, so offset = pageCount(part3) ONLY (the
+      // EDIT/CHANGE bugfix formula, NOT part1+part2+part3). The returned
+      // `equipmentIds`/`pageMap` ARE consumed below to stamp SEPG
+      // `is_booked` / `booked_at` / `page_number` per row alongside the
+      // SPG stamp (§20.3 Invariant 1).
+      const por03Offset = (await PDFDocument.load(part3Buffer)).getPageCount();
+      const por03 =
+        await this.por03Service.renderApprovedSupplementScopedPor03Buffer(
+          supplementId,
+          por03Offset,
+        );
       // wave-supplement-assembly-metadata-parity / BE-01 — use the
       // pageCount-emitting merge variant so the version row carries
       // `totalPages` without a second PDFDocument.load roundtrip.
       // `mergedPageCount` is null only on the (defensive) catch path
       // inside `mergePdfBuffersWithMeta` for the single-buffer
-      // shortcut — the standard 3-buffer path always yields a number.
+      // shortcut — the standard multi-buffer path always yields a number.
       const { buffer: mergedBuffer, pageCount: mergedPageCount } =
-        await this.mergePdfBuffersWithMeta([
-          part1Buffer,
-          part2Buffer,
-          part3Buffer,
-        ]);
+        await this.mergePdfBuffersWithMeta(
+          por03
+            ? [part1Buffer, part2Buffer, part3Buffer, por03.buffer]
+            : [part1Buffer, part2Buffer, part3Buffer],
+        );
       // `mergedPath` is the RELATIVE KEY (umbrella §7.2) — persisted
       // verbatim to `supplement_assembly_versions.merged_file_path`.
       const mergedPath = this.fileService.writeMerged(
@@ -1912,6 +1982,32 @@ export class SupplementAssemblyService {
         { id: In(approvedProjects.map((p) => p.id)) },
         { isBooked: true, bookedAt: finalizeBookedAt },
       );
+
+      // SEPG (ครุภัณฑ์ ผ.03 เล่มเพิ่มเติม) booking stamp on Approved SEPGs
+      // that the renderer included in the appended section. Parallels
+      // `main-assembly.service.ts:1017` (EPG) and the EDIT/CHANGE RELPG
+      // stamp. §21.3.4 — supplement ผ.02 Part 3 restarts at 1, so
+      // absolutePage(id) = por03Offset + local. §12 — booking flip is
+      // NOT a status transition; no TrackingStatus row written.
+      if (por03 && por03.equipmentIds.length > 0) {
+        const sepgIds = por03.equipmentIds;
+        const sepgPages: (number | null)[] = sepgIds.map((id) => {
+          const local = por03.pageMap.get(id);
+          return local === undefined ? null : por03Offset + local;
+        });
+        await manager.query(
+          `UPDATE supplement_equipment_project_groups e
+             SET is_booked = true,
+                 booked_at = $1,
+                 page_number = u.page_number
+           FROM unnest($2::uuid[], $3::int[]) AS u(id, page_number)
+           WHERE e.id = u.id`,
+          [finalizeBookedAt, sepgIds, sepgPages],
+        );
+        this.logger.log(
+          `[SupplementAssembly] merge stamped isBooked + page_number on ${sepgIds.length} SEPG row(s) supplement=${supplementId}`,
+        );
+      }
 
       // Version-projects join — pageNumber 1..N matching the renderer
       // sort. The cascade re-snapshot guarantee is satisfied because we

@@ -37,7 +37,7 @@
 
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, ILike, In, Repository } from 'typeorm';
+import { DataSource, ILike, In, LessThanOrEqual, Repository } from 'typeorm';
 
 import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
@@ -659,15 +659,20 @@ export class PublicArchiveService {
     const buildEditRevisionDtos = (
       planRevisions: DevelopmentPlanRevision[],
     ): PublicRevisionDto[] => {
+      // `revisionNumber` is a GLOBAL per-plan counter shared across both
+      // แก้ไข and เปลี่ยนแปลง rounds, so it cannot be used as the displayed
+      // "ครั้งที่ N". The user-facing ordinal must be PER-TYPE. Since the
+      // source list is ordered by `revisionNumber ASC` (see the find above),
+      // the Nth edit row IS the Nth edit round → use the filtered index.
       return planRevisions
         .filter((r) => r.revisionType?.name === 'แก้ไข')
-        .map((r) => {
+        .map((r, idx) => {
           const versions = (editVersionMap.get(r.id) ?? [])
             .map((v) => toPublicEditVersion(v))
             .filter((v): v is PublicVersionDto => v !== null);
           return {
             revisionId: r.id,
-            revisionName: `แก้ไข ครั้งที่ ${r.revisionNumber}`,
+            revisionName: `แก้ไข ครั้งที่ ${idx + 1}`,
             versions,
           };
         })
@@ -677,15 +682,18 @@ export class PublicArchiveService {
     const buildChangeRevisionDtos = (
       planRevisions: DevelopmentPlanRevision[],
     ): PublicRevisionDto[] => {
+      // Per-type ordinal — see buildEditRevisionDtos. `revisionNumber` is a
+      // global per-plan counter (an edit + a change yields 1 then 2), so a
+      // change that is the 1st change round would wrongly show "ครั้งที่ 2".
       return planRevisions
         .filter((r) => r.revisionType?.name === 'เปลี่ยนแปลง')
-        .map((r) => {
+        .map((r, idx) => {
           const versions = (changeVersionMap.get(r.id) ?? [])
             .map((v) => toPublicChangeVersion(v))
             .filter((v): v is PublicVersionDto => v !== null);
           return {
             revisionId: r.id,
-            revisionName: `เปลี่ยนแปลง ครั้งที่ ${r.revisionNumber}`,
+            revisionName: `เปลี่ยนแปลง ครั้งที่ ${idx + 1}`,
             versions,
           };
         })
@@ -834,6 +842,32 @@ export class PublicArchiveService {
    * to `limit` results combined across PG + RPG + SPG, ordered by
    * createdAt (newest first).
    */
+  /**
+   * Per-TYPE display ordinal for a revision's "ครั้งที่ N" label.
+   *
+   * `revisionNumber` is a GLOBAL per-plan counter shared across both แก้ไข
+   * and เปลี่ยนแปลง rounds (e.g. an edit then a change yields 1 then 2), so
+   * it must NOT be shown directly — the 1st change round would wrongly read
+   * "ครั้งที่ 2". This counts same-plan, same-type rounds with a
+   * revisionNumber ≤ this one (soft-deleted excluded via @DeleteDateColumn),
+   * giving the true per-type ordinal. Mirrors the index-based numbering used
+   * by the list builders in `listPlans`.
+   */
+  private async revisionTypeOrdinal(
+    rev: DevelopmentPlanRevision,
+  ): Promise<number> {
+    const planId = rev.developmentPlan?.id;
+    const typeId = rev.revisionType?.id;
+    if (!planId || !typeId) return rev.revisionNumber;
+    return this.devPlanRevisionRepo.count({
+      where: {
+        developmentPlan: { id: planId },
+        revisionType: { id: typeId },
+        revisionNumber: LessThanOrEqual(rev.revisionNumber),
+      },
+    });
+  }
+
   async searchProjects(
     q: string,
     limit: number = 50,
@@ -887,24 +921,27 @@ export class PublicArchiveService {
       .limit(limit)
       .getMany();
 
-    const rpgHits: PublicProjectSearchHit[] = rpgRows
-      .filter((rpg) => rpg.developmentPlanRevision?.id)
-      .map((rpg) => {
-        const rev = rpg.developmentPlanRevision!;
-        const isChange = rev.revisionType?.name === 'เปลี่ยนแปลง';
-        return {
-          projectId: rpg.id,
-          projectTitle: rpg.title,
-          projectYear: rpg.projectYear,
-          sourceType: isChange ? 'change_revision' : 'edit_revision',
-          sourceId: rev.id,
-          planId: rev.developmentPlan?.id ?? '',
-          planName: rev.developmentPlan?.name ?? '',
-          bookName: `${rev.revisionType?.name ?? ''} ครั้งที่ ${rev.revisionNumber}`,
-          likeCount: Number(rpg.likeCount ?? 0),
-          viewCount: Number(rpg.viewCount ?? 0),
-        };
-      });
+    const rpgHits: PublicProjectSearchHit[] = await Promise.all(
+      rpgRows
+        .filter((rpg) => rpg.developmentPlanRevision?.id)
+        .map(async (rpg) => {
+          const rev = rpg.developmentPlanRevision!;
+          const isChange = rev.revisionType?.name === 'เปลี่ยนแปลง';
+          const ordinal = await this.revisionTypeOrdinal(rev);
+          return {
+            projectId: rpg.id,
+            projectTitle: rpg.title,
+            projectYear: rpg.projectYear,
+            sourceType: isChange ? 'change_revision' : 'edit_revision',
+            sourceId: rev.id,
+            planId: rev.developmentPlan?.id ?? '',
+            planName: rev.developmentPlan?.name ?? '',
+            bookName: `${rev.revisionType?.name ?? ''} ครั้งที่ ${ordinal}`,
+            likeCount: Number(rpg.likeCount ?? 0),
+            viewCount: Number(rpg.viewCount ?? 0),
+          };
+        }),
+    );
 
     // SPG search — joined via developmentPlanSupplement → developmentPlan.
     const spgRows = await this.supplementProjectGroupRepo
@@ -1130,6 +1167,9 @@ export class PublicArchiveService {
       `[public] detail ${sourceType} id=${rpg.id} rev=${rev.id} v${latestVersionNumber}`,
     );
 
+    // Per-type ordinal — `revisionNumber` is a global per-plan counter.
+    const revOrdinal = await this.revisionTypeOrdinal(rev);
+
     return this.assembleDetail({
       projectId: rpg.id,
       title: rpg.title,
@@ -1153,7 +1193,7 @@ export class PublicArchiveService {
       book: {
         sourceType,
         sourceId: rev.id,
-        bookName: `${revTypeName} ครั้งที่ ${rev.revisionNumber}`,
+        bookName: `${revTypeName} ครั้งที่ ${revOrdinal}`,
         latestVersionNumber,
         pageNumber: rpg.pageNumber,
       },

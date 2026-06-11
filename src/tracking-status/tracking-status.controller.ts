@@ -34,6 +34,10 @@ import { PromoteVerifiedSupplementScopeDto } from './dto/promote-verified-supple
 // (EPG) and RevisedEquipmentProjectGroup (RELPG).
 import { PromoteVerifiedEquipmentScopeDto } from './dto/promote-verified-equipment-scope.dto';
 import { PromoteVerifiedRevisedEquipmentScopeDto } from './dto/promote-verified-revised-equipment-scope.dto';
+// Wave wave-supplement-equipment-por03 — promote-verified SEPG (2026-06-10).
+// Scope-driven promote-Verified request body for
+// SupplementEquipmentProjectGroup (the 6th §12.1 member).
+import { PromoteVerifiedSupplementEquipmentScopeDto } from './dto/promote-verified-supplement-equipment-scope.dto';
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
 
@@ -106,6 +110,30 @@ export class TrackingStatusController {
       'Request to create tracking status by equipment project group',
     );
     return this.trackingStatusService.createByEquipmentProjectGroup(
+      dto,
+      req.user.userId,
+    );
+  }
+
+  /**
+   * Wave wave-supplement-equipment-por03 — BE-B2 (2026-06-08).
+   * Tracking-status write endpoint for SupplementEquipmentProjectGroup
+   * (ครุภัณฑ์ ผ.03 under เล่มเพิ่มเติม). Handles owner Pull_Back, owner
+   * resubmission, and staff workflow transitions (Pending → Verified,
+   * Verified → Pending_Approval, Pending_Approval → Approved,
+   * * → Returned_For_Revision, * → Rejected). Mirrors
+   * `create-by-equipment-project-group`; the SEPG id may be supplied via
+   * either `supplementEquipmentProjectGroupId` (preferred) or `projectId`.
+   */
+  @Post('create-by-supplement-equipment-project-group')
+  createBySupplementEquipmentProjectGroup(
+    @Body() dto: CreateTrackingStatusDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    this.logger.log(
+      'Request to create tracking status by supplement equipment project group',
+    );
+    return this.trackingStatusService.createBySupplementEquipmentProjectGroup(
       dto,
       req.user.userId,
     );
@@ -278,6 +306,41 @@ export class TrackingStatusController {
   }
 
   /**
+   * Wave wave-supplement-equipment-por03 (2026-06-10) — scope-driven
+   * promote-Verified for SupplementEquipmentProjectGroup (SEPG, ครุภัณฑ์
+   * ผ.03 ของเล่มเพิ่มเติม). The 6th member of the §12.1 "Scope-Based Verified
+   * Promotion Endpoints" family, and the equipment sibling of the SPG
+   * promote above — so the supplement staff "พิมพ์เล่มร่าง" action can move
+   * BOTH the supplement project (SPG) AND the supplement equipment (SEPG)
+   * sets `Verified → Pending_Approval`, exactly like the change-print page
+   * already promotes both RPG and RELPG.
+   *
+   * Promotes EVERY SEPG whose latest status is `Verified` under the supplied
+   * `developmentPlanSupplementId` (§12.1 supplement-book scope key) to
+   * `Pending_Approval` in ONE transaction and returns `{ movedCount }`. SET
+   * operation — no row cap, no id list, no page / limit.
+   *
+   * Staff-only (§3 / §4.1 — NOT agency-gated per §5.3, the agency-only rule
+   * is authoring-scoped); AGENCY-based area responsibility for `staff`
+   * (admin / super-admin bypass); §12 audit per row; §15.4 supplement book
+   * lock honored before any move; §17.4 baseline NOT fired (Verified →
+   * Pending_Approval is not authoring); §18 cascade NOT triggered.
+   */
+  @Post('promote-verified/supplement-equipment-project-group')
+  promoteVerifiedSupplementEquipmentProjectGroup(
+    @Body() dto: PromoteVerifiedSupplementEquipmentScopeDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    this.logger.log(
+      `Request to promote Verified→Pending_Approval SEPGs (supplement=${dto.developmentPlanSupplementId})`,
+    );
+    return this.trackingStatusService.promoteVerifiedSupplementEquipmentByScope(
+      dto,
+      req.user.userId,
+    );
+  }
+
+  /**
    * BE-04 (Wave wave-print-merge-scale-statuschange, 2026-06-04) —
    * scope-driven promote-Verified for EquipmentProjectGroup (ผ.03, page 1).
    *
@@ -353,6 +416,38 @@ export class TrackingStatusController {
       `Request to approve Pending_Approval→Approved RELPGs (revision=${dto.developmentPlanRevisionId})`,
     );
     return this.trackingStatusService.approvePendingApprovalRelpgByScope(
+      dto,
+      req.user.userId,
+    );
+  }
+
+  /**
+   * Wave wave-supplement-equipment-por03 (2026-06-10) — scope-driven APPROVE
+   * for SupplementEquipmentProjectGroup (SEPG, ครุภัณฑ์ ผ.03 ของเล่มเพิ่มเติม).
+   * The equipment half of the supplement "อนุมัติทั้งหมด" Stage-3 action —
+   * the APPROVE sibling of the SEPG promote-verified endpoint above, and the
+   * SEPG analog of the RELPG approve-by-scope.
+   *
+   * Moves EVERY SEPG whose latest status is `Pending_Approval` under the
+   * supplied `developmentPlanSupplementId` (§12.1 supplement-book scope key)
+   * to `Approved` in ONE transaction and returns `{ movedCount }`. SET
+   * operation — no row cap, no id list, no page / limit.
+   *
+   * Staff-only (§3 / §4.1 — NOT agency-gated per §5.3, the agency-only rule
+   * is authoring-scoped); AGENCY-based area responsibility for `staff`
+   * (admin / super-admin bypass); §12 audit per row; §15.4 supplement book
+   * lock honored before any move; §17.4 baseline NOT fired (Pending_Approval
+   * → Approved is not authoring); §18 cascade NOT triggered.
+   */
+  @Post('approve-pending-approval/supplement-equipment-project-group')
+  approvePendingApprovalSupplementEquipmentProjectGroup(
+    @Body() dto: PromoteVerifiedSupplementEquipmentScopeDto,
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    this.logger.log(
+      `Request to approve Pending_Approval→Approved SEPGs (supplement=${dto.developmentPlanSupplementId})`,
+    );
+    return this.trackingStatusService.approvePendingApprovalSupplementEquipmentByScope(
       dto,
       req.user.userId,
     );
@@ -455,6 +550,33 @@ export class TrackingStatusController {
     );
     return this.trackingStatusService.rollbackEquipmentProjectGroupStatus(
       equipmentProjectGroupId,
+      req.user.userId,
+      body?.clearResponsibleAgency,
+    );
+  }
+
+  /**
+   * Wave wave-supplement-equipment-por03 — BE-B2 (2026-06-08). Staff-led
+   * rollback for SupplementEquipmentProjectGroup. Mirrors the SPG
+   * rollback endpoint; AGENCY-based responsibility is enforced inside the
+   * service. The `clearResponsibleAgency` flag is silently ignored
+   * (SEPG is agency-only by construction; §7.2/§7.3 LAO-origin clearing
+   * is unreachable).
+   */
+  @Post(
+    'rollback/supplement-equipment-project-group/:supplementEquipmentProjectGroupId',
+  )
+  rollbackStatusSupplementEquipmentProjectGroup(
+    @Param('supplementEquipmentProjectGroupId', ParseUUIDPipe)
+    supplementEquipmentProjectGroupId: string,
+    @Body() body: { clearResponsibleAgency?: boolean },
+    @Req() req: Request & { user: JwtPayloadUser },
+  ) {
+    this.logger.log(
+      `Request to pull back supplement equipment project group: ${supplementEquipmentProjectGroupId}`,
+    );
+    return this.trackingStatusService.rollbackSupplementEquipmentProjectGroupStatus(
+      supplementEquipmentProjectGroupId,
       req.user.userId,
       body?.clearResponsibleAgency,
     );

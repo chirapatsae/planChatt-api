@@ -17,6 +17,10 @@ import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equi
 // Wave Equipment Revision Management — BE-01 (Phase 3). Owner lookup
 // branch for the new `'revised-equipment-project-group'` target kind.
 import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
+// Wave wave-supplement-equipment-por03 — BE-B1 (2026-06-08). Owner lookup
+// branch for the new `'supplement-equipment-project-group'` target kind
+// (§17.4 no-ai-baseline at the SEPG publish path).
+import { SupplementEquipmentProjectGroup } from 'src/supplement-equipment-project-group/entities/supplement-equipment-project-group.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { CreatePreSubmitSnapshotDto } from './dto/pre-submit-snapshot.dto';
 import {
@@ -74,6 +78,9 @@ export class PreSubmitSnapshotService {
     // Wave Equipment Revision Management — BE-01 (Phase 3).
     @InjectRepository(RevisedEquipmentProjectGroup)
     private readonly revisedEquipmentRepo: Repository<RevisedEquipmentProjectGroup>,
+    // Wave wave-supplement-equipment-por03 — BE-B1 (2026-06-08).
+    @InjectRepository(SupplementEquipmentProjectGroup)
+    private readonly supplementEquipmentRepo: Repository<SupplementEquipmentProjectGroup>,
     @InjectRepository(WorkHistory)
     private readonly workHistoryRepo: Repository<WorkHistory>,
     private readonly dataSource: DataSource,
@@ -336,7 +343,9 @@ export class PreSubmitSnapshotService {
       // Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28).
       targetKind !== 'equipment-project-group' &&
       // Wave Equipment Revision Management — BE-01 (Phase 3).
-      targetKind !== 'revised-equipment-project-group'
+      targetKind !== 'revised-equipment-project-group' &&
+      // Wave wave-supplement-equipment-por03 — BE-B1 (2026-06-08).
+      targetKind !== 'supplement-equipment-project-group'
     ) {
       throw new NotFoundException('ไม่พบข้อมูล snapshot');
     }
@@ -445,7 +454,9 @@ export class PreSubmitSnapshotService {
       // Wave Equipment ผ.03 Phase 2 — BE-06 (2026-05-28).
       targetKind !== 'equipment-project-group' &&
       // Wave Equipment Revision Management — BE-01 (Phase 3).
-      targetKind !== 'revised-equipment-project-group'
+      targetKind !== 'revised-equipment-project-group' &&
+      // Wave wave-supplement-equipment-por03 — BE-B1 (2026-06-08).
+      targetKind !== 'supplement-equipment-project-group'
     ) {
       throw new NotFoundException('ไม่พบข้อมูล snapshot');
     }
@@ -633,21 +644,42 @@ export class PreSubmitSnapshotService {
       return id;
     }
     // Wave Equipment Revision Management — BE-01 (Phase 3).
-    // revised-equipment-project-group
+    if (targetKind === 'revised-equipment-project-group') {
+      const row = outerManager
+        ? await outerManager.findOne(RevisedEquipmentProjectGroup, {
+            where: { id: targetId },
+            relations: ['createdBy'],
+          })
+        : await this.revisedEquipmentRepo.findOne({
+            where: { id: targetId },
+            relations: ['createdBy'],
+          });
+      if (!row) throw new NotFoundException('ไม่พบรายการครุภัณฑ์ (ฉบับแก้ไข)');
+      const id = row.createdBy?.id;
+      if (!id) {
+        throw new ForbiddenException(
+          'รายการครุภัณฑ์ (ฉบับแก้ไข) นี้ไม่มีข้อมูลเจ้าของที่ถูกต้อง',
+        );
+      }
+      return id;
+    }
+    // Wave wave-supplement-equipment-por03 — BE-B1 (2026-06-08).
+    // supplement-equipment-project-group
     const row = outerManager
-      ? await outerManager.findOne(RevisedEquipmentProjectGroup, {
+      ? await outerManager.findOne(SupplementEquipmentProjectGroup, {
           where: { id: targetId },
           relations: ['createdBy'],
         })
-      : await this.revisedEquipmentRepo.findOne({
+      : await this.supplementEquipmentRepo.findOne({
           where: { id: targetId },
           relations: ['createdBy'],
         });
-    if (!row) throw new NotFoundException('ไม่พบรายการครุภัณฑ์ (ฉบับแก้ไข)');
+    if (!row)
+      throw new NotFoundException('ไม่พบรายการครุภัณฑ์ (เล่มเพิ่มเติม)');
     const id = row.createdBy?.id;
     if (!id) {
       throw new ForbiddenException(
-        'รายการครุภัณฑ์ (ฉบับแก้ไข) นี้ไม่มีข้อมูลเจ้าของที่ถูกต้อง',
+        'รายการครุภัณฑ์ (เล่มเพิ่มเติม) นี้ไม่มีข้อมูลเจ้าของที่ถูกต้อง',
       );
     }
     return id;

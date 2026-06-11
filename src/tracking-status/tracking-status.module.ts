@@ -21,6 +21,10 @@ import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entit
 // the same transaction as the TrackingStatus write. Mirrors PG (NOT
 // RPG/SPG) for amphoe-based responsibility + main-plan scope binding.
 import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
+// Wave wave-supplement-equipment-por03 — BE-B2 (2026-06-08). Register SEPG
+// so the tracking-status service can run its workflow transitions
+// (Ready → Pending → Verified → Pending_Approval → Approved + rollback).
+import { SupplementEquipmentProjectGroup } from 'src/supplement-equipment-project-group/entities/supplement-equipment-project-group.entity';
 
 import { AnnouncementsModule } from 'src/announcements/announcements.module';
 import { WorkHistoryAmphoeResponsibility } from 'src/work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity';
@@ -72,6 +76,7 @@ import { SupplementProjectGroupModule } from 'src/supplement-project-group/suppl
       SupplementProjectGroup,
       DevelopmentPlanSupplement,
       EquipmentProjectGroup,
+      SupplementEquipmentProjectGroup,
       WorkHistoryAmphoeResponsibility,
       WorkHistoryGovernmentAgencyResponsibility,
     ]),

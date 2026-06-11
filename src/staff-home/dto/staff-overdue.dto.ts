@@ -31,7 +31,8 @@ export type StaffOverdueBookKind =
   | 'change' // RevisedProjectGroup, revisionType = เปลี่ยนแปลง
   | 'supplement' // SupplementProjectGroup
   | 'equipment' // EquipmentProjectGroup (ผ.03)
-  | 'revised-equipment'; // RevisedEquipmentProjectGroup (RELPG ผ.03)
+  | 'revised-equipment' // RevisedEquipmentProjectGroup (RELPG ผ.03)
+  | 'supplement-equipment'; // SupplementEquipmentProjectGroup (SEPG ผ.03 เล่มเพิ่มเติม)
 
 /** The three non-terminal review stages a staff member is responsible for. */
 export type StaffOverdueStage = 'Pending' | 'Verified' | 'Pending_Approval';

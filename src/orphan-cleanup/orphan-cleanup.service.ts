@@ -10,6 +10,7 @@ import { DataSource, EntityManager, IsNull, Repository } from 'typeorm';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
+import { SupplementEquipmentProjectGroup } from 'src/supplement-equipment-project-group/entities/supplement-equipment-project-group.entity';
 import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
 import { PrevEquipmentProjectType } from 'src/revised-equipment-project-group/dto/prev-equipment-project-type.enum';
@@ -212,6 +213,23 @@ export class OrphanCleanupService {
         reasonText,
         statusFilter: 'all',
       });
+
+      // Wave wave-supplement-equipment-por03 — BE-B3. SEPG
+      // (SupplementEquipmentProjectGroup) is the equipment analog of SPG
+      // under a DevelopmentPlanSupplement. Apply the SAME Phase B
+      // soft-delete procedure (§18.4.2): tombstone TrackingStatus row
+      // (isLatest=false) tagged on `supplementEquipmentProjectGroupId`
+      // BEFORE `deletedAt`. §14 lineage is vacuous in v1 (no SEPG
+      // descendant edge exists — OQ-B3), so no descendant guard / topo
+      // sort. §18.11 LAO clearing is VACUOUS — SEPG is agency-origin only.
+      // Folded into `rpgCount` so the cascade return shape is unchanged.
+      rpgCount += await this.bulkSoftDeleteSupplementEquipmentProjectGroups({
+        em,
+        bookId: book.id,
+        actorWorkHistoryId: actorWorkHistory.id,
+        reasonText,
+        statusFilter: 'all',
+      });
     }
 
     this.logger.log(
@@ -292,6 +310,18 @@ export class OrphanCleanupService {
 
     if (bookKind === 'SUPPLEMENT') {
       rpgCount = await this.bulkSoftDeleteSupplementProjectGroups({
+        em,
+        bookId: book.id,
+        actorWorkHistoryId: actorWorkHistory.id,
+        reasonText: null,
+        bookNameForFinalize: bookName,
+        statusFilter: 'finalize',
+      });
+
+      // Wave wave-supplement-equipment-por03 — BE-B3. SEPG finalize
+      // cascade: exclude {Approved, Rejected}; resolve reason per-row via
+      // §18.6.1. Soft-delete + tombstone (§18.4.2). Folded into `rpgCount`.
+      rpgCount += await this.bulkSoftDeleteSupplementEquipmentProjectGroups({
         em,
         bookId: book.id,
         actorWorkHistoryId: actorWorkHistory.id,
@@ -842,6 +872,150 @@ export class OrphanCleanupService {
     await em.save(TrackingStatus, tombstone);
     await em.softDelete(SupplementProjectGroup, { id: spgId });
     return true;
+  }
+
+  // ===================================================================
+  // Internals — SEPG soft-delete (Wave wave-supplement-equipment-por03 —
+  // BE-B3). Mirror of `bulkSoftDeleteSupplementProjectGroups`: SEPG
+  // (SupplementEquipmentProjectGroup) is the equipment analog of SPG
+  // under a DevelopmentPlanSupplement. Same Phase B procedure — write a
+  // tombstone TrackingStatus row (isLatest=false, original status
+  // preserved) tagged on `supplementEquipmentProjectGroupId` BEFORE
+  // `deletedAt`. §14 lineage is VACUOUS in v1 (OQ-B3 — no
+  // prev_project_id columns, no SEPG descendant edge can exist), so NO
+  // descendant guard / topological sort is needed. §18.11 LAO
+  // responsibleAgency clearing is VACUOUS — SEPG is agency-origin only
+  // by §5.3 construction, so responsibleAgency is NEVER cleared (no
+  // clearing path exists in this Phase B soft-delete shape at all).
+  // ===================================================================
+
+  private async bulkSoftDeleteSupplementEquipmentProjectGroups(args: {
+    em: EntityManager;
+    bookId: string;
+    actorWorkHistoryId: string;
+    reasonText: string | null;
+    bookNameForFinalize?: string;
+    statusFilter: 'all' | 'finalize';
+  }): Promise<number> {
+    const ids = await this.materializeCandidateSepgIds({
+      em: args.em,
+      bookId: args.bookId,
+      statusFilter: args.statusFilter,
+    });
+    if (ids.length === 0) return 0;
+
+    let count = 0;
+    for (const sepgId of ids) {
+      const wrote = await this.tombstoneAndSoftDeleteSepg({
+        em: args.em,
+        sepgId,
+        actorWorkHistoryId: args.actorWorkHistoryId,
+        reasonText: args.reasonText,
+        bookNameForFinalize: args.bookNameForFinalize,
+      });
+      if (wrote) count += 1;
+    }
+    return count;
+  }
+
+  private async tombstoneAndSoftDeleteSepg(args: {
+    em: EntityManager;
+    sepgId: string;
+    actorWorkHistoryId: string;
+    reasonText: string | null;
+    bookNameForFinalize?: string;
+  }): Promise<boolean> {
+    const { em, sepgId, actorWorkHistoryId } = args;
+
+    const sepg = await em
+      .createQueryBuilder(SupplementEquipmentProjectGroup, 'sepg')
+      .where('sepg.id = :sepgId', { sepgId })
+      .andWhere('sepg.deletedAt IS NULL')
+      .setLock('pessimistic_write')
+      .getOne();
+    if (!sepg) return false;
+
+    const currentTracking = await em.findOne(TrackingStatus, {
+      where: {
+        supplementEquipmentProjectGroupId: { id: sepgId },
+        isLatest: true,
+      },
+      relations: ['statusId'],
+    });
+
+    let staffRemark = args.reasonText;
+    if (staffRemark === null) {
+      const priorStatusName = currentTracking?.statusId?.name ?? '';
+      const reasonKind = resolveFinalizeReasonKind(priorStatusName);
+      if (reasonKind === 'NOT_AFFECTED') return false;
+      const bookName = args.bookNameForFinalize ?? '';
+      staffRemark =
+        reasonKind === 'OWNER_TIMEOUT'
+          ? ORPHAN_CLEANUP_REASONS.FINALIZE_OWNER_TIMEOUT(bookName)
+          : ORPHAN_CLEANUP_REASONS.FINALIZE_STAFF_TIMEOUT(bookName);
+    }
+
+    // Demote prior latest (§12 — SEPG is leaving the workflow).
+    if (currentTracking) {
+      await em.update(
+        TrackingStatus,
+        { id: currentTracking.id },
+        { isLatest: false },
+      );
+    }
+
+    // Tombstone TrackingStatus — preserves the original status id, marks
+    // isLatest=false. Written BEFORE `deletedAt` so §12 traceability is
+    // intact.
+    const tombstoneStatusId =
+      currentTracking?.statusId?.id ??
+      (await this.resolveStatusId(em, STATUS_NAMES.READY));
+    const tombstone = em.create(TrackingStatus, {
+      statusId: { id: tombstoneStatusId } as Status,
+      isLatest: false,
+      comment: undefined,
+      staffRemark,
+      projectGroupId: null,
+      revisedProjectGroupId: null,
+      supplementProjectGroupId: null,
+      equipmentProjectGroupId: null,
+      revisedEquipmentProjectGroupId: null,
+      supplementEquipmentProjectGroupId: {
+        id: sepgId,
+      } as SupplementEquipmentProjectGroup,
+      createdBy: { id: actorWorkHistoryId } as WorkHistory,
+    });
+    await em.save(TrackingStatus, tombstone);
+
+    await em.softDelete(SupplementEquipmentProjectGroup, { id: sepgId });
+    return true;
+  }
+
+  private async materializeCandidateSepgIds(args: {
+    em: EntityManager;
+    bookId: string;
+    statusFilter: 'all' | 'finalize';
+  }): Promise<string[]> {
+    const qb = args.em
+      .createQueryBuilder(SupplementEquipmentProjectGroup, 'sepg')
+      .leftJoin('sepg.developmentPlanSupplement', 'dps')
+      .leftJoin(
+        TrackingStatus,
+        'ts',
+        'ts.supplement_equipment_project_group_id = sepg.id AND ts.is_latest = TRUE',
+      )
+      .leftJoin(Status, 'st', 'st.id = ts.status_id')
+      .where('sepg.deletedAt IS NULL')
+      .andWhere('dps.id = :bookId', { bookId: args.bookId });
+
+    if (args.statusFilter === 'finalize') {
+      qb.andWhere('(st.name IS NULL OR st.name NOT IN (:...nonTarget))', {
+        nonTarget: [STATUS_NAMES.APPROVED, STATUS_NAMES.REJECTED],
+      });
+    }
+    qb.select('sepg.id', 'id');
+    const rows = await qb.getRawMany<{ id: string }>();
+    return rows.map((r) => r.id);
   }
 
   // ===================================================================

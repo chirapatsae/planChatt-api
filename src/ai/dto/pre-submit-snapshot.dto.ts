@@ -125,13 +125,17 @@ export class CreatePreSubmitSnapshotDto {
     // Wave Equipment Revision Management — BE-01 (Phase 3). RELPG submit
     // fires the §17.4 `no-ai-baseline` snapshot under this target kind.
     'revised-equipment-project-group',
+    // Wave wave-supplement-equipment-por03 — BE-B1 (2026-06-08). SEPG
+    // publish fires the §17.4 `no-ai-baseline` snapshot under this kind.
+    'supplement-equipment-project-group',
   ])
   targetKind:
     | 'project-group'
     | 'revised-project-group'
     | 'supplement-project-group'
     | 'equipment-project-group'
-    | 'revised-equipment-project-group';
+    | 'revised-equipment-project-group'
+    | 'supplement-equipment-project-group';
 
   @IsUUID()
   targetId: string;

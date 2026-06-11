@@ -47,6 +47,16 @@ export class SupplementReadinessBreakdownDto {
   rejectedCount: number;
   /** Total non-deleted projects in scope (excludes Ready / Pull_Back / Rejected — see service for rationale). */
   totalCount: number;
+  /**
+   * Approved SEPG (ครุภัณฑ์ ผ.03) rows under the supplement — surfaced as a
+   * separate ผ.03 line in the readiness bar. Approved-only to mirror the
+   * §20.2 supplement ผ.03 append (the formal booked set,
+   * `renderApprovedSupplementScopedPor03Buffer`) and to stay on the same
+   * "อนุมัติแล้ว" basis as `approvedCount` (ผ.02). SUPPLEMENT is agency-only
+   * (§5.3 SEPG / §21.2.3) so there is NO อปท./อบจ. tri-split — just
+   * projects (ผ.02) + equipment (ผ.03).
+   */
+  approvedEquipmentCount: number;
 }
 
 export class SupplementReadinessDto {

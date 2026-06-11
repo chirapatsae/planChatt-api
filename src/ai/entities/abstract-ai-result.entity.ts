@@ -90,6 +90,12 @@ export abstract class AbstractAiResult {
       // Listing the value here keeps the TypeORM column metadata in
       // lockstep with the DB enum.
       'revised-equipment-project-group',
+      // Wave wave-supplement-equipment-por03 — BE-B1 (2026-06-08). DB-level
+      // enum widening via `BootstrapMigrationsService` + the dedicated
+      // migration `1782900000000-SupplementEquipmentAiWidenTargetKind.ts`.
+      // Listing the value here keeps the TypeORM column metadata in
+      // lockstep with the DB enum.
+      'supplement-equipment-project-group',
     ] as AiResultTargetKind[],
     enumName: 'ai_target_kind',
     nullable: true,

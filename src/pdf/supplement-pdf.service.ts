@@ -97,6 +97,10 @@ import {
 // were delivered by SUPP_PRINT_BE_02.
 import { PDFDocument } from 'pdf-lib';
 import { PdfService } from './pdf.service';
+// wave-supplement-scoped-draftbook-download — SEPG ผ.03 render reuse
+// (`renderApprovedSupplementScopedPor03Buffer`). Same render the
+// supplement assembly combined append consumes; no new variant.
+import { Por03PdfService } from './por03-pdf.service';
 import { createSupplementSummaryDocDefinition } from './report-supplement-summary.part';
 import {
   createSupplementGroupCoverPageDocDefinition,
@@ -178,6 +182,12 @@ export class SupplementPdfService {
     // from the grouped projects. Per-group renderers receive the
     // resolved `AlignmentRow | null` via the new `alignment` param.
     private readonly alignmentResolver: AlignmentResolverService,
+    // wave-supplement-scoped-draftbook-download — reuse the SAME SEPG
+    // ผ.03 render that the supplement assembly combined append consumes
+    // (`renderApprovedSupplementScopedPor03Buffer`). No new render
+    // variant is introduced. Same `PdfModule` provider — no cross-module
+    // circular dependency. §17.2 read-only.
+    private readonly por03PdfService: Por03PdfService,
   ) {}
 
   // ===================================================================
@@ -787,6 +797,133 @@ export class SupplementPdfService {
       projectIdsSnapshot: projects.map((p) => p.id),
       createdById: args.createdById,
     });
+  }
+
+  /**
+   * wave-supplement-scoped-draftbook-download — scoped, on-demand
+   * download for the LATEST supplement draft. SEPG analog of
+   * `PdfService.generateScopedDraftAgencyDownload` (and the revision
+   * analogs `generateScopedRevisionEditDraftDownload` /
+   * `generateScopedRevisionChangeDraftDownload`).
+   *
+   *   - scope='project'   → ผ.02 only, with `selectedColumns`
+   *   - scope='equipment' → ผ.03 (SEPG) only, Approved/STRATEGY-only
+   *   - scope='combined'  → ผ.02 (custom columns) + ผ.03 appended, merged
+   *
+   * Building-block reuse (no render duplication, no new variant):
+   *   - ผ.02 portion reuses the SAME pair the combined draft path
+   *     (`generateSupplementDraftFromStatus`) uses:
+   *     `listSupplementProjectsForPdf({ approvedOnly: false })` +
+   *     `generateSupplementPdfBuffer`. It is a TRANSIENT buffer — no
+   *     `PdfSupplementDraftDocument` row, no version, no audit.
+   *   - ผ.03 portion reuses `renderApprovedSupplementScopedPor03Buffer`
+   *     — the SAME SEPG render the supplement assembly combined append
+   *     consumes (`supplement-assembly.service.ts`). Approved-only,
+   *     STRATEGY_BASED-only; degrades to null on ISSUE_BASED / no rows.
+   *
+   * Read-only (§17.2): NO TrackingStatus / AI / audit writes, NO version
+   * row created — pure render. §10 scope: bound to the passed
+   * (developmentPlanId, developmentPlanSupplementId) ONLY. Column
+   * selection applies ONLY to the ผ.02 portion; equipment has no column
+   * picker.
+   */
+  async generateScopedSupplementDraftDownload(
+    developmentPlanId: string,
+    developmentPlanSupplementId: string,
+    scope: 'combined' | 'project' | 'equipment',
+    selectedColumns?: string[],
+  ): Promise<Buffer> {
+    // §10 scope binding — resolve the supplement and re-assert it belongs
+    // to the passed plan; never trust a global latest book.
+    const { supplement, plan } = await this.loadSupplementOrFail(
+      developmentPlanSupplementId,
+    );
+    if (plan.id !== developmentPlanId) {
+      throw new BadRequestException(
+        'รอบเพิ่มเติมไม่ตรงกับแผนพัฒนาที่ระบุ',
+      );
+    }
+
+    const DEFAULT_COLUMNS = [
+      'index',
+      'title',
+      'objective',
+      'target',
+      'budget',
+      'expectedResult',
+      'mainAgency',
+    ];
+
+    let projectBuffer: Buffer | null = null;
+    if (scope === 'combined' || scope === 'project') {
+      // Same ผ.02 building block as `generateSupplementDraftFromStatus`.
+      const projects = await this.listSupplementProjectsForPdf(
+        developmentPlanSupplementId,
+        { approvedOnly: false },
+      );
+      if (projects.length > 0) {
+        projectBuffer = await this.generateSupplementPdfBuffer({
+          supplement,
+          plan,
+          projects,
+          selectedColumns:
+            selectedColumns && selectedColumns.length > 0
+              ? selectedColumns
+              : DEFAULT_COLUMNS,
+          variant: 'draft',
+          generatedAt: new Date(),
+          // SPG is agency-only (§5.1) — responsibleAgency is always known,
+          // so force 'inAuthority' to render the actual agency name,
+          // matching the combined draft path.
+          reportType: 'inAuthority',
+        });
+      }
+    }
+
+    let equipmentBuffer: Buffer | null = null;
+    if (scope === 'combined' || scope === 'equipment') {
+      // Same SEPG ผ.03 render the supplement assembly combined append
+      // uses; take `.buffer`, keep the null-degrade behavior. DRAFT scope:
+      // pass status IN {Pending_Approval, Approved} so ผ.03 appears in the
+      // เข้าเล่มร่าง download BEFORE final approval — matching the agency
+      // draft ผ.03 (`renderPlanScopedPor03Buffer`). The assembly append
+      // keeps its Approved-only default (no arg).
+      const por03 =
+        await this.por03PdfService.renderApprovedSupplementScopedPor03Buffer(
+          developmentPlanSupplementId,
+          0,
+          ['Pending_Approval', 'Approved'],
+        );
+      equipmentBuffer = por03 ? por03.buffer : null;
+    }
+
+    if (scope === 'project') {
+      if (!projectBuffer) {
+        throw new BadRequestException(
+          'ไม่มีโครงการ (ผ.02) ที่พร้อมดาวน์โหลดในเล่มนี้',
+        );
+      }
+      return projectBuffer;
+    }
+    if (scope === 'equipment') {
+      if (!equipmentBuffer) {
+        throw new BadRequestException(
+          'ไม่มีครุภัณฑ์ (ผ.03) ที่พร้อมดาวน์โหลดในเล่มนี้ (เฉพาะแผนยุทธศาสตร์ที่มีครุภัณฑ์รออนุมัติขึ้นไป)',
+        );
+      }
+      return equipmentBuffer;
+    }
+
+    // combined
+    const parts = [projectBuffer, equipmentBuffer].filter(
+      (b): b is Buffer => !!b,
+    );
+    if (parts.length === 0) {
+      throw new BadRequestException('ไม่มีข้อมูลสำหรับดาวน์โหลดในเล่มนี้');
+    }
+    return parts.length === 1
+      ? parts[0]
+      : this.pdfService.mergePdfBuffers(parts);
   }
 
   private async saveSupplementDraftPdfAndMeta(args: {

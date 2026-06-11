@@ -53,7 +53,12 @@ export type AiResultTargetKind =
   // (RevisedEquipmentProjectGroup) fires the §17.4 `no-ai-baseline`
   // snapshot on submit (Ready → Pending) with the same
   // audit-by-UUID-no-FK semantics (§17.3).
-  | 'revised-equipment-project-group';
+  | 'revised-equipment-project-group'
+  // Wave wave-supplement-equipment-por03 — BE-B1 (2026-06-08). SEPG
+  // (SupplementEquipmentProjectGroup — ครุภัณฑ์ ผ.03 under เล่มเพิ่มเติม)
+  // fires the §17.4 `no-ai-baseline` snapshot on the publish path
+  // (Ready → Pending) with the same audit-by-UUID-no-FK semantics (§17.3).
+  | 'supplement-equipment-project-group';
 
 /**
  * Canonical AI score envelope consumed by UI surfaces.

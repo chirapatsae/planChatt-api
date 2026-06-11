@@ -13,6 +13,7 @@ import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
 import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
+import { SupplementEquipmentProjectGroup } from 'src/supplement-equipment-project-group/entities/supplement-equipment-project-group.entity';
 
 @Entity('budget')
 export class Budget {
@@ -82,6 +83,26 @@ export class Budget {
   )
   @JoinColumn({ name: 'revised_equipment_project_group_id' })
   revisedEquipmentProjectGroupId?: RevisedEquipmentProjectGroup;
+
+  /**
+   * Wave wave-supplement-equipment-por03 — DB-B1 (2026-06-08).
+   * Sixth nullable FK extending the polymorphic budget pattern to SEPG
+   * (SupplementEquipmentProjectGroup) rows. Exactly one of the six
+   * target FKs is expected to be set per row (not DB-enforced — same
+   * convention as the existing five FKs).
+   */
+  @IsOptional()
+  @ManyToOne(
+    () => SupplementEquipmentProjectGroup,
+    (supplementEquipmentProjectGroup) => supplementEquipmentProjectGroup.budgets,
+    {
+      onDelete: 'CASCADE',
+      onUpdate: 'CASCADE',
+      nullable: true,
+    },
+  )
+  @JoinColumn({ name: 'supplement_equipment_project_group_id' })
+  supplementEquipmentProjectGroupId?: SupplementEquipmentProjectGroup;
 
   @Column()
   year: number;

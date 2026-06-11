@@ -334,7 +334,8 @@ describe('StaffHomeService (PHASE2-BE-01 + BE-01 enrichment)', () => {
       workHistoryResponsibleGovernmentAgency: [],
     });
 
-    // index 3 = supplement, index 4 = equipment.
+    // Call order: 0=mainPlan, 1=RPG, 2=RELPG, 3=SPG(supplement),
+    // 4=SEPG(supplement-equipment), 5=EPG(equipment).
     rawRowsByCall[3] = [
       row({
         projectid: 's1',
@@ -346,6 +347,18 @@ describe('StaffHomeService (PHASE2-BE-01 + BE-01 enrichment)', () => {
       }),
     ];
     rawRowsByCall[4] = [
+      // SEPG — folds into the supplement lane with its own bookKind.
+      row({
+        projectid: 'sq1',
+        title: 'ครุภัณฑ์ เพิ่มเติม 1',
+        statusname: 'Pending',
+        createat: daysAgo(2),
+        isbooked: true,
+        planname: 'แผน Y',
+        supplementnumber: 1,
+      }),
+    ];
+    rawRowsByCall[5] = [
       row({
         projectid: 'q1',
         title: 'ครุภัณฑ์ 1',
@@ -366,6 +379,15 @@ describe('StaffHomeService (PHASE2-BE-01 + BE-01 enrichment)', () => {
     expect(supp.actionRoute).toBe('/supplement/admin/print-presentation');
     expect(supp.detailRoute).toBeNull();
     expect(supp.historyRoute).toBeNull();
+
+    // SEPG — folded into the supplement lane (Pending stage), own bookKind.
+    const sepg = res.lanes
+      .find((l) => l.lane === 'supplement')!
+      .stages.find((s) => s.stage === 'Pending')!.topItems[0];
+    expect(sepg.bookKind).toBe('supplement-equipment');
+    expect(sepg.bookLabel).toBe('แผน Y · ฉบับเพิ่มเติม ครั้งที่ 1');
+    expect(sepg.actionRoute).toBe('/supplement/admin/pending');
+    expect(sepg.pageNumber).toBeNull();
 
     const equip = res.lanes
       .find((l) => l.lane === 'equipment')!

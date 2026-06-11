@@ -56,6 +56,12 @@ import { AgencyOnlyGuard } from 'src/common/guards/agency-only.guard';
 // Entity already registered in its owning module + app.module.ts; this
 // is a `forFeature` wiring only (NO new @Entity).
 import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
+// Wave wave-supplement-equipment-por03 — BE-B4 (2026-06-08).
+// Por03PdfService now also reads SEPG rows for the supplement-scoped
+// ผ.03 assembly append. Register the entity for repo injection. Entity
+// already registered in its owning module + app.module.ts; this is a
+// `forFeature` wiring only (NO new @Entity).
+import { SupplementEquipmentProjectGroup } from 'src/supplement-equipment-project-group/entities/supplement-equipment-project-group.entity';
 
 @Module({
   imports: [
@@ -88,6 +94,10 @@ import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-grou
       // (2026-06-03). RELPG repo injected into `Por03PdfService` for the
       // OLD-vs-NEW revision print path. Entity already in app.module.ts.
       RevisedEquipmentProjectGroup,
+      // Wave wave-supplement-equipment-por03 — BE-B4 (2026-06-08). SEPG
+      // repo injected into `Por03PdfService` for the supplement-scoped
+      // ผ.03 assembly append. Entity already in app.module.ts.
+      SupplementEquipmentProjectGroup,
       User,
       // SUPP_PRINT post-SEC_01 hotfix — `WorkStatusApprovedGuard`
       // injects `Repository<WorkHistory>` per `work-status-approved.guard.ts`.

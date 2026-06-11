@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 
 import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
+import { SupplementEquipmentProjectGroup } from 'src/supplement-equipment-project-group/entities/supplement-equipment-project-group.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import {
   EXECUTIVE_EXCLUDED_STATUS_NAMES,
@@ -58,6 +59,8 @@ export class UnifiedEquipmentService {
     private readonly epgRepo: Repository<EquipmentProjectGroup>,
     @InjectRepository(RevisedEquipmentProjectGroup)
     private readonly relpgRepo: Repository<RevisedEquipmentProjectGroup>,
+    @InjectRepository(SupplementEquipmentProjectGroup)
+    private readonly sepgRepo: Repository<SupplementEquipmentProjectGroup>,
     @InjectRepository(WorkHistory)
     private readonly workHistoryRepo: Repository<WorkHistory>,
   ) {}
@@ -226,16 +229,26 @@ export class UnifiedEquipmentService {
     // emits the no-match `1 = 0` guard.
     const epgAmphoeIds = areaScope ? areaScope.amphoeIds : null;
     const relpgAgencyIds = areaScope ? areaScope.agencyIds : null;
-    const [epgRows, relpgRows] = await Promise.all([
+    // SEPG (ครุภัณฑ์ เล่มเพิ่มเติม) is agency-scoped for staff, matching
+    // `StaffHomeService.aggregateSupplementLane` (both SPG and SEPG fan
+    // out by `responsible_agency_id`). §14 lineage is vacuous in v1
+    // per §5.3 — no descendants, no HEAD anti-join needed.
+    const sepgAgencyIds = areaScope ? areaScope.agencyIds : null;
+    const [epgRows, relpgRows, sepgRows] = await Promise.all([
       this.loadEpgHeadRows(developmentPlanId, ownerWorkHistoryId, epgAmphoeIds),
       this.loadRelpgHeadRows(
         developmentPlanId,
         ownerWorkHistoryId,
         relpgAgencyIds,
       ),
+      this.loadSepgHeadRows(
+        developmentPlanId,
+        ownerWorkHistoryId,
+        sepgAgencyIds,
+      ),
     ]);
 
-    const merged = [...epgRows, ...relpgRows];
+    const merged = [...epgRows, ...relpgRows, ...sepgRows];
     // §17.3 PII — the projected wire shape (`UnifiedEquipmentCreator`)
     // surfaces ONLY firstName/lastName. No email / phone / citizenId is
     // ever projected, so there is no contact PII on the response and no
@@ -400,6 +413,70 @@ export class UnifiedEquipmentService {
   }
 
   // ──────────────────────────────────────────────────────────────────
+  //  SEPG head rows — ครุภัณฑ์ ผ.03 under DevelopmentPlanSupplement.
+  //  §14 lineage is vacuous in v1 per §5.3 (no revised-supplement-
+  //  equipment sub-type) so no HEAD anti-join is needed. §10 plan-scope
+  //  resolves via the parent supplement's developmentPlan.
+  // ──────────────────────────────────────────────────────────────────
+
+  private async loadSepgHeadRows(
+    developmentPlanId: string | undefined,
+    ownerWorkHistoryId: string | null,
+    /**
+     * §3 / §4.1 area scope. SEPG is agency-scoped for staff (mirrors
+     * `StaffHomeService.aggregateSupplementLane`'s
+     * `responsible_agency_id` fan-out). `null` → system-wide / admin
+     * bypass. EMPTY array → fail-closed `1 = 0` no-match.
+     */
+    agencyIds: string[] | null = null,
+  ): Promise<UnifiedEquipmentRow[]> {
+    const qb = this.sepgRepo
+      .createQueryBuilder('sepg')
+      .leftJoinAndSelect('sepg.createdBy', 'createdBy')
+      .leftJoinAndSelect('createdBy.user', 'createdByUser')
+      .leftJoinAndSelect(
+        'sepg.developmentPlanSupplement',
+        'developmentPlanSupplement',
+      )
+      .leftJoinAndSelect(
+        'developmentPlanSupplement.developmentPlan',
+        'developmentPlan',
+      )
+      .leftJoinAndSelect('sepg.strategy', 'strategy')
+      .leftJoinAndSelect('sepg.tactic', 'tactic')
+      .leftJoinAndSelect('sepg.plan', 'plan')
+      .leftJoinAndSelect('sepg.developmentIssue', 'developmentIssue')
+      .leftJoinAndSelect('sepg.equipmentCategory', 'equipmentCategory')
+      .leftJoinAndSelect('sepg.responsibleAgency', 'responsibleAgency')
+      .leftJoinAndSelect('sepg.budgets', 'budgets')
+      .leftJoinAndSelect('sepg.trackingStatus', 'trackingStatus')
+      .leftJoinAndSelect('trackingStatus.statusId', 'status')
+      .where('sepg.deletedAt IS NULL');
+
+    if (developmentPlanId) {
+      qb.andWhere('developmentPlan.id = :planId', {
+        planId: developmentPlanId,
+      });
+    }
+    if (ownerWorkHistoryId) {
+      qb.andWhere('createdBy.id = :ownerId', { ownerId: ownerWorkHistoryId });
+    }
+    if (agencyIds !== null) {
+      if (agencyIds.length === 0) {
+        // Fail-closed: staff with no responsible agencies sees no SEPGs.
+        qb.andWhere('1 = 0');
+      } else {
+        qb.andWhere('sepg.responsible_agency_id IN (:...agencyIds)', {
+          agencyIds,
+        });
+      }
+    }
+
+    const rows = await qb.getMany();
+    return rows.map((sepg) => this.projectSepg(sepg));
+  }
+
+  // ──────────────────────────────────────────────────────────────────
   //  Projection helpers
   // ──────────────────────────────────────────────────────────────────
 
@@ -439,8 +516,14 @@ export class UnifiedEquipmentService {
       // Under REPLACE semantics a HEAD EPG (the only ones returned here)
       // has no live RELPG descendant by construction of the anti-join.
       hasDescendant: false,
-      isBooked: epg.isBooked ?? false,
-      bookedAt: this.toIso(epg.bookedAt),
+      // §20.3 Invariant 1 — the per-row `is_booked` is the canonical
+      // source. Fall back to the parent book's flag so rows whose
+      // finalize path predates the §20.3 stamping rollout (or whose
+      // assembly merge doesn't yet stamp them — see §20.2 Phase 3
+      // deferral for the EDIT/CHANGE-side RELPG case) still surface
+      // the correct "เข้าเล่มแล้ว" affordance to the staff browse view.
+      isBooked: Boolean(epg.isBooked) || Boolean(plan?.isBooked),
+      bookedAt: this.toIso(epg.bookedAt ?? plan?.bookedAt ?? null),
       pageNumber: epg.pageNumber ?? null,
       budgets: this.projectBudgets(epg.budgets),
       createdBy: epg.createdBy
@@ -511,8 +594,15 @@ export class UnifiedEquipmentService {
       // anti-join — so head rows surface as `false`. (A non-head RELPG is
       // dropped, never projected.)
       hasDescendant: false,
-      isBooked: relpg.isBooked ?? false,
-      bookedAt: this.toIso(relpg.bookedAt),
+      // §20.3 Invariant 1 — fall back to the parent revision's flag.
+      // This covers the §20.2 Phase 3 deferral: the EDIT/CHANGE
+      // assembly `merge()` does NOT yet stamp `is_booked` /
+      // `booked_at` on RELPG rows on finalize, so the row-level
+      // column stays false even after the revision book is published.
+      // Reading through the parent DPR surfaces the correct booked
+      // affordance until Phase 3 ships per-row stamping.
+      isBooked: Boolean(relpg.isBooked) || Boolean(dpr?.isBooked),
+      bookedAt: this.toIso(relpg.bookedAt ?? dpr?.bookedAt ?? null),
       pageNumber: relpg.pageNumber ?? null,
       budgets: this.projectBudgets(relpg.budgets),
       createdBy: relpg.createdBy
@@ -530,6 +620,80 @@ export class UnifiedEquipmentService {
           }
         : null,
       createdAt: this.toIso(relpg.createdAt) ?? new Date(0).toISOString(),
+    };
+  }
+
+  private projectSepg(
+    sepg: SupplementEquipmentProjectGroup,
+  ): UnifiedEquipmentRow {
+    const dps = sepg.developmentPlanSupplement;
+    const plan = dps?.developmentPlan;
+    return {
+      kind: 'supplement-equipment',
+      id: sepg.id,
+      equipmentName: sepg.equipmentName ?? '',
+      targetOutput: sepg.targetOutput ?? null,
+      expectedResults: sepg.expectedResults ?? null,
+      indicator: sepg.indicator ?? null,
+      equipmentCategory: sepg.equipmentCategory
+        ? {
+            id: sepg.equipmentCategory.id,
+            code: sepg.equipmentCategory.code,
+            name: sepg.equipmentCategory.name,
+          }
+        : null,
+      strategy: this.classificationLite(sepg.strategy),
+      tactic: this.classificationLite(sepg.tactic),
+      plan: this.classificationLite(sepg.plan),
+      developmentIssue: this.classificationLite(sepg.developmentIssue),
+      developmentPlan: {
+        id: plan?.id ?? '',
+        name: plan?.name ?? '',
+        startYear: plan?.startYear ?? null,
+        endYear: plan?.endYear ?? null,
+        isLatest: plan?.isLatest ?? false,
+        isBooked: plan?.isBooked ?? false,
+        reportFormat:
+          (plan?.reportFormat as 'STRATEGY_BASED' | 'ISSUE_BASED') ??
+          'STRATEGY_BASED',
+      },
+      developmentPlanRevision: undefined,
+      developmentPlanSupplement: dps
+        ? {
+            id: dps.id,
+            supplementNumber: dps.supplementNumber ?? null,
+            description: dps.description ?? null,
+            isOpen: dps.isOpen ?? false,
+            isBooked: dps.isBooked ?? false,
+          }
+        : undefined,
+      status: this.latestStatus(sepg.trackingStatus),
+      // §14 lineage is vacuous in SEPG v1 — no descendants by construction.
+      hasDescendant: false,
+      // §20.3 Invariant 1 — fall back to the parent supplement's
+      // flag (mirrors the EPG/RELPG fallback pattern above). The
+      // SUPPLEMENT assembly `merge()` stamps SEPG.is_booked per the
+      // SEPG wave, but reading through the parent dps is a safety
+      // net for any row whose finalize predates that stamping.
+      isBooked: Boolean(sepg.isBooked) || Boolean(dps?.isBooked),
+      bookedAt: this.toIso(sepg.bookedAt ?? dps?.bookedAt ?? null),
+      pageNumber: sepg.pageNumber ?? null,
+      budgets: this.projectBudgets(sepg.budgets),
+      createdBy: sepg.createdBy
+        ? {
+            workHistoryId: sepg.createdBy.id,
+            firstName: this.creatorFirstName(sepg.createdBy),
+            lastName: this.creatorLastName(sepg.createdBy),
+          }
+        : null,
+      createdByWorkHistoryId: sepg.createdBy?.id ?? null,
+      responsibleAgency: sepg.responsibleAgency
+        ? {
+            id: sepg.responsibleAgency.id,
+            name: sepg.responsibleAgency.name ?? null,
+          }
+        : null,
+      createdAt: this.toIso(sepg.createdAt) ?? new Date(0).toISOString(),
     };
   }
 

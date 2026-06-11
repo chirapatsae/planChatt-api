@@ -14,6 +14,7 @@ import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.
 import { Favorite } from 'src/favorite/entities/favorite.entity';
 import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
+import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entities/development-plan-supplement.entity';
 import { AttachmentProjectGroup } from 'src/attachment-project-groups/entities/attachment-project-group.entity';
 import { AttachmentRevisedProjectGroup } from 'src/attachment-revised-project-groups/entities/attachment-revised-project-group.entity';
 import { DevelopmentIssue } from 'src/development-issue/entities/development-issue.entity';
@@ -50,6 +51,9 @@ export interface IUnifiedProjectDisplay {
   originalProjectId?: string;
   projectGroup?: { id: string | undefined } | null;
   developmentPlanRevision?: DevelopmentPlanRevision;
+  // Supplement-rooted version (§14.1) — carries the parent supplement so the
+  // version-detail FE can render "ฉบับเพิ่มเติม ครั้งที่ N".
+  developmentPlanSupplement?: DevelopmentPlanSupplement;
   // W57-DB-01 — entity widened to `string | null`. DTO mirrors that so
   // callers passing `revisedProject.prevProjectId` (now `string | null
   // | undefined`) compile.
@@ -245,6 +249,7 @@ export class UnifiedProjectMapper {
       plan: spg.plan,
       developmentIssue: spg.developmentIssue,
       developmentPlan: spg.developmentPlanSupplement?.developmentPlan,
+      developmentPlanSupplement: spg.developmentPlanSupplement,
       createdBy: spg.createdBy,
       originAgencyId: spg.originAgencyId,
       responsibleAgency: spg.responsibleAgency,

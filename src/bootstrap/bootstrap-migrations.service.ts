@@ -281,6 +281,22 @@ export class BootstrapMigrationsService implements OnApplicationBootstrap {
       name: 'ai_target_kind ADD VALUE revised-equipment-project-group (Phase 3 BE-01)',
       sql: `ALTER TYPE "ai_target_kind" ADD VALUE IF NOT EXISTS 'revised-equipment-project-group';`,
     },
+    // Wave wave-supplement-equipment-por03 — BE-B1 (2026-06-08).
+    //
+    // Widen the shared `ai_target_kind` enum to accept the new
+    // `'supplement-equipment-project-group'` value used by the §17.4
+    // baseline write from `SupplementEquipmentProjectGroupService.create`
+    // (publish: Ready → Pending) and the owner / staff read paths in
+    // `PreSubmitSnapshotService`.
+    //
+    // Mirrors migration `1782900000000-SupplementEquipmentAiWidenTargetKind.ts`
+    // for dev boxes that run `synchronize: true` without the migration
+    // runner. `IF NOT EXISTS` makes the statement a no-op on subsequent
+    // boots. §17.3 audit separation preserved — no FK introduced.
+    {
+      name: 'ai_target_kind ADD VALUE supplement-equipment-project-group (BE-B1)',
+      sql: `ALTER TYPE "ai_target_kind" ADD VALUE IF NOT EXISTS 'supplement-equipment-project-group';`,
+    },
   ];
 
   async onApplicationBootstrap(): Promise<void> {

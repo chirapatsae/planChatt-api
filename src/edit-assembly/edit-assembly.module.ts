@@ -54,6 +54,7 @@ import { EditProjectLineage } from './entities/edit-project-lineage.entity';
 // Dependency entities — repositories injected by EditAssemblyService.
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
+import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
 import { User } from 'src/users/entities/user.entity';
 
@@ -88,6 +89,7 @@ import { BookAssemblyModule } from 'src/book-assembly/book-assembly.module';
       // Dependency entities consumed via @InjectRepository.
       WorkHistory,
       RevisedProjectGroup,
+      RevisedEquipmentProjectGroup,
       DevelopmentPlanRevision,
       User,
     ]),

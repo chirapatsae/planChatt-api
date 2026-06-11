@@ -45,6 +45,16 @@ export class ChangeReadinessBreakdownDto {
   rejectedCount: number;
   /** Total non-deleted RPGs in scope (excludes Ready / Pull_Back / Rejected). */
   totalCount: number;
+  /**
+   * Approved RELPG (ครุภัณฑ์ ผ.03) rows under the revision — surfaced as a
+   * separate ผ.03 line in the readiness bar. Approved-only to mirror the
+   * §20.2 EDIT/CHANGE ผ.03 append (the formal booked set,
+   * `renderApprovedRevisionScopedPor03Buffer`) and to stay on the same
+   * "อนุมัติแล้ว" basis as `approvedCount` (ผ.02). CHANGE is agency-only,
+   * so the FE agency-only checklist uses the top-level `approvedCount`;
+   * this is simply projects (ผ.02) + equipment (ผ.03).
+   */
+  approvedEquipmentCount: number;
 }
 
 export class ChangeReadinessDto {

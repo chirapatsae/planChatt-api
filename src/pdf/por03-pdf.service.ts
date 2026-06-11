@@ -18,6 +18,7 @@ import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.
 import { ReportFormat } from 'src/development-plan/types/report-format.enum';
 import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
+import { SupplementEquipmentProjectGroup } from 'src/supplement-equipment-project-group/entities/supplement-equipment-project-group.entity';
 import { PrevEquipmentProjectType } from 'src/revised-equipment-project-group/dto/prev-equipment-project-type.enum';
 import { WorkHistoryLookupService } from 'src/work-history/work-history-lookup.service';
 import { isAgencyWorkHistory } from 'src/project-groups/util/agency-data.util';
@@ -111,6 +112,15 @@ export class Por03PdfService {
    */
   private static readonly COOLDOWN_ENDPOINT_KEY_REVISION =
     'print-por03-revision';
+  /**
+   * Wave Supplement Equipment ผ.03 Standalone Print — BE-01 (2026-06-09).
+   * Distinct cooldown surface from `print-por03` / `print-por03-revision`
+   * per §17.8 (key registered in CLAUDE.md §17.8). The composite key embeds
+   * the endpoint key (`${whId}|${endpointKey}`), so the SEPG print window is
+   * INDEPENDENT of the EPG owner print and the revision print windows.
+   */
+  private static readonly COOLDOWN_ENDPOINT_KEY_SUPPLEMENT =
+    'print-por03-supplement';
   private readonly cooldownStore = new Map<string, number>();
   private readonly logger = new Logger(Por03PdfService.name);
 
@@ -119,6 +129,10 @@ export class Por03PdfService {
     private readonly equipmentRepo: Repository<EquipmentProjectGroup>,
     @InjectRepository(RevisedEquipmentProjectGroup)
     private readonly revisedEquipmentRepo: Repository<RevisedEquipmentProjectGroup>,
+    // Wave wave-supplement-equipment-por03 — BE-B4 (2026-06-08). SEPG
+    // repo for the supplement-scoped Approved ผ.03 assembly append.
+    @InjectRepository(SupplementEquipmentProjectGroup)
+    private readonly supplementEquipmentRepo: Repository<SupplementEquipmentProjectGroup>,
     @InjectRepository(DevelopmentPlan)
     private readonly developmentPlanRepo: Repository<DevelopmentPlan>,
     private readonly workHistoryLookup: WorkHistoryLookupService,
@@ -278,6 +292,181 @@ export class Por03PdfService {
     // contract automatically (5xx propagates from this method as a
     // thrown exception, never reaching this line).
     this.armCooldown(callerWhId);
+
+    return pdfBuffer;
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Supplement equipment ผ.03 standalone print — BE-01 (2026-06-09)
+  //
+  // Wave Supplement Equipment ผ.03 Standalone Print. SEPG sibling of the
+  // EPG `generate()` owner print. Reads from `SupplementEquipmentProjectGroup`
+  // and emits an `application/pdf` Buffer by REUSING the shared
+  // `buildPor03Buffer(rows, parentPlan)` core — NO new render variant. The
+  // parent plan (reportFormat + year window) is resolved via
+  // `sepg.developmentPlanSupplement.developmentPlan` (§16.3 — supplement does
+  // not own reportFormat). Read-only (§17.2): NO TrackingStatus / AI / audit /
+  // any DB write.
+  // ──────────────────────────────────────────────────────────────────
+
+  /**
+   * Generate the ผ.03 PDF for the given SEPG (supplement equipment) id
+   * selection.
+   *
+   * @param userId — authenticated caller's userId (from JWT).
+   * @param supplementEquipmentIds — UUIDs of the selected SEPG items.
+   * @returns Buffer containing the application/pdf payload.
+   *
+   * Error codes (see endpoint contract):
+   *   - 401 UNAUTHENTICATED — missing caller userId (controller-side)
+   *   - 403 EQUIPMENT_AGENCY_ONLY — LAO caller (defense-in-depth re-assert)
+   *   - 403 EQUIPMENT_NOT_OWNED — any row whose createdBy ≠ caller WH id
+   *   - 400 EQUIPMENT_PRINT_REQUIRES_STRATEGY_SHAPE — non-STRATEGY shape
+   *   - 400 EQUIPMENT_PRINT_PLAN_WINDOW_MISSING — parent plan missing year
+   *   - 404 EQUIPMENT_NOT_FOUND — any id missing / soft-deleted
+   *   - 409 EQUIPMENT_MIXED_SUPPLEMENTS — selection spans >1 supplement
+   *   - 429 PRINT_COOLDOWN_ACTIVE { retryAfterSeconds }
+   */
+  async generateSupplementPor03(
+    userId: string,
+    supplementEquipmentIds: string[],
+  ): Promise<Buffer> {
+    // §1 / §2 — resolve caller WorkHistory + workStatus first (read-only
+    // path; no transaction needed).
+    const em = this.supplementEquipmentRepo.manager;
+    const callerWh = await this.workHistoryLookup.getCurrent(em, userId);
+    this.workHistoryLookup.assertWorkStatusApproved(callerWh);
+
+    // §5.3 / §17.11 defense-in-depth — re-assert agency-only. The controller
+    // guard ran already; the service re-checks independently.
+    // `isAgencyWorkHistory` ignores role, so super-admin LAO STILL gets 403.
+    if (!isAgencyWorkHistory(callerWh)) {
+      throw new ForbiddenException({
+        code: 'EQUIPMENT_AGENCY_ONLY',
+        message: 'ฟีเจอร์ครุภัณฑ์ (ผ.03) ใช้ได้เฉพาะผู้ใช้สังกัด อบจ.',
+      });
+    }
+
+    // §17.8 cooldown probe — DISTINCT surface key `print-por03-supplement`,
+    // independent window from the EPG owner / revision ผ.03 prints. Probe
+    // after authn/authz so anonymous probes can't enumerate cooldown state.
+    this.assertCooldownClear(
+      callerWh.id,
+      Por03PdfService.COOLDOWN_ENDPOINT_KEY_SUPPLEMENT,
+    );
+
+    // Load SEPG rows by id. Relation set mirrors
+    // `renderApprovedSupplementScopedPor03Buffer` (parent-plan-via-supplement)
+    // + the EPG `generate()` set. `deletedAt IS NULL` excludes soft-deleted.
+    const rows = await this.supplementEquipmentRepo.find({
+      where: {
+        id: In(supplementEquipmentIds),
+        deletedAt: IsNull(),
+      },
+      relations: {
+        developmentPlanSupplement: { developmentPlan: true },
+        equipmentCategory: true,
+        tactic: true,
+        plan: true,
+        strategy: true,
+        developmentIssue: true,
+        responsibleAgency: true,
+        budgets: true,
+        createdBy: true,
+      },
+    });
+
+    // 404 — any requested id missing (soft-deleted, mistyped, etc.).
+    if (rows.length !== supplementEquipmentIds.length) {
+      throw new NotFoundException({ code: 'EQUIPMENT_NOT_FOUND' });
+    }
+
+    // §4 ownership — every row's createdBy MUST be the caller's current
+    // WorkHistory. Compare WorkHistory.id, NOT user.id.
+    const callerWhId = callerWh.id;
+    const foreignRow = rows.find((r) => r.createdBy?.id !== callerWhId);
+    if (foreignRow) {
+      throw new ForbiddenException({ code: 'EQUIPMENT_NOT_OWNED' });
+    }
+
+    // STRATEGY_BASED-only narrowing (§16.5) — per-row authoritative check.
+    // Any row carrying a `developmentIssue` OR lacking (strategy, tactic,
+    // plan) violates the print contract. LOUD failure, NOT silent-skip
+    // (silent-skip is only for the assembly-append path).
+    const shapeOffender = rows.find(
+      (r) => !r.strategy || !r.tactic || !r.plan || r.developmentIssue,
+    );
+    if (shapeOffender) {
+      throw new BadRequestException({
+        code: 'EQUIPMENT_PRINT_REQUIRES_STRATEGY_SHAPE',
+        message:
+          'ผ.03 v1 รองรับเฉพาะครุภัณฑ์รูปแบบยุทธศาสตร์ (STRATEGY_BASED) เท่านั้น',
+      });
+    }
+
+    // 409 single-supplement constraint — the cover renders ONE เล่มเพิ่มเติม
+    // name. A mixed-supplement selection is rejected loudly (analog of the
+    // EPG `EQUIPMENT_MIXED_PLANS`).
+    const supplementIds = new Set(
+      rows.map((r) => r.developmentPlanSupplement?.id).filter(Boolean),
+    );
+    if (supplementIds.size !== 1) {
+      throw new ConflictException({
+        code: 'EQUIPMENT_MIXED_SUPPLEMENTS',
+        message:
+          'ครุภัณฑ์ที่เลือกอยู่คนละเล่มเพิ่มเติม ไม่สามารถพิมพ์ในรายงานเดียวกันได้',
+      });
+    }
+
+    // §16.3 — parent plan resolved via the supplement JOIN (never the
+    // supplement itself, which does not own reportFormat / the year window).
+    const parentPlan = rows[0].developmentPlanSupplement?.developmentPlan;
+    if (!parentPlan?.startYear || !parentPlan?.endYear) {
+      // Owner path THROWS (mirrors EPG `generate()`); only the append path
+      // degrades to null.
+      throw new BadRequestException({
+        code: 'EQUIPMENT_PRINT_PLAN_WINDOW_MISSING',
+        message: 'แผนพัฒนาต้นทางไม่มี startYear/endYear กรุณาตรวจสอบ',
+      });
+    }
+
+    // Centered page footer (2026-06-10) — main plan name + supplement round
+    // label, e.g. "แผนพัฒนาท้องถิ่น พ.ศ. 2566-2570 · ฉบับเพิ่มเติม ครั้งที่ 1".
+    // The plan name already encodes the "พ.ศ. {start-end}" window; fall back
+    // to a synthesized line when blank (mirrors `buildPor03Buffer`).
+    const planLine = parentPlan.name?.trim()
+      ? parentPlan.name
+      : `แผนพัฒนาท้องถิ่น พ.ศ. ${parentPlan.startYear}-${parentPlan.endYear}`;
+    const supplementNumber =
+      rows[0].developmentPlanSupplement?.supplementNumber;
+    const footerCenterText = supplementNumber
+      ? `${planLine} · ฉบับเพิ่มเติม ครั้งที่ ${supplementNumber}`
+      : planLine;
+
+    // Shared render tail — `buildPor03Buffer` is shape-agnostic (SEPG carries
+    // the same strategy/tactic/plan/equipmentCategory/budgets relations as
+    // EPG). Same cast precedent as `renderApprovedSupplementScopedPor03Buffer`.
+    const pdfBuffer = await this.buildPor03Buffer(
+      rows as unknown as EquipmentProjectGroup[],
+      parentPlan,
+      footerCenterText,
+    );
+
+    if (!pdfBuffer) {
+      // Defensive — every other branch above has thrown by now (zero ids
+      // would have produced a 404).
+      throw new BadRequestException({
+        code: 'EQUIPMENT_PRINT_EMPTY_SELECTION',
+        message: 'ไม่มีครุภัณฑ์สำหรับพิมพ์',
+      });
+    }
+
+    // §17.8 — arm the cooldown ONLY after a successful 2xx render. Any throw
+    // above skips this line (5xx never reaches it → no-arm satisfied).
+    this.armCooldown(
+      callerWhId,
+      Por03PdfService.COOLDOWN_ENDPOINT_KEY_SUPPLEMENT,
+    );
 
     return pdfBuffer;
   }
@@ -992,6 +1181,7 @@ export class Por03PdfService {
   private async buildPor03Buffer(
     rows: EquipmentProjectGroup[],
     parentPlan: DevelopmentPlan,
+    footerCenterText?: string,
   ): Promise<Buffer | null> {
     // Degrade (do NOT throw) on a missing plan window. The owner path
     // guards + throws upstream; the plan-wide path wants a clean null.
@@ -1035,6 +1225,7 @@ export class Por03PdfService {
       groups,
       years,
       newWord,
+      footerCenterText,
     });
 
     if (!detailDoc) {
@@ -1466,6 +1657,237 @@ export class Por03PdfService {
     // `por03.buffer` to the ผ.02 book; BE-01's global post-merge pass
     // numbers the whole combined book. Same contract as the Phase 2.6
     // sibling.
+    const buffer = await this.pdfService.mergePdfBuffers([
+      dividerBuffer,
+      ...groupBuffers,
+    ]);
+
+    return { buffer, equipmentIds: includedIds, pageMap };
+  }
+
+  /**
+   * SUPPLEMENT-scoped FORMAL-assembly ผ.03 render core (Wave
+   * wave-supplement-equipment-por03 — BE-B4, 2026-06-08). The supplement
+   * analog of `renderApprovedPlanScopedPor03Buffer`: a PLAIN list render
+   * (NOT the OLD-vs-NEW revision shape — v1 SEPG has no lineage per
+   * OQ-B3) of Approved `SupplementEquipmentProjectGroup` (SEPG) rows
+   * under a `DevelopmentPlanSupplement`. Consumed by the SUPPLEMENT
+   * assembly append (BE-B5) at `preview()` + `merge()`.
+   *
+   * Selection: SEPG rows under the passed supplement whose latest
+   * tracking status = `Approved` (the formal booked set, mirroring the
+   * revision method's Approved-only filter — `Approved` is matched via
+   * the `supplement_equipment_project_group_id` FK on `tracking_status`),
+   * `deletedAt IS NULL`. §10 — bound to the passed supplement id; never
+   * a global lookup.
+   *
+   * §16.3 — `reportFormat` is resolved via the supplement → parent plan
+   * JOIN (the supplement never owns the format). STRATEGY_BASED ONLY for
+   * v1 (OQ-B5): an ISSUE_BASED parent plan SILENT-skips (returns null),
+   * and any per-row non-STRATEGY shape is logged + skipped — NEVER throws,
+   * NEVER blocks the เล่ม (precedent §5.3 Phase 2.6 draft-append
+   * contract, mirroring `renderApprovedRevisionScopedPor03Buffer`).
+   *
+   * §21.3 — `pageOffset` is threaded into the ผ.03 footer numbering
+   * exactly as the revision / plan variants do: each per-group buffer's
+   * footer renders `currentPage + (pageOffset + localOffset)` so the
+   * supplement ผ.03 pages continue the supplement book's running count.
+   * This method ONLY honors whatever `pageOffset` BE-B5 passes — it does
+   * NOT compute the offset (risk #3 / §21.3.4 — the caller owns the
+   * formula).
+   *
+   * Degrades to `null` (NEVER throws on equipment edge cases — the
+   * combined เล่ม must not fail over an equipment edge case) when:
+   *   - the supplement is missing / soft-deleted
+   *   - the parent plan is missing
+   *   - the parent plan is ISSUE_BASED (OQ-B5 v1 skip)
+   *   - the parent plan window (startYear/endYear) is missing
+   *   - there are zero Approved SEPG rows
+   *   - every row violates the STRATEGY shape, leaving zero groups
+   *
+   * Read-only (§17.2): NO ownership check, NO agency-only assertion, NO
+   * cooldown, NO audit / AI / TrackingStatus writes. BE-B5 owns any
+   * `isBooked` / `pageNumber` stamping.
+   */
+  async renderApprovedSupplementScopedPor03Buffer(
+    developmentPlanSupplementId: string,
+    pageOffset: number = 0,
+    // Status set for the SEPG selection. Defaults to Approved-only so the
+    // §20.2 assembly append (the original caller) is byte-for-byte
+    // unchanged. The Stage-2 "เข้าเล่มร่าง" DRAFT download passes
+    // `['Pending_Approval', 'Approved']` so ผ.03 appears in the draft book
+    // before final approval — mirroring the agency draft ผ.03
+    // (`renderPlanScopedPor03Buffer`, status IN {Pending_Approval, Approved}).
+    statusNames: string[] = ['Approved'],
+  ): Promise<{
+    buffer: Buffer;
+    equipmentIds: string[];
+    pageMap: Map<string, number>;
+  } | null> {
+    // SEPG fetch scoped to the passed supplement. Mirrors the relation
+    // eager-loads of `renderApprovedPlanScopedPor03Buffer` EXACTLY,
+    // joining through the supplement → parent plan to resolve the
+    // reportFormat + year window. Approved-only via the SEPG FK on
+    // tracking_status. §10 — bound to the passed supplement id.
+    const rows = await this.supplementEquipmentRepo
+      .createQueryBuilder('sepg')
+      .leftJoinAndSelect(
+        'sepg.developmentPlanSupplement',
+        'developmentPlanSupplement',
+      )
+      .leftJoinAndSelect('developmentPlanSupplement.developmentPlan', 'plan')
+      .leftJoinAndSelect('sepg.equipmentCategory', 'equipmentCategory')
+      .leftJoinAndSelect('sepg.tactic', 'tactic')
+      .leftJoinAndSelect('sepg.plan', 'sepgPlan')
+      .leftJoinAndSelect('sepg.strategy', 'strategy')
+      .leftJoinAndSelect('sepg.developmentIssue', 'developmentIssue')
+      .leftJoinAndSelect('sepg.responsibleAgency', 'responsibleAgency')
+      .leftJoinAndSelect('sepg.budgets', 'budgets')
+      .leftJoinAndSelect('sepg.createdBy', 'createdBy')
+      .where('developmentPlanSupplement.id = :supplementId', {
+        supplementId: developmentPlanSupplementId,
+      })
+      .andWhere('sepg.deletedAt IS NULL')
+      .andWhere(
+        'EXISTS (SELECT 1 FROM tracking_status ts ' +
+          ' INNER JOIN status s ON s.id = ts.status_id ' +
+          ' WHERE ts.supplement_equipment_project_group_id = sepg.id ' +
+          '   AND ts.is_latest = true ' +
+          '   AND s.name IN (:...statusNames))',
+        { statusNames },
+      )
+      .getMany();
+
+    this.logger.log(
+      `renderApprovedSupplementScopedPor03Buffer: supplement ${developmentPlanSupplementId} — ${rows.length} SEPG row(s) matched status IN {${statusNames.join(', ')}}`,
+    );
+
+    if (rows.length === 0) {
+      this.logger.warn(
+        `renderApprovedSupplementScopedPor03Buffer: supplement ${developmentPlanSupplementId} — 0 Approved SEPG rows; skipping ผ.03 section`,
+      );
+      return null;
+    }
+
+    // §16.3 — parent plan resolved via the supplement JOIN (never the
+    // supplement itself, which does not own reportFormat).
+    const parentPlan = rows[0].developmentPlanSupplement?.developmentPlan;
+    if (!parentPlan) {
+      this.logger.warn(
+        `renderApprovedSupplementScopedPor03Buffer: supplement ${developmentPlanSupplementId} parent plan missing; skipping ผ.03 section`,
+      );
+      return null;
+    }
+
+    // OQ-B5 — ISSUE_BASED parent plans skip the ผ.03 section entirely
+    // (silent, no throw — §5.3 Phase 2.6 contract).
+    if (parentPlan.reportFormat === ReportFormat.ISSUE_BASED) {
+      this.logger.warn(
+        `renderApprovedSupplementScopedPor03Buffer: supplement ${developmentPlanSupplementId} parent plan ${parentPlan.id} is ISSUE_BASED; ผ.03 v1 supports STRATEGY_BASED only — skipping section`,
+      );
+      return null;
+    }
+
+    // Risk row — missing plan window degrades to null (no throw).
+    if (!parentPlan.startYear || !parentPlan.endYear) {
+      this.logger.warn(
+        `renderApprovedSupplementScopedPor03Buffer: supplement ${developmentPlanSupplementId} parent plan ${parentPlan.id} missing startYear/endYear; skipping ผ.03 section`,
+      );
+      return null;
+    }
+
+    // STRATEGY_BASED-only narrowing (§16.5 / OQ-B5) — silent skip
+    // mis-shaped rows, mirroring `renderApprovedRevisionScopedPor03Buffer`
+    // and the STRATEGY branch of `renderApprovedPlanScopedPor03Buffer`.
+    const filteredRows = rows.filter((r) => {
+      const isStrategyShape =
+        !!r.strategy && !!r.tactic && !!r.plan && !r.developmentIssue;
+      if (!isStrategyShape) {
+        this.logger.warn(
+          `renderApprovedSupplementScopedPor03Buffer: SEPG ${r.id} under supplement ${developmentPlanSupplementId} is not STRATEGY_BASED-shaped; skipping row`,
+        );
+      }
+      return isStrategyShape;
+    });
+
+    if (filteredRows.length === 0) {
+      this.logger.warn(
+        `renderApprovedSupplementScopedPor03Buffer: supplement ${developmentPlanSupplementId} — 0 STRATEGY_BASED-shaped Approved SEPG rows after filter (matched=${rows.length}); skipping ผ.03 section`,
+      );
+      return null;
+    }
+
+    // §16.5 year axis — derive from the parent plan window. Coerce to
+    // Number defensively (string-hydrated columns would string-concat).
+    const startYear = Number(parentPlan.startYear);
+    const endYear = Number(parentPlan.endYear);
+    const years = Array.from(
+      { length: endYear - startYear + 1 },
+      (_, i) => startYear + i,
+    );
+
+    const fonts = this.pdfService.getPdfFonts();
+    const newWord = this.pdfService.newWord.bind(this.pdfService);
+
+    const developmentPlanLine = parentPlan.name?.trim()
+      ? parentPlan.name
+      : `แผนพัฒนาท้องถิ่น พ.ศ. ${parentPlan.startYear}-${parentPlan.endYear}`;
+
+    // ── GROUP-LEVEL page tracking (§21.3) ───────────────────────────
+    // Render the "บัญชีครุภัณฑ์ (ผ.03)" full-page divider first, then
+    // EACH (Category, Tactic, Plan) group as its own buffer, accumulating
+    // a running `localOffset`. Each group footer renders
+    // `currentPage + (pageOffset + localOffset)` so the ผ.03 pages
+    // continue the supplement book's absolute count. Every SEPG row in a
+    // group shares the group's first 1-based LOCAL page. Identical
+    // mechanics to the STRATEGY branch of
+    // `renderApprovedPlanScopedPor03Buffer`; reuses `groupRows` +
+    // `createPor03DetailDocDefinition` — no layout/grouping duplication.
+    const dividerDoc = createPor03SectionDividerDocDefinition();
+    const dividerBuffer = await this.pdfService.createPdfBuffer(
+      dividerDoc,
+      fonts,
+    );
+
+    const pageMap = new Map<string, number>();
+    const groupBuffers: Buffer[] = [];
+    const includedIds: string[] = [];
+
+    let localOffset = (await PDFDocument.load(dividerBuffer)).getPageCount();
+
+    const groups = this.groupRows(
+      filteredRows as unknown as EquipmentProjectGroup[],
+    );
+
+    for (let i = 0; i < groups.length; i += 1) {
+      const group = groups[i];
+      const groupDoc = createPor03DetailDocDefinition({
+        developmentPlanName: developmentPlanLine,
+        groups: [group],
+        years,
+        newWord,
+        includeCoverBlock: i === 0,
+        pageOffset: pageOffset + localOffset,
+      });
+      if (!groupDoc) continue;
+      const groupBuffer = await this.pdfService.createPdfBuffer(
+        groupDoc,
+        fonts,
+      );
+      for (const r of group.rows) {
+        pageMap.set(r.id, localOffset + 1);
+        includedIds.push(r.id);
+      }
+      groupBuffers.push(groupBuffer);
+      localOffset += (await PDFDocument.load(groupBuffer)).getPageCount();
+    }
+
+    // Degrade cleanly if every group failed to render (defensive — the
+    // shape filter above already returned null on zero rows).
+    if (groupBuffers.length === 0) {
+      return null;
+    }
+
     const buffer = await this.pdfService.mergePdfBuffers([
       dividerBuffer,
       ...groupBuffers,

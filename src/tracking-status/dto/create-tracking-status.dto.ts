@@ -35,7 +35,12 @@ export class CreateTrackingStatusDto {
    * (`POST /tracking-status/create-by-equipment-project-group`) may
    * carry the equipment id without supplying `projectId`.
    */
-  @ValidateIf((o) => !o.supplementProjectGroupId && !o.equipmentProjectGroupId)
+  @ValidateIf(
+    (o) =>
+      !o.supplementProjectGroupId &&
+      !o.equipmentProjectGroupId &&
+      !o.supplementEquipmentProjectGroupId,
+  )
   @IsUUID()
   @IsNotEmpty()
   projectId?: string;
@@ -69,6 +74,23 @@ export class CreateTrackingStatusDto {
   @IsOptional()
   @IsUUID()
   equipmentProjectGroupId?: string;
+
+  /**
+   * Wave wave-supplement-equipment-por03 — BE-B2 (2026-06-08) — Optional
+   * explicit SupplementEquipmentProjectGroup id.
+   *
+   * The SEPG endpoint
+   * (`POST /tracking-status/create-by-supplement-equipment-project-group`)
+   * accepts the SEPG id via either `supplementEquipmentProjectGroupId`
+   * (preferred, explicit) OR `projectId` (legacy mirror). The service
+   * prefers `supplementEquipmentProjectGroupId` when present.
+   *
+   * Other endpoints (PG / RPG / SPG / equipment paths) MUST ignore this
+   * field.
+   */
+  @IsOptional()
+  @IsUUID()
+  supplementEquipmentProjectGroupId?: string;
 
   @IsUUID()
   @IsNotEmpty()

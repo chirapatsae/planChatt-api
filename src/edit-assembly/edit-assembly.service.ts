@@ -106,6 +106,7 @@ import {
 
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
+import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
 import { User } from 'src/users/entities/user.entity';
 import { ReportFormat } from 'src/development-plan/types/report-format.enum';
@@ -189,6 +190,9 @@ export class EditAssemblyService {
 
     @InjectRepository(RevisedProjectGroup)
     private readonly revisedProjectGroupRepo: Repository<RevisedProjectGroup>,
+
+    @InjectRepository(RevisedEquipmentProjectGroup)
+    private readonly relpgRepo: Repository<RevisedEquipmentProjectGroup>,
 
     @InjectRepository(DevelopmentPlanRevision)
     private readonly devPlanRevisionRepo: Repository<DevelopmentPlanRevision>,
@@ -837,11 +841,12 @@ export class EditAssemblyService {
       // §21.3). Approved-only, STRATEGY_BASED-only, read-only (§17.2 — NO
       // tracking/AI/audit writes). The render degrades to null when no
       // Approved RELPG exists, in which case the ผ.02 book is produced
-      // verbatim (no behavior change). The offset continues the absolute
-      // page count past part1+part2+part3 so ผ.03 footers number correctly
-      // within the merged PDF. `equipmentIds`/`pageMap` are intentionally
-      // discarded — no RELPG booking-state stamping or equipment snapshot
-      // this wave (deferred per §20.2).
+      // verbatim (no behavior change). §21.3.4 — EDIT ผ.02 Part 3
+      // restarts at 1, so offset = pageCount(part3); the printed footer
+      // on ผ.03 page `i` reads `por03Offset + i`. The returned
+      // `equipmentIds`/`pageMap` ARE consumed below to stamp RELPG
+      // `is_booked` / `booked_at` / `page_number` per row — the §20.2
+      // Phase 3 deferral note is lifted by the booking-stamp step.
       const por03Offset = (await PDFDocument.load(part3)).getPageCount();
       const por03 =
         await this.por03Service.renderApprovedRevisionScopedPor03Buffer(
@@ -899,6 +904,36 @@ export class EditAssemblyService {
             },
           );
         }
+      }
+
+      // 6b. Equipment (ผ.03 revision) booking stamp on Approved RELPGs
+      //     that the renderer included in the appended section. Parallels
+      //     the MAIN `EquipmentProjectGroup` stamp at
+      //     `main-assembly.service.ts:1017` and the RPG stamp above.
+      //     §21.3.4 — EDIT ผ.02 Part 3 restarts at 1, so absolutePage(id)
+      //     = por03Offset + local. §12 — booking flip is NOT a status
+      //     transition; no TrackingStatus row written. Raw SQL UPDATE
+      //     keeps `RevisedEquipmentProjectGroup` out of the edit-assembly
+      //     module beyond the §20.10.3 shared-infra channel.
+      if (por03 && por03.equipmentIds.length > 0) {
+        const relpgIds = por03.equipmentIds;
+        const relpgBookedAt = new Date();
+        const relpgPages: (number | null)[] = relpgIds.map((id) => {
+          const local = por03.pageMap.get(id);
+          return local === undefined ? null : por03Offset + local;
+        });
+        await manager.query(
+          `UPDATE revised_equipment_project_groups e
+             SET is_booked = true,
+                 booked_at = $1,
+                 page_number = u.page_number
+           FROM unnest($2::uuid[], $3::int[]) AS u(id, page_number)
+           WHERE e.id = u.id`,
+          [relpgBookedAt, relpgIds, relpgPages],
+        );
+        this.logger.log(
+          `[EditAssembly] merge stamped isBooked + page_number on ${relpgIds.length} RELPG row(s) revision=${developmentPlanRevisionId}`,
+        );
       }
 
       // 7. Revision booking flip. Mirrors the legacy
@@ -1558,6 +1593,24 @@ export class EditAssemblyService {
       .andWhere('status.name = :name', { name: STATUS_NAMES.APPROVED })
       .getCount();
 
+    // Approved RELPG (ครุภัณฑ์ ผ.03) under the SAME revision scope as the RPG
+    // counts above. Approved-only to mirror the §20.2 EDIT/CHANGE ผ.03 append
+    // (the formal booked set) and to stay on the same "อนุมัติแล้ว" basis as
+    // approvedCount above. Same join shape as the RPG counts (relation alias
+    // `trackingStatus` → `statusId`); the RELPG FK on tracking_status is
+    // `revised_equipment_project_group_id` (§12). Pure read — §17.2 advisory.
+    const approvedEquipmentCount = await this.relpgRepo
+      .createQueryBuilder('relpg')
+      .innerJoin('relpg.trackingStatus', 'ts')
+      .innerJoin('ts.statusId', 'status')
+      .where('relpg.developmentPlanRevision = :id', {
+        id: developmentPlanRevisionId,
+      })
+      .andWhere('relpg.deletedAt IS NULL')
+      .andWhere('ts.isLatest = :isLatest', { isLatest: true })
+      .andWhere('status.name = :name', { name: STATUS_NAMES.APPROVED })
+      .getCount();
+
     // EDIT uses `DevelopmentPlanRevision.isOpen` (single-row predicate)
     // — mirrors `BookAssemblyService.getRevisionRoundReadiness`.
     const revision = await this.devPlanRevisionRepo.findOne({
@@ -1615,6 +1668,7 @@ export class EditAssemblyService {
       pullBackCount: statusMap[STATUS_NAMES.PULL_BACK] ?? 0,
       rejectedCount: statusMap[STATUS_NAMES.REJECTED] ?? 0,
       totalCount,
+      approvedEquipmentCount,
     };
 
     return { approvedCount, totalCount, isReady, hasOpenPhase, breakdown };

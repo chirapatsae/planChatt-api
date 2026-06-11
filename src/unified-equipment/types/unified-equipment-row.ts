@@ -25,9 +25,13 @@
  */
 
 /** Discriminator — `equipment` (EPG, เล่มหลัก) | `revised-equipment`
- *  (RELPG, เล่มแก้ไข). Hyphenated to match the `ai_target_kind`
- *  convention used elsewhere for equipment snapshots. */
-export type UnifiedEquipmentKind = 'equipment' | 'revised-equipment';
+ *  (RELPG, เล่มแก้ไข) | `supplement-equipment` (SEPG, ครุภัณฑ์ เล่มเพิ่มเติม).
+ *  Hyphenated to match the `ai_target_kind` convention used elsewhere
+ *  for equipment snapshots. */
+export type UnifiedEquipmentKind =
+  | 'equipment'
+  | 'revised-equipment'
+  | 'supplement-equipment';
 
 /**
  * W67 executive view 4-group rollup. Imported + RE-EXPORTED from the
@@ -85,6 +89,15 @@ export interface UnifiedEquipmentDevelopmentPlanRevision {
   isOpen: boolean;
 }
 
+/** Parent supplement-book metadata — SEPG only (ครุภัณฑ์ เล่มเพิ่มเติม). */
+export interface UnifiedEquipmentDevelopmentPlanSupplement {
+  id: string;
+  supplementNumber: number | null;
+  description: string | null;
+  isOpen: boolean;
+  isBooked: boolean;
+}
+
 /** Per-year budget row. */
 export interface UnifiedEquipmentBudget {
   year: number | null;
@@ -139,8 +152,10 @@ export interface UnifiedEquipmentRow {
 
   // ---- Scope / format binding (§10, §16) ----
   developmentPlan: UnifiedEquipmentDevelopmentPlan;
-  /** RELPG only — undefined for EPG (เล่มหลัก). */
+  /** RELPG only — undefined for EPG (เล่มหลัก) / SEPG (เล่มเพิ่มเติม). */
   developmentPlanRevision?: UnifiedEquipmentDevelopmentPlanRevision;
+  /** SEPG only — undefined for EPG / RELPG. */
+  developmentPlanSupplement?: UnifiedEquipmentDevelopmentPlanSupplement;
 
   // ---- §12 status + §14 lineage ----
   status: UnifiedEquipmentStatus;

@@ -10,7 +10,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, DeepPartial, EntityManager, IsNull, Not, Repository } from 'typeorm';
+import { DataSource, DeepPartial, EntityManager, In, IsNull, Not, Repository } from 'typeorm';
 import { ProjectGroup } from './entities/project-group.entity';
 import { CreateDraftProjectGroupDto, CreateProjectGroupDto } from './dto/create-project-group.dto';
 import { BulkAssignAgencyDto, UpdateProjectGroupDto } from './dto/update-project-group.dto';
@@ -5318,12 +5318,31 @@ export class ProjectGroupsService {
       });
 
       if (!revisedProject) {
+        // 2.5) ยังไม่เจอ → อาจเป็นโครงการ "เพิ่มเติม" (SupplementProjectGroup)
+        //      ที่เป็น lineage root (§14.1). PG/RPG lookup ข้างบนไม่ resolve
+        //      SPG id จึงเคยคืน 404 — ทำให้ดูประวัติโครงการเพิ่มเติมไม่ได้.
+        const supplementRoot = await this.loadSupplementRootForVersions(
+          projectId,
+        );
+        if (supplementRoot) {
+          return this.buildSupplementRootedVersions(supplementRoot);
+        }
         throw new NotFoundException('ไม่พบโครงการ');
       }
 
       rootProjectGroupId = revisedProject.projectGroup?.id || null;
 
       if (!rootProjectGroupId) {
+        // RPG without a PG root → it is rooted at a SupplementProjectGroup
+        // (prev_project_type='supplement', §14.1). Walk up to the SPG root
+        // and render the supplement-rooted version chain.
+        const spgRootId = await this.resolveSupplementRootId(revisedProject);
+        const supplementRoot = spgRootId
+          ? await this.loadSupplementRootForVersions(spgRootId)
+          : null;
+        if (supplementRoot) {
+          return this.buildSupplementRootedVersions(supplementRoot);
+        }
         throw new NotFoundException('ไม่พบโครงการต้นฉบับของรายการแก้ไขนี้');
       }
 
@@ -5446,6 +5465,182 @@ export class ProjectGroupsService {
         id: unifiedOriginal.id,
         isOriginal: true,
       };
+    }
+
+    return {
+      originalProject: unifiedOriginal,
+      revisions: unifiedRevisions,
+      totalVersions,
+      latestVersion,
+    };
+  }
+
+  // ─── Supplement-rooted version chain (§14.1) ────────────────────────────
+  // A version lineage can be rooted at a SupplementProjectGroup (SPG), not
+  // only a ProjectGroup. `findAllVersions` originally resolved PG / RPG ids
+  // only, so opening the "ประวัติ" of a supplement (SPG) returned 404. These
+  // helpers resolve the SPG root and build the same `IProjectVersionsResponse`
+  // shape the PG-rooted path returns.
+
+  /** Load an SPG with the relations the unified version mapper needs. */
+  private async loadSupplementRootForVersions(
+    supplementProjectGroupId: string,
+  ): Promise<SupplementProjectGroup | null> {
+    return this.supplementProjectGroupRepo.findOne({
+      where: { id: supplementProjectGroupId },
+      relations: [
+        'createdBy',
+        'createdBy.user',
+        'createdBy.amphoe',
+        'createdBy.localAdministrativeOrganization',
+        'strategy',
+        'tactic',
+        'plan',
+        'developmentIssue',
+        'developmentPlanSupplement',
+        'developmentPlanSupplement.developmentPlan',
+        'budgets',
+        'trackingStatus',
+        'trackingStatus.statusId',
+        'trackingStatus.comments',
+        'trackingStatus.createdBy',
+        'trackingStatus.createdBy.user',
+        'responsibleAgency',
+        'originAgencyId',
+        'amphoe',
+        'localAdministrativeOrganization',
+        'attachments',
+      ],
+    });
+  }
+
+  /**
+   * Walk an RPG's prev-chain up to its SupplementProjectGroup root. Returns
+   * the SPG id when the lineage is supplement-rooted, else null (PG-rooted).
+   */
+  private async resolveSupplementRootId(
+    rpg: RevisedProjectGroup,
+  ): Promise<string | null> {
+    let cursor: RevisedProjectGroup | null = rpg;
+    let guard = 0;
+    while (cursor && guard++ < 50) {
+      if (cursor.prevProjectType === ('supplement' as never)) {
+        return cursor.prevProjectId ?? null;
+      }
+      if (cursor.prevProjectType === ('revised' as never) && cursor.prevProjectId) {
+        cursor = await this.revisedProjectGroupRepo.findOne({
+          where: { id: cursor.prevProjectId },
+        });
+        continue;
+      }
+      return null; // 'original' → PG-rooted, not a supplement chain
+    }
+    return null;
+  }
+
+  /**
+   * Collect the full RPG descendant chain of an SPG root: the first hop is
+   * `prev_project_type='supplement'`, subsequent hops are `'revised'`. Empty
+   * for a standalone supplement (never revised). Ordered by revisionNumber.
+   */
+  private async collectSupplementRevisionChain(
+    spgId: string,
+  ): Promise<RevisedProjectGroup[]> {
+    const RPG_RELATIONS = [
+      'developmentPlanRevision',
+      'developmentPlanRevision.developmentPlan',
+      'developmentPlanRevision.revisionType',
+      'projectGroup',
+      'createdBy',
+      'createdBy.user',
+      'createdBy.amphoe',
+      'createdBy.localAdministrativeOrganization',
+      'strategy',
+      'tactic',
+      'plan',
+      'developmentPlan',
+      'budgets',
+      'trackingStatus',
+      'trackingStatus.statusId',
+      'trackingStatus.comments',
+      'trackingStatus.createdBy',
+      'trackingStatus.createdBy.user',
+      'responsibleAgency',
+      'originAgencyId',
+      'attachments',
+    ];
+    const collected: RevisedProjectGroup[] = [];
+    let frontier: string[] = [spgId];
+    let prevType: 'supplement' | 'revised' = 'supplement';
+    let guard = 0;
+    while (frontier.length > 0 && guard++ < 50) {
+      const children: RevisedProjectGroup[] =
+        await this.revisedProjectGroupRepo.find({
+          where: {
+            prevProjectId: In(frontier),
+            prevProjectType: prevType as never,
+            deletedAt: IsNull(),
+            trackingStatus: { isLatest: true },
+          },
+          relations: RPG_RELATIONS,
+        });
+      if (children.length === 0) break;
+      collected.push(...children);
+      frontier = children.map((c) => c.id);
+      prevType = 'revised';
+    }
+    collected.sort(
+      (a, b) =>
+        (a.developmentPlanRevision?.revisionNumber ?? 0) -
+        (b.developmentPlanRevision?.revisionNumber ?? 0),
+    );
+    return collected;
+  }
+
+  /** Build the version response for a supplement-rooted lineage. */
+  private async buildSupplementRootedVersions(
+    supplementRoot: SupplementProjectGroup,
+  ): Promise<IProjectVersionsResponse> {
+    const allRevisions = await this.collectSupplementRevisionChain(
+      supplementRoot.id,
+    );
+
+    // PDPA masking — reuse the project masker (structural over createdBy +
+    // trackingStatus actors; SPG is shape-compatible). Cast for the typed sig.
+    await this.maskCreatedByUserOnProjects(supplementRoot as never);
+    await this.maskCreatedByUserOnProjects(allRevisions);
+
+    const unifiedOriginal = UnifiedProjectMapper.fromSupplementProjectGroup(
+      supplementRoot,
+      allRevisions.length > 0,
+    );
+    const unifiedRevisions = allRevisions.map((revision) =>
+      UnifiedProjectMapper.fromRevisedProjectGroup(revision),
+    );
+
+    for (let i = 0; i < unifiedRevisions.length; i++) {
+      const current = unifiedRevisions[i];
+      // i === 0 compares against the supplement original (treated as the
+      // 'original' baseline so the type union + FE handling stay unchanged).
+      const previous =
+        i === 0 ? unifiedOriginal : unifiedRevisions[i - 1];
+      current.changes = {
+        comparedWith: i === 0 ? 'original' : 'revised',
+        changedFields: this.calculateChangedFields(current, previous),
+      };
+    }
+
+    const totalVersions = 1 + unifiedRevisions.length;
+    let latestVersion: IProjectVersionsResponse['latestVersion'] = null;
+    if (unifiedRevisions.length > 0) {
+      const latest = unifiedRevisions[unifiedRevisions.length - 1];
+      latestVersion = {
+        id: latest.id,
+        revisionNumber: latest.developmentPlanRevision?.revisionNumber,
+        isOriginal: false,
+      };
+    } else {
+      latestVersion = { id: unifiedOriginal.id, isOriginal: true };
     }
 
     return {

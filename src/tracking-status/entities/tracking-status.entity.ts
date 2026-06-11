@@ -5,6 +5,7 @@ import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
 import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
+import { SupplementEquipmentProjectGroup } from 'src/supplement-equipment-project-group/entities/supplement-equipment-project-group.entity';
 import { Status } from 'src/status/entities/status.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import {
@@ -130,13 +131,14 @@ export class TrackingStatus {
    * Wave Equipment Revision Management — DB-01 (Phase 3).
    * Fifth nullable FK so RELPG (RevisedEquipmentProjectGroup) rows can
    * record §12 audit transitions the same way PG / RPG / SPG / EPG do.
-   * Exactly one of the five target FKs is expected to be set per row;
+   * Exactly one of the six target FKs is expected to be set per row;
    * downstream code that branches on
    * `if (ts.projectGroupId) … else if (ts.revisedProjectGroupId) …
    *  else if (ts.supplementProjectGroupId) …
-   *  else if (ts.equipmentProjectGroupId) …`
-   * MUST be extended with `… else if (ts.revisedEquipmentProjectGroupId) …`
-   * (BE-01 owns the RELPG service extension).
+   *  else if (ts.equipmentProjectGroupId) …
+   *  else if (ts.revisedEquipmentProjectGroupId) …`
+   * MUST be extended with `… else if (ts.supplementEquipmentProjectGroupId) …`
+   * (BE-B1 / BE-B2 own the SEPG service extension).
    */
   @ManyToOne(
     () => RevisedEquipmentProjectGroup,
@@ -149,6 +151,29 @@ export class TrackingStatus {
   )
   @JoinColumn({ name: 'revised_equipment_project_group_id' })
   revisedEquipmentProjectGroupId: RevisedEquipmentProjectGroup | null;
+
+  /**
+   * Wave wave-supplement-equipment-por03 — DB-B2 (2026-06-08).
+   * Sixth nullable FK so SEPG (SupplementEquipmentProjectGroup) rows can
+   * record §12 audit transitions the same way PG / RPG / SPG / EPG /
+   * RELPG do. Exactly one of the six target FKs is expected to be set
+   * per row; every downstream FK-chain resolver
+   * (`if (ts.projectGroupId) … else if (ts.revisedProjectGroupId) …`)
+   * MUST include the `… else if (ts.supplementEquipmentProjectGroupId) …`
+   * branch.
+   */
+  @ManyToOne(
+    () => SupplementEquipmentProjectGroup,
+    (supplementEquipmentProjectGroup) =>
+      supplementEquipmentProjectGroup.trackingStatus,
+    {
+      onDelete: 'CASCADE',
+      onUpdate: 'CASCADE',
+      nullable: true,
+    },
+  )
+  @JoinColumn({ name: 'supplement_equipment_project_group_id' })
+  supplementEquipmentProjectGroupId: SupplementEquipmentProjectGroup | null;
 
   @ManyToOne(() => Status, (status) => status.trackingStatus, {
     onDelete: 'CASCADE',

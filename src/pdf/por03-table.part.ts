@@ -78,6 +78,16 @@ export interface Por03DetailDocParams {
    * + draft append) keeps the cover on the first page as before.
    */
   includeCoverBlock?: boolean;
+  /**
+   * Owner print surface (2026-06-10) — when set AND `pageOffset` is
+   * undefined, every page renders a centered footer carrying this text
+   * (main plan + supplement round label, e.g. "แผนพัฒนาท้องถิ่น พ.ศ.
+   * 2566-2570 · ฉบับเพิ่มเติม ครั้งที่ 1"). NO page number is added,
+   * preserving the ผ.03 print no-page-numbers rule (README §12); only
+   * the book label is shown. Ignored when `pageOffset` is a number (the
+   * continuous-pagination append path owns the footer there).
+   */
+  footerCenterText?: string;
 }
 
 const PAGE_MARGINS: [number, number, number, number] = [15, 60, 15, 40];
@@ -480,7 +490,22 @@ export const createPor03DetailDocDefinition = (
             margin: [15, 0, 15, 20],
           };
         }
-      : function () { return null; },
+      : params.footerCenterText
+        ? function () {
+            const footerText = params.newWord
+              ? params.newWord(params.footerCenterText as string)
+              : (params.footerCenterText as string);
+            return {
+              text: footerText,
+              alignment: 'center',
+              fontSize: 12,
+              bold: true,
+              margin: [15, 0, 15, 20],
+            };
+          }
+        : function () {
+            return null;
+          },
     content,
     pageSize: 'A4',
     pageOrientation: PAGE_ORIENTATION,
