@@ -685,7 +685,7 @@ export class SupplementAssemblyService {
       // pre-emptive FE disable can never disagree with this throw. Runs INSIDE
       // the transaction, BEFORE the deprecate write. (Today supplement→RPG
       // forks are rare, but the §20.7 parity invariant must hold.)
-      const supplementSnapshotIds = version.part3ProjectSnapshot ?? [];
+      const supplementSnapshotIds = this.extractApprovedSpgIds(version);
       const blockingProjectIds = await this.collectDownstreamForkIds(
         supplementSnapshotIds,
         manager,
@@ -912,7 +912,7 @@ export class SupplementAssemblyService {
       // transaction, BEFORE the deprecate/un-book writes. PART1/PART2 leave
       // SPGs booked, so they are NOT guarded.
       if (isFullReset) {
-        const snapshotIds = currentVersion.part3ProjectSnapshot ?? [];
+        const snapshotIds = this.extractApprovedSpgIds(currentVersion);
         const blockingProjectIds = await this.collectDownstreamForkIds(
           snapshotIds,
           manager,
@@ -2221,7 +2221,7 @@ export class SupplementAssemblyService {
   ): Promise<SupplementAssemblyVersionDto> {
     const dto = this.toVersionDto(v);
     dto.hasDownstreamFork = await this.computeHasDownstreamFork(
-      v.part3ProjectSnapshot ?? [],
+      this.extractApprovedSpgIds(v),
       this.dataSource.manager,
     );
     return dto;
@@ -2235,6 +2235,21 @@ export class SupplementAssemblyService {
    * so the pre-emptive FE disable can never disagree with the throw. Reuses
    * LineageLockService — no parallel query.
    */
+  /**
+   * Pull the UUID-keyed approved SPG ids from a version row's
+   * `metadataJson.approvedSpgIds`. `part3ProjectSnapshot` on the supplement
+   * subsystem stores project TITLES (Thai strings), not UUIDs — the §14.11
+   * lineage guards need real UUIDs to feed into LineageLockService, so we
+   * source them from the sibling metadata column populated at merge.
+   * Returns [] for legacy version rows missing the metadata key (pre-dates
+   * the metadata write), which safely no-ops the guard.
+   */
+  private extractApprovedSpgIds(v: SupplementAssemblyVersion): string[] {
+    const meta = (v.metadataJson as Record<string, unknown> | null) ?? null;
+    const ids = meta?.['approvedSpgIds'];
+    return Array.isArray(ids) ? (ids as string[]) : [];
+  }
+
   private async collectDownstreamForkIds(
     snapshotIds: string[],
     manager: EntityManager,
