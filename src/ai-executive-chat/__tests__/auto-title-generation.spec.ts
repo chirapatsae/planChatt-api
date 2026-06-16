@@ -235,6 +235,8 @@ function makeService(
     noop as never, // AGENCY_ENRICHMENT (Wave 54 BE-W54-06)
     noop as never, // RESILIENCE_ENVELOPE (Wave 54 BE-W54-07)
     noop as never, // ProjectLineageService (Wave 61)
+    noop as never, // AgencyProjectsCanonicalAggregatorService (Wave 103 PR2)
+    noop as never, // KnowledgeSearchService (Wave AI-Knowledge-Hub BE-04)
   );
 }
 

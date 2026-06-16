@@ -92,6 +92,11 @@ import { ProjectLineageService } from './aggregation/services/project-lineage.se
 // (default OFF). When OFF the legacy code paths run unchanged. §17.2
 // advisory only — never gates a workflow transition. §17.3 read-only.
 import { AgencyProjectsCanonicalAggregatorService } from './aggregation/services/agency-projects-canonical-aggregator.service';
+// Wave AI-Knowledge-Hub BE-04 — published-only knowledge retrieval
+// backend for the `searchKnowledgeBase` tool. One-way dependency
+// chat → hub (the hub module never imports this module); §17.15.4
+// exposure invariant lives inside the service's query. §17.2 advisory.
+import { KnowledgeSearchService } from 'src/ai-knowledge-hub/services/knowledge-search.service';
 import type {
   IAgencyEnrichment,
   IBudgetAggregator,
@@ -338,6 +343,10 @@ export class AiExecutiveChatService {
     // `filters.agencyIds` to call the canonical aggregator's
     // `computeWithLegacyComparison` for side-by-side telemetry.
     private readonly agencyProjectsCanonical: AgencyProjectsCanonicalAggregatorService,
+    // Wave AI-Knowledge-Hub BE-04 — `searchKnowledgeBase` retrieval
+    // backend (published-only per §17.15.4). Provided by the imported
+    // `AiKnowledgeHubModule`; handed to the handler via the deps bag.
+    private readonly knowledgeSearch: KnowledgeSearchService,
   ) {}
 
   // ────────────────────────────────────────────────────────────────
@@ -1323,6 +1332,10 @@ export class AiExecutiveChatService {
       // gate on the flag at call time so toggling the env var per test
       // works without re-importing this module.
       agencyProjectsCanonical: this.agencyProjectsCanonical,
+      // Wave AI-Knowledge-Hub BE-04 — `searchKnowledgeBase` backend.
+      // Optional in the bag (test-surface convention); always concrete
+      // in production wiring.
+      knowledgeSearch: this.knowledgeSearch,
     };
     return handler(params, caller, deps);
   }

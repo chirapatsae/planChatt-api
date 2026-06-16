@@ -15,6 +15,12 @@ import type { ProjectLineageService } from '../../aggregation/services/project-l
 // hand do not need to stub it. Production wiring in `AiExecutiveChatService`
 // always provides the concrete service.
 import type { AgencyProjectsCanonicalAggregatorService } from '../../aggregation/services/agency-projects-canonical-aggregator.service';
+// Wave AI-Knowledge-Hub BE-04 — published-only knowledge retrieval
+// backend for the `searchKnowledgeBase` tool. Type-only import keeps
+// the dependency one-way (chat → hub) and erased at runtime; the
+// concrete instance is provided by `AiExecutiveChatService` via the
+// hub module's exported provider.
+import type { KnowledgeSearchService } from 'src/ai-knowledge-hub/services/knowledge-search.service';
 
 /**
  * Caller-identity snapshot resolved once per turn and passed into every
@@ -72,6 +78,13 @@ export interface ExecutiveToolHandlerDeps {
   // guard `if (!deps.agencyProjectsCanonical)` and silently fall through
   // to the legacy code path when absent. §17.2 advisory; §17.3 read-only.
   agencyProjectsCanonical?: AgencyProjectsCanonicalAggregatorService;
+  // Wave AI-Knowledge-Hub BE-04 — `searchKnowledgeBase` retrieval
+  // backend. OPTIONAL (same convention as `projectLineage`) so the wide
+  // test surface doesn't need a stub; the handler guards
+  // `if (!deps.knowledgeSearch)` and returns an empty, schema-valid
+  // envelope when absent. Production wiring always provides the real
+  // service. §17.2 advisory; §17.3 read-only (`ai_knowledge_*` only).
+  knowledgeSearch?: KnowledgeSearchService;
 }
 
 /**

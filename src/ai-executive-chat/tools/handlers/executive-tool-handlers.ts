@@ -6336,8 +6336,9 @@ const getRevisionBookSummary: ExecutiveToolHandler = async (
   // mirroring `getProjectLocationBreakdown` (lines ~3565-3573) — query
   // through the Budget repo joined to RPG via the entity relation, so
   // the no-raw-SQL gate (`wave53-no-raw-sql.spec.ts`) does not see any
-  // bare `FROM budget` literal. The HEAD anti-join is applied on the
-  // joined RPG alias.
+  // bare FROM-budget table literal (the gate's template-literal scanner
+  // is backtick-naive, so this comment avoids backticking the phrase).
+  // The HEAD anti-join is applied on the joined RPG alias.
   const budgetQb = deps.dataSource
     .getRepository(Budget)
     .createQueryBuilder('b')
@@ -6461,8 +6462,9 @@ const getSupplementBookSummary: ExecutiveToolHandler = async (
   );
 
   // Sum-of-budgets via Budget repo join (mirrors revision-summary
-  // handler — avoids any raw `FROM budget` literal that the no-raw-SQL
-  // gate would flag).
+  // handler — avoids any raw FROM-budget table literal that the
+  // no-raw-SQL gate would flag; the gate's template-literal scanner is
+  // backtick-naive, so this comment deliberately avoids backticks too).
   const budgetQb = deps.dataSource
     .getRepository(Budget)
     .createQueryBuilder('b')
@@ -6486,6 +6488,72 @@ const getSupplementBookSummary: ExecutiveToolHandler = async (
     totalBudget,
     averageBudget,
     asOf: nowIso(),
+  };
+};
+
+// ────────────────────────────────────────────────────────────────────
+// Wave AI-Knowledge-Hub BE-04 (2026-06-12) — `searchKnowledgeBase`.
+//
+// Published-only curated/external knowledge retrieval (CLAUDE.md
+// §17.15.4): the status + soft-delete predicates live INSIDE
+// `KnowledgeSearchService.search` — draft / archived / staging rows
+// can never reach this envelope. The §17.9 delimiter wrap + return-
+// schema validation happen in the tool loop like every other tool.
+//
+// Dependency direction: chat → hub (the service instance arrives via
+// `deps.knowledgeSearch`, provided by `AiExecutiveChatService` from the
+// hub module's exported provider). The optional-dep guard mirrors
+// `deps.projectLineage` — absent service degrades to an empty,
+// schema-valid envelope so the wide test surface needs no stub.
+//
+// §17.2 advisory — results gate nothing; the system-prompt catalog rule
+// pins "derived data wins on conflict + cite ที่มา (origin/updatedAt)".
+// §17.8 — rides the existing executive-chat cooldown/quota keys.
+// ────────────────────────────────────────────────────────────────────
+
+const searchKnowledgeBase: ExecutiveToolHandler = async (
+  params,
+  ctx,
+  deps,
+) => {
+  assertExecutiveRole(ctx);
+
+  if (!deps.knowledgeSearch) {
+    // Graceful degrade (optional-dep convention) — empty result is
+    // schema-valid; the LLM simply finds no knowledge entries.
+    return { items: [], asOf: nowIso() };
+  }
+
+  const query = typeof params.query === 'string' ? params.query : '';
+  const domainKey =
+    typeof params.domainKey === 'string' && params.domainKey.length > 0
+      ? params.domainKey
+      : undefined;
+  const limit =
+    typeof params.limit === 'number' && Number.isFinite(params.limit)
+      ? params.limit
+      : undefined;
+
+  const result = await deps.knowledgeSearch.search({
+    query,
+    domainKey,
+    limit,
+  });
+
+  // Strict projection — exactly the eight returnSchema item keys
+  // (provenance fields are mandatory so the LLM can cite ที่มา).
+  return {
+    items: result.items.map((item) => ({
+      entryId: item.entryId,
+      title: item.title,
+      excerpt: item.excerpt,
+      domainKey: item.domainKey,
+      origin: item.origin,
+      sourceName: item.sourceName ?? null,
+      updatedAt: item.updatedAt,
+      version: item.version,
+    })),
+    asOf: result.asOf,
   };
 };
 
@@ -6542,6 +6610,10 @@ export const EXECUTIVE_TOOL_HANDLERS: ExecutiveToolHandlerMap = {
   // `renderedMarkdown`. Q1 ('none' → silence), Q3 (empty bucket → silence)
   // are enforced inside the composer. §17.11 no role exemption.
   getPlanCatalogOverview,
+  // Wave AI-Knowledge-Hub BE-04 (2026-06-12) — published-only knowledge
+  // retrieval via `deps.knowledgeSearch` (§17.15.4 exposure invariant;
+  // §17.2 advisory — derived data wins on conflict).
+  searchKnowledgeBase,
 };
 
 // Unused but-exported so downstream files can import the context type

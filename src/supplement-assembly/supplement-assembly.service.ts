@@ -1482,27 +1482,35 @@ export class SupplementAssemblyService {
         manager,
       );
 
-      // Reuse the existing renderer (Q-critical: DO NOT write a new one).
-      const buffer = await this.pdfService.generateSupplementPdfBuffer({
-        supplement,
-        plan,
-        projects: approvedProjects,
-        selectedColumns: [
-          'index',
-          'title',
-          'objective',
-          'target',
-          'budget',
-          'expectedResult',
-          'mainAgency',
-        ],
-        variant: 'approved',
-        generatedAt: new Date(),
-        generatedByName,
-        // SPG agency-only (§5.1) → responsibleAgency known. Mirrors the
-        // existing finalizeSupplementApproved override.
-        reportType: 'inAuthority',
-      });
+      // wave-supplement-true-footer-pagenumber / BE-01 — render via the
+      // page-tracking variant so we capture the TRUE ผ.02 footer page each
+      // SPG prints on (part3-relative, 1-based per §21.3.4). Visually
+      // equivalent to the per-group renderer (detail body split at project
+      // boundaries; same summary / covers / table). The returned `pageMap`
+      // is persisted on the draft below and consumed at `merge` (BE-02) to
+      // stamp `SupplementProjectGroup.pageNumber` + the version-projects
+      // join. §17.2 — pure render; no side-effect writes.
+      const { buffer, pageMap } =
+        await this.pdfService.generateSupplementPdfBufferWithPageTracking({
+          supplement,
+          plan,
+          projects: approvedProjects,
+          selectedColumns: [
+            'index',
+            'title',
+            'objective',
+            'target',
+            'budget',
+            'expectedResult',
+            'mainAgency',
+          ],
+          variant: 'approved',
+          generatedAt: new Date(),
+          generatedByName,
+          // SPG agency-only (§5.1) → responsibleAgency known. Mirrors the
+          // existing finalizeSupplementApproved override.
+          reportType: 'inAuthority',
+        });
 
       const targetVersion = await this.computeNextVersion(
         supplementId,
@@ -1519,6 +1527,12 @@ export class SupplementAssemblyService {
       draft.part3Source = SupplementAssemblyPartSource.GENERATED;
       draft.part3OriginalFileName = filename;
       draft.part3GeneratedAt = new Date();
+      // wave-supplement-true-footer-pagenumber / BE-01 — persist the
+      // per-SPG page map (UUID→1-based part3-relative footer page) inside
+      // the SAME transaction as the draft save. `merge` reads this back to
+      // stamp the TRUE footer page; null/legacy/manual-upload drafts fall
+      // back to sequential i+1 (BE-02 staleness guard).
+      draft.part3PageMap = Object.fromEntries(pageMap);
       draft.assemblyStatus = this.computeDraftStatus(draft);
 
       const saved = await manager.save(SupplementAssemblyDraft, draft);
@@ -1991,20 +2005,22 @@ export class SupplementAssemblyService {
         manager,
       );
 
-      // wave-supplement-convergence-milestone-2-spg-booked-fields /
-      // BE-01 (2026-05-25) — §20 parity with PG/RPG. Stamp the booked
-      // state on every approved SPG in the snapshot BEFORE the version-
-      // projects join writes per-row pageNumbers so the SPG row carries
-      // (isBooked=true, bookedAt=now, pageNumber=N) in one consistent
-      // post-finalize state. Mirrors BookAssemblyService.merge() which
-      // writes isBooked/bookedAt on PG/RPG inside the same transaction.
-      // The cascade in Step 10 only touches NON-Approved SPGs, so the
+      // §20 parity with PG/RPG — the booked state (isBooked, bookedAt,
+      // AND pageNumber) is stamped on the SPG ROW in the version-projects
+      // loop below (not only the join table), so every read surface
+      // (unified-project enricher → ProjectDetailPanel / BookedBadge /
+      // dashboard card / AI chat) renders "หน้า N".
+      //
+      // Bugfix (2026-06-15): the previous bulk update wrote only
+      // isBooked/bookedAt and left SPG.pageNumber NULL — the user-reported
+      // "รวมเล่มแล้วไม่บันทึกหน้า". The symmetric reset helper
+      // resetSupplementProjectBooking (:~2842) already CLEARS pageNumber on
+      // un-book / Part-3 correction, so the merge side MUST set it. Mirrors
+      // main-assembly.service.ts:988-995 (PG.pageNumber). One shared
+      // finalize timestamp (also consumed by the SEPG stamp below). The
+      // cascade in Step 10 only touches NON-Approved SPGs, so the
       // approvedProjects set is intact here.
       const finalizeBookedAt = new Date();
-      await manager.getRepository(SupplementProjectGroup).update(
-        { id: In(approvedProjects.map((p) => p.id)) },
-        { isBooked: true, bookedAt: finalizeBookedAt },
-      );
 
       // SEPG (ครุภัณฑ์ ผ.03 เล่มเพิ่มเติม) booking stamp on Approved SEPGs
       // that the renderer included in the appended section. Parallels
@@ -2032,17 +2048,50 @@ export class SupplementAssemblyService {
         );
       }
 
-      // Version-projects join — pageNumber 1..N matching the renderer
-      // sort. The cascade re-snapshot guarantee is satisfied because we
-      // re-queried approved SPGs in step 6 BEFORE writing pageNumbers
-      // (and cascade only touches NON-Approved SPGs, leaving the set
-      // intact).
+      // wave-supplement-true-footer-pagenumber / BE-02 — resolve the TRUE
+      // ผ.02 footer page per SPG from the page map BE-01 persisted on the
+      // draft at `generatePart3`. The map value equals the integer printed
+      // in that SPG's footer (part3-relative, 1-based per §21.3.4).
+      //
+      // Staleness guard (§17.5, no auto-recompute): the map is usable ONLY
+      // when it is present AND its key set EXACTLY matches the approved-set
+      // SPG ids re-queried in step 6. A null map (manual-upload / legacy
+      // draft) or any key mismatch (approved set changed since generate,
+      // merge without re-generate) → fall back to sequential i+1 for ALL
+      // rows + log a warning. No partial mixing — the whole stamp is either
+      // the true footer page or i+1 (deterministic, auditable).
+      const pageMap = draft.part3PageMap ?? null;
+      const approvedIds = approvedProjects.map((p) => p.id);
+      const pageMapUsable =
+        pageMap !== null &&
+        Object.keys(pageMap).length === approvedIds.length &&
+        approvedIds.every(
+          (id) => typeof pageMap[id] === 'number',
+        );
+      if (!pageMapUsable) {
+        this.logger.warn(
+          `[SupplementAssembly] merge part3PageMap stale/absent — falling back to sequential pageNumber supplement=${supplementId}`,
+        );
+      }
+
+      // Version-projects join + SPG ROW booking stamp — stamp the resolved
+      // true footer page (or the i+1 fallback) onto BOTH the SPG row AND
+      // the version-projects join so the live row and the version snapshot
+      // agree (§3.3 / D6). The cascade re-snapshot guarantee holds:
+      // approved SPGs were re-queried in step 6 and the cascade only
+      // touches NON-Approved SPGs.
+      const spgRepo = manager.getRepository(SupplementProjectGroup);
       for (let i = 0; i < approvedProjects.length; i += 1) {
         const spg = approvedProjects[i];
+        const resolvedPage = pageMapUsable ? pageMap![spg.id] : i + 1;
+        await spgRepo.update(
+          { id: spg.id },
+          { isBooked: true, bookedAt: finalizeBookedAt, pageNumber: resolvedPage },
+        );
         const join = manager.create(SupplementAssemblyVersionProject, {
           versionId: savedVersion.id,
           supplementProjectGroupId: spg.id,
-          pageNumber: i + 1,
+          pageNumber: resolvedPage,
         });
         await manager.save(SupplementAssemblyVersionProject, join);
       }

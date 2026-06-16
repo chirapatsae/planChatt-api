@@ -448,7 +448,18 @@ describe('BE-W54-08 / Wave 54 bilingual success-criteria prompts (§4)', () => {
     // `| งบประมาณ: {projects[i].budgetText}`). ~2KB net growth; cap
     // raised 67584 → 70656 to keep ~600-token headroom. Pairs with
     // W71-BE-PROJECT-BUDGET (aggregator change).
-    const TOTAL_BYTES_CAP = 70656;
+    // Wave AI-Knowledge-Hub BE-04 (2026-06-12): cap raised
+    // 70656 → 102400. TWO components: (a) ~1.6 KB credited to BE-04 —
+    // the `searchKnowledgeBase` tool-catalog entry (published-only
+    // knowledge retrieval + the "derived data wins on conflict" +
+    // "cite ที่มา (origin/updatedAt)" rules per CLAUDE.md §17.15.4 /
+    // §17.2); (b) ~27 KB of ACCUMULATED un-credited growth from the
+    // post-W71 prompt waves (rules #42–#48 incl. the Enterprise Output
+    // Bar, sub-book drill-down chain #44/#45, and the Book-Coverage
+    // tool-catalog entries) that landed without bumping this constant —
+    // measured total stood at ~99.5 KB BEFORE BE-04 touched the prompt.
+    // 102400 restores the conventional ~600-token (~2.4 KB) headroom.
+    const TOTAL_BYTES_CAP = 102400;
 
     const PROMPT_BYTES = EXECUTIVE_CHAT_SYSTEM_PROMPT.length;
     const TOOLS_BYTES = EXECUTIVE_CHAT_TOOL_INSTRUCTIONS.length;

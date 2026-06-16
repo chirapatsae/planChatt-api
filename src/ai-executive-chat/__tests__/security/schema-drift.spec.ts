@@ -79,7 +79,12 @@ describe('SEC-W44-01 / schema-drift (§17.9)', () => {
     // intent here is to forbid single-enum on PARAMETER inputs (which
     // would deny the model any real choice); a discriminator literal on
     // the RETURN envelope's `shape` key is exempt.
-    const SKIP_KEYS = new Set(['shape']);
+    // Wave AI-Exec-Chat-Enterprise-Output-Tone exemption (caught up by
+    // BE-04, 2026-06-12): `getPlanCatalogOverview.returnSchema.metadata.
+    // documentVersion` is `enum: ['1.0']` — a RETURN-envelope literal
+    // version tag, same discriminator-literal rationale as `shape`.
+    // Not a user-facing input enum, so it is exempt like `shape`.
+    const SKIP_KEYS = new Set(['shape', 'documentVersion']);
     const walkSchema = (
       schema: ToolJsonSchema,
       path: string,

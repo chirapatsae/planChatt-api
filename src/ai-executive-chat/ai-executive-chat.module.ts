@@ -42,6 +42,12 @@ import { AiUsageLog } from 'src/ai-usage-logs/entities/ai-usage-log.entity';
 import { PiiRedactorModule } from 'src/common/pii/pii-redactor.module';
 // BE-W44-02 — SSE tool-call loop service.
 import { AiExecutiveChatService } from './ai-executive-chat.service';
+// Wave AI-Knowledge-Hub BE-04 — `searchKnowledgeBase` tool backend.
+// One-way dependency chat → hub: the hub module exports
+// `KnowledgeSearchService` and never imports this module (its only
+// cross-module reads are the public tool-registry seam, §17.15.2(a)),
+// so no circular module reference exists.
+import { AiKnowledgeHubModule } from 'src/ai-knowledge-hub/ai-knowledge-hub.module';
 // Wave 54 BE-W54-01 — aggregation layer foundation. Scaffolds the
 // Tier B composer surface (types, interfaces, module wiring); concrete
 // providers land in BE-W54-02..05 and BE-W54-07. Dependency direction
@@ -94,6 +100,9 @@ import { AggregationModule } from './aggregation/aggregation.module';
     PiiRedactorModule,
     // Wave 54 BE-W54-01 — Tier B aggregation layer (foundation only).
     AggregationModule,
+    // Wave AI-Knowledge-Hub BE-04 — provides `KnowledgeSearchService`
+    // for the `searchKnowledgeBase` executive tool (chat → hub one-way).
+    AiKnowledgeHubModule,
   ],
   controllers: [AiExecutiveChatController],
   providers: [

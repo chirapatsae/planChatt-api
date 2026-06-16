@@ -247,6 +247,32 @@ import { AiStaffReviewRun } from './ai/entities/ai-staff-review-run.entity';
 // `AiStaffReviewRun` registration above. CLAUDE.md §17.3 — neither
 // entity has a FK into project / plan / tracking tables.
 import { AiExecutiveChatModule } from './ai-executive-chat/ai-executive-chat.module';
+// Wave wave-ai-knowledge-hub DB-01 — Phase-1 `ai_knowledge_*` entity
+// registration (entries / immutable revisions / dedicated audit log).
+// CLAUDE.md §17.3 — no FK into any project table; audit goes to
+// `ai_knowledge_audit_logs`, NEVER TrackingStatus. Services land in
+// BE-01 / BE-02. Entities are dual-registered: `forFeature` in the
+// feature module + the explicit `entities: [...]` list below (Wave 41
+// footgun — forRoot has no `autoLoadEntities`).
+import { AiKnowledgeHubModule } from './ai-knowledge-hub/ai-knowledge-hub.module';
+import { AiKnowledgeEntry } from './ai-knowledge-hub/entities/ai-knowledge-entry.entity';
+import { AiKnowledgeEntryRevision } from './ai-knowledge-hub/entities/ai-knowledge-entry-revision.entity';
+import { AiKnowledgeAuditLog } from './ai-knowledge-hub/entities/ai-knowledge-audit-log.entity';
+// Wave wave-ai-knowledge-hub DB-02 — Phase-2 connector registry +
+// quarantined ingestion staging (Q3 = webhook push only; Q4 = PII
+// forbidden, ceiling `internal`). Secrets stored as hash + prefix ONLY.
+// CLAUDE.md §17.3 — FKs are ai_* → ai_* only, never into project tables.
+import { AiKnowledgeSource } from './ai-knowledge-hub/entities/ai-knowledge-source.entity';
+import { AiKnowledgeIngestion } from './ai-knowledge-hub/entities/ai-knowledge-ingestion.entity';
+// Wave wave-ai-knowledge-structure-mgmt DB-01 — Class-A structure /
+// catalog overlay entities + Phase-3 tool-binding override. ai_*
+// namespace only; FKs are ai_* → ai_* (catalog children → catalog
+// tables) — never into project tables (§17.3).
+import { AiKnowledgeDomainMeta } from './ai-knowledge-hub/entities/ai-knowledge-domain-meta.entity';
+import { AiKnowledgeCatalogTable } from './ai-knowledge-hub/entities/ai-knowledge-catalog-table.entity';
+import { AiKnowledgeCatalogColumn } from './ai-knowledge-hub/entities/ai-knowledge-catalog-column.entity';
+import { AiKnowledgeCatalogRelation } from './ai-knowledge-hub/entities/ai-knowledge-catalog-relation.entity';
+import { AiKnowledgeToolBinding } from './ai-knowledge-hub/entities/ai-knowledge-tool-binding.entity';
 // Wave 44 DB-W44-02 — startup bootstrap hook that applies an
 // allow-listed, idempotent DDL catalog after the DataSource is up.
 // See `docs/tasks/wave44/DB-W44-02.md` and
@@ -638,6 +664,33 @@ import { UnifiedEquipmentModule } from './unified-equipment/unified-equipment.mo
         // DevelopmentPlanSupplement. §12 audit via the new (6th)
         // `supplement_equipment_project_group_id` FK on tracking_status.
         SupplementEquipmentProjectGroup,
+        // Wave wave-ai-knowledge-hub — DB-01 (see import note). Phase-1
+        // curated-knowledge tables. ai_* namespace only; NO FK into
+        // project / plan / tracking tables (§17.3). Owned by
+        // `AiKnowledgeHubModule` via `forFeature`; root registration here
+        // is mandatory or TypeORM throws `EntityMetadataNotFoundError`
+        // at boot (Wave 41 footgun).
+        AiKnowledgeEntry,
+        AiKnowledgeEntryRevision,
+        AiKnowledgeAuditLog,
+        // Wave wave-ai-knowledge-hub — DB-02 (see import note). Phase-2
+        // connector registry + quarantine staging. FKs are ai_* → ai_*
+        // ONLY (ingestions → sources / entries; entries.source_id →
+        // sources, SET NULL) — never into project tables (§17.3).
+        AiKnowledgeSource,
+        AiKnowledgeIngestion,
+        // Wave wave-ai-knowledge-structure-mgmt — DB-01 (see import
+        // note). Class-A structure/catalog overlay + Phase-3 tool-binding
+        // override. ai_* namespace ONLY; the only FKs are ai_* → ai_*
+        // (catalog columns / relations → catalog tables) — never into
+        // any project / plan / tracking table (§17.3). Root registration
+        // here is mandatory or TypeORM throws EntityMetadataNotFoundError
+        // at boot (Wave 41 footgun).
+        AiKnowledgeDomainMeta,
+        AiKnowledgeCatalogTable,
+        AiKnowledgeCatalogColumn,
+        AiKnowledgeCatalogRelation,
+        AiKnowledgeToolBinding,
       ],
       synchronize: true,
       extra: {
@@ -759,6 +812,12 @@ import { UnifiedEquipmentModule } from './unified-equipment/unified-equipment.mo
     ChangeAssemblyModule,
     DevelopmentIssueModule,
     AiExecutiveChatModule,
+    // Wave wave-ai-knowledge-hub DB-01 — AI Knowledge Hub storage layer.
+    // Entity-registration-only in this wave node; order vs
+    // `AiExecutiveChatModule` is irrelevant (no runtime dependency —
+    // BE-04 hooks in via the public tool-registration seam, never via
+    // module internals per wave decision #4).
+    AiKnowledgeHubModule,
     // SUPP_AGG_BE_01 — Unified Projects HTTP surface. Imported AFTER
     // `AiExecutiveChatModule` so the `AggregationModule` re-export
     // chain (UNIFIED_PROJECT_AGGREGATOR token) is fully resolved.

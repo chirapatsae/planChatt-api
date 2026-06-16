@@ -721,6 +721,299 @@ export class SupplementPdfService {
     return this.pdfService.mergePdfBuffers(pdfBuffers);
   }
 
+  /**
+   * wave-supplement-true-footer-pagenumber / BE-01 — page-tracking variant
+   * of `generateSupplementPdfBuffer`.
+   *
+   * Renders the ผ.02 detail body as ONE detail buffer PER PROJECT (keeping
+   * the group cover emitted ONCE per group) so we can record the TRUE
+   * footer page each SPG prints on. Returns `{ buffer, pageMap }` where
+   * `pageMap.get(spg.id)` equals the integer printed in that SPG's ผ.02
+   * footer.
+   *
+   * The page number is PART3-RELATIVE (1-based, `pageOffset` seeded at 0)
+   * per §21.3.4 — the supplement ผ.02 Part 3 restarts footer numbering at
+   * 1 and the renderer's footer formula is `currentPage + pageOffset`, so
+   * `pageMap.set(spg.id, pageOffset + 1)` recorded BEFORE the project
+   * buffer's page count is added is exactly the printed footer.
+   *
+   * MIRRORS (does NOT import — §20.10.3 standalone boundary) the canonical
+   * per-PROJECT tracking pattern at
+   * `PdfService.generateProjectReportWithPageTracking`
+   * (`pdf.service.ts:1131-1318`). Reuses the SAME summary / cover / detail
+   * doc-definition builders and the SAME `orderApprovedSupplementsForPdf`
+   * sort as the per-group `generateSupplementPdfBuffer`, so output stays
+   * visually equivalent (only structural change: detail body split at
+   * project boundaries — pdfmake repeats `headerRows` on continuation
+   * pages so each per-project table renders identically to the per-group
+   * table).
+   *
+   * §17.2 — pure render; NO `tracking_status` / `ai_*` / notification
+   * writes. The returned map is an advisory authoring artifact (UUID→int).
+   */
+  async generateSupplementPdfBufferWithPageTracking(args: {
+    supplement: DevelopmentPlanSupplement;
+    plan: DevelopmentPlan;
+    projects: SupplementProjectGroup[];
+    selectedColumns: string[];
+    variant: 'draft' | 'approved';
+    generatedAt?: Date;
+    generatedByName?: string;
+    reportType?: 'default' | 'inAuthority' | 'outAuthority';
+  }): Promise<{ buffer: Buffer; pageMap: Map<string, number> }> {
+    const reportFormat = args.plan.reportFormat ?? ReportFormat.STRATEGY_BASED;
+
+    // 1. Deterministic sort — SAME comparator the per-group renderer + the
+    //    BE-02 merge stamp use, so the recorded pages line up 1:1.
+    const orderedProjects = orderApprovedSupplementsForPdf(
+      args.projects as any,
+      reportFormat,
+    ) as SupplementProjectGroup[];
+
+    // 2. Shared rendering inputs (identical to generateSupplementPdfBuffer).
+    const fonts = this.pdfService.getPdfFonts();
+    const newWord = this.pdfService.newWord.bind(this.pdfService);
+    const pageMargins: [number, number, number, number] = [15, 60, 15, 40];
+    const pageOrientation: 'portrait' | 'landscape' = 'landscape';
+    const years = Array.from(
+      { length: args.plan.endYear - args.plan.startYear + 1 },
+      (_, i) => args.plan.startYear + i,
+    );
+
+    const supplementDescription = (args.supplement.description ?? '').trim();
+    const supplementDisplayName = supplementDescription.length > 0
+      ? supplementDescription
+      : `เล่มเพิ่มเติมรอบที่ ${args.supplement.supplementNumber} พ.ศ. ${args.plan.startYear}-${args.plan.endYear}`;
+
+    const columnMap: Record<string, { text: string; key: string }> = {
+      index: { text: 'ที่', key: 'index' },
+      title: { text: 'โครงการ', key: 'title' },
+      objective: { text: 'วัตถุประสงค์', key: 'objective' },
+      target: { text: 'เป้าหมาย \n(ผลผลิตของโครงการ)', key: 'target' },
+      budget: { text: 'งบประมาณ (บาท)', key: 'budget' },
+      kpi: { text: 'ตัวชี้วัด (KPI)', key: 'kpi' },
+      expectedResult: { text: 'ผลที่คาดว่าจะได้รับ', key: 'expectedResult' },
+      mainAgency: { text: 'หน่วยงาน\nรับผิดชอบหลัก', key: 'mainAgency' },
+      amphoe: { text: 'อำเภอ', key: 'amphoe' },
+      coordinates: { text: 'พิกัดทาง \nภูมิศาสตร์', key: 'coordinates' },
+    };
+
+    const baseFiltered = args.selectedColumns.filter(
+      (col) => columnMap[col] && col !== 'amphoe' && col !== 'coordinates',
+    );
+    const availableColumns =
+      reportFormat === ReportFormat.ISSUE_BASED
+        ? baseFiltered.filter((col) => col !== 'kpi')
+        : baseFiltered;
+
+    const pdfBuffers: Buffer[] = [];
+    const pageMap = new Map<string, number>();
+    // PART3-RELATIVE — supplement Part 3 restarts at 1 (§21.3.4). Seed 0.
+    let pageOffset = 0;
+
+    const resolvedReportType =
+      args.reportType ?? (args.variant === 'approved' ? 'inAuthority' : 'default');
+
+    // 3. Summary page (format-aware) — emitted once, identical to the
+    //    per-group renderer.
+    if (reportFormat === ReportFormat.ISSUE_BASED) {
+      const { issues, overallSum, overallCount } =
+        this.pdfService.prepareIssueBasedReportAggregations(
+          orderedProjects as any,
+          years,
+        );
+      const summaryDoc = createSupplementSummaryDocDefinition({ coverTitle: "บัญชีเพิ่มเติม",
+        developmentPlanSupplementName: supplementDisplayName,
+        years,
+        reportFormat: 'ISSUE_BASED',
+        issues,
+        overallSum,
+        overallCount,
+        totalProjectCount: orderedProjects.length,
+        pageMargins,
+        pageOrientation,
+        newWord,
+      });
+      const summaryBuffer = await this.pdfService.createPdfBuffer(summaryDoc, fonts);
+      pdfBuffers.push(summaryBuffer);
+      const summaryPdf = await PDFDocument.load(summaryBuffer);
+      pageOffset += summaryPdf.getPageCount();
+    } else {
+      const { strategies, overallSum, overallCount } =
+        this.pdfService.prepareReportAggregations(orderedProjects as any, years);
+      const summaryDoc = createSupplementSummaryDocDefinition({ coverTitle: "บัญชีเพิ่มเติม",
+        developmentPlanSupplementName: supplementDisplayName,
+        years,
+        reportFormat: 'STRATEGY_BASED',
+        strategies,
+        overallSum,
+        overallCount,
+        totalProjectCount: orderedProjects.length,
+        pageMargins,
+        pageOrientation,
+        newWord,
+      });
+      const summaryBuffer = await this.pdfService.createPdfBuffer(summaryDoc, fonts);
+      pdfBuffers.push(summaryBuffer);
+      const summaryPdf = await PDFDocument.load(summaryBuffer);
+      pageOffset += summaryPdf.getPageCount();
+    }
+
+    // 4. Detail pages — group cover ONCE per group, then ONE detail buffer
+    //    PER PROJECT, recording the footer page BEFORE adding its page
+    //    count (mirrors main-plan).
+    if (reportFormat === ReportFormat.ISSUE_BASED) {
+      const groupedByIssue = new Map<string, SupplementProjectGroup[]>();
+      const issueSortOrder = new Map<string, number>();
+      for (const project of orderedProjects) {
+        const issueName = project.developmentIssue?.name || '-';
+        const sortOrder = project.developmentIssue?.sortOrder ?? 999;
+        if (!groupedByIssue.has(issueName)) {
+          groupedByIssue.set(issueName, []);
+          issueSortOrder.set(issueName, sortOrder);
+        }
+        groupedByIssue.get(issueName)!.push(project);
+      }
+
+      const sortedIssueEntries = [...groupedByIssue.entries()].sort((a, b) => {
+        const soA = issueSortOrder.get(a[0]) ?? 999;
+        const soB = issueSortOrder.get(b[0]) ?? 999;
+        if (soA !== soB) return soA - soB;
+        return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
+      });
+
+      for (const [issueName, groupProjects] of sortedIssueEntries) {
+        const coverDoc = createIssueBasedSupplementGroupCoverPageDocDefinition(
+          issueName,
+          supplementDisplayName,
+          pageMargins,
+          pageOrientation,
+          newWord,
+          pageOffset,
+        );
+        const coverBuffer = await this.pdfService.createPdfBuffer(coverDoc, fonts);
+        pdfBuffers.push(coverBuffer);
+        const coverPdf = await PDFDocument.load(coverBuffer);
+        pageOffset += coverPdf.getPageCount();
+
+        for (const project of groupProjects) {
+          const detailDoc = createIssueBasedSupplementGroupDetailDocDefinition({
+            developmentPlanSupplementName: supplementDisplayName,
+            years,
+            groupProjects: [project],
+            availableColumns,
+            columnMap,
+            pageMargins,
+            pageOrientation,
+            newWord,
+            reportType: resolvedReportType,
+            issueName,
+            pageOffset,
+          });
+          if (detailDoc) {
+            const detailBuffer = await this.pdfService.createPdfBuffer(detailDoc, fonts);
+            pdfBuffers.push(detailBuffer);
+            const detailPdf = await PDFDocument.load(detailBuffer);
+            pageMap.set(project.id, pageOffset + 1);
+            pageOffset += detailPdf.getPageCount();
+          }
+        }
+      }
+    } else {
+      // STRATEGY_BASED — group by Strategy/Tactic/Plan preserving order.
+      const groupedProjects = new Map<string, SupplementProjectGroup[]>();
+      for (const project of orderedProjects) {
+        const strategyName = project.strategy?.name || '-';
+        const tacticName = project.tactic?.name || '-';
+        const planName = project.plan?.name || '-';
+        const groupKey = `${strategyName}||${tacticName}||${planName}`;
+        if (!groupedProjects.has(groupKey)) groupedProjects.set(groupKey, []);
+        groupedProjects.get(groupKey)!.push(project);
+      }
+
+      // Batch external alignment lookup — identical to the per-group
+      // renderer so each per-project sub-render shares the resolved row.
+      const nameKeyToTriple = new Map<string, AlignmentTriple | null>();
+      const triples: AlignmentTriple[] = [];
+      for (const [groupKey, projects] of groupedProjects.entries()) {
+        const head = projects?.[0];
+        const strategyId = head?.strategy?.id;
+        const tacticId = head?.tactic?.id;
+        const planId = head?.plan?.id;
+        if (!strategyId || !tacticId || !planId) {
+          nameKeyToTriple.set(groupKey, null);
+          continue;
+        }
+        const triple: AlignmentTriple = {
+          strategyId: String(strategyId),
+          tacticId: String(tacticId),
+          planId: String(planId),
+        };
+        nameKeyToTriple.set(groupKey, triple);
+        triples.push(triple);
+      }
+      const resolvedAlignment = await this.alignmentResolver.resolveMany(triples);
+      const alignmentByGroupKey = new Map<string, AlignmentRow | null>();
+      for (const [groupKey, triple] of nameKeyToTriple.entries()) {
+        alignmentByGroupKey.set(
+          groupKey,
+          triple ? resolvedAlignment.get(buildTripleKey(triple)) ?? null : null,
+        );
+      }
+
+      for (const [groupKey, groupProjects] of groupedProjects.entries()) {
+        const [strategyName, tacticName, planName] = groupKey.split('||');
+        const coverDoc = createSupplementGroupCoverPageDocDefinition(
+          strategyName,
+          supplementDisplayName,
+          pageMargins,
+          pageOrientation,
+          newWord,
+          pageOffset,
+        );
+        const coverBuffer = await this.pdfService.createPdfBuffer(coverDoc, fonts);
+        pdfBuffers.push(coverBuffer);
+        const coverPdf = await PDFDocument.load(coverBuffer);
+        pageOffset += coverPdf.getPageCount();
+
+        const strategyCode = groupProjects?.[0]?.strategy?.id ?? null;
+        const groupAlignment = alignmentByGroupKey.get(groupKey) ?? null;
+
+        for (const project of groupProjects) {
+          const detailDoc = createSupplementGroupDetailDocDefinition({
+            developmentPlanSupplementName: supplementDisplayName,
+            years,
+            groupProjects: [project],
+            availableColumns,
+            columnMap,
+            pageMargins,
+            pageOrientation,
+            newWord,
+            reportType: resolvedReportType,
+            strategyName,
+            strategyCode,
+            tacticName,
+            planName,
+            pageOffset,
+            alignment: groupAlignment,
+          });
+          if (detailDoc) {
+            const detailBuffer = await this.pdfService.createPdfBuffer(detailDoc, fonts);
+            pdfBuffers.push(detailBuffer);
+            const detailPdf = await PDFDocument.load(detailBuffer);
+            pageMap.set(project.id, pageOffset + 1);
+            pageOffset += detailPdf.getPageCount();
+          }
+        }
+      }
+    }
+
+    // 5. Merge Summary + per-group(Cover + per-project Detail) into one
+    //    Buffer.
+    const buffer = await this.pdfService.mergePdfBuffers(pdfBuffers);
+    return { buffer, pageMap };
+  }
+
   // ===================================================================
   // Public — Draft
   // ===================================================================

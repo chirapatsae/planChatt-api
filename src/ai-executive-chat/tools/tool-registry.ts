@@ -3,6 +3,11 @@ import {
   ExecutiveToolSpec,
   ToolJsonSchema,
 } from './executive-tool.types';
+// Wave AI-Knowledge-Hub BE-04 (2026-06-12) — knowledge domain keys for
+// the `searchKnowledgeBase.paramsSchema.domainKey` enum. One-way
+// dependency chat → hub (the hub's registry data file imports only the
+// TYPE surface of this module, so no runtime cycle exists).
+import { ALL_KNOWLEDGE_DOMAIN_KEYS } from 'src/ai-knowledge-hub/registry/derived-domain-map';
 
 /**
  * Executive AI Chat — tool whitelist.
@@ -2438,6 +2443,91 @@ const getPlanCatalogOverview: ExecutiveToolSpec = {
   handlerPlaceholder: null,
 };
 
+// ──────────────────────────────────────────────────────────────────────
+// Wave AI-Knowledge-Hub BE-04 (2026-06-12) — `searchKnowledgeBase`.
+//
+// Published-only curated/external knowledge retrieval for the executive
+// chat (CLAUDE.md §17.15.4 exposure invariant — draft / archived /
+// staging rows are NEVER selectable; the predicate is baked into
+// `KnowledgeSearchService` and spec-asserted). Tool-based retrieval per
+// report §2.4 — NO RAG context-stuffing; pgvector is a Phase-B internal
+// upgrade behind this same contract. §17.9 wrap + returnSchema
+// validation apply automatically in the tool loop like every other
+// tool; §17.8 — rides the existing executive-chat cooldown/quota keys
+// (no new key). §17.2 advisory — derived (live-DB) tool data WINS on
+// conflict with knowledge entries (staleness risk, report §7.2).
+// Provenance fields (`origin` / `sourceName` / `updatedAt` / `version`)
+// are REQUIRED envelope keys so the LLM can cite ที่มา.
+// ──────────────────────────────────────────────────────────────────────
+const searchKnowledgeBase: ExecutiveToolSpec = {
+  name: 'searchKnowledgeBase',
+  thaiLabel: 'ค้นหาองค์ความรู้ที่ดูแลโดยผู้ดูแลระบบ',
+  description:
+    'ค้นหาองค์ความรู้ที่ผู้ดูแลระบบจัดทำ/เผยแพร่แล้ว (เฉพาะ entry ที่ publish แล้วเท่านั้น) — อภิธานศัพท์ / นโยบาย-แนวปฏิบัติ / ข้อมูลองค์กร / FAQ. ใช้สำหรับคำถามเชิงนิยามหรือนโยบาย เช่น "…คืออะไร", "นโยบาย…", หรือความรู้ที่ไม่ได้มาจากฐานข้อมูลโครงการโดยตรง. **ข้อมูลจากเครื่องมือ derived (อ่านฐานข้อมูลสด) ชนะเสมอเมื่อขัดแย้งกับองค์ความรู้** (องค์ความรู้อาจล้าสมัย) — และทุกครั้งที่ใช้ผลลัพธ์ต้องอ้างที่มา (origin / sourceName / updatedAt). ผลลัพธ์เป็นข้อมูลสนับสนุนเท่านั้น (advisory) ห้ามใช้ตัดสินขั้นตอนอนุมัติใด ๆ. query 1–200 ตัวอักษร; domainKey เป็น optional boost; limit 1–5 (default 3). อ่านอย่างเดียว.',
+  paramsSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['query'],
+    properties: {
+      // 1..200 chars — the in-house schema subset has no minLength /
+      // maxLength, so the bounds are enforced by the handler/service
+      // (trim + truncate at 200; empty → zero items) per the
+      // listProjectsInPlan handler-owned-validation precedent.
+      query: {
+        type: 'string',
+        description:
+          'คำค้น 1–200 ตัวอักษร (เกิน 200 จะถูกตัด; ว่างเปล่าคืน items ว่าง)',
+      },
+      domainKey: {
+        type: 'string',
+        enum: [...ALL_KNOWLEDGE_DOMAIN_KEYS],
+        description:
+          'โดเมนองค์ความรู้สำหรับ boost อันดับผลลัพธ์ (ไม่ใช่ hard filter)',
+      },
+      limit: { type: 'integer', minimum: 1, maximum: 5, default: 3 },
+    },
+  },
+  returnSchema: {
+    type: 'object',
+    required: ['items', 'asOf'],
+    properties: {
+      items: {
+        type: 'array',
+        items: {
+          type: 'object',
+          // `sourceName` follows the W58 nullable-via-required-only
+          // convention — listed in `required[]` so the key is always
+          // present (provenance contract), omitted from `properties`
+          // so the validator accepts `null` for curated rows.
+          required: [
+            'entryId',
+            'title',
+            'excerpt',
+            'domainKey',
+            'origin',
+            'sourceName',
+            'updatedAt',
+            'version',
+          ],
+          properties: {
+            entryId: uuidField,
+            title: { type: 'string' },
+            // Hard-capped at 800 chars by `KnowledgeSearchService`
+            // (token-bloat mitigation, report §7.2).
+            excerpt: { type: 'string' },
+            domainKey: { type: 'string' },
+            origin: { type: 'string', enum: ['curated', 'external'] },
+            updatedAt: { type: 'string', format: 'date-time' },
+            version: { type: 'integer', minimum: 1 },
+          },
+        },
+      },
+      asOf: { type: 'string', format: 'date-time' },
+    },
+  },
+  handlerPlaceholder: null,
+};
+
 export const EXECUTIVE_TOOL_REGISTRY: Record<
   ExecutiveToolName,
   ExecutiveToolSpec
@@ -2502,6 +2592,10 @@ export const EXECUTIVE_TOOL_REGISTRY: Record<
   // canonical Rule #47 bullet layout server-side so the LLM emits
   // verbatim per Rule #32 / #48 (Enterprise Output Bar, BE-02).
   getPlanCatalogOverview,
+  // Wave AI-Knowledge-Hub BE-04 (2026-06-12) — published-only knowledge
+  // retrieval (§17.15.4). Derived data wins on conflict; provenance is
+  // mandatory; rides existing executive-chat cooldown keys (§17.8).
+  searchKnowledgeBase,
 };
 
 /**

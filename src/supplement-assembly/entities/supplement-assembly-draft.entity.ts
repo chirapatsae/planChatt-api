@@ -190,6 +190,20 @@ export class SupplementAssemblyDraft {
   })
   part3GeneratedAt: Date | null;
 
+  // wave-supplement-true-footer-pagenumber / DB-01 — per-SPG page map
+  // produced by the page-tracking renderer at `generatePart3` and consumed
+  // at `merge` to stamp the TRUE ผ.02 footer page onto SupplementProjectGroup
+  // .pageNumber + the version-projects join. Key = SPG UUID, value = 1-based
+  // PART3-RELATIVE page (== the printed footer; supplement Part 3 restarts at
+  // 1 per §21.3.4). Nullable: manual-upload / legacy drafts have no map →
+  // merge falls back to sequential i+1 (BE-02 staleness guard). Advisory
+  // authoring artifact per §17.2 (UUID→int only, no PII; NOT a tracking_status
+  // / ai_* row). synchronize:true adds the column in dev; prod needs a manual
+  // `ALTER TABLE supplement_assembly_drafts ADD COLUMN part3_page_map jsonb`
+  // (nullable → no backfill of existing rows required).
+  @Column({ name: 'part3_page_map', type: 'jsonb', nullable: true })
+  part3PageMap: Record<string, number> | null;
+
   // Creator — `created_by_id` is the canonical column. As of
   // wave-supplement-assembly-metadata-parity / BE-01 we also expose a
   // `@ManyToOne(WorkHistory)` relation on the same column so the draft

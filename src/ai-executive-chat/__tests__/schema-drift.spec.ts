@@ -86,3 +86,107 @@ describe('BE-W44-02 / tool-schema-validator', () => {
     expect(res.error).toMatch(/asOf/);
   });
 });
+
+/**
+ * Wave AI-Knowledge-Hub BE-04 (2026-06-12) — `searchKnowledgeBase`
+ * schema strictness (§17.9). Output validation failures on this tool
+ * surface as 502 `AI_SCHEMA_DRIFT` through the same tool-loop path the
+ * cases above exercise; provenance keys are REQUIRED so the LLM can
+ * always cite ที่มา (origin / sourceName / updatedAt / version).
+ */
+describe('BE-04 / searchKnowledgeBase schema strictness (§17.9)', () => {
+  const spec = EXECUTIVE_TOOL_REGISTRY.searchKnowledgeBase;
+
+  it('missing required `query` is an error, not a silent default', () => {
+    const res = validateAgainstSchema(spec.paramsSchema, { limit: 3 });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/missing required/);
+  });
+
+  it('limit above the top-k ceiling of 5 is rejected', () => {
+    const res = validateAgainstSchema(spec.paramsSchema, {
+      query: 'นโยบาย',
+      limit: 6,
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/above maximum/);
+  });
+
+  it('domainKey outside the knowledge-domain enum is rejected', () => {
+    const res = validateAgainstSchema(spec.paramsSchema, {
+      query: 'นโยบาย',
+      domainKey: 'not-a-domain',
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/enum/);
+  });
+
+  it('additionalProperties:false rejects injected extra params', () => {
+    const res = validateAgainstSchema(spec.paramsSchema, {
+      query: 'นโยบาย',
+      injected: 'attack',
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/additional property/);
+  });
+
+  it('valid params pass (domainKey from the registered knowledge domains)', () => {
+    const res = validateAgainstSchema(spec.paramsSchema, {
+      query: 'การประสานแผน คืออะไร',
+      domainKey: 'glossary',
+      limit: 3,
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it('return schema catches handler drift — missing asOf', () => {
+    const res = validateAgainstSchema(spec.returnSchema, { items: [] });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/asOf/);
+  });
+
+  it('return schema demands the provenance key `sourceName` on every item (nullable-via-required-only)', () => {
+    const itemMissingSourceName = {
+      entryId: '11111111-1111-1111-1111-111111111111',
+      title: 'อภิธานศัพท์',
+      excerpt: 'คำนิยาม…',
+      domainKey: 'glossary',
+      origin: 'curated',
+      updatedAt: '2026-06-12T00:00:00.000Z',
+      version: 1,
+    };
+    const res = validateAgainstSchema(spec.returnSchema, {
+      items: [itemMissingSourceName],
+      asOf: '2026-06-12T00:00:00.000Z',
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/sourceName/);
+
+    // `sourceName: null` (curated row) passes — key present, value null.
+    const ok = validateAgainstSchema(spec.returnSchema, {
+      items: [{ ...itemMissingSourceName, sourceName: null }],
+      asOf: '2026-06-12T00:00:00.000Z',
+    });
+    expect(ok).toEqual({ ok: true });
+  });
+
+  it('return schema rejects an origin outside curated|external (provenance spoof = drift)', () => {
+    const res = validateAgainstSchema(spec.returnSchema, {
+      items: [
+        {
+          entryId: '11111111-1111-1111-1111-111111111111',
+          title: 'อภิธานศัพท์',
+          excerpt: 'คำนิยาม…',
+          domainKey: 'glossary',
+          origin: 'system',
+          sourceName: null,
+          updatedAt: '2026-06-12T00:00:00.000Z',
+          version: 1,
+        },
+      ],
+      asOf: '2026-06-12T00:00:00.000Z',
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/enum/);
+  });
+});

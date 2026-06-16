@@ -119,7 +119,18 @@ export type ExecutiveToolName =
   //     Rule #32 + Rule #47 + Rule #48 ("Enterprise Output Bar",
   //     appended by BE-02). Read-only (§17.2 / §17.3); §17.11 no role
   //     exemption — handler MUST NOT branch on role.
-  | 'getPlanCatalogOverview';
+  | 'getPlanCatalogOverview'
+  // --- Wave AI-Knowledge-Hub BE-04 (2026-06-12): `searchKnowledgeBase`
+  //     — published-only curated/external knowledge retrieval (§17.15.4
+  //     exposure invariant). Backed by `KnowledgeSearchService` in the
+  //     `ai-knowledge-hub` module (one-way dependency chat → hub).
+  //     pg_trgm + ILIKE retrieval per Q5; top-k ≤ 5, excerpt ≤ 800
+  //     chars. Advisory per §17.2 — derived (live-DB) tool data WINS on
+  //     conflict; provenance (origin / sourceName / updatedAt) is
+  //     mandatory in the envelope so the LLM can cite ที่มา. Rides the
+  //     existing executive-chat cooldown/quota keys (§17.8 — no new
+  //     key). Read-only (§17.2 / §17.3); §17.11 no role exemption.
+  | 'searchKnowledgeBase';
 
 /**
  * Minimal structural subset of JSON Schema Draft-07. Consumed by the

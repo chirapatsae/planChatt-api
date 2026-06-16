@@ -90,6 +90,20 @@ describe('SEC-W44-01 / injection-basic (§17.9)', () => {
         'listLaos',
         // Wave 67 (W67-AGENCY-RESOLVER) — government_agency name → PK resolver
         'listAgencies',
+        // Wave AI-Exec-Chat-Book-Coverage BE-01 (2026-05-28) — sub-book
+        // drill-down read tools (whitelist refresh caught up by BE-04;
+        // the four tools predate this entry).
+        'listProjectsInRevisionBook',
+        'listProjectsInSupplementBook',
+        'getRevisionBookSummary',
+        'getSupplementBookSummary',
+        // Wave AI-Exec-Chat-Enterprise-Output-Tone BE-01 (2026-05-28) —
+        // document-centric catalog orchestrator (read-only).
+        'getPlanCatalogOverview',
+        // Wave AI-Knowledge-Hub BE-04 (2026-06-12) — published-only
+        // knowledge retrieval (§17.15.4). Read aggregator over
+        // ai_knowledge_entries; derived data wins on conflict (§17.2).
+        'searchKnowledgeBase',
       ]),
     );
   });
