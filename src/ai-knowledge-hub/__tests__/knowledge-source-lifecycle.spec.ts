@@ -14,14 +14,14 @@
  * 5. Rotate-key — old key stops verifying, new plaintext returned once.
  * 6. Every mutation writes exactly one `ai_knowledge_audit_logs` row;
  *    audit detail never contains the plaintext key.
- * 7. Controller role matrix — every /sources* route is ADMIN_OR_ABOVE
- *    behind the JWT chain.
+ * 7. Controller role matrix — every /sources* route is SUPER_ADMIN_ONLY
+ *    behind the JWT chain (2026-06-16 super-admin-only narrowing).
  */
 import { Reflector } from '@nestjs/core';
 import * as argon2 from 'argon2';
 
 import { JwtAuthGuard } from '../../auth/auth.guard';
-import { ADMIN_OR_ABOVE } from '../../auth/role-groups';
+import { SUPER_ADMIN_ONLY } from '../../auth/role-groups';
 import { ROLES_KEY } from '../../auth/roles.decorator';
 import { RolesGuard } from '../../auth/roles.guard';
 import { WorkStatusApprovedGuard } from '../../auth/work-status-approved.guard';
@@ -287,11 +287,11 @@ describe('BE-03 controller role matrix (real metadata)', () => {
   ];
 
   it.each(adminHandlers)(
-    '%s is ADMIN_OR_ABOVE behind the JWT chain',
+    '%s is SUPER_ADMIN_ONLY behind the JWT chain (2026-06-16 super-admin-only narrowing)',
     (handler) => {
       const method = KnowledgeIngestController.prototype[handler] as object;
       const roles = reflector.get<string[]>(ROLES_KEY, method as never);
-      expect(roles).toEqual([...ADMIN_OR_ABOVE]);
+      expect(roles).toEqual([...SUPER_ADMIN_ONLY]);
 
       const guards: unknown[] =
         Reflect.getMetadata('__guards__', method) ?? [];

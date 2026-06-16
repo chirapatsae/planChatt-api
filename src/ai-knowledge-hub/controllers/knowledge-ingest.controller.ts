@@ -16,7 +16,7 @@ import {
 
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
-import { ADMIN_OR_ABOVE } from 'src/auth/role-groups';
+import { SUPER_ADMIN_ONLY } from 'src/auth/role-groups';
 import { Roles } from 'src/auth/roles.decorator';
 import { RolesGuard } from 'src/auth/roles.guard';
 import { WorkStatusApprovedGuard } from 'src/auth/work-status-approved.guard';
@@ -57,8 +57,10 @@ import { KnowledgeSourceService } from '../services/knowledge-source.service';
  *
  *   1. ADMIN routes (`/sources*`, `/ingestions*`) — the standard JWT
  *      chain (JwtAuthGuard → RolesGuard → WorkStatusApprovedGuard) with
- *      `@Roles(...ADMIN_OR_ABOVE)` (Q2 / §18.3 authority; §17.11 — no
- *      role exemption, UI visibility is never access control).
+ *      `@Roles(...SUPER_ADMIN_ONLY)` (§17.11 — no role exemption, UI
+ *      visibility is never access control). (2026-06-16: narrowed to
+ *      super-admin only per user direction; supersedes the prior
+ *      EXEC_READ / ADMIN_OR_ABOVE audience.)
  *   2. INGEST route (`/ingest/:sourceKey`) — `KnowledgeSourceApiKeyGuard`
  *      ONLY. NO JWT, NO session, NO role context: the API key grants
  *      exactly one capability (staging INSERT). See the least-privilege
@@ -80,13 +82,15 @@ export class KnowledgeIngestController {
   ) {}
 
   // ──────────────────────────────────────────────────────────────────
-  // §3.1 — Source admin console (ADMIN_OR_ABOVE)
+  // §3.1 — Source admin console (SUPER_ADMIN_ONLY; 2026-06-16: narrowed
+  // to super-admin only per user direction; supersedes the prior
+  // EXEC_READ / ADMIN_OR_ABOVE audience)
   // ──────────────────────────────────────────────────────────────────
 
   /** List sources incl. health counters + last_seen_at. ZERO-WRITE. */
   @Get('sources')
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async listSources(): Promise<KnowledgeSourceListResponseDto> {
     return this.knowledgeSourceService.listSources();
   }
@@ -94,7 +98,7 @@ export class KnowledgeIngestController {
   /** Source detail incl. health. ZERO-WRITE. */
   @Get('sources/:id')
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async getSource(
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<KnowledgeSourceDto> {
@@ -108,7 +112,7 @@ export class KnowledgeIngestController {
    */
   @Post('sources')
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async createSource(
     @Body() dto: CreateKnowledgeSourceDto,
     @Req() req: { user: JwtPayloadUser },
@@ -123,7 +127,7 @@ export class KnowledgeIngestController {
   @Post('sources/:id/approve')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async approveSource(
     @Param('id', ParseUUIDPipe) id: string,
     @Req() req: { user: JwtPayloadUser },
@@ -134,7 +138,7 @@ export class KnowledgeIngestController {
   @Post('sources/:id/suspend')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async suspendSource(
     @Param('id', ParseUUIDPipe) id: string,
     @Req() req: { user: JwtPayloadUser },
@@ -145,7 +149,7 @@ export class KnowledgeIngestController {
   @Post('sources/:id/revoke')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async revokeSource(
     @Param('id', ParseUUIDPipe) id: string,
     @Req() req: { user: JwtPayloadUser },
@@ -157,7 +161,7 @@ export class KnowledgeIngestController {
   @Post('sources/:id/rotate-key')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async rotateKey(
     @Param('id', ParseUUIDPipe) id: string,
     @Req() req: { user: JwtPayloadUser },
@@ -168,7 +172,7 @@ export class KnowledgeIngestController {
   /** Schema / rate-limit / domain edits — NOT status, NOT credentials. */
   @Patch('sources/:id')
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async updateSource(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateKnowledgeSourceDto,
@@ -211,13 +215,15 @@ export class KnowledgeIngestController {
   }
 
   // ──────────────────────────────────────────────────────────────────
-  // §3.3 — Quarantine review (ADMIN_OR_ABOVE)
+  // §3.3 — Quarantine review (SUPER_ADMIN_ONLY; 2026-06-16: narrowed to
+  // super-admin only per user direction; supersedes the prior EXEC_READ
+  // / ADMIN_OR_ABOVE audience)
   // ──────────────────────────────────────────────────────────────────
 
   /** Paginated staging review list (cap 100). ZERO-WRITE (§18.13). */
   @Get('ingestions')
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async listIngestions(
     @Query() query: ListKnowledgeIngestionsQueryDto,
   ): Promise<KnowledgeIngestionListResponseDto> {
@@ -232,7 +238,7 @@ export class KnowledgeIngestController {
   @Post('ingestions/:id/promote')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async promoteIngestion(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: PromoteKnowledgeIngestionDto,
@@ -245,7 +251,7 @@ export class KnowledgeIngestController {
   @Post('ingestions/:id/reject')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async rejectIngestion(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RejectKnowledgeIngestionDto,

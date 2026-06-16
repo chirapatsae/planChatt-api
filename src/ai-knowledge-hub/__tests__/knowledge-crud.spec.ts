@@ -3,9 +3,10 @@
  *
  * Curated-knowledge CRUD acceptance specs (task §7):
  *
- * 1. Role matrix — mutations are admin + super-admin ONLY (Q2 LOCKED);
- *    user / staff / c-level → 403 via the canonical `RolesGuard`
- *    against REAL controller metadata. Reads are EXEC_READ.
+ * 1. Role matrix — every knowledge-hub endpoint (reads + mutations) is
+ *    super-admin ONLY (2026-06-16 super-admin-only narrowing); user /
+ *    staff / admin / c-level → 403 via the canonical `RolesGuard`
+ *    against REAL controller metadata.
  * 2. §17.4 content hash — SHA-256 over NFC-normalized title + body;
  *    NFC-stable, boundary-unambiguous.
  * 3. Edit produces immutable revision vN+1, preserves vN byte-for-byte,
@@ -18,7 +19,7 @@
  * 6. Every mutation writes EXACTLY ONE `ai_knowledge_audit_logs` row
  *    (actor WorkHistory uuid + denormalized role) — §17.3, NEVER
  *    TrackingStatus.
- * 7. Visibility — non-admin EXEC_READ callers see `published` only.
+ * 7. Visibility — non-admin callers see `published` only.
  * 8. Hygiene — no tracking-status / project-table import anywhere in
  *    the module (grep-style spec per task §7).
  */
@@ -32,7 +33,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import { JwtAuthGuard } from '../../auth/auth.guard';
-import { ADMIN_OR_ABOVE, EXEC_READ } from '../../auth/role-groups';
+import { SUPER_ADMIN_ONLY } from '../../auth/role-groups';
 import { ROLES_KEY } from '../../auth/roles.decorator';
 import { Role } from '../../auth/roles.enum';
 import { RolesGuard } from '../../auth/roles.guard';
@@ -349,16 +350,18 @@ describe('curated-knowledge endpoints — role matrix (Q2 LOCKED)', () => {
       }),
     }) as unknown as ExecutionContext;
 
-  it('list/detail reads declare @Roles(...EXEC_READ)', () => {
+  it('list/detail reads declare @Roles(...SUPER_ADMIN_ONLY) (2026-06-16 super-admin-only narrowing)', () => {
     for (const handler of readHandlers) {
-      expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([...EXEC_READ]);
+      expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([
+        ...SUPER_ADMIN_ONLY,
+      ]);
     }
   });
 
-  it('revisions + all five mutations declare @Roles(...ADMIN_OR_ABOVE)', () => {
+  it('revisions + all five mutations declare @Roles(...SUPER_ADMIN_ONLY) (2026-06-16 super-admin-only narrowing)', () => {
     for (const handler of adminHandlers) {
       expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([
-        ...ADMIN_OR_ABOVE,
+        ...SUPER_ADMIN_ONLY,
       ]);
     }
   });
@@ -373,8 +376,8 @@ describe('curated-knowledge endpoints — role matrix (Q2 LOCKED)', () => {
     }
   });
 
-  it.each([Role.USER, Role.STAFF, Role.C_LEVEL])(
-    'role "%s" is rejected (403) on every mutation / revision handler',
+  it.each([Role.USER, Role.STAFF, Role.ADMIN, Role.C_LEVEL])(
+    'role "%s" is rejected (403) on every mutation / revision handler (super-admin only)',
     (role) => {
       for (const handler of adminHandlers) {
         expect(() => guard.canActivate(contextFor(handler, role))).toThrow(
@@ -384,31 +387,32 @@ describe('curated-knowledge endpoints — role matrix (Q2 LOCKED)', () => {
     },
   );
 
-  it.each([Role.ADMIN, Role.SUPER_ADMIN])(
-    'role "%s" passes the role gate on every mutation handler',
-    (role) => {
-      for (const handler of adminHandlers) {
-        expect(guard.canActivate(contextFor(handler, role))).toBe(true);
-      }
-    },
-  );
-
-  it.each([Role.STAFF, Role.ADMIN, Role.SUPER_ADMIN, Role.C_LEVEL])(
-    'EXEC_READ role "%s" passes the role gate on reads',
-    (role) => {
-      for (const handler of readHandlers) {
-        expect(guard.canActivate(contextFor(handler, role))).toBe(true);
-      }
-    },
-  );
-
-  it('role "user" is rejected on reads too', () => {
-    for (const handler of readHandlers) {
-      expect(() => guard.canActivate(contextFor(handler, Role.USER))).toThrow(
-        ForbiddenException,
+  it('only super-admin passes the role gate on every mutation handler (2026-06-16 super-admin-only narrowing)', () => {
+    for (const handler of adminHandlers) {
+      expect(guard.canActivate(contextFor(handler, Role.SUPER_ADMIN))).toBe(
+        true,
       );
     }
   });
+
+  it('only super-admin passes the role gate on reads (2026-06-16 super-admin-only narrowing)', () => {
+    for (const handler of readHandlers) {
+      expect(guard.canActivate(contextFor(handler, Role.SUPER_ADMIN))).toBe(
+        true,
+      );
+    }
+  });
+
+  it.each([Role.USER, Role.STAFF, Role.ADMIN, Role.C_LEVEL])(
+    'role "%s" is rejected (403) on reads too (super-admin only)',
+    (role) => {
+      for (const handler of readHandlers) {
+        expect(() => guard.canActivate(contextFor(handler, role))).toThrow(
+          ForbiddenException,
+        );
+      }
+    },
+  );
 });
 
 // ────────────────────────────────────────────────────────────────────

@@ -4,10 +4,10 @@
  * Class-A data-catalog + relationship CRUD acceptance specs (task §6 /
  * §7):
  *
- *  1. Role matrix (Q-03) — the BE-03 catalog mutations are admin +
- *     super-admin ONLY through the canonical `RolesGuard` against REAL
- *     controller metadata: `user` / `staff` / `c-level` → 403; `admin` /
- *     `super-admin` → pass.
+ *  1. Role matrix (Q-03) — the BE-03 catalog mutations are super-admin
+ *     ONLY (2026-06-16 super-admin-only narrowing) through the canonical
+ *     `RolesGuard` against REAL controller metadata: `user` / `staff` /
+ *     `admin` / `c-level` → 403; `super-admin` → pass.
  *  2. Catalog table CRUD — create (+ duplicate-name guard), patch
  *     (merge + rename collision + 404), soft-delete with the SERVICE
  *     cascade to columns + dangling relations (NOT a DB CASCADE).
@@ -29,7 +29,7 @@ import {
 import { Reflector } from '@nestjs/core';
 
 import { JwtAuthGuard } from '../../auth/auth.guard';
-import { ADMIN_OR_ABOVE } from '../../auth/role-groups';
+import { SUPER_ADMIN_ONLY } from '../../auth/role-groups';
 import { ROLES_KEY } from '../../auth/roles.decorator';
 import { Role } from '../../auth/roles.enum';
 import { RolesGuard } from '../../auth/roles.guard';
@@ -351,10 +351,10 @@ describe('KnowledgeStructureController — BE-03 catalog role gate (Q-03)', () =
   ];
 
   it.each(CATALOG_HANDLERS)(
-    '%s declares @Roles(...ADMIN_OR_ABOVE) + the canonical guard chain',
+    '%s declares @Roles(...SUPER_ADMIN_ONLY) + the canonical guard chain (2026-06-16 super-admin-only narrowing)',
     (_name, handler) => {
       expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([
-        ...ADMIN_OR_ABOVE,
+        ...SUPER_ADMIN_ONLY,
       ]);
       expect(Reflect.getMetadata('__guards__', handler)).toEqual([
         JwtAuthGuard,
@@ -365,13 +365,12 @@ describe('KnowledgeStructureController — BE-03 catalog role gate (Q-03)', () =
   );
 
   it.each(CATALOG_HANDLERS)(
-    '%s: admin + super-admin pass; user / staff / c-level → 403',
+    '%s: super-admin only; user / staff / admin / c-level → 403 (2026-06-16 super-admin-only narrowing)',
     (_name, handler) => {
-      expect(guard.canActivate(contextFor(handler, Role.ADMIN))).toBe(true);
       expect(
         guard.canActivate(contextFor(handler, Role.SUPER_ADMIN)),
       ).toBe(true);
-      for (const role of [Role.USER, Role.STAFF, Role.C_LEVEL]) {
+      for (const role of [Role.USER, Role.STAFF, Role.ADMIN, Role.C_LEVEL]) {
         expect(() => guard.canActivate(contextFor(handler, role))).toThrow(
           ForbiddenException,
         );

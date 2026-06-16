@@ -18,15 +18,17 @@
  *   4. ZERO-WRITE proof (§18.13 condition 2): neither `getKnowledgeMap`
  *      nor `getStructure` touches a mutating repository method — the
  *      mutation surface throws on touch.
- *   5. Role gate (Q-06): `GET /structure` declares `@Roles(...EXEC_READ)`
- *      through the canonical `RolesGuard`; `user` → 403, EXEC_READ → 200.
+ *   5. Role gate (2026-06-16 super-admin-only narrowing): `GET /structure`
+ *      declares `@Roles(...SUPER_ADMIN_ONLY)` through the canonical
+ *      `RolesGuard`; super-admin only → 200, everyone else (user / staff /
+ *      admin / c-level) → 403.
  */
 import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 
 import { EXECUTIVE_TOOL_NAMES } from '../../ai-executive-chat/tools/tool-registry';
 import { JwtAuthGuard } from '../../auth/auth.guard';
-import { EXEC_READ } from '../../auth/role-groups';
+import { SUPER_ADMIN_ONLY } from '../../auth/role-groups';
 import { ROLES_KEY } from '../../auth/roles.decorator';
 import { Role } from '../../auth/roles.enum';
 import { RolesGuard } from '../../auth/roles.guard';
@@ -571,7 +573,7 @@ describe('BE-01 reads are zero-write (§18.13)', () => {
 // 5. Role gate — real controller metadata through the canonical guard
 // ────────────────────────────────────────────────────────────────────
 
-describe('GET /v1/ai-knowledge-hub/structure — role gate (Q-06)', () => {
+describe('GET /v1/ai-knowledge-hub/structure — role gate (2026-06-16 super-admin-only narrowing)', () => {
   const handler = KnowledgeStructureController.prototype.getStructure;
   const guard = new RolesGuard(new Reflector());
 
@@ -582,8 +584,10 @@ describe('GET /v1/ai-knowledge-hub/structure — role gate (Q-06)', () => {
       switchToHttp: () => ({ getRequest: () => ({ user: { role } }) }),
     }) as unknown as ExecutionContext;
 
-  it('declares @Roles(...EXEC_READ) on the structure handler', () => {
-    expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([...EXEC_READ]);
+  it('declares @Roles(...SUPER_ADMIN_ONLY) on the structure handler', () => {
+    expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([
+      ...SUPER_ADMIN_ONLY,
+    ]);
   });
 
   it('mirrors the map-controller guard chain (Jwt → Roles → WorkStatus)', () => {
@@ -594,16 +598,16 @@ describe('GET /v1/ai-knowledge-hub/structure — role gate (Q-06)', () => {
     ]);
   });
 
-  it.each([Role.STAFF, Role.ADMIN, Role.SUPER_ADMIN, Role.C_LEVEL])(
-    'EXEC_READ role "%s" passes the role gate (→ 200 path)',
+  it('super-admin passes the role gate (→ 200 path)', () => {
+    expect(guard.canActivate(contextForRole(Role.SUPER_ADMIN))).toBe(true);
+  });
+
+  it.each([Role.USER, Role.STAFF, Role.ADMIN, Role.C_LEVEL])(
+    'role "%s" is rejected with 403 FORBIDDEN_ROLE',
     (role) => {
-      expect(guard.canActivate(contextForRole(role))).toBe(true);
+      expect(() => guard.canActivate(contextForRole(role))).toThrow(
+        ForbiddenException,
+      );
     },
   );
-
-  it('role "user" is rejected with 403 FORBIDDEN_ROLE', () => {
-    expect(() => guard.canActivate(contextForRole(Role.USER))).toThrow(
-      ForbiddenException,
-    );
-  });
 });

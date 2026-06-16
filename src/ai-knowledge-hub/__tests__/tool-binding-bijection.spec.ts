@@ -4,10 +4,13 @@
  * Class-B tool↔domain binding override + RUNTIME bijection guard
  * acceptance specs (task §6 / §7):
  *
- *  1. Role matrix (Q-04) — the WRITE (`putToolBinding`) is SUPER-ADMIN
- *     ONLY through the canonical `RolesGuard` against REAL controller
- *     metadata: `admin` → 403, `super-admin` → pass; the diagnostics READ
- *     (`getToolBindings`) is ADMIN_OR_ABOVE.
+ *  1. Role matrix — both the WRITE (`putToolBinding`) and the diagnostics
+ *     READ (`getToolBindings`) are SUPER-ADMIN ONLY through the canonical
+ *     `RolesGuard` against REAL controller metadata: `super-admin` → pass;
+ *     admin / staff / c-level / user → 403 (2026-06-16 super-admin-only
+ *     narrowing — the whole AI Knowledge Hub collapsed to super-admin; the
+ *     PUT was already SUPER_ADMIN_ONLY per Q-04, the GET tightened from
+ *     ADMIN_OR_ABOVE).
  *  2. Fallback proof (task §6) — an EMPTY override table resolves to the
  *     CODE map (`KNOWLEDGE_DOMAINS[].toolNames`), byte-identical to
  *     pre-Phase-3 (B1 default).
@@ -39,10 +42,7 @@ import {
 import { Reflector } from '@nestjs/core';
 
 import { JwtAuthGuard } from '../../auth/auth.guard';
-import {
-  ADMIN_OR_ABOVE,
-  SUPER_ADMIN_ONLY,
-} from '../../auth/role-groups';
+import { SUPER_ADMIN_ONLY } from '../../auth/role-groups';
 import { ROLES_KEY } from '../../auth/roles.decorator';
 import { Role } from '../../auth/roles.enum';
 import { RolesGuard } from '../../auth/roles.guard';
@@ -271,15 +271,14 @@ describe('KnowledgeStructureController — tool-binding role gate (Q-04)', () =>
     }
   });
 
-  it('GET /tool-bindings is ADMIN_OR_ABOVE (diagnostics read)', () => {
+  it('GET /tool-bindings is SUPER_ADMIN_ONLY (diagnostics read; 2026-06-16 super-admin-only narrowing — tightened from ADMIN_OR_ABOVE)', () => {
     expect(Reflect.getMetadata(ROLES_KEY, getHandler)).toEqual([
-      ...ADMIN_OR_ABOVE,
+      ...SUPER_ADMIN_ONLY,
     ]);
-    expect(guard.canActivate(contextFor(getHandler, Role.ADMIN))).toBe(true);
     expect(guard.canActivate(contextFor(getHandler, Role.SUPER_ADMIN))).toBe(
       true,
     );
-    for (const role of [Role.USER, Role.STAFF, Role.C_LEVEL]) {
+    for (const role of [Role.ADMIN, Role.USER, Role.STAFF, Role.C_LEVEL]) {
       expect(() => guard.canActivate(contextFor(getHandler, role))).toThrow(
         ForbiddenException,
       );

@@ -14,11 +14,7 @@ import {
 
 import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { JwtPayloadUser } from 'src/auth/jwt.strategy';
-import {
-  ADMIN_OR_ABOVE,
-  EXEC_READ,
-  SUPER_ADMIN_ONLY,
-} from 'src/auth/role-groups';
+import { SUPER_ADMIN_ONLY } from 'src/auth/role-groups';
 import { Roles } from 'src/auth/roles.decorator';
 import { RolesGuard } from 'src/auth/roles.guard';
 import { WorkStatusApprovedGuard } from 'src/auth/work-status-approved.guard';
@@ -91,13 +87,16 @@ import {
  *
  * CLAUDE.md references:
  *   - §18.13 — `GET /structure` is a zero-write read aggregator with a
- *     declared authority gate (EXEC_READ); it never writes a row.
- *   - §17.15.6 / Q-06 LOCKED — read audience is full EXEC_READ
- *     (`staff`, `admin`, `super-admin`, `c-level`) + `workStatus =
- *     approved`, mirroring `GET /map`.
- *   - §17.16.7 / Q-03 LOCKED — Class-A mutations are admin + super-admin
- *     ONLY (`@Roles(...ADMIN_OR_ABOVE)`); the guard chain is the only
- *     gate.
+ *     declared authority gate; it never writes a row.
+ *   - §17.15.6 / Q-06 LOCKED — (2026-06-16: the read audience, formerly
+ *     full EXEC_READ + `workStatus = approved` mirroring `GET /map`, was
+ *     narrowed to super-admin only per user direction; supersedes the
+ *     prior EXEC_READ / ADMIN_OR_ABOVE audience.)
+ *   - §17.16.7 / Q-03 LOCKED — (2026-06-16: Class-A mutations, formerly
+ *     admin + super-admin, were narrowed to super-admin only
+ *     (`@Roles(...SUPER_ADMIN_ONLY)`) per user direction; supersedes the
+ *     prior EXEC_READ / ADMIN_OR_ABOVE audience.) The guard chain is the
+ *     only gate.
  *   - §17.2 — every payload is advisory editor display/seed data;
  *     nothing here gates any workflow transition.
  *   - §17.3 — BE-02 mutations audit via `ai_knowledge_audit_logs` ONLY
@@ -136,10 +135,13 @@ export class KnowledgeStructureController {
    * + the read-only executive tool registry + the `unmappedTools[]`
    * orphan detector. ZERO writes (§18.13 condition 2). No PII, no staging
    * content, no secrets.
+   *
+   * (2026-06-16: narrowed to super-admin only per user direction;
+   * supersedes the prior EXEC_READ / ADMIN_OR_ABOVE audience.)
    */
   @Get()
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...EXEC_READ)
+  @Roles(...SUPER_ADMIN_ONLY)
   async getStructure(): Promise<KnowledgeStructureResponseDto> {
     return this.knowledgeHubService.getStructure();
   }
@@ -154,14 +156,16 @@ export class KnowledgeStructureController {
    * Bulk drag-reorder convenience (task §3): stamps each key's
    * `display_order` to its array index in one transaction + writes ONE
    * batch `domain_meta_update` audit row. Unknown keys are ignored
-   * (task §8). Admin + super-admin only (Q-03).
+   * (task §8). Super-admin only (2026-06-16: narrowed to super-admin
+   * only per user direction; supersedes the prior EXEC_READ /
+   * ADMIN_OR_ABOVE audience).
    *
    * Declared BEFORE the `:domainKey` route so `order` is not captured as
    * a domain key by the parameterised PATCH below.
    */
   @Patch('domains/order')
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async reorderDomains(
     @Body() dto: ReorderKnowledgeDomainsDto,
     @Req() req: { user: JwtPayloadUser },
@@ -173,15 +177,17 @@ export class KnowledgeStructureController {
    * PATCH /v1/ai-knowledge-hub/structure/domains/:domainKey
    *
    * Upsert the Class-A DISPLAY overlay (label TH/EN, description, order,
-   * colour, icon, hidden) for a code-declared domain (admin + super-admin,
-   * Q-03). REJECTS an unknown `domainKey` (`400 KNOWLEDGE_DOMAIN_UNKNOWN`)
-   * and an off-allow-list colour/icon (`400 KNOWLEDGE_TOKEN_INVALID`).
-   * Q-05 — `key` / `layer` / tool binding are NOT in the DTO, so they
-   * cannot be sent. Audits exactly one `domain_meta_update` row.
+   * colour, icon, hidden) for a code-declared domain (super-admin only;
+   * 2026-06-16: narrowed to super-admin only per user direction;
+   * supersedes the prior EXEC_READ / ADMIN_OR_ABOVE audience). REJECTS an
+   * unknown `domainKey` (`400 KNOWLEDGE_DOMAIN_UNKNOWN`) and an
+   * off-allow-list colour/icon (`400 KNOWLEDGE_TOKEN_INVALID`). Q-05 —
+   * `key` / `layer` / tool binding are NOT in the DTO, so they cannot be
+   * sent. Audits exactly one `domain_meta_update` row.
    */
   @Patch('domains/:domainKey')
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async patchDomainOverlay(
     @Param('domainKey') domainKey: string,
     @Body() dto: PatchKnowledgeDomainDto,
@@ -201,13 +207,15 @@ export class KnowledgeStructureController {
   /**
    * POST /v1/ai-knowledge-hub/structure/gaps
    *
-   * Create a UI coverage-gap node (admin + super-admin, Q-03). REJECTS a
-   * key colliding with a code domain/gap key or an existing overlay row
+   * Create a UI coverage-gap node (super-admin only; 2026-06-16:
+   * narrowed to super-admin only per user direction; supersedes the
+   * prior EXEC_READ / ADMIN_OR_ABOVE audience). REJECTS a key colliding
+   * with a code domain/gap key or an existing overlay row
    * (`400 KNOWLEDGE_GAP_KEY_COLLISION`). Audits `gap_create`.
    */
   @Post('gaps')
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async createGap(
     @Body() dto: CreateKnowledgeGapDto,
     @Req() req: { user: JwtPayloadUser },
@@ -218,14 +226,15 @@ export class KnowledgeStructureController {
   /**
    * PATCH /v1/ai-knowledge-hub/structure/gaps/:domainKey
    *
-   * Edit a coverage gap's label / reason / order / hidden (admin + super-
-   * admin, Q-03). A code gap with no overlay yet is UPSERTED; a
-   * non-existent non-code key → `404 KNOWLEDGE_GAP_NOT_FOUND`. Audits
-   * `gap_update`.
+   * Edit a coverage gap's label / reason / order / hidden (super-admin
+   * only; 2026-06-16: narrowed to super-admin only per user direction;
+   * supersedes the prior EXEC_READ / ADMIN_OR_ABOVE audience). A code gap
+   * with no overlay yet is UPSERTED; a non-existent non-code key →
+   * `404 KNOWLEDGE_GAP_NOT_FOUND`. Audits `gap_update`.
    */
   @Patch('gaps/:domainKey')
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async patchGap(
     @Param('domainKey') domainKey: string,
     @Body() dto: PatchKnowledgeGapDto,
@@ -241,14 +250,16 @@ export class KnowledgeStructureController {
   /**
    * DELETE /v1/ai-knowledge-hub/structure/gaps/:domainKey
    *
-   * Remove a coverage gap (admin + super-admin, Q-03). A UI-created gap is
-   * soft-deleted; a CODE gap (e.g. `equipment`) cannot be hard-removed and
-   * is HIDDEN instead (`is_hidden = true`) — the response surfaces the
-   * nuance. Audits `gap_delete`.
+   * Remove a coverage gap (super-admin only; 2026-06-16: narrowed to
+   * super-admin only per user direction; supersedes the prior EXEC_READ
+   * / ADMIN_OR_ABOVE audience). A UI-created gap is soft-deleted; a CODE
+   * gap (e.g. `equipment`) cannot be hard-removed and is HIDDEN instead
+   * (`is_hidden = true`) — the response surfaces the nuance. Audits
+   * `gap_delete`.
    */
   @Delete('gaps/:domainKey')
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async deleteGap(
     @Param('domainKey') domainKey: string,
     @Req() req: { user: JwtPayloadUser },
@@ -266,14 +277,16 @@ export class KnowledgeStructureController {
   /**
    * POST /v1/ai-knowledge-hub/structure/catalog/tables
    *
-   * Create a catalog table DOCUMENTATION row (admin + super-admin, Q-03).
+   * Create a catalog table DOCUMENTATION row (super-admin only;
+   * 2026-06-16: narrowed to super-admin only per user direction;
+   * supersedes the prior EXEC_READ / ADMIN_OR_ABOVE audience).
    * `tableName` is plain text — NEVER an SQL identifier, NEVER feeds DDL
    * (no-DDL guarantee). A duplicate live name →
    * `409 CATALOG_TABLE_NAME_DUPLICATE`. Audits `catalog_table_create`.
    */
   @Post('catalog/tables')
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async createCatalogTable(
     @Body() dto: CreateCatalogTableDto,
     @Req() req: { user: JwtPayloadUser },
@@ -284,14 +297,15 @@ export class KnowledgeStructureController {
   /**
    * PATCH /v1/ai-knowledge-hub/structure/catalog/tables/:id
    *
-   * Edit a catalog table's display fields (admin + super-admin, Q-03). A
-   * non-existent / soft-deleted id → `404 CATALOG_TABLE_NOT_FOUND`; a
-   * rename collision → `409 CATALOG_TABLE_NAME_DUPLICATE`. Audits
-   * `catalog_table_update`.
+   * Edit a catalog table's display fields (super-admin only; 2026-06-16:
+   * narrowed to super-admin only per user direction; supersedes the
+   * prior EXEC_READ / ADMIN_OR_ABOVE audience). A non-existent /
+   * soft-deleted id → `404 CATALOG_TABLE_NOT_FOUND`; a rename collision →
+   * `409 CATALOG_TABLE_NAME_DUPLICATE`. Audits `catalog_table_update`.
    */
   @Patch('catalog/tables/:id')
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async updateCatalogTable(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateCatalogTableDto,
@@ -303,14 +317,16 @@ export class KnowledgeStructureController {
   /**
    * DELETE /v1/ai-knowledge-hub/structure/catalog/tables/:id
    *
-   * Soft-delete a catalog table (admin + super-admin, Q-03). The service
-   * cascades the soft-delete to the table's columns + every dangling
-   * relation (NOT a DB CASCADE that hard-deletes) so the ER view stays
-   * consistent. Audits `catalog_table_delete`.
+   * Soft-delete a catalog table (super-admin only; 2026-06-16: narrowed
+   * to super-admin only per user direction; supersedes the prior
+   * EXEC_READ / ADMIN_OR_ABOVE audience). The service cascades the
+   * soft-delete to the table's columns + every dangling relation (NOT a
+   * DB CASCADE that hard-deletes) so the ER view stays consistent. Audits
+   * `catalog_table_delete`.
    */
   @Delete('catalog/tables/:id')
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async deleteCatalogTable(
     @Param('id', ParseUUIDPipe) id: string,
     @Req() req: { user: JwtPayloadUser },
@@ -321,14 +337,16 @@ export class KnowledgeStructureController {
   /**
    * PUT /v1/ai-knowledge-hub/structure/catalog/tables/:id/columns
    *
-   * Bulk replace the column set for a table (admin + super-admin, Q-03):
-   * the service diffs the incoming ordered array against the live columns,
+   * Bulk replace the column set for a table (super-admin only;
+   * 2026-06-16: narrowed to super-admin only per user direction;
+   * supersedes the prior EXEC_READ / ADMIN_OR_ABOVE audience): the
+   * service diffs the incoming ordered array against the live columns,
    * soft-deletes removed, upserts kept / added. `columnName` / `dataType`
    * are plain text (no-DDL). Audits ONE batch `catalog_column_upsert` row.
    */
   @Put('catalog/tables/:id/columns')
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async upsertCatalogColumns(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpsertCatalogColumnsDto,
@@ -344,8 +362,10 @@ export class KnowledgeStructureController {
   /**
    * POST /v1/ai-knowledge-hub/structure/catalog/relations
    *
-   * Draw an ER edge between two catalog tables (admin + super-admin, Q-03).
-   * Both ids must reference LIVE catalog tables
+   * Draw an ER edge between two catalog tables (super-admin only;
+   * 2026-06-16: narrowed to super-admin only per user direction;
+   * supersedes the prior EXEC_READ / ADMIN_OR_ABOVE audience). Both ids
+   * must reference LIVE catalog tables
    * (`400 CATALOG_RELATION_TABLE_INVALID`); a self-loop without `allowSelf`
    * → `400 CATALOG_RELATION_SELF_LOOP`; `relationType` is required. The
    * edge is DOCUMENTATION — `onDeleteNote` is never enforced at the DB
@@ -353,7 +373,7 @@ export class KnowledgeStructureController {
    */
   @Post('catalog/relations')
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async createCatalogRelation(
     @Body() dto: CreateCatalogRelationDto,
     @Req() req: { user: JwtPayloadUser },
@@ -364,14 +384,16 @@ export class KnowledgeStructureController {
   /**
    * PATCH /v1/ai-knowledge-hub/structure/catalog/relations/:id
    *
-   * Edit an ER edge's type / label / note / order (admin + super-admin,
-   * Q-03). A non-existent / soft-deleted id →
-   * `404 CATALOG_RELATION_NOT_FOUND`. The table ids cannot be re-pointed
-   * (the DTO omits them). Audits `relation_update`.
+   * Edit an ER edge's type / label / note / order (super-admin only;
+   * 2026-06-16: narrowed to super-admin only per user direction;
+   * supersedes the prior EXEC_READ / ADMIN_OR_ABOVE audience). A
+   * non-existent / soft-deleted id → `404 CATALOG_RELATION_NOT_FOUND`.
+   * The table ids cannot be re-pointed (the DTO omits them). Audits
+   * `relation_update`.
    */
   @Patch('catalog/relations/:id')
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async updateCatalogRelation(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateCatalogRelationDto,
@@ -387,13 +409,14 @@ export class KnowledgeStructureController {
   /**
    * DELETE /v1/ai-knowledge-hub/structure/catalog/relations/:id
    *
-   * Soft-delete an ER edge (admin + super-admin, Q-03). A non-existent /
-   * already-deleted id → `404 CATALOG_RELATION_NOT_FOUND`. Audits
-   * `relation_delete`.
+   * Soft-delete an ER edge (super-admin only; 2026-06-16: narrowed to
+   * super-admin only per user direction; supersedes the prior EXEC_READ
+   * / ADMIN_OR_ABOVE audience). A non-existent / already-deleted id →
+   * `404 CATALOG_RELATION_NOT_FOUND`. Audits `relation_delete`.
    */
   @Delete('catalog/relations/:id')
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async deleteCatalogRelation(
     @Param('id', ParseUUIDPipe) id: string,
     @Req() req: { user: JwtPayloadUser },
@@ -408,7 +431,9 @@ export class KnowledgeStructureController {
   /**
    * POST /v1/ai-knowledge-hub/structure/catalog/seed
    *
-   * One-shot, idempotent import (Q-02, admin + super-admin). Reads TypeORM
+   * One-shot, idempotent import (Q-02, super-admin only; 2026-06-16:
+   * narrowed to super-admin only per user direction; supersedes the
+   * prior EXEC_READ / ADMIN_OR_ABOVE audience). Reads TypeORM
    * `DataSource.entityMetadatas` READ-ONLY and inserts catalog tables /
    * columns as DATA rows (`is_seeded = true`) for any table not already
    * present as a LIVE catalog row. It issues NO DDL, touches NO schema, and
@@ -418,7 +443,7 @@ export class KnowledgeStructureController {
    */
   @Post('catalog/seed')
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async seedCatalog(
     @Req() req: { user: JwtPayloadUser },
   ): Promise<CatalogSeedResultDto> {
@@ -435,13 +460,14 @@ export class KnowledgeStructureController {
    * Read the RESOLVED binding per derived domain (override set when the
    * `ai_knowledge_tool_binding` table has rows, else the code fallback) +
    * the full read-only registry pick-list + `unmappedTools[]` /
-   * `doubleMappedTools[]` diagnostics. Admin + super-admin read (report
-   * §4.1 — the WRITE is super-admin only, the diagnostics read is
-   * admin-or-above). ZERO-WRITE (§18.13 condition 2).
+   * `doubleMappedTools[]` diagnostics. Super-admin read (2026-06-16:
+   * narrowed to super-admin only per user direction; supersedes the
+   * prior EXEC_READ / ADMIN_OR_ABOVE audience — the WRITE was already
+   * super-admin only). ZERO-WRITE (§18.13 condition 2).
    */
   @Get('tool-bindings')
   @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
-  @Roles(...ADMIN_OR_ABOVE)
+  @Roles(...SUPER_ADMIN_ONLY)
   async getToolBindings(): Promise<ToolBindingReadDto> {
     return this.knowledgeToolBindingService.getToolBindings();
   }
@@ -450,8 +476,11 @@ export class KnowledgeStructureController {
    * PUT /v1/ai-knowledge-hub/structure/tool-bindings/:domainKey
    *
    * Replace the override tool set for ONE derived domain. SUPER-ADMIN
-   * ONLY (Q-04 — `@Roles(...SUPER_ADMIN_ONLY)`, stricter than the
-   * Class-A `ADMIN_OR_ABOVE`). The body carries the FULL desired
+   * ONLY (Q-04 — `@Roles(...SUPER_ADMIN_ONLY)`). (2026-06-16: the rest of
+   * the hub was also narrowed to super-admin only per user direction;
+   * the prior "stricter than the Class-A ADMIN_OR_ABOVE" distinction no
+   * longer applies — every gate is now SUPER_ADMIN_ONLY.) The body
+   * carries the FULL desired
    * `toolName[]` (replace-set). The service re-asserts the registry⇄domain
    * BIJECTION at RUNTIME inside the transaction — unknown tool / orphan /
    * double-map → `400 KNOWLEDGE_TOOL_BINDING_INVALID` and a full rollback;

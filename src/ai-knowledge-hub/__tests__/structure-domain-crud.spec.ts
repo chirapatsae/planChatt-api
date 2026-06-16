@@ -4,10 +4,11 @@
  * Class-A domain display-overlay + coverage-gap CRUD acceptance specs
  * (task §6 / §7):
  *
- *  1. Role matrix (Q-03) — Class-A mutations are admin + super-admin
- *     ONLY through the canonical `RolesGuard` against REAL controller
- *     metadata: `user` / `staff` / `c-level` → 403; `admin` /
- *     `super-admin` → pass. `GET /structure` stays EXEC_READ.
+ *  1. Role matrix (2026-06-16 super-admin-only narrowing) — every
+ *     user-facing endpoint (Class-A mutations AND `GET /structure`) is
+ *     super-admin ONLY through the canonical `RolesGuard` against REAL
+ *     controller metadata: `user` / `staff` / `admin` / `c-level` →
+ *     403; only `super-admin` → pass.
  *  2. Domain overlay upsert — INSERT when absent, merge-patch UPDATE when
  *     present; label / description / order / colour / icon / hidden flow
  *     through; an edit survives "reboot" (the overlay row persists; the
@@ -39,7 +40,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import { JwtAuthGuard } from '../../auth/auth.guard';
-import { ADMIN_OR_ABOVE, EXEC_READ } from '../../auth/role-groups';
+import { SUPER_ADMIN_ONLY } from '../../auth/role-groups';
 import { ROLES_KEY } from '../../auth/roles.decorator';
 import { Role } from '../../auth/roles.enum';
 import { RolesGuard } from '../../auth/roles.guard';
@@ -294,10 +295,10 @@ describe('KnowledgeStructureController — role gate (Q-03 / Q-06)', () => {
   ];
 
   it.each(MUTATION_HANDLERS)(
-    '%s declares @Roles(...ADMIN_OR_ABOVE) + the canonical guard chain',
+    '%s declares @Roles(...SUPER_ADMIN_ONLY) + the canonical guard chain (2026-06-16 super-admin-only narrowing)',
     (_name, handler) => {
       expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([
-        ...ADMIN_OR_ABOVE,
+        ...SUPER_ADMIN_ONLY,
       ]);
       expect(Reflect.getMetadata('__guards__', handler)).toEqual([
         JwtAuthGuard,
@@ -308,13 +309,12 @@ describe('KnowledgeStructureController — role gate (Q-03 / Q-06)', () => {
   );
 
   it.each(MUTATION_HANDLERS)(
-    '%s: admin + super-admin pass; user / staff / c-level → 403',
+    '%s: super-admin only; user / staff / admin / c-level → 403 (2026-06-16 super-admin-only narrowing)',
     (_name, handler) => {
-      expect(guard.canActivate(contextFor(handler, Role.ADMIN))).toBe(true);
       expect(guard.canActivate(contextFor(handler, Role.SUPER_ADMIN))).toBe(
         true,
       );
-      for (const role of [Role.USER, Role.STAFF, Role.C_LEVEL]) {
+      for (const role of [Role.USER, Role.STAFF, Role.ADMIN, Role.C_LEVEL]) {
         expect(() => guard.canActivate(contextFor(handler, role))).toThrow(
           ForbiddenException,
         );
@@ -322,15 +322,17 @@ describe('KnowledgeStructureController — role gate (Q-03 / Q-06)', () => {
     },
   );
 
-  it('GET /structure stays EXEC_READ (read audience unchanged)', () => {
+  it('GET /structure is super-admin only; everyone else → 403 (2026-06-16 super-admin-only narrowing)', () => {
     const handler = KnowledgeStructureController.prototype.getStructure;
-    expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([...EXEC_READ]);
-    for (const role of [Role.STAFF, Role.C_LEVEL]) {
-      expect(guard.canActivate(contextFor(handler, role))).toBe(true);
+    expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([
+      ...SUPER_ADMIN_ONLY,
+    ]);
+    expect(guard.canActivate(contextFor(handler, Role.SUPER_ADMIN))).toBe(true);
+    for (const role of [Role.USER, Role.STAFF, Role.ADMIN, Role.C_LEVEL]) {
+      expect(() => guard.canActivate(contextFor(handler, role))).toThrow(
+        ForbiddenException,
+      );
     }
-    expect(() => guard.canActivate(contextFor(handler, Role.USER))).toThrow(
-      ForbiddenException,
-    );
   });
 });
 
