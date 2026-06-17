@@ -9,6 +9,9 @@ import { ProjectGroup } from '../project-groups/entities/project-group.entity';
 import { DevelopmentPlan } from '../development-plan/entities/development-plan.entity';
 import { RevisedProjectGroup } from '../revised-project-group/entities/revised-project-group.entity';
 import { SupplementProjectGroup } from '../supplement-project-group/entities/supplement-project-group.entity';
+import { EquipmentProjectGroup } from '../equipment-project-group/entities/equipment-project-group.entity';
+import { RevisedEquipmentProjectGroup } from '../revised-equipment-project-group/entities/revised-equipment-project-group.entity';
+import { SupplementEquipmentProjectGroup } from '../supplement-equipment-project-group/entities/supplement-equipment-project-group.entity';
 
 /**
  * Test suite for ExecutiveService.getTeamDashboard — specifically the rename
@@ -29,6 +32,9 @@ describe('ExecutiveService', () => {
   let developmentPlanRepo: jest.Mocked<Repository<DevelopmentPlan>>;
   let revisedProjectGroupRepo: jest.Mocked<Repository<RevisedProjectGroup>>;
   let supplementProjectGroupRepo: jest.Mocked<Repository<SupplementProjectGroup>>;
+  let equipmentProjectGroupRepo: jest.Mocked<Repository<EquipmentProjectGroup>>;
+  let revisedEquipmentProjectGroupRepo: jest.Mocked<Repository<RevisedEquipmentProjectGroup>>;
+  let supplementEquipmentProjectGroupRepo: jest.Mocked<Repository<SupplementEquipmentProjectGroup>>;
 
   const STAFF_USER_ID = 'staff-user-1';
   const STAFF_WH_ID = 'wh-staff-1';
@@ -144,6 +150,15 @@ describe('ExecutiveService', () => {
     supplementProjectGroupRepo = {
       createQueryBuilder: jest.fn(),
     } as any;
+    equipmentProjectGroupRepo = {
+      createQueryBuilder: jest.fn(),
+    } as any;
+    revisedEquipmentProjectGroupRepo = {
+      createQueryBuilder: jest.fn(),
+    } as any;
+    supplementEquipmentProjectGroupRepo = {
+      createQueryBuilder: jest.fn(),
+    } as any;
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -153,6 +168,15 @@ describe('ExecutiveService', () => {
         { provide: getRepositoryToken(DevelopmentPlan), useValue: developmentPlanRepo },
         { provide: getRepositoryToken(RevisedProjectGroup), useValue: revisedProjectGroupRepo },
         { provide: getRepositoryToken(SupplementProjectGroup), useValue: supplementProjectGroupRepo },
+        { provide: getRepositoryToken(EquipmentProjectGroup), useValue: equipmentProjectGroupRepo },
+        {
+          provide: getRepositoryToken(RevisedEquipmentProjectGroup),
+          useValue: revisedEquipmentProjectGroupRepo,
+        },
+        {
+          provide: getRepositoryToken(SupplementEquipmentProjectGroup),
+          useValue: supplementEquipmentProjectGroupRepo,
+        },
       ],
     }).compile();
 
@@ -506,6 +530,220 @@ describe('ExecutiveService', () => {
           'Returned_For_Revision',
         ]),
       );
+    });
+  });
+
+  /**
+   * wave-team-dashboard-equipment-coverage (BE-01) — equipment scope.
+   *
+   * The new `scope=equipment` path aggregates EPG + RELPG (edit + change) +
+   * SEPG under the staff member's `responsibleAgency` §7 partition, on a
+   * DEDICATED path so the ผ.02 union/legacy code is untouched.
+   *
+   * Invariants asserted:
+   *   - each of EPG / RELPG-edit / RELPG-change / SEPG appears tagged with
+   *     the correct equipment `sourceType`.
+   *   - status buckets count correctly (tile drops Ready only).
+   *   - the amphoe (LAO) bucket is emptied (equipment is agency-origin only).
+   *   - no write methods (.save / .insert) are called anywhere (§17.2).
+   *   - scope=main stays byte-identical (existing specs above unchanged).
+   */
+  describe('getTeamDashboard — equipment scope (wave-team-dashboard-equipment-coverage)', () => {
+    /**
+     * Build an equipment-shaped fixture row. Equipment status lives entirely
+     * in `tracking_status` (shape-agnostic §16.5) — the row carries no
+     * classification fields, only the §7 `responsibleAgency` partition key
+     * and the latest tracking status.
+     */
+    const buildEquipmentRow = (
+      id: string,
+      title: string,
+      statusName: string,
+      revisionTypeName?: string,
+    ) => ({
+      id,
+      title,
+      deletedAt: null,
+      responsibleAgency: { id: AGENCY_ID },
+      developmentPlanRevision: revisionTypeName
+        ? { revisionType: { name: revisionTypeName } }
+        : undefined,
+      trackingStatus: [
+        {
+          isLatest: true,
+          createAt: twoDaysAgo(),
+          statusId: { name: statusName },
+        },
+      ],
+      createdBy: { user: { id: STAFF_USER_ID, firstname: 'S', lastname: 'U' } },
+    });
+
+    /**
+     * Wire the legacy preamble (workHistory main + scope builders, pg counter
+     * builder) plus a getMany-returning builder for each of the three
+     * equipment repos. `epgRows` / `relpgRows` / `sepgRows` are the fixture
+     * rows each equipment loader's `.getMany()` resolves to.
+     */
+    const wireEquipment = (opts: {
+      epgRows?: any[];
+      relpgRows?: any[];
+      sepgRows?: any[];
+    }) => {
+      const mainBuilder = makeQueryBuilder(buildStaffRow(STATUS_NAMES.PENDING));
+      const scopeBuilder = makeQueryBuilder(null);
+      workHistoryRepo.createQueryBuilder
+        .mockReturnValueOnce(mainBuilder as any)
+        .mockReturnValue(scopeBuilder as any);
+
+      const pgBuilder = makeQueryBuilder(null);
+      projectGroupRepo.createQueryBuilder.mockReturnValue(pgBuilder as any);
+
+      const epgBuilder = makeQueryBuilder(null);
+      epgBuilder.getMany = jest.fn().mockResolvedValue(opts.epgRows ?? []);
+      equipmentProjectGroupRepo.createQueryBuilder.mockReturnValue(epgBuilder as any);
+
+      const relpgBuilder = makeQueryBuilder(null);
+      relpgBuilder.getMany = jest.fn().mockResolvedValue(opts.relpgRows ?? []);
+      revisedEquipmentProjectGroupRepo.createQueryBuilder.mockReturnValue(
+        relpgBuilder as any,
+      );
+
+      const sepgBuilder = makeQueryBuilder(null);
+      sepgBuilder.getMany = jest.fn().mockResolvedValue(opts.sepgRows ?? []);
+      supplementEquipmentProjectGroupRepo.createQueryBuilder.mockReturnValue(
+        sepgBuilder as any,
+      );
+    };
+
+    const getAgencyBucket = (result: any) =>
+      result.staffWithTotalLao[0].workHistoryResponsibleGovernmentAgency[0]
+        .governmentAgency as any;
+
+    it('echoes scope=equipment at top-level', async () => {
+      wireEquipment({ epgRows: [buildEquipmentRow('epg-1', 'EPG', 'Pending')] });
+      const result = (await service.getTeamDashboard(
+        STAFF_USER_ID,
+        'equipment',
+      )) as any;
+      expect(result.scope).toBe('equipment');
+      expect(result.byScope).toBeUndefined();
+    });
+
+    it('tags EPG as equipment-main and counts it', async () => {
+      wireEquipment({ epgRows: [buildEquipmentRow('epg-1', 'EPG', 'Pending')] });
+      const result = await service.getTeamDashboard(STAFF_USER_ID, 'equipment');
+      const agency = getAgencyBucket(result);
+
+      expect(agency.responsibleAgencyProjectGroup).toHaveLength(1);
+      expect(agency.responsibleAgencyProjectGroup[0].id).toBe('epg-1');
+      expect(agency.responsibleAgencyProjectGroup[0].sourceType).toBe('equipment-main');
+      expect(agency.statusCounts.Pending).toBe(1);
+    });
+
+    it('tags RELPG edit vs change from revisionType.name', async () => {
+      wireEquipment({
+        relpgRows: [
+          buildEquipmentRow('relpg-edit', 'RELPG edit', 'Verified', 'แก้ไข'),
+          buildEquipmentRow('relpg-change', 'RELPG change', 'Verified', 'เปลี่ยนแปลง'),
+        ],
+      });
+      const result = await service.getTeamDashboard(STAFF_USER_ID, 'equipment');
+      const agency = getAgencyBucket(result);
+
+      const byId: Record<string, any> = {};
+      for (const p of agency.responsibleAgencyProjectGroup) byId[p.id] = p;
+      expect(byId['relpg-edit'].sourceType).toBe('equipment-revision-edit');
+      expect(byId['relpg-change'].sourceType).toBe('equipment-revision-change');
+      // both Verified → tile count = 2
+      expect(agency.statusCounts.Verified).toBe(2);
+    });
+
+    it('tags SEPG as equipment-supplement', async () => {
+      wireEquipment({
+        sepgRows: [buildEquipmentRow('sepg-1', 'SEPG', 'Pending_Approval')],
+      });
+      const result = await service.getTeamDashboard(STAFF_USER_ID, 'equipment');
+      const agency = getAgencyBucket(result);
+
+      expect(agency.responsibleAgencyProjectGroup).toHaveLength(1);
+      expect(agency.responsibleAgencyProjectGroup[0].id).toBe('sepg-1');
+      expect(agency.responsibleAgencyProjectGroup[0].sourceType).toBe(
+        'equipment-supplement',
+      );
+      expect(agency.statusCounts.Pending_Approval).toBe(1);
+    });
+
+    it('unions all three equipment sub-types under one scope', async () => {
+      wireEquipment({
+        epgRows: [buildEquipmentRow('epg-1', 'EPG', 'Pending')],
+        relpgRows: [
+          buildEquipmentRow('relpg-edit', 'RELPG edit', 'Verified', 'แก้ไข'),
+          buildEquipmentRow('relpg-change', 'RELPG change', 'Pending', 'เปลี่ยนแปลง'),
+        ],
+        sepgRows: [buildEquipmentRow('sepg-1', 'SEPG', 'Approved')],
+      });
+      const result = await service.getTeamDashboard(STAFF_USER_ID, 'equipment');
+      const agency = getAgencyBucket(result);
+
+      const ids = agency.responsibleAgencyProjectGroup.map((p: any) => p.id).sort();
+      expect(ids).toEqual(['epg-1', 'relpg-change', 'relpg-edit', 'sepg-1']);
+      expect(agency.statusCounts.Pending).toBe(2); // epg-1 + relpg-change
+      expect(agency.statusCounts.Verified).toBe(1); // relpg-edit
+      expect(agency.statusCounts.Approved).toBe(1); // sepg-1
+    });
+
+    it('empties the amphoe (LAO) bucket for the equipment scope', async () => {
+      wireEquipment({ epgRows: [buildEquipmentRow('epg-1', 'EPG', 'Pending')] });
+      const result = await service.getTeamDashboard(STAFF_USER_ID, 'equipment');
+      const amphoe = result.staffWithTotalLao[0].workHistoryResponsibleAmphoe[0]
+        .amphoe as any;
+
+      expect(amphoe.projectGroups).toHaveLength(0);
+      expect(amphoe.projectCount).toBe(0);
+      expect(amphoe.statusCounts.Pending).toBe(0);
+      expect(amphoe.statusCounts.Verified).toBe(0);
+      expect(amphoe.statusCounts.Approved).toBe(0);
+    });
+
+    it('drops Ready-status equipment rows from the tile (draft exclusion)', async () => {
+      wireEquipment({
+        epgRows: [
+          buildEquipmentRow('epg-ready', 'EPG ready', 'Ready'),
+          buildEquipmentRow('epg-pending', 'EPG pending', 'Pending'),
+        ],
+      });
+      const result = await service.getTeamDashboard(STAFF_USER_ID, 'equipment');
+      const agency = getAgencyBucket(result);
+
+      // Ready dropped from both tile counts and the shipped executive array.
+      expect(agency.responsibleAgencyProjectGroup).toHaveLength(1);
+      expect(agency.responsibleAgencyProjectGroup[0].id).toBe('epg-pending');
+      expect(agency.statusCounts.Pending).toBe(1);
+    });
+
+    it('is READ-ONLY — no .save() / .insert() on any equipment repo (§17.2)', async () => {
+      wireEquipment({
+        epgRows: [buildEquipmentRow('epg-1', 'EPG', 'Pending')],
+        relpgRows: [buildEquipmentRow('relpg-1', 'RELPG', 'Verified', 'แก้ไข')],
+        sepgRows: [buildEquipmentRow('sepg-1', 'SEPG', 'Approved')],
+      });
+
+      // Attach spies the service would call ONLY if it tried to write.
+      (equipmentProjectGroupRepo as any).save = jest.fn();
+      (equipmentProjectGroupRepo as any).insert = jest.fn();
+      (revisedEquipmentProjectGroupRepo as any).save = jest.fn();
+      (revisedEquipmentProjectGroupRepo as any).insert = jest.fn();
+      (supplementEquipmentProjectGroupRepo as any).save = jest.fn();
+      (supplementEquipmentProjectGroupRepo as any).insert = jest.fn();
+
+      await service.getTeamDashboard(STAFF_USER_ID, 'equipment');
+
+      expect((equipmentProjectGroupRepo as any).save).not.toHaveBeenCalled();
+      expect((equipmentProjectGroupRepo as any).insert).not.toHaveBeenCalled();
+      expect((revisedEquipmentProjectGroupRepo as any).save).not.toHaveBeenCalled();
+      expect((revisedEquipmentProjectGroupRepo as any).insert).not.toHaveBeenCalled();
+      expect((supplementEquipmentProjectGroupRepo as any).save).not.toHaveBeenCalled();
+      expect((supplementEquipmentProjectGroupRepo as any).insert).not.toHaveBeenCalled();
     });
   });
 });
