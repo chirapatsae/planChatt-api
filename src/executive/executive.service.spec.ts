@@ -206,6 +206,12 @@ describe('ExecutiveService', () => {
 
       const pgBuilder = makeQueryBuilder(null);
       projectGroupRepo.createQueryBuilder.mockReturnValue(pgBuilder as any);
+
+      // wave-team-dashboard-equipment-folded — the main path now folds EPG
+      // into the agency bucket. Wire an empty EPG builder so the loader
+      // no-ops and the PG-only numbers stay byte-identical.
+      const epgBuilder = makeQueryBuilder(null);
+      equipmentProjectGroupRepo.createQueryBuilder.mockReturnValue(epgBuilder as any);
     };
 
     it('exposes Returned_For_Revision key on amphoe statusCounts (not Revision)', async () => {
@@ -327,6 +333,22 @@ describe('ExecutiveService', () => {
 
       const spgBuilder = makeQueryBuilder(null);
       supplementProjectGroupRepo.createQueryBuilder.mockReturnValue(spgBuilder as any);
+
+      // wave-team-dashboard-equipment-folded — the union path now ALSO loads
+      // the matching equipment sub-type (RELPG / SEPG) per scope, and the
+      // main path loads EPG. Wire empty builders so those loaders no-op here.
+      const epgBuilder = makeQueryBuilder(null);
+      equipmentProjectGroupRepo.createQueryBuilder.mockReturnValue(epgBuilder as any);
+
+      const relpgBuilder = makeQueryBuilder(null);
+      revisedEquipmentProjectGroupRepo.createQueryBuilder.mockReturnValue(
+        relpgBuilder as any,
+      );
+
+      const sepgBuilder = makeQueryBuilder(null);
+      supplementEquipmentProjectGroupRepo.createQueryBuilder.mockReturnValue(
+        sepgBuilder as any,
+      );
     };
 
     it('scope=main → response has NO scope key (byte-identical legacy)', async () => {
@@ -447,6 +469,10 @@ describe('ExecutiveService', () => {
         .mockReturnValue(scopeBuilder as any);
       const pgBuilder = makeQueryBuilder(null);
       projectGroupRepo.createQueryBuilder.mockReturnValue(pgBuilder as any);
+      // wave-team-dashboard-equipment-folded — empty EPG builder (no
+      // equipment in this fixture; PG-only numbers must stay unchanged).
+      const epgBuilder = makeQueryBuilder(null);
+      equipmentProjectGroupRepo.createQueryBuilder.mockReturnValue(epgBuilder as any);
     };
 
     it('preserves Returned_For_Revision tile while excluding RFR + Pull_Back from amphoe projectCount', async () => {
@@ -493,6 +519,12 @@ describe('ExecutiveService', () => {
         getCount: jest.fn().mockResolvedValue(0),
       };
       projectGroupRepo.createQueryBuilder.mockReturnValue(pgBuilder as any);
+      // wave-team-dashboard-equipment-folded — main now folds EPG in; give an
+      // empty equipment builder so loadEquipmentProjectGroupsByAgency returns
+      // an empty map and the PG-only count assertions below stay valid.
+      equipmentProjectGroupRepo.createQueryBuilder.mockReturnValue(
+        makeQueryBuilder(null) as any,
+      );
 
       await service.getTeamDashboard(STAFF_USER_ID, 'main');
 
@@ -534,21 +566,23 @@ describe('ExecutiveService', () => {
   });
 
   /**
-   * wave-team-dashboard-equipment-coverage (BE-01) — equipment scope.
+   * wave-team-dashboard-equipment-folded (2026-06-18) — equipment is FOLDED
+   * INTO each book scope, not exposed as a standalone scope.
    *
-   * The new `scope=equipment` path aggregates EPG + RELPG (edit + change) +
-   * SEPG under the staff member's `responsibleAgency` §7 partition, on a
-   * DEDICATED path so the ผ.02 union/legacy code is untouched.
+   * Equipment (ครุภัณฑ์ ผ.03) is PART of every book, like projects. The
+   * former standalone `scope=equipment` (which lumped ALL equipment across
+   * ALL book types into one tab) has been REMOVED. Each scope now merges its
+   * matching equipment sub-type into the SAME per-staff `responsibleAgency`
+   * bucket alongside the ผ.02 project rows:
+   *   main            → PG  + EPG   (equipment-main)
+   *   revision-edit   → RPG + RELPG (equipment-revision-edit)
+   *   revision-change → RPG + RELPG (equipment-revision-change)
+   *   supplement      → SPG + SEPG  (equipment-supplement)
    *
-   * Invariants asserted:
-   *   - each of EPG / RELPG-edit / RELPG-change / SEPG appears tagged with
-   *     the correct equipment `sourceType`.
-   *   - status buckets count correctly (tile drops Ready only).
-   *   - the amphoe (LAO) bucket is emptied (equipment is agency-origin only).
-   *   - no write methods (.save / .insert) are called anywhere (§17.2).
-   *   - scope=main stays byte-identical (existing specs above unchanged).
+   * §5.3 — equipment is agency-origin only, so it only lands in the agency
+   * bucket. §17.2 READ-ONLY. §16.5 shape-agnostic.
    */
-  describe('getTeamDashboard — equipment scope (wave-team-dashboard-equipment-coverage)', () => {
+  describe('getTeamDashboard — equipment folded into book scopes', () => {
     /**
      * Build an equipment-shaped fixture row. Equipment status lives entirely
      * in `tracking_status` (shape-agnostic §16.5) — the row carries no
@@ -579,17 +613,44 @@ describe('ExecutiveService', () => {
     });
 
     /**
-     * Wire the legacy preamble (workHistory main + scope builders, pg counter
-     * builder) plus a getMany-returning builder for each of the three
-     * equipment repos. `epgRows` / `relpgRows` / `sepgRows` are the fixture
-     * rows each equipment loader's `.getMany()` resolves to.
+     * Wire the legacy preamble plus getMany-returning builders for the ผ.02
+     * union repos (RPG / SPG) AND the three equipment repos. The agency
+     * bucket on the staff row is built EMPTY here so the merged result is
+     * driven entirely by the loader fixtures (clean assertion surface).
      */
-    const wireEquipment = (opts: {
+    const wireFolded = (opts: {
+      pgRows?: any[]; // raw agency-origin main PG rows (stashed by legacy)
+      rpgRows?: any[];
+      spgRows?: any[];
       epgRows?: any[];
       relpgRows?: any[];
       sepgRows?: any[];
     }) => {
-      const mainBuilder = makeQueryBuilder(buildStaffRow(STATUS_NAMES.PENDING));
+      // Staff row whose agency bucket starts with the supplied raw PG rows
+      // (the legacy join result that gets stashed on __rawMainProjectGroups).
+      const staffRow = {
+        id: STAFF_WH_ID,
+        user: {
+          id: STAFF_USER_ID,
+          prefix: 'นาย',
+          firstname: 'Test',
+          lastname: 'Staff',
+        },
+        role: { name: 'staff' },
+        workHistoryResponsibleAmphoe: [
+          { amphoe: { id: AMPHOE_ID, projectGroups: [] } },
+        ],
+        workHistoryResponsibleGovernmentAgency: [
+          {
+            governmentAgency: {
+              id: AGENCY_ID,
+              responsibleAgencyProjectGroup: opts.pgRows ?? [],
+            },
+          },
+        ],
+      };
+
+      const mainBuilder = makeQueryBuilder(staffRow);
       const scopeBuilder = makeQueryBuilder(null);
       workHistoryRepo.createQueryBuilder
         .mockReturnValueOnce(mainBuilder as any)
@@ -597,6 +658,14 @@ describe('ExecutiveService', () => {
 
       const pgBuilder = makeQueryBuilder(null);
       projectGroupRepo.createQueryBuilder.mockReturnValue(pgBuilder as any);
+
+      const rpgBuilder = makeQueryBuilder(null);
+      rpgBuilder.getMany = jest.fn().mockResolvedValue(opts.rpgRows ?? []);
+      revisedProjectGroupRepo.createQueryBuilder.mockReturnValue(rpgBuilder as any);
+
+      const spgBuilder = makeQueryBuilder(null);
+      spgBuilder.getMany = jest.fn().mockResolvedValue(opts.spgRows ?? []);
+      supplementProjectGroupRepo.createQueryBuilder.mockReturnValue(spgBuilder as any);
 
       const epgBuilder = makeQueryBuilder(null);
       epgBuilder.getMany = jest.fn().mockResolvedValue(opts.epgRows ?? []);
@@ -619,50 +688,95 @@ describe('ExecutiveService', () => {
       result.staffWithTotalLao[0].workHistoryResponsibleGovernmentAgency[0]
         .governmentAgency as any;
 
-    it('echoes scope=equipment at top-level', async () => {
-      wireEquipment({ epgRows: [buildEquipmentRow('epg-1', 'EPG', 'Pending')] });
-      const result = (await service.getTeamDashboard(
-        STAFF_USER_ID,
-        'equipment',
-      )) as any;
-      expect(result.scope).toBe('equipment');
-      expect(result.byScope).toBeUndefined();
-    });
-
-    it('tags EPG as equipment-main and counts it', async () => {
-      wireEquipment({ epgRows: [buildEquipmentRow('epg-1', 'EPG', 'Pending')] });
-      const result = await service.getTeamDashboard(STAFF_USER_ID, 'equipment');
+    it('main scope folds EPG into the agency bucket alongside PG', async () => {
+      wireFolded({
+        pgRows: [buildEquipmentRow('pg-1', 'PG', 'Pending')],
+        epgRows: [buildEquipmentRow('epg-1', 'EPG', 'Verified')],
+      });
+      const result = await service.getTeamDashboard(STAFF_USER_ID, 'main');
       const agency = getAgencyBucket(result);
 
-      expect(agency.responsibleAgencyProjectGroup).toHaveLength(1);
-      expect(agency.responsibleAgencyProjectGroup[0].id).toBe('epg-1');
-      expect(agency.responsibleAgencyProjectGroup[0].sourceType).toBe('equipment-main');
-      expect(agency.statusCounts.Pending).toBe(1);
+      const byId: Record<string, any> = {};
+      for (const p of agency.responsibleAgencyProjectGroup) byId[p.id] = p;
+      expect(byId['pg-1'].sourceType).toBe('main');
+      expect(byId['epg-1'].sourceType).toBe('equipment-main');
+      expect(agency.statusCounts.Pending).toBe(1); // pg-1
+      expect(agency.statusCounts.Verified).toBe(1); // epg-1
+      // main payload does NOT echo a scope key (byte-identical contract).
+      expect((result as any).scope).toBeUndefined();
     });
 
-    it('tags RELPG edit vs change from revisionType.name', async () => {
-      wireEquipment({
+    it('main scope with ZERO equipment is byte-identical to legacy PG-only output', async () => {
+      wireFolded({
+        pgRows: [
+          buildEquipmentRow('pg-pending', 'PG pending', 'Pending'),
+          buildEquipmentRow('pg-ready', 'PG ready', 'Ready'),
+        ],
+        epgRows: [],
+      });
+      const result = await service.getTeamDashboard(STAFF_USER_ID, 'main');
+      const agency = getAgencyBucket(result);
+
+      // Ready dropped from the executive array; Pending survives.
+      expect(agency.responsibleAgencyProjectGroup).toHaveLength(1);
+      expect(agency.responsibleAgencyProjectGroup[0].id).toBe('pg-pending');
+      expect(agency.statusCounts.Pending).toBe(1);
+      // internal stash never leaks into the response
+      expect(agency.__rawMainProjectGroups).toBeUndefined();
+    });
+
+    it('revision-edit scope folds RELPG (edit) alongside RPG (edit)', async () => {
+      wireFolded({
+        rpgRows: [],
         relpgRows: [
           buildEquipmentRow('relpg-edit', 'RELPG edit', 'Verified', 'แก้ไข'),
           buildEquipmentRow('relpg-change', 'RELPG change', 'Verified', 'เปลี่ยนแปลง'),
         ],
       });
-      const result = await service.getTeamDashboard(STAFF_USER_ID, 'equipment');
+      const result = await service.getTeamDashboard(
+        STAFF_USER_ID,
+        'revision-edit',
+      );
       const agency = getAgencyBucket(result);
 
-      const byId: Record<string, any> = {};
-      for (const p of agency.responsibleAgencyProjectGroup) byId[p.id] = p;
-      expect(byId['relpg-edit'].sourceType).toBe('equipment-revision-edit');
-      expect(byId['relpg-change'].sourceType).toBe('equipment-revision-change');
-      // both Verified → tile count = 2
-      expect(agency.statusCounts.Verified).toBe(2);
+      const ids = agency.responsibleAgencyProjectGroup.map((p: any) => p.id);
+      // change-type RELPG is filtered OUT of the edit scope.
+      expect(ids).toEqual(['relpg-edit']);
+      expect(agency.responsibleAgencyProjectGroup[0].sourceType).toBe(
+        'equipment-revision-edit',
+      );
+      expect(agency.statusCounts.Verified).toBe(1);
+      expect((result as any).scope).toBe('revision-edit');
     });
 
-    it('tags SEPG as equipment-supplement', async () => {
-      wireEquipment({
+    it('revision-change scope folds RELPG (change) alongside RPG (change)', async () => {
+      wireFolded({
+        relpgRows: [
+          buildEquipmentRow('relpg-edit', 'RELPG edit', 'Verified', 'แก้ไข'),
+          buildEquipmentRow('relpg-change', 'RELPG change', 'Pending', 'เปลี่ยนแปลง'),
+        ],
+      });
+      const result = await service.getTeamDashboard(
+        STAFF_USER_ID,
+        'revision-change',
+      );
+      const agency = getAgencyBucket(result);
+
+      const ids = agency.responsibleAgencyProjectGroup.map((p: any) => p.id);
+      // edit-type RELPG is filtered OUT of the change scope.
+      expect(ids).toEqual(['relpg-change']);
+      expect(agency.responsibleAgencyProjectGroup[0].sourceType).toBe(
+        'equipment-revision-change',
+      );
+      expect(agency.statusCounts.Pending).toBe(1);
+      expect((result as any).scope).toBe('revision-change');
+    });
+
+    it('supplement scope folds SEPG alongside SPG', async () => {
+      wireFolded({
         sepgRows: [buildEquipmentRow('sepg-1', 'SEPG', 'Pending_Approval')],
       });
-      const result = await service.getTeamDashboard(STAFF_USER_ID, 'equipment');
+      const result = await service.getTeamDashboard(STAFF_USER_ID, 'supplement');
       const agency = getAgencyBucket(result);
 
       expect(agency.responsibleAgencyProjectGroup).toHaveLength(1);
@@ -671,61 +785,13 @@ describe('ExecutiveService', () => {
         'equipment-supplement',
       );
       expect(agency.statusCounts.Pending_Approval).toBe(1);
-    });
-
-    it('unions all three equipment sub-types under one scope', async () => {
-      wireEquipment({
-        epgRows: [buildEquipmentRow('epg-1', 'EPG', 'Pending')],
-        relpgRows: [
-          buildEquipmentRow('relpg-edit', 'RELPG edit', 'Verified', 'แก้ไข'),
-          buildEquipmentRow('relpg-change', 'RELPG change', 'Pending', 'เปลี่ยนแปลง'),
-        ],
-        sepgRows: [buildEquipmentRow('sepg-1', 'SEPG', 'Approved')],
-      });
-      const result = await service.getTeamDashboard(STAFF_USER_ID, 'equipment');
-      const agency = getAgencyBucket(result);
-
-      const ids = agency.responsibleAgencyProjectGroup.map((p: any) => p.id).sort();
-      expect(ids).toEqual(['epg-1', 'relpg-change', 'relpg-edit', 'sepg-1']);
-      expect(agency.statusCounts.Pending).toBe(2); // epg-1 + relpg-change
-      expect(agency.statusCounts.Verified).toBe(1); // relpg-edit
-      expect(agency.statusCounts.Approved).toBe(1); // sepg-1
-    });
-
-    it('empties the amphoe (LAO) bucket for the equipment scope', async () => {
-      wireEquipment({ epgRows: [buildEquipmentRow('epg-1', 'EPG', 'Pending')] });
-      const result = await service.getTeamDashboard(STAFF_USER_ID, 'equipment');
-      const amphoe = result.staffWithTotalLao[0].workHistoryResponsibleAmphoe[0]
-        .amphoe as any;
-
-      expect(amphoe.projectGroups).toHaveLength(0);
-      expect(amphoe.projectCount).toBe(0);
-      expect(amphoe.statusCounts.Pending).toBe(0);
-      expect(amphoe.statusCounts.Verified).toBe(0);
-      expect(amphoe.statusCounts.Approved).toBe(0);
-    });
-
-    it('drops Ready-status equipment rows from the tile (draft exclusion)', async () => {
-      wireEquipment({
-        epgRows: [
-          buildEquipmentRow('epg-ready', 'EPG ready', 'Ready'),
-          buildEquipmentRow('epg-pending', 'EPG pending', 'Pending'),
-        ],
-      });
-      const result = await service.getTeamDashboard(STAFF_USER_ID, 'equipment');
-      const agency = getAgencyBucket(result);
-
-      // Ready dropped from both tile counts and the shipped executive array.
-      expect(agency.responsibleAgencyProjectGroup).toHaveLength(1);
-      expect(agency.responsibleAgencyProjectGroup[0].id).toBe('epg-pending');
-      expect(agency.statusCounts.Pending).toBe(1);
+      expect((result as any).scope).toBe('supplement');
     });
 
     it('is READ-ONLY — no .save() / .insert() on any equipment repo (§17.2)', async () => {
-      wireEquipment({
+      wireFolded({
+        pgRows: [buildEquipmentRow('pg-1', 'PG', 'Pending')],
         epgRows: [buildEquipmentRow('epg-1', 'EPG', 'Pending')],
-        relpgRows: [buildEquipmentRow('relpg-1', 'RELPG', 'Verified', 'แก้ไข')],
-        sepgRows: [buildEquipmentRow('sepg-1', 'SEPG', 'Approved')],
       });
 
       // Attach spies the service would call ONLY if it tried to write.
@@ -736,7 +802,7 @@ describe('ExecutiveService', () => {
       (supplementEquipmentProjectGroupRepo as any).save = jest.fn();
       (supplementEquipmentProjectGroupRepo as any).insert = jest.fn();
 
-      await service.getTeamDashboard(STAFF_USER_ID, 'equipment');
+      await service.getTeamDashboard(STAFF_USER_ID, 'main');
 
       expect((equipmentProjectGroupRepo as any).save).not.toHaveBeenCalled();
       expect((equipmentProjectGroupRepo as any).insert).not.toHaveBeenCalled();
@@ -744,6 +810,27 @@ describe('ExecutiveService', () => {
       expect((revisedEquipmentProjectGroupRepo as any).insert).not.toHaveBeenCalled();
       expect((supplementEquipmentProjectGroupRepo as any).save).not.toHaveBeenCalled();
       expect((supplementEquipmentProjectGroupRepo as any).insert).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * wave-team-dashboard-equipment-folded — the standalone `equipment` scope
+   * has been REMOVED. The controller validates against TEAM_DASHBOARD_SCOPES;
+   * `'equipment'` is no longer a member, so it is rejected as an invalid
+   * scope (controller throws 400 BAD_SCOPE). The service type no longer
+   * accepts it.
+   */
+  describe('getTeamDashboard — standalone equipment scope removed', () => {
+    const { TEAM_DASHBOARD_SCOPES } = jest.requireActual('./executive.service');
+
+    it('TEAM_DASHBOARD_SCOPES no longer contains equipment', () => {
+      expect(TEAM_DASHBOARD_SCOPES).not.toContain('equipment');
+      expect(TEAM_DASHBOARD_SCOPES).toEqual([
+        'main',
+        'revision-edit',
+        'revision-change',
+        'supplement',
+      ]);
     });
   });
 });

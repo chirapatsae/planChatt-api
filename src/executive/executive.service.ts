@@ -18,32 +18,50 @@ import { STATUS_NAMES } from 'src/common/status-names';
 import { EXECUTIVE_EXCLUDED_STATUS_NAMES } from 'src/ai-executive-chat/aggregation/constants/executive-status-groups';
 
 /**
- * Wave 43 — Team Dashboard scope extension.
+ * Team Dashboard scope aggregation.
  *
- * The dashboard historically aggregated staff workload across `ProjectGroup`
- * (main plan) only. Wave 43 adds optional aggregation of
- * `RevisedProjectGroup` (edit + change) and `SupplementProjectGroup` under
- * the same per-staff responsibility partition.
+ * The dashboard partitions staff workload across the four book scopes —
+ * `main`, `revision-edit`, `revision-change`, `supplement` — under the same
+ * per-staff responsibility partition (§7).
  *
- * Contract (see docs/tasks/TEAM_DASHBOARD_SCOPE_EXTEND_BACKEND.md):
- *   - `scope=main` → payload is byte-identical to the pre-Wave-43 shape.
- *     No `scope`, no `byScope`, no `sourceType` fields.
- *   - Any other scope (`all | revision | supplement`) → union aggregation
- *     with `scope` echoed at top-level AND `byScope` breakdown. Per-project
- *     items under agency / amphoe buckets carry a `sourceType` discriminator
- *     of `'main' | 'revision-edit' | 'revision-change' | 'supplement'`.
+ * wave-team-dashboard-equipment-folded (2026-06-18) — equipment (ครุภัณฑ์
+ * ผ.03) is PART of every book, like projects (โครงการ); it is NOT a separate
+ * book-type. Each scope therefore FOLDS its matching equipment sub-type into
+ * the same `responsibleAgency` bucket alongside the ผ.02 project rows:
+ *   - `main`            → ProjectGroup (PG)            + EquipmentProjectGroup (EPG)
+ *   - `revision-edit`   → RevisedProjectGroup (edit)   + RELPG (edit)
+ *   - `revision-change` → RevisedProjectGroup (change) + RELPG (change)
+ *   - `supplement`      → SupplementProjectGroup (SPG) + SEPG
+ * Each project / equipment row carries a `sourceType` discriminator of
+ * `'main' | 'revision-edit' | 'revision-change' | 'supplement' |
+ * 'equipment-main' | 'equipment-revision-edit' | 'equipment-revision-change'
+ * | 'equipment-supplement'`. The former standalone `equipment` scope (which
+ * lumped ALL equipment across ALL book types into one tab) has been REMOVED.
+ *
+ * Contract:
+ *   - `scope=main` → keeps the legacy payload shape (no top-level `scope`
+ *     key). PG-only numbers are byte-identical to the pre-fold output.
+ *   - non-main scopes → `scope` echoed at top-level.
+ *
+ * §5.3 — equipment is agency-origin only, so it lands only in the agency
+ * bucket; the amphoe (LAO) bucket never carries equipment. §17.2 READ-ONLY.
+ * §16.5 shape-agnostic — status from `tracking_status` only.
  */
 export const TEAM_DASHBOARD_SCOPES = [
+  // Equipment (ครุภัณฑ์ ผ.03) is NOT a separate book-type — it is PART of
+  // every book (like projects). Each scope therefore FOLDS its matching
+  // equipment sub-type into the same per-staff responsibleAgency bucket
+  // (wave-team-dashboard-equipment-folded, 2026-06-18):
+  //   main            → ProjectGroup (PG)            + EquipmentProjectGroup (EPG)
+  //   revision-edit   → RevisedProjectGroup (edit)   + RevisedEquipmentProjectGroup (RELPG, edit)
+  //   revision-change → RevisedProjectGroup (change) + RevisedEquipmentProjectGroup (RELPG, change)
+  //   supplement      → SupplementProjectGroup (SPG) + SupplementEquipmentProjectGroup (SEPG)
+  // The former standalone 'equipment' scope (which lumped ALL equipment
+  // across ALL book types into one tab) has been REMOVED.
   'main',
   'revision-edit',
   'revision-change',
   'supplement',
-  // wave-team-dashboard-equipment-coverage (BE-01) — a SINGLE equipment
-  // scope spanning EPG (main) + RELPG (edit + change) + SEPG (supplement).
-  // Per-row distinction is carried by the equipment `sourceType` chips
-  // rendered in FE-01. Routed to a dedicated path so the ผ.02 union/legacy
-  // code stays byte-identical (scope=main N3 guarantee).
-  'equipment',
 ] as const;
 export type TeamDashboardScope = (typeof TEAM_DASHBOARD_SCOPES)[number];
 
@@ -52,28 +70,11 @@ type SourceType =
   | 'revision-edit'
   | 'revision-change'
   | 'supplement'
-  // Equipment sourceType discriminators (wave-team-dashboard-equipment-coverage).
+  // Equipment sourceType discriminators — folded into the matching ผ.02 scope.
   | 'equipment-main'
   | 'equipment-revision-edit'
   | 'equipment-revision-change'
   | 'equipment-supplement';
-
-/**
- * Per-source counter bundle used inside `byScope`. Kept orthogonal to the
- * legacy top-level totals so that N3 snapshot tests can assert
- * byte-identical behavior on `scope=main`.
- */
-interface SourceCounters {
-  projectGroupCount: number;
-  approveCount: number;
-  inProgressCount: number;
-}
-
-const EMPTY_COUNTERS = (): SourceCounters => ({
-  projectGroupCount: 0,
-  approveCount: 0,
-  inProgressCount: 0,
-});
 
 @Injectable()
 export class ExecutiveService {
@@ -122,29 +123,35 @@ export class ExecutiveService {
    * Dispatch entry point. Resolves auth / work-history / role gate once,
    * then delegates to the scope-specific aggregator.
    *
-   * `scope=main` takes the legacy code path verbatim — this is the
-   * byte-identical regression guarantee for N3.
+   * `scope=main` folds PG + EPG into the agency bucket
+   * (wave-team-dashboard-equipment-folded). The PG-only numbers remain
+   * byte-identical to the pre-fold legacy output (see
+   * `getTeamDashboardMain` no-regression note).
    */
   async getTeamDashboard(userId: string, scope: TeamDashboardScope = 'main') {
     if (scope === 'main') {
-      return this.getTeamDashboardMainLegacy(userId);
-    }
-    // wave-team-dashboard-equipment-coverage (BE-01) — equipment scope takes
-    // a DEDICATED path so the ผ.02 union code (and the scope=main legacy path)
-    // remain completely untouched.
-    if (scope === 'equipment') {
-      return this.getTeamDashboardEquipment(userId);
+      return this.getTeamDashboardMain(userId);
     }
     return this.getTeamDashboardUnion(userId, scope);
   }
 
   /**
-   * LEGACY PATH — pre-Wave-43 behavior, byte-identical.
+   * LEGACY PG-only aggregator — pre-Wave-43 behavior.
    *
-   * Kept as a private method so the public entry point can dispatch on
-   * scope without branching inside the aggregation. DO NOT modify the
-   * output shape of this method — N3 snapshot asserts equality with the
-   * pre-Wave-43 response.
+   * This method is the shared building block consumed by BOTH the main
+   * scope (`getTeamDashboardMain`) and the union scopes
+   * (`getTeamDashboardUnion`). It produces:
+   *   - the per-staff amphoe (LAO main PG) bucket — used verbatim by the
+   *     main scope (byte-identical to pre-Wave-43)
+   *   - the per-staff agency (agency-origin main PG) bucket — used verbatim
+   *     by the main scope WHEN no equipment is present, and re-decorated
+   *     with EPG folded in by `getTeamDashboardMain`
+   *   - the PG-only top-level totals (`projectGroupCount` etc.)
+   *
+   * DO NOT modify the amphoe-bucket decoration or the top-level PG counts —
+   * the main scope relies on them being byte-identical. The agency-bucket
+   * decoration is re-derived from raw PG rows by `getTeamDashboardMain` so
+   * EPG can be merged without losing the PG set.
    */
   private async getTeamDashboardMainLegacy(userId: string) {
     // 1. Get Current User's WorkHistory to determine scope
@@ -339,6 +346,11 @@ export class ExecutiveService {
             };
 
             const allProjects = item.governmentAgency.responsibleAgencyProjectGroup || [];
+            // wave-team-dashboard-equipment-folded — stash the RAW
+            // agency-origin main PG list (before the dual-split collapses it)
+            // so `getTeamDashboardMain` can re-derive the agency bucket from
+            // the exact same row set, merging EPG in without losing any PG.
+            (item.governmentAgency as any).__rawMainProjectGroups = allProjects;
             // Wave 24 — same dual-set split as the amphoe block above.
             const tileProjects = allProjects.filter(p => {
               const latest = p.trackingStatus?.find(t => t.isLatest);
@@ -492,29 +504,146 @@ export class ExecutiveService {
   }
 
   /**
-   * Wave 43 — Union aggregator for non-`main` scopes.
+   * Main scope (wave-team-dashboard-equipment-folded, 2026-06-18).
+   *
+   * Folds the main-plan equipment (`EquipmentProjectGroup`, EPG) INTO the
+   * per-staff `responsibleAgency` bucket ALONGSIDE the main-plan
+   * `ProjectGroup` (PG). EPG is agency-origin only (§5.3), so only the
+   * agency bucket gains equipment — the amphoe (LAO) bucket is left exactly
+   * as the legacy method decorated it.
+   *
+   * NO-REGRESSION GUARANTEE (PG-only): with ZERO equipment present, this
+   * method produces numbers identical to the pre-fold legacy output, because
+   *   1. the amphoe bucket + top-level PG counts are taken verbatim from
+   *      `getTeamDashboardMainLegacy` (untouched);
+   *   2. the agency bucket is re-derived from the EXACT SAME raw
+   *      agency-origin PG array the legacy loop iterated. The legacy method
+   *      stashes that array on `agency.__rawMainProjectGroups` BEFORE it
+   *      collapses the bucket; we read it back here, merge EPG in, then run
+   *      the SAME dual-split (tile drops Ready; executive drops
+   *      EXECUTIVE_EXCLUDED) + the SAME `buildStatusBuckets` shape the legacy
+   *      loop used. With no EPG, the combined list IS the legacy PG list, so
+   *      statusCounts / statusAging / projectCount /
+   *      responsibleAgencyProjectGroup come out identical to legacy. This
+   *      reuses the legacy data source (the WorkHistory join) verbatim — it
+   *      does NOT introduce a second PG query.
+   *
+   * §17.2 READ-ONLY — pure reads, no `.save()` / tracking_status insert /
+   * ai_* write. §16.5 shape-agnostic — status from tracking_status only.
+   */
+  private async getTeamDashboardMain(userId: string) {
+    const legacy = await this.getTeamDashboardMainLegacy(userId);
+    const developmentPlan: DevelopmentPlan | null = legacy.developmentPlan as any;
+
+    const staffRows: any[] = legacy.staffWithTotalLao as any[];
+    const agencyIdSet = new Set<string>();
+    for (const staff of staffRows) {
+      const agencyLinks = staff.workHistoryResponsibleGovernmentAgency || [];
+      for (const link of agencyLinks) {
+        if (link.governmentAgency?.id != null) {
+          agencyIdSet.add(String(link.governmentAgency.id));
+        }
+      }
+    }
+    const agencyIds = Array.from(agencyIdSet);
+
+    // Main-plan equipment rows (EPG) for the agencies-of-interest, keyed by
+    // responsibleAgency id. The PG side is read back from the stashed raw
+    // legacy array per agency below.
+    const epgRowsByAgency = await this.loadEquipmentProjectGroupsByAgency(
+      developmentPlan?.id ?? null,
+      agencyIds,
+    );
+
+    for (const staff of staffRows) {
+      const agencyLinks = staff.workHistoryResponsibleGovernmentAgency || [];
+      for (const link of agencyLinks) {
+        if (!link.governmentAgency) continue;
+        const agency = link.governmentAgency as any;
+        const agencyId = String(agency.id);
+
+        const mainProjects: any[] = (agency.__rawMainProjectGroups || []).map(
+          (p: any) => ({ ...p, sourceType: 'main' as SourceType }),
+        );
+        const epgProjects: any[] = (epgRowsByAgency.get(agencyId) || []).map(
+          (p: any) => ({ ...p, sourceType: 'equipment-main' as SourceType }),
+        );
+
+        const mergedProjects = [...mainProjects, ...epgProjects];
+
+        // Same dual-split as the legacy aggregator:
+        //   tile      → drops Ready only (preserves Returned_For_Revision tile).
+        //   executive → drops EXECUTIVE_EXCLUDED (§3 W67); drives the
+        //               FE-shipped array + projectCount.
+        const tileProjects = mergedProjects.filter((p: any) => {
+          const latest = p.trackingStatus?.find((t: any) => t.isLatest);
+          return latest && latest.statusId && latest.statusId.name !== 'Ready';
+        });
+        const executiveProjects = mergedProjects.filter((p: any) => {
+          const latest = p.trackingStatus?.find((t: any) => t.isLatest);
+          return (
+            latest &&
+            latest.statusId &&
+            !(EXECUTIVE_EXCLUDED_STATUS_NAMES as readonly string[]).includes(
+              latest.statusId.name,
+            )
+          );
+        });
+
+        const { counts, aging } = this.buildStatusBuckets(tileProjects, staff);
+
+        agency.responsibleAgencyProjectGroup = executiveProjects;
+        agency.projectCount = executiveProjects.length;
+        agency.statusCounts = counts;
+        agency.statusAging = aging;
+        // Drop the internal stash so it never leaks into the response.
+        delete agency.__rawMainProjectGroups;
+      }
+      // Amphoe (LAO main PG) bucket is left exactly as legacy decorated it —
+      // EPG is agency-origin only (§5.3), so there is no equipment to fold in.
+    }
+
+    // Top-level PG-only totals are carried through from the legacy method
+    // unchanged (the PG-only no-regression contract). The main payload does
+    // NOT echo a `scope` key — preserving the historical byte-identical
+    // contract the FE uses to detect the main scope. The behavioral change
+    // is carried entirely by the equipment rows now tagged `equipment-main`
+    // inside the agency bucket.
+    return legacy;
+  }
+
+  /**
+   * Union aggregator for non-`main` scopes (revision-edit / revision-change
+   * / supplement).
+   *
+   * wave-team-dashboard-equipment-folded (2026-06-18) — each scope now FOLDS
+   * its matching equipment sub-type into the SAME per-staff
+   * `responsibleAgency` bucket alongside the ผ.02 project rows:
+   *   revision-edit   → RevisedProjectGroup (edit)   + RELPG (edit)
+   *   revision-change → RevisedProjectGroup (change) + RELPG (change)
+   *   supplement      → SupplementProjectGroup       + SEPG
    *
    * Strategy:
-   *   1. Run the legacy path to get staff rows with main-plan decoration.
-   *      For `scope=all` we keep the decoration as-is. For `scope=revision`
-   *      / `scope=supplement` we zero out the main-scope project arrays
-   *      and statusCounts/statusAging before re-populating them.
-   *   2. Fetch RPG / SPG rows keyed by the agency ids already loaded onto
-   *      each staff row and decorate the `responsibleAgency` bucket.
-   *   3. Recompute statusCounts / statusAging per agency based on the
-   *      active source set, tagging each project with `sourceType`.
-   *   4. Compute per-source global counters for `byScope`.
+   *   1. Run the legacy path to get staff rows (for the amphoe bucket + the
+   *      agency id set + the top-level PG counts that are then overwritten).
+   *   2. Fetch the scope's ผ.02 rows (RPG / SPG) AND the matching equipment
+   *      rows (RELPG / SEPG) keyed by the agency ids loaded on each staff row.
+   *   3. Merge ผ.02 + equipment into one list per agency, tag each row with
+   *      its `sourceType`, recompute statusCounts / statusAging via the same
+   *      dual-split + `buildStatusBuckets` shape.
+   *
+   * §5.3 — RPG / SPG / RELPG / SEPG are all agency-origin, so the amphoe
+   * (LAO) bucket is always emptied. §17.2 READ-ONLY — pure reads.
+   * §16.5 shape-agnostic — status from tracking_status only.
    */
   private async getTeamDashboardUnion(userId: string, scope: TeamDashboardScope) {
     const legacy = await this.getTeamDashboardMainLegacy(userId);
     const developmentPlan: DevelopmentPlan | null = legacy.developmentPlan as any;
 
-    // Post-dispatch refactor: the 'all' scope was removed per user request —
-    // each scope is now pure (main / revision-edit / revision-change /
-    // supplement). The `main` path still short-circuits to the legacy
-    // byte-identical method at the top of `getTeamDashboard`, so by the
-    // time we land here scope is one of the three non-main variants.
-    const includeMain = false;
+    // Each scope is pure (revision-edit / revision-change / supplement). The
+    // `main` path is handled by `getTeamDashboardMain` at the top of
+    // `getTeamDashboard`, so by the time we land here scope is one of the
+    // three non-main variants.
     const includeRevisionEdit = scope === 'revision-edit';
     const includeRevisionChange = scope === 'revision-change';
     const includeRevision = includeRevisionEdit || includeRevisionChange;
@@ -531,18 +660,36 @@ export class ExecutiveService {
         }
       }
     }
+    const agencyIds = Array.from(agencyIdSet);
 
-    // Load RPG / SPG projects for the agencies-of-interest.
+    // Load the scope's ผ.02 rows (RPG / SPG) for the agencies-of-interest.
     const revisionRowsByAgency = includeRevision
       ? await this.loadRevisedProjectGroupsByAgency(
           developmentPlan?.id ?? null,
-          Array.from(agencyIdSet),
+          agencyIds,
         )
       : new Map<string, any[]>();
     const supplementRowsByAgency = includeSupplement
       ? await this.loadSupplementProjectGroupsByAgency(
           developmentPlan?.id ?? null,
-          Array.from(agencyIdSet),
+          agencyIds,
+        )
+      : new Map<string, any[]>();
+
+    // wave-team-dashboard-equipment-folded — load the MATCHING equipment
+    // sub-type for the active scope: RELPG for the revision scopes, SEPG for
+    // the supplement scope. These are folded INTO `mergedProjects` alongside
+    // the ผ.02 rows below.
+    const revisionEquipmentRowsByAgency = includeRevision
+      ? await this.loadRevisedEquipmentProjectGroupsByAgency(
+          developmentPlan?.id ?? null,
+          agencyIds,
+        )
+      : new Map<string, any[]>();
+    const supplementEquipmentRowsByAgency = includeSupplement
+      ? await this.loadSupplementEquipmentProjectGroupsByAgency(
+          developmentPlan?.id ?? null,
+          agencyIds,
         )
       : new Map<string, any[]>();
 
@@ -556,23 +703,17 @@ export class ExecutiveService {
         const agency = link.governmentAgency as any;
         const agencyId = String(agency.id);
 
-        // Collect per-source project arrays. Tag each with sourceType.
-        const mainProjects: any[] = includeMain
-          ? (agency.responsibleAgencyProjectGroup || []).map((p: any) => ({
-              ...p,
-              sourceType: 'main' as SourceType,
-            }))
-          : [];
+        // Scope-specific edit-vs-change filter, shared by ผ.02 revision rows
+        // and RELPG equipment rows.
+        const revisionTypeMatches = (p: any): boolean => {
+          if (includeRevisionEdit && includeRevisionChange) return true;
+          if (includeRevisionEdit) return p.__revisionType !== 'change';
+          if (includeRevisionChange) return p.__revisionType === 'change';
+          return false;
+        };
 
         const revisionProjects: any[] = (revisionRowsByAgency.get(agencyId) || [])
-          .filter((p: any) => {
-            // Scope-specific filter: when user picked
-            // `revision-edit`, drop change-type rows; and vice versa.
-            if (includeRevisionEdit && includeRevisionChange) return true;
-            if (includeRevisionEdit) return p.__revisionType !== 'change';
-            if (includeRevisionChange) return p.__revisionType === 'change';
-            return false;
-          })
+          .filter(revisionTypeMatches)
           .map((p: any) => ({
             ...p,
             sourceType:
@@ -585,10 +726,30 @@ export class ExecutiveService {
           (p: any) => ({ ...p, sourceType: 'supplement' as SourceType }),
         );
 
+        // wave-team-dashboard-equipment-folded — matching equipment rows,
+        // tagged with the equipment-* sourceType, folded in alongside the
+        // ผ.02 rows. RELPG honors the same edit-vs-change scope filter.
+        const revisionEquipmentProjects: any[] = (
+          revisionEquipmentRowsByAgency.get(agencyId) || []
+        )
+          .filter(revisionTypeMatches)
+          .map((p: any) => ({
+            ...p,
+            sourceType:
+              p.__revisionType === 'change'
+                ? ('equipment-revision-change' as SourceType)
+                : ('equipment-revision-edit' as SourceType),
+          }));
+
+        const supplementEquipmentProjects: any[] = (
+          supplementEquipmentRowsByAgency.get(agencyId) || []
+        ).map((p: any) => ({ ...p, sourceType: 'equipment-supplement' as SourceType }));
+
         const mergedProjects = [
-          ...mainProjects,
           ...revisionProjects,
           ...supplementProjects,
+          ...revisionEquipmentProjects,
+          ...supplementEquipmentProjects,
         ];
 
         // Wave 24 — same dual-split as the legacy aggregator (Patches C/D):
@@ -619,12 +780,11 @@ export class ExecutiveService {
         agency.statusAging = aging;
       }
 
-      // For scope=all the amphoe (main-plan-only bucket) is preserved.
-      // For scope=revision/supplement, amphoe bucket has no revision/supplement
-      // analog — responsibility partition §7 puts those on responsibleAgency.
-      // We still leave the existing amphoe decoration so the FE can render
-      // an empty-state when the user filters to a non-main scope.
-      if (!includeMain && staff.workHistoryResponsibleAmphoe) {
+      // Non-main scopes (revision-edit / revision-change / supplement) have
+      // no amphoe (LAO) analog — RPG / SPG / RELPG / SEPG are all
+      // agency-origin, so the §7 partition puts them on responsibleAgency.
+      // Empty the amphoe bucket so the FE renders a clean empty-state.
+      if (staff.workHistoryResponsibleAmphoe) {
         for (const item of staff.workHistoryResponsibleAmphoe) {
           if (!item.amphoe) continue;
           const amphoe = item.amphoe as any;
@@ -640,22 +800,29 @@ export class ExecutiveService {
     // Top-level totals reflect only the active scope (each scope is
     // now pure — no union). Counts are derived from the already-filtered
     // `responsibleAgencyProjectGroup` arrays that were rewritten in the
-    // loop above.
+    // loop above. Dedupe agencies by id so an agency linked under more than
+    // one staff is counted ONCE (an agency object is shared across staff).
     let scopeProjectGroupCount = 0;
     let scopeApproveCount = 0;
     let scopeInprogressCount = 0;
+    const countedAgencyIds = new Set<string>();
     for (const staff of staffRows) {
       const agencyLinks = staff.workHistoryResponsibleGovernmentAgency || [];
       for (const link of agencyLinks) {
         const agency = link.governmentAgency as any;
         if (!agency) continue;
+        const agencyId = String(agency.id);
+        if (countedAgencyIds.has(agencyId)) continue;
+        countedAgencyIds.add(agencyId);
         const counts = agency.statusCounts || {};
         scopeProjectGroupCount += agency.projectCount || 0;
-        scopeApproveCount += counts.approve || 0;
+        // buildStatusBuckets emits CAPITALIZED status keys (Approved / Pending
+        // / Verified / Pending_Approval) — read those, not lowercase aliases.
+        scopeApproveCount += counts.Approved || 0;
         scopeInprogressCount +=
-          (counts.pending || 0) +
-          (counts.verified || 0) +
-          (counts.pendingApproval || 0);
+          (counts.Pending || 0) +
+          (counts.Verified || 0) +
+          (counts.Pending_Approval || 0);
       }
     }
 
@@ -665,157 +832,6 @@ export class ExecutiveService {
       projectGroupApproveCount: scopeApproveCount,
       projectGroupInprogressCount: scopeInprogressCount,
       scope,
-    };
-  }
-
-  /**
-   * wave-team-dashboard-equipment-coverage (BE-01) — equipment aggregator.
-   *
-   * Aggregates each staff member's ครุภัณฑ์ (ผ.03) workload across the three
-   * equipment sub-types under the SAME per-staff `responsibleAgency` §7
-   * partition the ผ.02 union path uses:
-   *   - EPG   — `EquipmentProjectGroup` (main plan), sourceType 'equipment-main'
-   *   - RELPG — `RevisedEquipmentProjectGroup` (edit + change), sourceType
-   *             'equipment-revision-edit' | 'equipment-revision-change'
-   *   - SEPG  — `SupplementEquipmentProjectGroup`, sourceType 'equipment-supplement'
-   *
-   * Structurally a 1:1 mirror of `getTeamDashboardUnion` but on a DEDICATED
-   * path so the ผ.02 code stays byte-identical (scope=main N3 guarantee).
-   *
-   * §5.3 — equipment is agency-origin only, so the amphoe (LAO) bucket is
-   * always empty here, exactly as the RPG/SPG union path empties it.
-   * §17.2 — READ-ONLY: pure getMany; no `.save()`, no tracking_status insert,
-   * no ai_* write anywhere in this path.
-   * §16.5 — shape-agnostic: status lives entirely in tracking_status; this
-   * path never reads `indicator` / `equipment_category_id` / `strategy_id` /
-   * `development_issue_id`.
-   */
-  private async getTeamDashboardEquipment(userId: string) {
-    const legacy = await this.getTeamDashboardMainLegacy(userId);
-    const developmentPlan: DevelopmentPlan | null = legacy.developmentPlan as any;
-
-    // Collect all agency ids already loaded on the staff rows.
-    const staffRows: any[] = legacy.staffWithTotalLao as any[];
-    const agencyIdSet = new Set<string>();
-    for (const staff of staffRows) {
-      const agencyLinks = staff.workHistoryResponsibleGovernmentAgency || [];
-      for (const link of agencyLinks) {
-        if (link.governmentAgency?.id != null) {
-          agencyIdSet.add(String(link.governmentAgency.id));
-        }
-      }
-    }
-    const agencyIds = Array.from(agencyIdSet);
-
-    // Load the three equipment sub-types for the agencies-of-interest.
-    const epgRowsByAgency = await this.loadEquipmentProjectGroupsByAgency(
-      developmentPlan?.id ?? null,
-      agencyIds,
-    );
-    const relpgRowsByAgency = await this.loadRevisedEquipmentProjectGroupsByAgency(
-      developmentPlan?.id ?? null,
-      agencyIds,
-    );
-    const sepgRowsByAgency = await this.loadSupplementEquipmentProjectGroupsByAgency(
-      developmentPlan?.id ?? null,
-      agencyIds,
-    );
-
-    // Re-decorate each staff row's responsibleAgency bucket with the merged
-    // equipment set, tagged by sourceType.
-    for (const staff of staffRows) {
-      const agencyLinks = staff.workHistoryResponsibleGovernmentAgency || [];
-      for (const link of agencyLinks) {
-        if (!link.governmentAgency) continue;
-        const agency = link.governmentAgency as any;
-        const agencyId = String(agency.id);
-
-        const epgProjects: any[] = (epgRowsByAgency.get(agencyId) || []).map(
-          (p: any) => ({ ...p, sourceType: 'equipment-main' as SourceType }),
-        );
-        const relpgProjects: any[] = (relpgRowsByAgency.get(agencyId) || []).map(
-          (p: any) => ({
-            ...p,
-            sourceType:
-              p.__revisionType === 'change'
-                ? ('equipment-revision-change' as SourceType)
-                : ('equipment-revision-edit' as SourceType),
-          }),
-        );
-        const sepgProjects: any[] = (sepgRowsByAgency.get(agencyId) || []).map(
-          (p: any) => ({ ...p, sourceType: 'equipment-supplement' as SourceType }),
-        );
-
-        const mergedProjects = [...epgProjects, ...relpgProjects, ...sepgProjects];
-
-        // Same dual-split as the ผ.02 union path:
-        //   tile      → drops Ready only (preserves Returned_For_Revision tile).
-        //   executive → drops EXECUTIVE_EXCLUDED_STATUS_NAMES (§3 W67);
-        //               drives the FE-shipped array + projectCount.
-        const tileProjects = mergedProjects.filter((p: any) => {
-          const latest = p.trackingStatus?.find((t: any) => t.isLatest);
-          return latest && latest.statusId && latest.statusId.name !== 'Ready';
-        });
-        const executiveProjects = mergedProjects.filter((p: any) => {
-          const latest = p.trackingStatus?.find((t: any) => t.isLatest);
-          return (
-            latest &&
-            latest.statusId &&
-            !(EXECUTIVE_EXCLUDED_STATUS_NAMES as readonly string[]).includes(
-              latest.statusId.name,
-            )
-          );
-        });
-
-        const { counts, aging } = this.buildStatusBuckets(tileProjects, staff);
-
-        agency.responsibleAgencyProjectGroup = executiveProjects;
-        agency.projectCount = executiveProjects.length;
-        agency.statusCounts = counts;
-        agency.statusAging = aging;
-      }
-
-      // Equipment is agency-origin only (§5.3) — the amphoe (LAO) bucket has
-      // no equipment analog. Empty it exactly as the RPG/SPG union path does.
-      if (staff.workHistoryResponsibleAmphoe) {
-        for (const item of staff.workHistoryResponsibleAmphoe) {
-          if (!item.amphoe) continue;
-          const amphoe = item.amphoe as any;
-          amphoe.projectGroups = [];
-          amphoe.projectCount = 0;
-          const { counts, aging } = this.buildStatusBuckets([], staff);
-          amphoe.statusCounts = counts;
-          amphoe.statusAging = aging;
-        }
-      }
-    }
-
-    // Top-level counters = union of the three equipment sub-types, derived
-    // from the already-filtered responsibleAgency arrays rewritten above.
-    let scopeProjectGroupCount = 0;
-    let scopeApproveCount = 0;
-    let scopeInprogressCount = 0;
-    for (const staff of staffRows) {
-      const agencyLinks = staff.workHistoryResponsibleGovernmentAgency || [];
-      for (const link of agencyLinks) {
-        const agency = link.governmentAgency as any;
-        if (!agency) continue;
-        const counts = agency.statusCounts || {};
-        scopeProjectGroupCount += agency.projectCount || 0;
-        scopeApproveCount += counts.approve || 0;
-        scopeInprogressCount +=
-          (counts.pending || 0) +
-          (counts.verified || 0) +
-          (counts.pendingApproval || 0);
-      }
-    }
-
-    return {
-      ...legacy,
-      projectGroupCount: scopeProjectGroupCount,
-      projectGroupApproveCount: scopeApproveCount,
-      projectGroupInprogressCount: scopeInprogressCount,
-      scope: 'equipment' as TeamDashboardScope,
     };
   }
 
@@ -1099,87 +1115,5 @@ export class ExecutiveService {
       result.set(agencyId, arr);
     }
     return result;
-  }
-
-  /**
-   * Per-source global counters (for `byScope.main`). Mirrors the three
-   * legacy counters so that `scope=all` preserves feature parity.
-   */
-  private async countProjectGroup(developmentPlanId: string | null): Promise<SourceCounters> {
-    if (!developmentPlanId) return EMPTY_COUNTERS();
-    const base = () =>
-      this.projectGroupRepo
-        .createQueryBuilder('pg')
-        .innerJoin('pg.trackingStatus', 'ts')
-        .innerJoin('ts.statusId', 'status')
-        .where('pg.developmentPlan = :id', { id: developmentPlanId })
-        .andWhere('ts.isLatest = :isLatest', { isLatest: true })
-        .andWhere('pg.isDraft = :isDraft', { isDraft: false });
-
-    const [projectGroupCount, approveCount, inProgressCount] = await Promise.all([
-      base().andWhere('status.name != :readyStatus', { readyStatus: 'Ready' }).getCount(),
-      base().andWhere('status.name = :status', { status: 'Approved' }).getCount(),
-      base()
-        .andWhere('status.name NOT IN (:...excludeStatuses)', {
-          excludeStatuses: ['Approved', 'Ready'],
-        })
-        .getCount(),
-    ]);
-    return { projectGroupCount, approveCount, inProgressCount };
-  }
-
-  private async countRevisedProjectGroup(
-    developmentPlanId: string | null,
-  ): Promise<SourceCounters> {
-    if (!developmentPlanId) return EMPTY_COUNTERS();
-    const base = () =>
-      this.revisedProjectGroupRepo
-        .createQueryBuilder('rpg')
-        .leftJoin('rpg.developmentPlanRevision', 'dpr')
-        .innerJoin('rpg.trackingStatus', 'ts')
-        .innerJoin('ts.statusId', 'status')
-        .where('dpr.developmentPlan = :id', { id: developmentPlanId })
-        .andWhere('rpg.deletedAt IS NULL')
-        .andWhere('dpr.deletedAt IS NULL')
-        .andWhere('ts.isLatest = :isLatest', { isLatest: true });
-
-    const [projectGroupCount, approveCount, inProgressCount] = await Promise.all([
-      base().andWhere('status.name != :readyStatus', { readyStatus: 'Ready' }).getCount(),
-      base().andWhere('status.name = :status', { status: 'Approved' }).getCount(),
-      base()
-        .andWhere('status.name NOT IN (:...excludeStatuses)', {
-          excludeStatuses: ['Approved', 'Ready'],
-        })
-        .getCount(),
-    ]);
-    return { projectGroupCount, approveCount, inProgressCount };
-  }
-
-  private async countSupplementProjectGroup(
-    developmentPlanId: string | null,
-  ): Promise<SourceCounters> {
-    if (!developmentPlanId) return EMPTY_COUNTERS();
-    const base = () =>
-      this.supplementProjectGroupRepo
-        .createQueryBuilder('spg')
-        .leftJoin('spg.developmentPlanSupplement', 'dps')
-        .innerJoin('spg.trackingStatus', 'ts')
-        .innerJoin('ts.statusId', 'status')
-        .where('dps.developmentPlan = :id', { id: developmentPlanId })
-        .andWhere('spg.deletedAt IS NULL')
-        .andWhere('dps.deletedAt IS NULL')
-        .andWhere('spg.isDraft = :isDraft', { isDraft: false })
-        .andWhere('ts.isLatest = :isLatest', { isLatest: true });
-
-    const [projectGroupCount, approveCount, inProgressCount] = await Promise.all([
-      base().andWhere('status.name != :readyStatus', { readyStatus: 'Ready' }).getCount(),
-      base().andWhere('status.name = :status', { status: 'Approved' }).getCount(),
-      base()
-        .andWhere('status.name NOT IN (:...excludeStatuses)', {
-          excludeStatuses: ['Approved', 'Ready'],
-        })
-        .getCount(),
-    ]);
-    return { projectGroupCount, approveCount, inProgressCount };
   }
 }

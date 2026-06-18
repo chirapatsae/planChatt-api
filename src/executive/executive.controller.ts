@@ -14,20 +14,26 @@ export class ExecutiveController {
   constructor(private readonly executiveService: ExecutiveService) { }
 
   /**
-   * Wave 43 — Team Dashboard scope extension.
+   * Team Dashboard scope dispatch.
    *
-   * Accepts `?scope=all|main|revision|supplement` (default `'all'`).
+   * Accepts `?scope=main|revision-edit|revision-change|supplement`
+   * (default `'main'`).
    *
-   * Backward-compatibility contract (see docs/tasks/TEAM_DASHBOARD_SCOPE_EXTEND_BACKEND.md):
-   *   - `scope=main` → byte-identical legacy payload (no `scope`, no `byScope`,
-   *     no `sourceType` fields injected).
-   *   - Missing param → treated as `'all'` per task AC item 1; the response
-   *     still contains the legacy top-level keys but also includes `scope`
-   *     and `byScope` so FE can render the union view without branching.
-   *   - `scope=revision|supplement|all` → union aggregation with per-source
-   *     counters in `byScope`.
+   * wave-team-dashboard-equipment-folded (2026-06-18) — equipment (ครุภัณฑ์
+   * ผ.03) is NOT a separate scope. It is PART of every book and is folded
+   * into the matching scope's `responsibleAgency` bucket alongside the ผ.02
+   * project rows (tagged with an `equipment-*` sourceType). The former
+   * standalone `scope=equipment` value has been REMOVED.
    *
-   * Invalid scope values → 400 BAD_SCOPE (§17.2 advisory, no workflow gating).
+   * Contract:
+   *   - `scope=main` → PG + EPG; payload keeps the legacy shape (no top-level
+   *     `scope` key) so existing FE consumers are unchanged. PG-only numbers
+   *     are byte-identical to the pre-fold output.
+   *   - `scope=revision-edit|revision-change|supplement` → ผ.02 + matching
+   *     equipment, with `scope` echoed at top-level.
+   *
+   * Invalid scope values (including the now-removed `equipment`) →
+   * 400 BAD_SCOPE (§17.2 advisory, no workflow gating).
    */
   @Get('team-dashboard')
   getTeamDashboard(
