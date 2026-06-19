@@ -14,6 +14,13 @@ import { SupplementProjectGroup } from 'src/supplement-project-group/entities/su
 import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
 import { SupplementEquipmentProjectGroup } from 'src/supplement-equipment-project-group/entities/supplement-equipment-project-group.entity';
+// Round-window source entities (wave-team-dashboard-scope-window, 2026-06-19)
+// — §8 PlanPhase (main) + §9 DevelopmentPlanRevision / DevelopmentPlanSupplement
+// (revision / change / supplement). READ-ONLY (§17.2): the window is a
+// display overlay, NEVER a workflow gate.
+import { PlanPhase, PhaseType } from 'src/plan-phase/entities/plan-phase.entity';
+import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
+import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entities/development-plan-supplement.entity';
 import { STATUS_NAMES } from 'src/common/status-names';
 import { EXECUTIVE_EXCLUDED_STATUS_NAMES } from 'src/ai-executive-chat/aggregation/constants/executive-status-groups';
 
@@ -76,6 +83,33 @@ type SourceType =
   | 'equipment-revision-change'
   | 'equipment-supplement';
 
+/**
+ * Plan ROUND-WINDOW projected onto the Team Status Calendar
+ * (wave-team-dashboard-scope-window, 2026-06-19).
+ *
+ * DISPLAY-ONLY (§17.2) — the window lets the FE draw the round clock
+ * (open-band / close-edge / post-close wash) so closures and queue cells
+ * are read against the round. It is derived from existing book/phase state
+ * via PURE READS and MUST NEVER gate a workflow transition. §8 / §9 remain
+ * the authoritative activation rules, enforced by the real workflow
+ * services — this object only visualises their clock.
+ *
+ *   - `main`                            → active `PlanPhase` (§8):
+ *     `phaseType` = 'LAO' | 'AGENCY'.
+ *   - `revision-edit` / `revision-change` / `supplement` → the matching
+ *     `DevelopmentPlanRevision` / `DevelopmentPlanSupplement` (§9):
+ *     `phaseType` = null (no phase concept), window from
+ *     `startDate` / `endDate` (else `bookedAt`) / `isOpen`.
+ *
+ * `null` when no phase / round exists for the scope.
+ */
+export type ScopeWindow = {
+  phaseType: 'LAO' | 'AGENCY' | null;
+  openDate: string | null;
+  closeDate: string | null;
+  isOpen: boolean;
+} | null;
+
 @Injectable()
 export class ExecutiveService {
   private readonly logger = new Logger(ExecutiveService.name);
@@ -97,6 +131,13 @@ export class ExecutiveService {
     private readonly revisedEquipmentProjectGroupRepo: Repository<RevisedEquipmentProjectGroup>,
     @InjectRepository(SupplementEquipmentProjectGroup)
     private readonly supplementEquipmentProjectGroupRepo: Repository<SupplementEquipmentProjectGroup>,
+    // Round-window source repos (wave-team-dashboard-scope-window) — read-only.
+    @InjectRepository(PlanPhase)
+    private readonly planPhaseRepo: Repository<PlanPhase>,
+    @InjectRepository(DevelopmentPlanRevision)
+    private readonly developmentPlanRevisionRepo: Repository<DevelopmentPlanRevision>,
+    @InjectRepository(DevelopmentPlanSupplement)
+    private readonly developmentPlanSupplementRepo: Repository<DevelopmentPlanSupplement>,
   ) { }
 
   create(createExecutiveDto: CreateExecutiveDto) {
@@ -609,7 +650,16 @@ export class ExecutiveService {
     // contract the FE uses to detect the main scope. The behavioral change
     // is carried entirely by the equipment rows now tagged `equipment-main`
     // inside the agency bucket.
-    return legacy;
+    //
+    // wave-team-dashboard-scope-window — attach the §8 PlanPhase round window
+    // for the FE calendar overlay. ADDITIVE: `scopeWindow` does NOT add a
+    // top-level `scope` key, so main-scope detection on the FE is unchanged.
+    // §17.2 — display-only, derived via a pure read.
+    const scopeWindow = await this.deriveScopeWindow(
+      developmentPlan?.id ?? null,
+      'main',
+    );
+    return { ...legacy, scopeWindow };
   }
 
   /**
@@ -826,13 +876,169 @@ export class ExecutiveService {
       }
     }
 
+    // wave-team-dashboard-scope-window — attach the §9 round window derived
+    // from the active DevelopmentPlanRevision (revision-edit / revision-change)
+    // or DevelopmentPlanSupplement (supplement) for the FE calendar overlay.
+    // §17.2 — display-only, derived via a pure read.
+    const scopeWindow = await this.deriveScopeWindow(
+      developmentPlan?.id ?? null,
+      scope,
+    );
+
     return {
       ...legacy,
       projectGroupCount: scopeProjectGroupCount,
       projectGroupApproveCount: scopeApproveCount,
       projectGroupInprogressCount: scopeInprogressCount,
       scope,
+      scopeWindow,
     };
+  }
+
+  /**
+   * Resolve the plan ROUND-WINDOW for a scope (wave-team-dashboard-scope-window).
+   *
+   * DISPLAY-ONLY (§17.2) — a pure read used by the FE to draw the round clock
+   * on the Team Status Calendar. NEVER gates a workflow transition; §8 / §9
+   * remain the authoritative activation rules enforced elsewhere.
+   *
+   *   - `main`            → active `PlanPhase` (§8).
+   *   - `revision-edit` /
+   *     `revision-change`  → active `DevelopmentPlanRevision` (§9).
+   *   - `supplement`      → active `DevelopmentPlanSupplement` (§9).
+   *
+   * Returns `null` when no plan id is resolved or no phase / round exists.
+   */
+  private async deriveScopeWindow(
+    developmentPlanId: string | null,
+    scope: TeamDashboardScope,
+  ): Promise<ScopeWindow> {
+    if (!developmentPlanId) return null;
+    if (scope === 'main') {
+      return this.deriveMainPhaseWindow(developmentPlanId);
+    }
+    if (scope === 'supplement') {
+      return this.deriveSupplementWindow(developmentPlanId);
+    }
+    // revision-edit | revision-change
+    return this.deriveRevisionWindow(developmentPlanId, scope);
+  }
+
+  /**
+   * §8 main-plan window — the active `PlanPhase`. Selection: prefer an OPEN
+   * phase, tie-break by the latest `openDate` (the current active round). If
+   * no phase is open, fall back to the latest `openDate` row so the calendar
+   * still renders the most-recent (closed) round with `isOpen = false`.
+   */
+  private async deriveMainPhaseWindow(
+    developmentPlanId: string,
+  ): Promise<ScopeWindow> {
+    const phases = await this.planPhaseRepo.find({
+      where: { developmentPlan: { id: developmentPlanId } },
+    });
+    if (phases.length === 0) return null;
+
+    const phase = [...phases].sort((a, b) => {
+      if (a.isOpen !== b.isOpen) return a.isOpen ? -1 : 1;
+      return this.timeOf(b.openDate) - this.timeOf(a.openDate);
+    })[0];
+
+    return {
+      phaseType: phase.phaseType === PhaseType.AGENCY ? 'AGENCY' : 'LAO',
+      openDate: this.toIso(phase.openDate),
+      closeDate: this.toIso(phase.closeDate),
+      isOpen: phase.isOpen,
+    };
+  }
+
+  /**
+   * §9 revision/change window — the active `DevelopmentPlanRevision` matching
+   * the scope's revision type (`เปลี่ยนแปลง` = change, else edit), filtered to
+   * non-soft-deleted rows of this plan. Prefer an OPEN round, tie-break by the
+   * latest `revisionNumber`.
+   */
+  private async deriveRevisionWindow(
+    developmentPlanId: string,
+    scope: 'revision-edit' | 'revision-change',
+  ): Promise<ScopeWindow> {
+    const rows = await this.developmentPlanRevisionRepo
+      .createQueryBuilder('dpr')
+      .leftJoinAndSelect('dpr.revisionType', 'rt')
+      .where('dpr.developmentPlan = :planId', { planId: developmentPlanId })
+      .andWhere('dpr.deletedAt IS NULL')
+      .getMany();
+
+    const wantChange = scope === 'revision-change';
+    const matching = rows.filter((r) => {
+      // Thai vocab: 'เปลี่ยนแปลง' = change, anything else = edit (mirrors the
+      // __revisionType discriminator in loadRevisedProjectGroupsByAgency).
+      const isChange = (r as any).revisionType?.name === 'เปลี่ยนแปลง';
+      return wantChange ? isChange : !isChange;
+    });
+    if (matching.length === 0) return null;
+
+    const dpr = matching.sort((a, b) => {
+      if (a.isOpen !== b.isOpen) return a.isOpen ? -1 : 1;
+      return (b.revisionNumber ?? 0) - (a.revisionNumber ?? 0);
+    })[0];
+
+    return this.toBookWindow(dpr);
+  }
+
+  /**
+   * §9 supplement window — the active `DevelopmentPlanSupplement` of this plan
+   * (non-soft-deleted). Prefer an OPEN round, tie-break by the latest
+   * `supplementNumber`.
+   */
+  private async deriveSupplementWindow(
+    developmentPlanId: string,
+  ): Promise<ScopeWindow> {
+    const rows = await this.developmentPlanSupplementRepo
+      .createQueryBuilder('dps')
+      .where('dps.developmentPlan = :planId', { planId: developmentPlanId })
+      .andWhere('dps.deletedAt IS NULL')
+      .getMany();
+    if (rows.length === 0) return null;
+
+    const dps = rows.sort((a, b) => {
+      if (a.isOpen !== b.isOpen) return a.isOpen ? -1 : 1;
+      return (b.supplementNumber ?? 0) - (a.supplementNumber ?? 0);
+    })[0];
+
+    return this.toBookWindow(dps);
+  }
+
+  /**
+   * Shared shape for a DPR / DPS round: `openDate` = `startDate`,
+   * `closeDate` = `endDate` (else the `bookedAt` finalize timestamp).
+   * `phaseType` is null — only `PlanPhase` carries an LAO/AGENCY phase.
+   */
+  private toBookWindow(book: {
+    isOpen: boolean;
+    startDate: Date | null;
+    endDate: Date | null;
+    bookedAt: Date | null;
+  }): ScopeWindow {
+    return {
+      phaseType: null,
+      openDate: this.toIso(book.startDate),
+      closeDate: this.toIso(book.endDate ?? book.bookedAt),
+      isOpen: book.isOpen,
+    };
+  }
+
+  /** Normalize a nullable Date column to an ISO string (or null). */
+  private toIso(d: Date | null | undefined): string | null {
+    if (!d) return null;
+    const t = new Date(d);
+    return Number.isNaN(t.getTime()) ? null : t.toISOString();
+  }
+
+  /** Nullable Date → epoch ms (−Infinity when absent) for deterministic sort. */
+  private timeOf(d: Date | null | undefined): number {
+    if (!d) return -Infinity;
+    const t = new Date(d).getTime();
+    return Number.isNaN(t) ? -Infinity : t;
   }
 
   /**

@@ -2143,6 +2143,80 @@ export class ProjectGroupsService {
   }
 
   /**
+   * หาโครงการในเล่มเพิ่มเติม (SupplementProjectGroup / SPG) ที่เป็น
+   * version ล่าสุด สำหรับใช้บนแผนที่ผู้บริหาร (executive amphoe map).
+   *
+   * Mirrors `findOriginalLatestProjects` join topology so the shared
+   * `transformToDistrictStructure` reads SPG fields exactly like PG/RPG.
+   *
+   * CLAUDE.md §10 Scope Binding — SPG is bound to its supplement's parent
+   * `DevelopmentPlan` (`supplement.developmentPlan.id = :developmentPlanId`),
+   * NEVER a global latest plan.
+   * CLAUDE.md §5.3 / supplement-add-project Q1+Q2 — SPG is agency-origin
+   * only, so each row carries a `responsibleAgency` and is bucketed by the
+   * transform's `'3001027'` (อบจ นครราชสีมา) special case.
+   * Read-only aggregator — no writes (§12 / §17.2 N/A here).
+   */
+  private async findSupplementLatestProjects(
+    developmentPlanId: string,
+    status?: string,
+  ): Promise<SupplementProjectGroup[]> {
+    const query = this.supplementProjectGroupRepo
+      .createQueryBuilder('supplementProjectGroup')
+      .leftJoinAndSelect('supplementProjectGroup.developmentPlanSupplement', 'developmentPlanSupplement')
+      .leftJoinAndSelect('developmentPlanSupplement.developmentPlan', 'developmentPlan')
+      .leftJoinAndSelect('supplementProjectGroup.createdBy', 'createdBy')
+      .leftJoinAndSelect('createdBy.user', 'createdByUser')
+      .leftJoinAndSelect('createdBy.amphoe', 'amphoe')
+      .leftJoinAndSelect('createdBy.localAdministrativeOrganization', 'localAdministrativeOrganization')
+      .leftJoinAndSelect('supplementProjectGroup.strategy', 'strategy')
+      .leftJoinAndSelect('supplementProjectGroup.tactic', 'tactic')
+      .leftJoinAndSelect('supplementProjectGroup.plan', 'plan')
+      .leftJoinAndSelect('supplementProjectGroup.developmentIssue', 'developmentIssue')
+      .leftJoinAndSelect('supplementProjectGroup.budgets', 'budgets')
+      .leftJoinAndSelect('supplementProjectGroup.trackingStatus', 'trackingStatus')
+      .leftJoinAndSelect('trackingStatus.statusId', 'status')
+      .leftJoinAndSelect('trackingStatus.comments', 'comments')
+      .leftJoinAndSelect('trackingStatus.createdBy', 'workHistory')
+      .leftJoinAndSelect('workHistory.user', 'user')
+      .leftJoinAndSelect('workHistory.localAdministrativeOrganization', 'localAdministrativeOrganizationWorkHistory')
+      .leftJoinAndSelect('workHistory.governmentAgencies', 'governmentAgencies')
+      .leftJoinAndSelect('workHistory.workStatus', 'workStatus')
+      .leftJoinAndSelect('supplementProjectGroup.responsibleAgency', 'responsibleAgency')
+      .leftJoinAndSelect('supplementProjectGroup.originAgencyId', 'originAgencyId')
+      .leftJoinAndSelect('originAgencyId.amphoe', 'originAgencyAmphoe')
+      .leftJoinAndSelect('supplementProjectGroup.amphoe', 'projectAmphoe')
+      .leftJoinAndSelect('supplementProjectGroup.localAdministrativeOrganization', 'projectLocalAdministrativeOrganization')
+      // SPG version-latest guard (mirrors the SPG list queries) +
+      // latest-tracking-row guard (mirrors PG/RPG executive reads).
+      .andWhere('supplementProjectGroup.is_latest = :spgIsLatest', { spgIsLatest: true })
+      .andWhere('supplementProjectGroup.isDraft = :isDraft', { isDraft: false })
+      .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
+      // Wave 24 §3 W67 — exclude workflow-internal authoring states from
+      // every executive read path (Ready / Pull_Back / Returned_For_Revision).
+      .andWhere('status.name NOT IN (:...excludedStatusNames)', {
+        excludedStatusNames: [...EXECUTIVE_EXCLUDED_STATUS_NAMES],
+      })
+      .andWhere('developmentPlan.id = :developmentPlanId', { developmentPlanId });
+
+    if (status) {
+      query.andWhere('status.name = :statusName', { statusName: status });
+    }
+
+    const projects = await query.getMany();
+    // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
+    // `maskCreatedByUserOnProjects` reads `createdBy.user` / `trackingStatus`
+    // structurally, so it operates on SPG rows identically.
+    await this.maskCreatedByUserOnProjects(projects as any);
+    // Tag each row so `transformToDistrictStructure` can render the
+    // "เพิ่มเติม" tag (FE reads `project.projectKind === 'supplement'`).
+    for (const p of projects) {
+      (p as any).__projectKind = 'supplement';
+    }
+    return projects;
+  }
+
+  /**
  * หาโครงการล่าสุดทั้งหมด (ไม่กรองสถานะ)
  * ถ้าโครงการมีลูก → เอาลูกล่าสุดมา
  * ถ้าโครงการไม่มีลูก → เอาแม่มา
@@ -3478,12 +3552,35 @@ export class ProjectGroupsService {
       order: { name: 'ASC' }
     });
 
-    // Query all projects (original + revised) - ใช้เหมือนบรรทัด 1465-1470
-    const [originalProjects, revisedProjects] = await Promise.all([
+    // Query all projects (original + revised + supplement). Supplement
+    // (SPG / "เล่มเพิ่มเติม") rows are bound to the SAME DevelopmentPlan via
+    // their supplement's parent plan (§10 scope binding) and bucketed by the
+    // transform's agency-origin '3001027' special case.
+    const [originalProjects, revisedProjects, supplementProjects] = await Promise.all([
       this.findOriginalLatestProjects(developmentPlan.id),
       this.findRevisedLatestProjects(developmentPlan.id),
+      this.findSupplementLatestProjects(developmentPlan.id),
     ]);
-    const allProjects = [...originalProjects, ...revisedProjects];
+    const allProjectsRaw = [...originalProjects, ...revisedProjects, ...supplementProjects];
+
+    // §14 head-of-lineage dedup — a revised lineage (PG → RPG → RPG, or
+    // SPG → RPG) must count ONCE (the head), matching the canonical unified
+    // aggregator used by /executive/overall. The bespoke findOriginal /
+    // findRevised dedup keys off `developmentPlanRevision.isLatest`, which
+    // over-counts when the revision round is NOT the latest DPR (it leaves
+    // the locked original PG/RPG in the set). Drop every row that has a
+    // live (non-deleted) revised descendant so the map total matches the
+    // executive-overall count exactly.
+    const lockedParentRows = await this.revisedProjectGroupRepo
+      .createQueryBuilder('rpg')
+      .select('rpg.prevProjectId', 'prevId')
+      .where('rpg.deletedAt IS NULL')
+      .andWhere('rpg.prevProjectId IS NOT NULL')
+      .getRawMany<{ prevId: string }>();
+    const lockedParentIds = new Set(lockedParentRows.map((row) => row.prevId));
+    const allProjects = allProjectsRaw.filter(
+      (project: any) => !lockedParentIds.has(project.id),
+    );
 
     // Transform to district structure: Amphoe > LAO > Projects
     const districtData = this.transformToDistrictStructure(amphoes, localOrgs, allProjects);
@@ -3895,6 +3992,11 @@ export class ProjectGroupsService {
 
             // Metadata
             isRevised: !!project.originalProject,
+            // FE popup reads `project.projectKind === 'supplement'` to render
+            // the "เพิ่มเติม" tag. SPG rows carry `__projectKind = 'supplement'`
+            // (tagged in findSupplementLatestProjects); PG/RPG resolve to
+            // 'main'/'revised'.
+            projectKind: (project as any).__projectKind ?? (project.originalProject ? 'revised' : 'main'),
             isDraft: project.isDraft || project.originalProject?.isDraft || false,
             createdAt: project.createdAt || project.originalProject?.createdAt
           };
