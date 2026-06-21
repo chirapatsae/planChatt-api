@@ -178,6 +178,10 @@ export interface UnifiedEquipmentRow {
   /** §4 ownership scalar (WorkHistory.id) — for FE row-ownership gating. */
   createdByWorkHistoryId: string | null;
   responsibleAgency: { id: string; name: string | null } | null;
+  /** Project-level อำเภอ / อปท (อบจ-level for equipment) — present on the row
+   *  so executive read surfaces (e.g. plan-analysis modal) can display them. */
+  amphoe: { id: string; name: string | null } | null;
+  localAdministrativeOrganization: { id: string; name: string | null } | null;
 
   /** Row's own `createdAt` ISO — used for timeline sort (newest first). */
   createdAt: string;

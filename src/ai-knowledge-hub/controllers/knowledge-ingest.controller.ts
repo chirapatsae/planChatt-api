@@ -34,6 +34,7 @@ import {
   KnowledgeSourceCreatedDto,
   KnowledgeSourceDto,
   KnowledgeSourceListResponseDto,
+  KnowledgeSourceRotateHmacResponseDto,
   KnowledgeSourceRotateKeyResponseDto,
   UpdateKnowledgeSourceDto,
 } from '../dto/knowledge-source.dto';
@@ -167,6 +168,34 @@ export class KnowledgeIngestController {
     @Req() req: { user: JwtPayloadUser },
   ): Promise<KnowledgeSourceRotateKeyResponseDto> {
     return this.knowledgeSourceService.rotateKey(id, req.user.userId);
+  }
+
+  /**
+   * Enable (first call) or rotate the optional HMAC body-signature secret
+   * — NEW plaintext secret returned ONCE; stored AES-encrypted-at-rest.
+   * Sources stay API-key-only until this is called (opt-in).
+   */
+  @Post('sources/:id/rotate-hmac-secret')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
+  @Roles(...SUPER_ADMIN_ONLY)
+  async rotateHmacSecret(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: { user: JwtPayloadUser },
+  ): Promise<KnowledgeSourceRotateHmacResponseDto> {
+    return this.knowledgeSourceService.rotateHmacSecret(id, req.user.userId);
+  }
+
+  /** Disable HMAC — clears the secret, reverting to API-key-only ingest. */
+  @Post('sources/:id/disable-hmac-secret')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard, WorkStatusApprovedGuard)
+  @Roles(...SUPER_ADMIN_ONLY)
+  async disableHmacSecret(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: { user: JwtPayloadUser },
+  ): Promise<KnowledgeSourceDto> {
+    return this.knowledgeSourceService.disableHmacSecret(id, req.user.userId);
   }
 
   /** Schema / rate-limit / domain edits — NOT status, NOT credentials. */

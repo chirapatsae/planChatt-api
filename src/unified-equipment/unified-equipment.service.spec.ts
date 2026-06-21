@@ -3,6 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 
 import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 import { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
+import { SupplementEquipmentProjectGroup } from 'src/supplement-equipment-project-group/entities/supplement-equipment-project-group.entity';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 
 import { UnifiedEquipmentService } from './unified-equipment.service';
@@ -57,6 +58,8 @@ function makeRow(
     createdBy: null,
     createdByWorkHistoryId: null,
     responsibleAgency: null,
+    amphoe: null,
+    localAdministrativeOrganization: null,
     createdAt: new Date().toISOString(),
     ...rest,
   };
@@ -74,11 +77,19 @@ describe('UnifiedEquipmentService.executiveList', () => {
           provide: getRepositoryToken(RevisedEquipmentProjectGroup),
           useValue: {},
         },
+        {
+          provide: getRepositoryToken(SupplementEquipmentProjectGroup),
+          useValue: {},
+        },
         { provide: getRepositoryToken(WorkHistory), useValue: {} },
       ],
     }).compile();
 
     service = moduleRef.get(UnifiedEquipmentService);
+    // SEPG head-row loader was added to executiveList/staffList in the SEPG
+    // wave (2026-06-08); stub it by default so tests that spy only EPG/RELPG
+    // don't hit the un-mocked sepgRepo query builder. Tests may override.
+    jest.spyOn(service as any, 'loadSepgHeadRows').mockResolvedValue([]);
   });
 
   it('excludes W67 in-flight statuses and tags survivors with executiveStatusGroup', async () => {
@@ -193,10 +204,18 @@ describe('UnifiedEquipmentService.staffList — area scope (§1/§3/§4.1)', () 
           provide: getRepositoryToken(RevisedEquipmentProjectGroup),
           useValue: {},
         },
+        {
+          provide: getRepositoryToken(SupplementEquipmentProjectGroup),
+          useValue: {},
+        },
         { provide: getRepositoryToken(WorkHistory), useValue: whRepo },
       ],
     }).compile();
     service = moduleRef.get(UnifiedEquipmentService);
+    // SEPG head-row loader was added to executiveList/staffList in the SEPG
+    // wave (2026-06-08); stub it by default so tests that spy only EPG/RELPG
+    // don't hit the un-mocked sepgRepo query builder. Tests may override.
+    jest.spyOn(service as any, 'loadSepgHeadRows').mockResolvedValue([]);
   });
 
   it('scopes plain staff: EPG by amphoeIds, RELPG by agencyIds; result is a subset', async () => {

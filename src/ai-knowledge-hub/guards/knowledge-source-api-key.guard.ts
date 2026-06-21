@@ -6,11 +6,24 @@ import { KnowledgeSourceService } from '../services/knowledge-source.service';
 /** Header carrying the per-source API key (task §3.2). */
 export const INGEST_API_KEY_HEADER = 'x-pbk-api-key';
 
+/**
+ * Header carrying the OPTIONAL per-request HMAC body signature:
+ * `base64(HMAC-SHA256(source.hmacSecret, rawRequestBody))`. Only required
+ * when the source has opted into HMAC (`hmac_secret_hash IS NOT NULL`).
+ */
+export const INGEST_SIGNATURE_HEADER = 'x-pbk-signature';
+
 /** Request shape after the guard admits a caller. */
 export interface KnowledgeIngestRequest {
   params?: { sourceKey?: string };
   headers: Record<string, string | string[] | undefined>;
   ip?: string;
+  /**
+   * Raw request body bytes — present because `main.ts` boots with
+   * `{ rawBody: true }`. HMAC MUST be verified over these EXACT bytes,
+   * never a re-stringified parsed body (see `assertValidHmacSignature`).
+   */
+  rawBody?: Buffer;
   knowledgeSource?: AiKnowledgeSource;
 }
 
@@ -33,6 +46,14 @@ export interface KnowledgeIngestRequest {
  *     / revoked) source → 403. Either way the request NEVER touches
  *     staging (acceptance §6) — the guard throws before the controller
  *     body runs.
+ *   - OPTIONAL second factor: when the source has opted into HMAC
+ *     (`hmac_secret_hash IS NOT NULL`), the request must also carry a
+ *     valid `X-PBK-Signature` over the RAW body — verified in constant
+ *     time by `assertValidHmacSignature`. A bad / missing signature
+ *     answers the SAME generic 401 as a bad key (no enumeration). Sources
+ *     without HMAC are unaffected (back-compat). The signature is checked
+ *     BEFORE the source is attached, so a half-authenticated request
+ *     never carries `request.knowledgeSource` downstream.
  *
  * On success the matched source row is attached as
  * `request.knowledgeSource` so the controller/service never re-resolve
@@ -50,11 +71,26 @@ export class KnowledgeSourceApiKeyGuard implements CanActivate {
     const headerValue = request.headers[INGEST_API_KEY_HEADER];
     const rawKey = Array.isArray(headerValue) ? headerValue[0] : headerValue;
 
-    request.knowledgeSource =
-      await this.knowledgeSourceService.authenticateForIngest(
-        request.params?.sourceKey,
-        rawKey,
-      );
+    const source = await this.knowledgeSourceService.authenticateForIngest(
+      request.params?.sourceKey,
+      rawKey,
+    );
+
+    // Optional second factor — no-op when the source hasn't opted into
+    // HMAC; otherwise verifies the X-PBK-Signature over the RAW body.
+    const signatureHeader = request.headers[INGEST_SIGNATURE_HEADER];
+    const signature = Array.isArray(signatureHeader)
+      ? signatureHeader[0]
+      : signatureHeader;
+    await this.knowledgeSourceService.assertValidHmacSignature(
+      source,
+      request.rawBody,
+      signature,
+    );
+
+    // Attach only after BOTH factors pass — a half-authenticated request
+    // never carries the source row downstream.
+    request.knowledgeSource = source;
     return true;
   }
 }

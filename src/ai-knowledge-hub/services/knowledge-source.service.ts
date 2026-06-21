@@ -8,10 +8,11 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as argon2 from 'argon2';
-import { randomBytes } from 'crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import { Repository } from 'typeorm';
 import { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 
+import { decryption, encryption } from 'src/util/encryption.util';
 import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 import {
   CreateKnowledgeSourceDto,
@@ -19,6 +20,7 @@ import {
   KnowledgeSourceDto,
   KnowledgeSourceHealthDto,
   KnowledgeSourceListResponseDto,
+  KnowledgeSourceRotateHmacResponseDto,
   KnowledgeSourceRotateKeyResponseDto,
   UpdateKnowledgeSourceDto,
 } from '../dto/knowledge-source.dto';
@@ -34,6 +36,9 @@ import { KnowledgeAuditService } from './knowledge-audit.service';
 const API_KEY_NAMESPACE = 'pbk_live_';
 /** Stored lookup prefix length (matches the varchar(12) column). */
 const API_KEY_PREFIX_LENGTH = 12;
+
+/** Fixed HMAC-secret namespace prefix — `pbk_hmac_` + 43-char base64url. */
+const HMAC_SECRET_NAMESPACE = 'pbk_hmac_';
 
 /**
  * Argon2id parameters for API-KEY digests (NOT passwords). The key body
@@ -339,6 +344,92 @@ export class KnowledgeSourceService {
   }
 
   /**
+   * `POST /sources/:id/rotate-hmac-secret` — enable (first call) or rotate
+   * the optional HMAC body-signature secret. The NEW plaintext appears
+   * once in this response; the OLD secret stops verifying the instant the
+   * transaction commits. Stored AES-encrypted-at-rest (reversible — the
+   * server must recompute `HMAC(secret, rawBody)` at receipt; see the
+   * `hmacSecretHash` entity note). Forbidden on revoked sources, mirroring
+   * `rotateKey`. Audited as `update` on targetKind `source` (the audit
+   * action enum is a PG enum — widening it under synchronize:true is the
+   * documented footgun; the generic `update` + a `detail` discriminator is
+   * the established no-churn convention, same as `updateSource`).
+   */
+  async rotateHmacSecret(
+    id: string,
+    userId: string,
+  ): Promise<KnowledgeSourceRotateHmacResponseDto> {
+    const actor = await this.resolveActor(userId);
+    const source = await this.loadSourceOrThrow(id);
+
+    if (source.status === 'revoked') {
+      throw this.sourceStatusInvalid(source.status, 'rotate-hmac-secret');
+    }
+
+    const secret = this.generateHmacSecret();
+    const ciphertext = await encryption(secret);
+
+    await this.sourceRepository.manager.transaction(async (manager) => {
+      await manager
+        .getRepository(AiKnowledgeSource)
+        .update({ id }, { hmacSecretHash: ciphertext });
+      await this.knowledgeAuditService.record(
+        {
+          actorWorkHistoryId: actor.workHistoryId,
+          actorRole: actor.roleName,
+          action: 'update',
+          targetKind: 'source',
+          // NON-secret discriminator only — never the plaintext / ciphertext.
+          detail: { hmac: 'rotated' },
+          targetId: id,
+        },
+        manager,
+      );
+    });
+
+    return { id, hmacSecret: secret };
+  }
+
+  /**
+   * `POST /sources/:id/disable-hmac-secret` — opt back out (HMAC → off).
+   * Clears the secret so the source returns to API-key-only ingest
+   * (back-compat path). Idempotent: a no-op when already disabled (no
+   * write, no audit row). Forbidden on revoked sources.
+   */
+  async disableHmacSecret(
+    id: string,
+    userId: string,
+  ): Promise<KnowledgeSourceDto> {
+    const actor = await this.resolveActor(userId);
+    const source = await this.loadSourceOrThrow(id);
+
+    if (source.status === 'revoked') {
+      throw this.sourceStatusInvalid(source.status, 'disable-hmac-secret');
+    }
+
+    if (source.hmacSecretHash !== null) {
+      await this.sourceRepository.manager.transaction(async (manager) => {
+        await manager
+          .getRepository(AiKnowledgeSource)
+          .update({ id }, { hmacSecretHash: null });
+        await this.knowledgeAuditService.record(
+          {
+            actorWorkHistoryId: actor.workHistoryId,
+            actorRole: actor.roleName,
+            action: 'update',
+            targetKind: 'source',
+            detail: { hmac: 'disabled' },
+            targetId: id,
+          },
+          manager,
+        );
+      });
+    }
+
+    return this.toSourceDto({ ...source, hmacSecretHash: null }, undefined);
+  }
+
+  /**
    * `PATCH /sources/:id` — schema / rate-limit / domain / descriptive
    * edits. NOT status (dedicated endpoints), NOT mode (Q3), NOT
    * credentials (rotate-key only). Forbidden on revoked sources.
@@ -488,6 +579,70 @@ export class KnowledgeSourceService {
     return matched;
   }
 
+  /**
+   * Optional second ingest factor — HMAC-SHA256 body-signature check
+   * (§17.15.5 tampering/replay control; report §6.1 STRIDE-T). Called by
+   * `KnowledgeSourceApiKeyGuard` AFTER the API key has authenticated the
+   * source, BEFORE any staging write.
+   *
+   *   - `hmac_secret_hash IS NULL` → HMAC not configured → no-op
+   *     (back-compat: API-key-only sources are unaffected).
+   *   - otherwise the request MUST carry
+   *     `X-PBK-Signature: base64(HMAC-SHA256(secret, rawRequestBody))`.
+   *     The secret is decrypted from rest, the HMAC recomputed over the
+   *     EXACT raw bytes (never a re-stringified JSON — that would change
+   *     under whitespace / key-order / unicode shifts), and compared in
+   *     constant time.
+   *
+   * EVERY failure shape (missing header, missing rawBody, corrupt stored
+   * secret, length mismatch, byte mismatch) answers the SAME generic 401
+   * as a bad API key (`ingestKeyInvalid`) — no enumeration of whether the
+   * key, the slug, or the signature was the failing factor (task §3). Fail
+   * CLOSED: a missing rawBody NEVER falls back to `JSON.stringify(body)`
+   * (mirrors `line-signature.guard.ts`).
+   */
+  async assertValidHmacSignature(
+    source: AiKnowledgeSource,
+    rawBody: Buffer | undefined,
+    providedSignature: string | undefined,
+  ): Promise<void> {
+    // Opt-in: unconfigured sources keep API-key-only auth.
+    if (!source.hmacSecretHash) {
+      return;
+    }
+
+    if (!providedSignature || typeof providedSignature !== 'string') {
+      throw this.ingestKeyInvalid();
+    }
+    if (!rawBody || !Buffer.isBuffer(rawBody) || rawBody.length === 0) {
+      // Fail closed — NEVER sign a re-serialized JSON object.
+      throw this.ingestKeyInvalid();
+    }
+
+    let secret: string;
+    try {
+      secret = await decryption(source.hmacSecretHash);
+    } catch {
+      // Corrupt / undecryptable stored secret — fail closed, no detail leak.
+      throw this.ingestKeyInvalid();
+    }
+
+    const computed = createHmac('sha256', secret)
+      .update(rawBody)
+      .digest('base64');
+
+    const expected = Buffer.from(computed, 'utf8');
+    const actual = Buffer.from(providedSignature, 'utf8');
+    // timingSafeEqual requires equal lengths; a length mismatch is an
+    // immediate non-match without leaking the correct-prefix ratio.
+    if (
+      expected.length !== actual.length ||
+      !timingSafeEqual(expected, actual)
+    ) {
+      throw this.ingestKeyInvalid();
+    }
+  }
+
   // ── private helpers ─────────────────────────────────────────────
 
   /**
@@ -505,6 +660,16 @@ export class KnowledgeSourceService {
     const prefix = plaintext.slice(0, API_KEY_PREFIX_LENGTH);
     const hash = await argon2.hash(plaintext, API_KEY_HASH_OPTIONS);
     return { plaintext, prefix, hash };
+  }
+
+  /**
+   * Generate a fresh HMAC secret: `pbk_hmac_` + base64url(32 random bytes)
+   * (≈256-bit entropy). The plaintext is returned for the ONE-time
+   * response and stored only AES-encrypted (see `rotateHmacSecret`). It
+   * MUST NOT be logged by any caller.
+   */
+  private generateHmacSecret(): string {
+    return `${HMAC_SECRET_NAMESPACE}${randomBytes(32).toString('base64url')}`;
   }
 
   /** Fail-closed verify (corrupt digest → false, never throw). */
@@ -677,6 +842,9 @@ export class KnowledgeSourceService {
       classificationCeiling: source.classificationCeiling,
       rateLimitPerMin: source.rateLimitPerMin,
       maxPayloadBytes: source.maxPayloadBytes,
+      // Boolean projection ONLY — the secret (ciphertext or plaintext)
+      // never leaves the service layer (§17.15.7).
+      hmacEnabled: source.hmacSecretHash != null,
       purposeDeclaration: source.purposeDeclaration,
       lawfulBasis: source.lawfulBasis,
       createdByWorkHistoryId: source.createdByWorkHistoryId,

@@ -294,6 +294,8 @@ export class UnifiedEquipmentService {
       .leftJoinAndSelect('epg.developmentIssue', 'developmentIssue')
       .leftJoinAndSelect('epg.equipmentCategory', 'equipmentCategory')
       .leftJoinAndSelect('epg.responsibleAgency', 'responsibleAgency')
+      .leftJoinAndSelect('epg.amphoe', 'epgAmphoe')
+      .leftJoinAndSelect('epg.localAdministrativeOrganization', 'epgLao')
       .leftJoinAndSelect('epg.budgets', 'budgets')
       .leftJoinAndSelect('epg.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
@@ -372,6 +374,8 @@ export class UnifiedEquipmentService {
       .leftJoinAndSelect('relpg.developmentIssue', 'developmentIssue')
       .leftJoinAndSelect('relpg.equipmentCategory', 'equipmentCategory')
       .leftJoinAndSelect('relpg.responsibleAgency', 'responsibleAgency')
+      .leftJoinAndSelect('relpg.amphoe', 'relpgAmphoe')
+      .leftJoinAndSelect('relpg.localAdministrativeOrganization', 'relpgLao')
       .leftJoinAndSelect('relpg.budgets', 'budgets')
       .leftJoinAndSelect('relpg.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
@@ -448,6 +452,8 @@ export class UnifiedEquipmentService {
       .leftJoinAndSelect('sepg.developmentIssue', 'developmentIssue')
       .leftJoinAndSelect('sepg.equipmentCategory', 'equipmentCategory')
       .leftJoinAndSelect('sepg.responsibleAgency', 'responsibleAgency')
+      .leftJoinAndSelect('sepg.amphoe', 'sepgAmphoe')
+      .leftJoinAndSelect('sepg.localAdministrativeOrganization', 'sepgLao')
       .leftJoinAndSelect('sepg.budgets', 'budgets')
       .leftJoinAndSelect('sepg.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
@@ -540,6 +546,10 @@ export class UnifiedEquipmentService {
             name: epg.responsibleAgency.name ?? null,
           }
         : null,
+      amphoe: epg.amphoe ? { id: epg.amphoe.id, name: epg.amphoe.name ?? null } : null,
+      localAdministrativeOrganization: epg.localAdministrativeOrganization
+        ? { id: epg.localAdministrativeOrganization.id, name: epg.localAdministrativeOrganization.name ?? null }
+        : null,
       createdAt: this.toIso(epg.createdAt) ?? new Date(0).toISOString(),
     };
   }
@@ -619,6 +629,10 @@ export class UnifiedEquipmentService {
             name: relpg.responsibleAgency.name ?? null,
           }
         : null,
+      amphoe: relpg.amphoe ? { id: relpg.amphoe.id, name: relpg.amphoe.name ?? null } : null,
+      localAdministrativeOrganization: relpg.localAdministrativeOrganization
+        ? { id: relpg.localAdministrativeOrganization.id, name: relpg.localAdministrativeOrganization.name ?? null }
+        : null,
       createdAt: this.toIso(relpg.createdAt) ?? new Date(0).toISOString(),
     };
   }
@@ -692,6 +706,10 @@ export class UnifiedEquipmentService {
             id: sepg.responsibleAgency.id,
             name: sepg.responsibleAgency.name ?? null,
           }
+        : null,
+      amphoe: sepg.amphoe ? { id: sepg.amphoe.id, name: sepg.amphoe.name ?? null } : null,
+      localAdministrativeOrganization: sepg.localAdministrativeOrganization
+        ? { id: sepg.localAdministrativeOrganization.id, name: sepg.localAdministrativeOrganization.name ?? null }
         : null,
       createdAt: this.toIso(sepg.createdAt) ?? new Date(0).toISOString(),
     };

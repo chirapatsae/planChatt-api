@@ -2019,8 +2019,15 @@ export class ProjectGroupsService {
 
 
   /**
-   * หาโครงการต้นฉบับ (ProjectGroup) ที่ไม่มี active revision
-   * กรองเฉพาะ status = "Approved"
+   * หาโครงการต้นฉบับ (ProjectGroup) เวอร์ชันปัจจุบัน (head-of-lineage) สำหรับ
+   * executive read paths (plan-analysis / dashboard / district-map / strategy).
+   *
+   * §14 head-of-lineage: ตัด PG ที่ถูก fork เป็น RevisedProjectGroup แล้ว
+   * (prev_project_type = 'original') — เวอร์ชันเก่าที่ถูกล็อก ไม่นับซ้ำ;
+   * เวอร์ชันหัวสายมาจาก findRevisedLatestProjects แทน.
+   * กรองสถานะแบบ executive (W67): ตัดเฉพาะ Ready / Pull_Back /
+   * Returned_For_Revision (คง Pending / Verified / Pending_Approval /
+   * Approved / Rejected). NOTE: ไม่ได้กรองเฉพาะ Approved.
    */
   private async findOriginalLatestProjects(
     developmentPlanId: string,
@@ -2053,17 +2060,6 @@ export class ProjectGroupsService {
       .leftJoinAndSelect('projectGroup.localAdministrativeOrganization', 'projectLocalAdministrativeOrganization')
       .leftJoinAndSelect('projectGroup.favorites', 'favorites')
       .leftJoinAndSelect('favorites.userId', 'userId')
-      // Left join เพื่อหา revised projects
-      .leftJoin(
-        RevisedProjectGroup,
-        'revisedProjects',
-        'revisedProjects.projectGroup = projectGroup.id',
-      )
-      .leftJoin(
-        DevelopmentPlanRevision,
-        'activeRevision',
-        'activeRevision.id = revisedProjects.developmentPlanRevision AND activeRevision.isLatest = true',
-      )
       .andWhere('projectGroup.isDraft = :isDraft', { isDraft: false })
       .andWhere('trackingStatus.isLatest = :isLatest', { isLatest: true })
       // Wave 24 §3 W67 — exclude workflow-internal authoring states from
@@ -2077,9 +2073,21 @@ export class ProjectGroupsService {
       query.andWhere('status.name = :statusName', { statusName: status });
     }
 
-    query
-      // ไม่มี active revision
-      .andWhere('activeRevision.id IS NULL');
+    // §14 lineage de-dup — exclude originals that have been forked into a
+    // (non-deleted) RevisedProjectGroup descendant. Such an original is a
+    // locked historical version; its head-of-lineage revision is returned by
+    // findRevisedLatestProjects instead, so each conceptual project is counted
+    // ONCE across every executive aggregate. (Replaces the prior "exclude only
+    // if forked under the LATEST revision round" rule, which leaked originals
+    // whose fork lived in an older, already-finalized round — double-count.)
+    query.andWhere(
+      `NOT EXISTS (
+        SELECT 1 FROM revised_project_groups child
+        WHERE child.prev_project_id = "projectGroup".id
+          AND child.prev_project_type = 'original'
+          AND child.deleted_at IS NULL
+      )`,
+    );
 
     const projects = await query.getMany();
     // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
@@ -2088,9 +2096,14 @@ export class ProjectGroupsService {
   }
 
   /**
-   * หาโครงการฉบับแก้ไข (RevisedProjectGroup) ที่เป็น version ล่าสุด
-   * ใช้ developmentPlanRevision.isLatest เพื่อหา latest revision
-   * ไม่กรองสถานะ - แสดงทุกสถานะ
+   * หาโครงการฉบับแก้ไข/เปลี่ยนแปลง (RevisedProjectGroup) เวอร์ชันปัจจุบัน
+   * (head-of-lineage) สำหรับ executive read paths.
+   *
+   * §14 head-of-lineage: เก็บเฉพาะ RPG ที่ไม่มี RPG ลูก
+   * (prev_project_type = 'revised') — revision กลางสายเป็นเวอร์ชันเก่าที่ถูก
+   * ล็อก ไม่นับซ้ำ. (เลิกใช้ developmentPlanRevision.isLatest เป็นตัวกรองแล้ว.)
+   * กรองสถานะแบบ executive (W67): ตัด Ready / Pull_Back /
+   * Returned_For_Revision. NOTE: ไม่ใช่ "แสดงทุกสถานะ".
    */
   private async findRevisedLatestProjects(
     developmentPlanId: string,
@@ -2136,6 +2149,19 @@ export class ProjectGroupsService {
       query.andWhere('status.name = :statusName', { statusName: status });
     }
 
+    // §14 lineage de-dup — keep only head-of-lineage revisions (no non-deleted
+    // RevisedProjectGroup child forked from this one). An intermediate revision
+    // in a chain is a locked historical version and must not be counted again
+    // in executive aggregates. Mirrors findLineageLeafRevisedProjects.
+    query.andWhere(
+      `NOT EXISTS (
+        SELECT 1 FROM revised_project_groups child
+        WHERE child.prev_project_id = "revisedProject".id
+          AND child.prev_project_type = 'revised'
+          AND child.deleted_at IS NULL
+      )`,
+    );
+
     const projects = await query.getMany();
     // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
     await this.maskCreatedByUserOnProjects(projects);
@@ -2143,8 +2169,13 @@ export class ProjectGroupsService {
   }
 
   /**
-   * หาโครงการในเล่มเพิ่มเติม (SupplementProjectGroup / SPG) ที่เป็น
-   * version ล่าสุด สำหรับใช้บนแผนที่ผู้บริหาร (executive amphoe map).
+   * หาโครงการในเล่มเพิ่มเติม (SupplementProjectGroup / SPG) เวอร์ชันปัจจุบัน
+   * (head-of-lineage) สำหรับ executive read paths — ทั้งแผนที่ผู้บริหาร
+   * (amphoe map) และ plan-analysis (วิเคราะห์แผนงาน). SPG เป็น project kind
+   * ที่ 3 ของ executive aggregate ควบคู่ PG (main) + RPG (revision/change).
+   *
+   * §14 head-of-lineage: ตัด SPG ที่ถูก fork เป็น RevisedProjectGroup แล้ว
+   * (prev_project_type = 'supplement') — เวอร์ชันเก่าที่ถูกล็อก ไม่นับซ้ำ.
    *
    * Mirrors `findOriginalLatestProjects` join topology so the shared
    * `transformToDistrictStructure` reads SPG fields exactly like PG/RPG.
@@ -2202,6 +2233,20 @@ export class ProjectGroupsService {
     if (status) {
       query.andWhere('status.name = :statusName', { statusName: status });
     }
+
+    // §14 lineage de-dup — keep only head-of-lineage supplements (no
+    // non-deleted RevisedProjectGroup forked from this SPG via
+    // prev_project_type = 'supplement'). A revised supplement is the head;
+    // its SPG root must not be counted again. Matches the PG/RPG
+    // head-of-lineage anti-joins in findOriginal/RevisedLatestProjects.
+    query.andWhere(
+      `NOT EXISTS (
+        SELECT 1 FROM revised_project_groups child
+        WHERE child.prev_project_id = "supplementProjectGroup".id
+          AND child.prev_project_type = 'supplement'
+          AND child.deleted_at IS NULL
+      )`,
+    );
 
     const projects = await query.getMany();
     // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).
@@ -3613,7 +3658,7 @@ export class ProjectGroupsService {
     };
   }
 
-  async findExecutivePlanAnalysis(userId: string): Promise<any> {
+  async findExecutivePlanAnalysis(userId: string, planId?: string): Promise<any> {
     const workHistory = await this.workHistoryRepo.findOne({
       where: { user: { id: userId } },
       relations: ['workStatus', 'role'],
@@ -3627,22 +3672,41 @@ export class ProjectGroupsService {
     if (!allowedRoles.includes(workHistory.role.name))
       throw new UnauthorizedException('คุณยังไม่ได้รับสิทธิในการเข้าถึงข้อมูล');
 
-    // Find development plan
-    let developmentPlan = await this.developmentPlanRepo.findOne({
-      where: { isLatest: true }
-    });
-
+    // Resolve the target DevelopmentPlan.
+    //  - If planId is provided, load it directly (CLAUDE.md §10 Scope Binding:
+    //    NEVER silently fall back to `isLatest = true` when the supplied plan
+    //    does not exist — that would mislead the executive).
+    //  - If planId is omitted, keep the legacy behaviour (load isLatest,
+    //    fall back to the latest DevelopmentPlanRevision's parent plan).
+    let developmentPlan: DevelopmentPlan | null = null;
     let isUsingMainPlan = true;
-    if (!developmentPlan || developmentPlan.id === null) {
-      const developmentPlanRevision = await this.developmentPlanRevisionRepo.findOne({
-        where: { isLatest: true },
-        relations: ['developmentPlan']
-      });
-      if (!developmentPlanRevision) {
-        throw new NotFoundException('Development plan revision not found');
+
+    if (planId) {
+      developmentPlan = await this.developmentPlanRepo.findOne({ where: { id: planId } });
+      if (!developmentPlan) {
+        throw new NotFoundException('DevelopmentPlan not found: ' + planId);
       }
-      developmentPlan = developmentPlanRevision.developmentPlan;
-      isUsingMainPlan = false;
+      // Plan loaded directly — no revision fallback path is taken. We still
+      // report isUsingMainPlan=true because the response contract uses it to
+      // signal "this is a root DevelopmentPlan", not "this is the latest".
+      isUsingMainPlan = true;
+    } else {
+      // Find development plan
+      developmentPlan = await this.developmentPlanRepo.findOne({
+        where: { isLatest: true }
+      });
+
+      if (!developmentPlan || developmentPlan.id === null) {
+        const developmentPlanRevision = await this.developmentPlanRevisionRepo.findOne({
+          where: { isLatest: true },
+          relations: ['developmentPlan']
+        });
+        if (!developmentPlanRevision) {
+          throw new NotFoundException('Development plan revision not found');
+        }
+        developmentPlan = developmentPlanRevision.developmentPlan;
+        isUsingMainPlan = false;
+      }
     }
 
     // Get all plans, tactics, and strategies
@@ -3652,12 +3716,17 @@ export class ProjectGroupsService {
       this.strategyRepo.find({ where: { deletedAt: IsNull() } })
     ]);
 
-    // Query all projects
-    const [originalProjects, revisedProjects] = await Promise.all([
+    // Query all projects — main (PG) + revision/change (RPG) + เล่มเพิ่มเติม
+    // (SPG), so the plan-analysis aggregate matches the executive overall
+    // dashboard (which also includes supplements). Each helper returns
+    // head-of-lineage rows only (§14), so a revised/supplemented project is
+    // counted ONCE.
+    const [originalProjects, revisedProjects, supplementProjects] = await Promise.all([
       this.findOriginalLatestProjects(developmentPlan.id),
       this.findRevisedLatestProjects(developmentPlan.id),
+      this.findSupplementLatestProjects(developmentPlan.id),
     ]);
-    const allProjects = [...originalProjects, ...revisedProjects];
+    const allProjects = [...originalProjects, ...revisedProjects, ...supplementProjects];
 
     // Get plan analysis data
     const planAnalysis = await this.getPlanAnalysis(allProjects, plans, tactics, strategies);

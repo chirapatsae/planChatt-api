@@ -12,6 +12,10 @@ import { SupplementProjectGroup } from '../supplement-project-group/entities/sup
 import { EquipmentProjectGroup } from '../equipment-project-group/entities/equipment-project-group.entity';
 import { RevisedEquipmentProjectGroup } from '../revised-equipment-project-group/entities/revised-equipment-project-group.entity';
 import { SupplementEquipmentProjectGroup } from '../supplement-equipment-project-group/entities/supplement-equipment-project-group.entity';
+// wave-team-dashboard-scope-window — round-window source repos (§8 / §9).
+import { PlanPhase } from '../plan-phase/entities/plan-phase.entity';
+import { DevelopmentPlanRevision } from '../development-plan-revision/entities/development-plan-revision.entity';
+import { DevelopmentPlanSupplement } from '../development-plan-supplement/entities/development-plan-supplement.entity';
 
 /**
  * Test suite for ExecutiveService.getTeamDashboard — specifically the rename
@@ -35,6 +39,10 @@ describe('ExecutiveService', () => {
   let equipmentProjectGroupRepo: jest.Mocked<Repository<EquipmentProjectGroup>>;
   let revisedEquipmentProjectGroupRepo: jest.Mocked<Repository<RevisedEquipmentProjectGroup>>;
   let supplementEquipmentProjectGroupRepo: jest.Mocked<Repository<SupplementEquipmentProjectGroup>>;
+  // wave-team-dashboard-scope-window — §8 / §9 round-window source repos.
+  let planPhaseRepo: jest.Mocked<Repository<PlanPhase>>;
+  let developmentPlanRevisionRepo: jest.Mocked<Repository<DevelopmentPlanRevision>>;
+  let developmentPlanSupplementRepo: jest.Mocked<Repository<DevelopmentPlanSupplement>>;
 
   const STAFF_USER_ID = 'staff-user-1';
   const STAFF_WH_ID = 'wh-staff-1';
@@ -159,6 +167,18 @@ describe('ExecutiveService', () => {
     supplementEquipmentProjectGroupRepo = {
       createQueryBuilder: jest.fn(),
     } as any;
+    // wave-team-dashboard-scope-window — round-window source repos. Defaults
+    // return empty so the §8/§9 window derivation no-ops (scopeWindow=null)
+    // and the existing assertions stay unchanged unless a test wires them.
+    planPhaseRepo = {
+      find: jest.fn().mockResolvedValue([]),
+    } as any;
+    developmentPlanRevisionRepo = {
+      createQueryBuilder: jest.fn().mockImplementation(() => makeQueryBuilder(null)),
+    } as any;
+    developmentPlanSupplementRepo = {
+      createQueryBuilder: jest.fn().mockImplementation(() => makeQueryBuilder(null)),
+    } as any;
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -176,6 +196,15 @@ describe('ExecutiveService', () => {
         {
           provide: getRepositoryToken(SupplementEquipmentProjectGroup),
           useValue: supplementEquipmentProjectGroupRepo,
+        },
+        { provide: getRepositoryToken(PlanPhase), useValue: planPhaseRepo },
+        {
+          provide: getRepositoryToken(DevelopmentPlanRevision),
+          useValue: developmentPlanRevisionRepo,
+        },
+        {
+          provide: getRepositoryToken(DevelopmentPlanSupplement),
+          useValue: developmentPlanSupplementRepo,
         },
       ],
     }).compile();
@@ -831,6 +860,122 @@ describe('ExecutiveService', () => {
         'revision-change',
         'supplement',
       ]);
+    });
+  });
+
+  /**
+   * wave-team-dashboard-scope-window (2026-06-19) — the response carries a
+   * `scopeWindow` for the Team Status Calendar round-clock overlay. DISPLAY-ONLY
+   * (§17.2): derived via PURE READS, never gates a transition. `main` derives
+   * from the active §8 `PlanPhase`; the non-main scopes derive from their §9
+   * `DevelopmentPlanRevision` / `DevelopmentPlanSupplement`.
+   */
+  describe('getTeamDashboard — scopeWindow round-window overlay (§8/§9)', () => {
+    /** Minimal staff-scan + count + union builders so getTeamDashboard runs. */
+    const wireForWindow = () => {
+      const mainBuilder = makeQueryBuilder(buildStaffRow(STATUS_NAMES.PENDING));
+      const scopeBuilder = makeQueryBuilder(null);
+      workHistoryRepo.createQueryBuilder
+        .mockReturnValueOnce(mainBuilder as any)
+        .mockReturnValue(scopeBuilder as any);
+      projectGroupRepo.createQueryBuilder.mockReturnValue(makeQueryBuilder(null) as any);
+      equipmentProjectGroupRepo.createQueryBuilder.mockReturnValue(makeQueryBuilder(null) as any);
+      revisedProjectGroupRepo.createQueryBuilder.mockReturnValue(makeQueryBuilder(null) as any);
+      supplementProjectGroupRepo.createQueryBuilder.mockReturnValue(makeQueryBuilder(null) as any);
+      revisedEquipmentProjectGroupRepo.createQueryBuilder.mockReturnValue(
+        makeQueryBuilder(null) as any,
+      );
+      supplementEquipmentProjectGroupRepo.createQueryBuilder.mockReturnValue(
+        makeQueryBuilder(null) as any,
+      );
+    };
+
+    it('main → derives from the active PlanPhase (prefers open + latest openDate)', async () => {
+      wireForWindow();
+      const olderClosed = {
+        phaseType: 'LAO',
+        isOpen: false,
+        openDate: new Date('2026-01-01T00:00:00Z'),
+        closeDate: new Date('2026-01-31T00:00:00Z'),
+      };
+      const currentOpen = {
+        phaseType: 'AGENCY',
+        isOpen: true,
+        openDate: new Date('2026-06-01T00:00:00Z'),
+        closeDate: new Date('2026-06-30T00:00:00Z'),
+      };
+      planPhaseRepo.find.mockResolvedValue([olderClosed, currentOpen] as any);
+
+      const result = (await service.getTeamDashboard(STAFF_USER_ID, 'main')) as any;
+      expect(result.scopeWindow).toEqual({
+        phaseType: 'AGENCY',
+        openDate: new Date('2026-06-01T00:00:00Z').toISOString(),
+        closeDate: new Date('2026-06-30T00:00:00Z').toISOString(),
+        isOpen: true,
+      });
+    });
+
+    it('main → scopeWindow is null when the plan has no PlanPhase', async () => {
+      wireForWindow();
+      planPhaseRepo.find.mockResolvedValue([]);
+      const result = (await service.getTeamDashboard(STAFF_USER_ID, 'main')) as any;
+      expect(result.scopeWindow).toBeNull();
+    });
+
+    it('revision-edit → derives from the matching (edit) DevelopmentPlanRevision; phaseType null', async () => {
+      wireForWindow();
+      const dprBuilder = makeQueryBuilder(null);
+      dprBuilder.getMany = jest.fn().mockResolvedValue([
+        {
+          isOpen: true,
+          revisionNumber: 2,
+          startDate: new Date('2026-05-01T00:00:00Z'),
+          endDate: new Date('2026-05-20T00:00:00Z'),
+          bookedAt: null,
+          revisionType: { name: 'แก้ไข' },
+        },
+        {
+          isOpen: false,
+          revisionNumber: 1,
+          startDate: new Date('2026-03-01T00:00:00Z'),
+          endDate: new Date('2026-03-20T00:00:00Z'),
+          bookedAt: null,
+          revisionType: { name: 'เปลี่ยนแปลง' }, // change — filtered OUT of edit scope
+        },
+      ]);
+      developmentPlanRevisionRepo.createQueryBuilder.mockReturnValue(dprBuilder as any);
+
+      const result = (await service.getTeamDashboard(STAFF_USER_ID, 'revision-edit')) as any;
+      expect(result.scope).toBe('revision-edit');
+      expect(result.scopeWindow).toEqual({
+        phaseType: null,
+        openDate: new Date('2026-05-01T00:00:00Z').toISOString(),
+        closeDate: new Date('2026-05-20T00:00:00Z').toISOString(),
+        isOpen: true,
+      });
+    });
+
+    it('supplement → close falls back to bookedAt when endDate is null', async () => {
+      wireForWindow();
+      const dpsBuilder = makeQueryBuilder(null);
+      dpsBuilder.getMany = jest.fn().mockResolvedValue([
+        {
+          isOpen: false,
+          supplementNumber: 1,
+          startDate: new Date('2026-04-01T00:00:00Z'),
+          endDate: null,
+          bookedAt: new Date('2026-04-15T00:00:00Z'),
+        },
+      ]);
+      developmentPlanSupplementRepo.createQueryBuilder.mockReturnValue(dpsBuilder as any);
+
+      const result = (await service.getTeamDashboard(STAFF_USER_ID, 'supplement')) as any;
+      expect(result.scopeWindow).toEqual({
+        phaseType: null,
+        openDate: new Date('2026-04-01T00:00:00Z').toISOString(),
+        closeDate: new Date('2026-04-15T00:00:00Z').toISOString(),
+        isOpen: false,
+      });
     });
   });
 });

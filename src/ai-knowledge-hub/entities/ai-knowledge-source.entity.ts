@@ -123,7 +123,25 @@ export class AiKnowledgeSource {
   @Column({ name: 'api_key_prefix', type: 'varchar', length: 12 })
   apiKeyPrefix: string;
 
-  /** Optional HMAC payload-signature secret — digest only, NEVER raw. */
+  /**
+   * Optional HMAC payload-signature secret (opt-in, NULL = API-key-only).
+   *
+   * Stored AES-ENCRYPTED-AT-REST (reversible ciphertext via
+   * `src/util/encryption.util.ts`, keyed by env `SECRET_KEY`/`SALT` —
+   * NOT a one-way hash). Symmetric HMAC-SHA256 verification requires the
+   * server to recompute `HMAC(secret, rawBody)` at receipt, so the raw
+   * secret MUST be recoverable — a one-way digest is cryptographically
+   * incompatible with body-signature verification. Encryption-at-rest
+   * keeps a bare DB dump useless (forging also needs `SECRET_KEY`),
+   * mirroring the W89 email/phone hardening posture (docs/pdpa/03 §P.3).
+   *
+   * The plaintext secret is server-generated, shown ONCE at
+   * rotate-hmac-secret, never logged, and never re-derivable from this
+   * column without `SECRET_KEY` (§17.15.5 hashed-credentials spirit;
+   * §17.15.7 — no role may read it back, only rotate/disable). The column
+   * name retains the `_hash` suffix for back-compat; its semantics are
+   * "encrypted secret", documented here and in docs/pdpa/03 §P.3.
+   */
   @Column({
     name: 'hmac_secret_hash',
     type: 'varchar',

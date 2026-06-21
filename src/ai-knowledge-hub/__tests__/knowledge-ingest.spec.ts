@@ -45,6 +45,15 @@ import {
   makeHarnessRepos,
 } from './connector-test.util';
 
+// `KnowledgeSourceService` imports the env-keyed AES util (HMAC secret at
+// rest). Jest forces NODE_ENV=test, so the real util can't find `.env.test`
+// and throws at import. These ingest specs don't exercise encryption, so
+// stub it (codebase convention — see users.service.spec.ts).
+jest.mock('../../util/encryption.util', () => ({
+  encryption: jest.fn((value: string) => Promise.resolve(value)),
+  decryption: jest.fn((value: string) => Promise.resolve(value)),
+}));
+
 jest.setTimeout(60_000);
 
 const RAW_KEY = 'pbk_live_TEST-test-test-test-test-test-test-tes';

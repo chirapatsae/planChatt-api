@@ -182,6 +182,12 @@ export interface KnowledgeSourceDto {
   classificationCeiling: AiKnowledgeClassification;
   rateLimitPerMin: number;
   maxPayloadBytes: number;
+  /**
+   * Whether this source requires an HMAC-SHA256 body signature on ingest
+   * (derived: `hmac_secret_hash IS NOT NULL`). Boolean ONLY — the secret
+   * itself (ciphertext or plaintext) NEVER leaves the service layer.
+   */
+  hmacEnabled: boolean;
   purposeDeclaration: string;
   lawfulBasis: string;
   createdByWorkHistoryId: string;
@@ -208,6 +214,19 @@ export interface KnowledgeSourceRotateKeyResponseDto {
   /** NEW plaintext API key — shown ONCE; the old key stops working. */
   apiKey: string;
   apiKeyPrefix: string;
+}
+
+/**
+ * `POST /sources/:id/rotate-hmac-secret` response — the ONLY surface where
+ * the plaintext HMAC secret ever appears. It is stored AES-encrypted-at-
+ * rest, never logged, and unrecoverable in plaintext afterwards. The
+ * source signs each ingest request as
+ * `X-PBK-Signature: base64(HMAC-SHA256(secret, rawRequestBody))`.
+ */
+export interface KnowledgeSourceRotateHmacResponseDto {
+  id: string;
+  /** Plaintext HMAC secret — shown ONCE; the old secret stops working. */
+  hmacSecret: string;
 }
 
 export interface KnowledgeSourceListResponseDto {

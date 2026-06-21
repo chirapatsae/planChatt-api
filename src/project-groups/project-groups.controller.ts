@@ -297,8 +297,11 @@ export class ProjectGroupsController {
   }
 
   @Get('/executive/plan')
-  async getExecutivePlanAnalysis(@Req() req: Request & { user: JwtPayloadUser }) {
-    return this.projectGroupsService.findExecutivePlanAnalysis(req.user.userId);
+  async getExecutivePlanAnalysis(
+    @Req() req: Request & { user: JwtPayloadUser },
+    @Query('planId', new ParseUUIDPipe({ optional: true })) planId?: string,
+  ) {
+    return this.projectGroupsService.findExecutivePlanAnalysis(req.user.userId, planId);
   }
 
   @Get('/executive/map-district')
