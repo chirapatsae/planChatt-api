@@ -156,17 +156,31 @@ export class AiUsageLogsService {
         .groupBy('log.usageType')
         .getRawMany();
 
-      const allusageTypes = ['PROJECT_GENERATION', 'FIELD_REGENERATION', 'SMART_APPROVE_ANALYSIS', 'PRE_SUBMIT_REVIEW', 'DOCUMENT_SUMMARY'];
+      // Authoring types — always shown (zero-filled) so they stay visible even
+      // before first use. Any OTHER usageType actually present in the logs
+      // (e.g. 'executive-chat', 'executive-chat-autotitle', 'PDPA_ADMIN_DELETE')
+      // is appended so the breakdown reflects EVERY real usage type — previously
+      // these were silently dropped because only the five below were mapped.
+      const knownUsageTypes = ['PROJECT_GENERATION', 'FIELD_REGENERATION', 'SMART_APPROVE_ANALYSIS', 'PRE_SUBMIT_REVIEW', 'DOCUMENT_SUMMARY'];
       const usageByTypeMap = new Map(usageByType.map(item => [item.usage_type, item]));
 
-      const completeUsageByType = allusageTypes.map(type => {
-        const item = usageByTypeMap.get(type);
-        return {
-          type,
-          count: item ? Number(item.request_count) : 0,
-          cost: item ? Number(item.total_cost) : 0
-        };
-      });
+      const completeUsageByType = [
+        ...knownUsageTypes.map(type => {
+          const item = usageByTypeMap.get(type);
+          return {
+            type,
+            count: item ? Number(item.request_count) : 0,
+            cost: item ? Number(item.total_cost) : 0,
+          };
+        }),
+        ...usageByType
+          .filter(item => !knownUsageTypes.includes(item.usage_type))
+          .map(item => ({
+            type: item.usage_type,
+            count: Number(item.request_count),
+            cost: Number(item.total_cost),
+          })),
+      ];
 
       // 3. Top 5 Users
       const topUsers = await this.aiUsageLogRepository
