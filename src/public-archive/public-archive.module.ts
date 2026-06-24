@@ -20,6 +20,8 @@ import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entit
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
+import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
+import { GovernmentAgency } from 'src/government-agencies/entities/government-agency.entity';
 import { MainAssemblyVersion } from 'src/main-assembly/entities/main-assembly-version.entity';
 import { EditAssemblyVersion } from 'src/edit-assembly/entities/edit-assembly-version.entity';
 import { ChangeAssemblyVersion } from 'src/change-assembly/entities/change-assembly-version.entity';
@@ -29,6 +31,7 @@ import { EditAssemblyModule } from 'src/edit-assembly/edit-assembly.module';
 import { ChangeAssemblyModule } from 'src/change-assembly/change-assembly.module';
 import { SupplementAssemblyModule } from 'src/supplement-assembly/supplement-assembly.module';
 import { PublicEngagementModule } from 'src/public-engagement/public-engagement.module';
+import { ProjectGroupsModule } from 'src/project-groups/project-groups.module';
 
 import { PublicArchiveController } from './public-archive.controller';
 import { PublicArchiveService } from './public-archive.service';
@@ -46,6 +49,8 @@ import { PublicArchiveService } from './public-archive.service';
       ProjectGroup,
       RevisedProjectGroup,
       SupplementProjectGroup,
+      Amphoe,
+      GovernmentAgency,
     ]),
     // Each standalone subsystem module exports its own service so the
     // public archive can call `getMergedPdfPath` / `getMergedAbsolutePath`
@@ -54,6 +59,9 @@ import { PublicArchiveService } from './public-archive.service';
     EditAssemblyModule,
     ChangeAssemblyModule,
     SupplementAssemblyModule,
+    // ProjectGroupsModule exports ProjectGroupsService — the public project
+    // map reuses its `buildMapDistrictData` aggregation (Approved-only).
+    ProjectGroupsModule,
     // PublicEngagementModule exports PublicEngagementService — the PDF
     // download handler fires `recordDownload(...)` BEFORE streaming.
     // `forwardRef` because PublicEngagementModule itself imports

@@ -22,6 +22,7 @@ import {
   Logger,
   Param,
   ParseIntPipe,
+  ParseUUIDPipe,
   Query,
   Req,
   Res,
@@ -33,6 +34,7 @@ import * as fs from 'fs';
 import { PublicEngagementService } from 'src/public-engagement/public-engagement.service';
 import {
   PublicArchiveService,
+  ProjectSearchFilters,
   PublicBookSourceType,
   PublicPlanDto,
   PublicProjectDetailDto,
@@ -85,11 +87,14 @@ export class PublicArchiveController {
   }
 
   /**
-   * GET /v1/public/plans/projects/search?q=...
+   * GET /v1/public/plans/projects/search?q=&page=&pageSize=
    *
-   * Find approved projects whose title contains q. Returns up to 50
-   * combined hits across PG + RPG, each pointing at the parent plan +
-   * book.
+   * Find approved (published-only) projects whose title contains q, across
+   * PG + RPG + SPG, ordered by global `createdAt DESC`. Server-side
+   * paginated — each call returns ONE page plus the global `total` for the
+   * pager (perf: only the page window is fetched, never the whole table).
+   * Empty q → recent published projects (the projects-page initial list);
+   * a single character → empty.
    *
    * Route ordering: this MUST be declared BEFORE the parameterized
    * `:sourceType/:sourceId/v:versionNumber/pdf` route below so Express
@@ -97,9 +102,89 @@ export class PublicArchiveController {
    * captured as `:sourceType`).
    */
   @Get('projects/search')
-  async searchProjects(@Query('q') q?: string): Promise<PublicProjectSearchHit[]> {
-    if (!q || q.trim().length < 2) return [];
-    return this.publicArchiveService.searchProjects(q, 50);
+  async searchProjects(
+    @Query('q') q?: string,
+    @Query('page') pageRaw?: string,
+    @Query('pageSize') pageSizeRaw?: string,
+    @Query('year') yearRaw?: string,
+    @Query('amphoeId') amphoeId?: string,
+    @Query('agencyId') agencyId?: string,
+    @Query('planId') planId?: string,
+    @Query('sourceType') sourceTypeRaw?: string,
+    @Query('sort') sortRaw?: string,
+  ): Promise<{
+    items: PublicProjectSearchHit[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    const trimmed = (q ?? '').trim();
+    const pageSize = Math.min(50, Math.max(1, Number.parseInt(pageSizeRaw ?? '10', 10) || 10));
+    const page = Math.max(0, Number.parseInt(pageRaw ?? '0', 10) || 0);
+    // A single character is too noisy → return an empty page.
+    if (trimmed.length === 1) return { items: [], total: 0, page, pageSize };
+
+    const yearNum = Number.parseInt(yearRaw ?? '', 10);
+    const sourceType = (['main', 'edit', 'change', 'supplement'] as const).find(
+      (t) => t === sourceTypeRaw,
+    );
+    const sort = sortRaw === 'popular' ? 'popular' : undefined;
+    const filters: ProjectSearchFilters = {
+      year: Number.isFinite(yearNum) ? yearNum : undefined,
+      amphoeId: amphoeId?.trim() || undefined,
+      agencyId: agencyId?.trim() || undefined,
+      planId: planId?.trim() || undefined,
+      sourceType,
+      sort,
+    };
+
+    const { items, total } = await this.publicArchiveService.searchProjectsPaged(
+      trimmed,
+      page,
+      pageSize,
+      filters,
+    );
+    return { items, total, page, pageSize };
+  }
+
+  /**
+   * GET /v1/public/plans/projects/filter-options
+   *
+   * Years / amphoes / agencies that appear among published-only + Approved
+   * projects — populates the public project-search filter dropdowns.
+   * Anonymous, read-only. MUST be declared before the parameterized
+   * `:sourceType/:projectId` route (same ordering rule as `projects/search`).
+   */
+  @Get('projects/filter-options')
+  async getProjectFilterOptions(): Promise<{
+    years: number[];
+    amphoes: { id: string; name: string }[];
+    agencies: { id: string; name: string }[];
+    plans: { id: string; name: string }[];
+  }> {
+    return this.publicArchiveService.getProjectFilterOptions();
+  }
+
+  /**
+   * GET /v1/public/plans/projects/map?planId=
+   *
+   * Public project map (แผนที่โครงการ) — the executive Amphoe > LAO > Project
+   * aggregation, PUBLISHED-ONLY: only plans with a COMPLETED main book are
+   * selectable and only `Approved` projects are shown. Anonymous, read-only.
+   *
+   * `planId` (optional UUID) must be a published plan, else the service 404s;
+   * omitted → newest published plan. The response carries `availablePlans`
+   * for the plan selector.
+   *
+   * Route ordering: declared BEFORE the parameterized
+   * `:sourceType/:projectId` route so Express matches `/projects/map`
+   * literally (same convention as `projects/search`).
+   */
+  @Get('projects/map')
+  async getProjectMap(
+    @Query('planId', new ParseUUIDPipe({ optional: true })) planId?: string,
+  ): Promise<unknown> {
+    return this.publicArchiveService.getProjectMap(planId);
   }
 
   /**

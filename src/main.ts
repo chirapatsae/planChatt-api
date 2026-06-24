@@ -41,6 +41,7 @@ async function bootstrap() {
   // silently 403'd) so CORS issues are diagnosable from logs.
   const defaultAllowedOrigins = [
     'http://localhost:5173',
+    'http://localhost:5174',
     'https://pb.koratpao.go.th',
     'http://pb.thaiakitech.co.th:8080',
     'http://pb.thaiakitech.co.th',          // proxy may rewrite without port

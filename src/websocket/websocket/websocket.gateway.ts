@@ -56,6 +56,7 @@ import {
 // merged with the defaults.
 const SOCKET_DEFAULT_ORIGINS = [
   'http://localhost:5173',
+  'http://localhost:5174',
   'https://pb.koratpao.go.th',
   'http://pb.thaiakitech.co.th',
   'http://pb.thaiakitech.co.th:8080',

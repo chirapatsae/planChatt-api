@@ -37,7 +37,7 @@
 
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, ILike, In, LessThanOrEqual, Repository } from 'typeorm';
+import { DataSource, ILike, In, LessThanOrEqual, ObjectLiteral, Repository, SelectQueryBuilder } from 'typeorm';
 
 import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.entity';
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
@@ -58,6 +58,9 @@ import { SupplementAssemblyVersion } from 'src/supplement-assembly/entities/supp
 import { SupplementAssemblyVersionStatus } from 'src/supplement-assembly/enums/supplement-assembly.enums';
 import { SupplementAssemblyService } from 'src/supplement-assembly/supplement-assembly.service';
 import { ReportFormat } from 'src/development-plan/types/report-format.enum';
+import { ProjectGroupsService } from 'src/project-groups/project-groups.service';
+import { Amphoe } from 'src/amphoes/entities/amphoe.entity';
+import { GovernmentAgency } from 'src/government-agencies/entities/government-agency.entity';
 
 /* ── Public source-type discriminator ────────────────────────────── */
 
@@ -153,6 +156,33 @@ export interface PublicProjectSearchHit {
   /** Engagement counters — always non-null, default 0 (CLAUDE.md §17.2 advisory). */
   likeCount: number;
   viewCount: number;
+}
+
+/**
+ * Public project-map plan option — one published DevelopmentPlan offered in
+ * the map's plan selector. Only plans with a COMPLETED main book appear.
+ */
+export interface PublicMapPlanOption {
+  developmentPlanId: string;
+  name: string;
+  startYear: number;
+  endYear: number;
+}
+
+/**
+ * Optional filters for the public project search (all server-side).
+ *  - `sourceType` single-select; `edit`/`change` both map to RevisedProjectGroup
+ *    and are split by `revisionType.name`.
+ *  - `sort` 'recent' (default, createdAt DESC) | 'popular' (viewCount DESC).
+ */
+export interface ProjectSearchFilters {
+  year?: number;
+  amphoeId?: string;
+  agencyId?: string;
+  /** Parent DevelopmentPlan id (the project's plan book). Must be published. */
+  planId?: string;
+  sourceType?: 'main' | 'edit' | 'change' | 'supplement';
+  sort?: 'recent' | 'popular';
 }
 
 /**
@@ -272,10 +302,15 @@ export class PublicArchiveService {
     private readonly revisedProjectGroupRepo: Repository<RevisedProjectGroup>,
     @InjectRepository(SupplementProjectGroup)
     private readonly supplementProjectGroupRepo: Repository<SupplementProjectGroup>,
+    @InjectRepository(Amphoe)
+    private readonly amphoeRepo: Repository<Amphoe>,
+    @InjectRepository(GovernmentAgency)
+    private readonly governmentAgencyRepo: Repository<GovernmentAgency>,
     private readonly mainAssemblyService: MainAssemblyService,
     private readonly editAssemblyService: EditAssemblyService,
     private readonly changeAssemblyService: ChangeAssemblyService,
     private readonly supplementAssemblyService: SupplementAssemblyService,
+    private readonly projectGroupsService: ProjectGroupsService,
     // Wave per-version-engagement-counts — raw rollup reads against the
     // FK-free engagement event tables (§17.3). No new repo / forFeature
     // entry needed; the engagement tables carry no entity here.
@@ -382,6 +417,152 @@ export class PublicArchiveService {
       select: { developmentPlanId: true },
     });
     return new Set(publishedMainVersions.map((v) => v.developmentPlanId));
+  }
+
+  /**
+   * Public project map (แผนที่โครงการสำหรับประชาชน).
+   *
+   * Returns the executive district-map aggregation (Amphoe > LAO > Project),
+   * but PUBLISHED-ONLY: only DevelopmentPlans with a COMPLETED main book are
+   * selectable, and within the chosen plan only `Approved` projects are shown
+   * (the same "เข้าเล่มแล้ว" gate used by `searchProjects` / `getProjectDetail`).
+   *
+   * Anonymous + read-only: access is the published-plan gate, NOT the
+   * executive role gate. Reuses `ProjectGroupsService.buildMapDistrictData`
+   * with an `['Approved']` allowlist so no aggregation logic is duplicated.
+   *
+   * @param planId optional — must be a published plan (else 404). Omitted →
+   *   newest published plan.
+   */
+  async getProjectMap(planId?: string): Promise<any> {
+    const publishedPlanIds = await this.getPublishedPlanIds();
+    if (publishedPlanIds.size === 0) {
+      return {
+        planInfo: null,
+        districts: [],
+        statistics: null,
+        totalAmphoes: 0,
+        totalLocalOrgs: 0,
+        totalProjects: 0,
+        availablePlans: [],
+      };
+    }
+
+    // Published plans for the selector (newest first).
+    const publishedPlans = await this.devPlanRepo.find({
+      where: { id: In(Array.from(publishedPlanIds)) },
+      order: { isLatest: 'DESC', startYear: 'DESC' },
+    });
+    const availablePlans: PublicMapPlanOption[] = publishedPlans.map((p) => ({
+      developmentPlanId: p.id,
+      name: p.name,
+      startYear: p.startYear,
+      endYear: p.endYear,
+    }));
+
+    // A supplied planId scopes to ONE published plan (PDPA / §10: never leak
+    // an unpublished plan). This path is kept for back-compat / deep-links.
+    if (planId) {
+      const targetPlan = publishedPlans.find((p) => p.id === planId);
+      if (!targetPlan) {
+        throw new NotFoundException('ไม่พบเล่มแผนที่เผยแพร่');
+      }
+      const mapData = await this.projectGroupsService.buildMapDistrictData(
+        targetPlan,
+        true,
+        ['Approved'],
+      );
+      return { ...mapData, availablePlans };
+    }
+
+    // DEFAULT (no planId) — this citizen surface shows ALL booked + published
+    // projects, so aggregate EVERY published plan into one map (no plan
+    // picker). Published plans are disjoint DevelopmentPlans, so the merge is
+    // a clean union (no double-count). Approved-only; no auth gate.
+    const maps = await Promise.all(
+      publishedPlans.map((p) =>
+        this.projectGroupsService.buildMapDistrictData(p, true, ['Approved']),
+      ),
+    );
+    return { ...this.mergeMapData(maps), availablePlans };
+  }
+
+  /**
+   * Merge several per-plan district maps (Amphoe > LAO > Project) into one,
+   * summing counts/budgets per amphoe + per LAO and concatenating project
+   * pins. Static amphoe/LAO identity fields (name / type / localOrgCount)
+   * are carried from the first occurrence. Used by the all-published
+   * aggregate path of `getProjectMap`.
+   */
+  private mergeMapData(maps: any[]): {
+    planInfo: null;
+    districts: any[];
+    statistics: null;
+    totalAmphoes: number;
+    totalLocalOrgs: number;
+    totalProjects: number;
+  } {
+    const byAmphoe = new Map<string, any>();
+    const zeroBreakdown = () => ({ approved: 0, pending: 0, rejected: 0 });
+    const addBreakdown = (target: any, src: any) => {
+      target.approved += src?.approved ?? 0;
+      target.pending += src?.pending ?? 0;
+      target.rejected += src?.rejected ?? 0;
+    };
+
+    for (const m of maps) {
+      for (const d of m?.districts ?? []) {
+        let amphoe = byAmphoe.get(d.amphoeId);
+        if (!amphoe) {
+          amphoe = {
+            ...d,
+            projectCount: 0,
+            totalBudget: 0,
+            statusBreakdown: zeroBreakdown(),
+            localOrganizations: [],
+            _laoIndex: new Map<string, any>(),
+          };
+          byAmphoe.set(d.amphoeId, amphoe);
+        }
+        amphoe.projectCount += d.projectCount ?? 0;
+        amphoe.totalBudget += d.totalBudget ?? 0;
+        addBreakdown(amphoe.statusBreakdown, d.statusBreakdown);
+
+        for (const lao of d.localOrganizations ?? []) {
+          let laoAgg = amphoe._laoIndex.get(lao.laoId);
+          if (!laoAgg) {
+            laoAgg = {
+              ...lao,
+              projectCount: 0,
+              totalBudget: 0,
+              statusBreakdown: zeroBreakdown(),
+              projects: [],
+            };
+            amphoe._laoIndex.set(lao.laoId, laoAgg);
+            amphoe.localOrganizations.push(laoAgg);
+          }
+          laoAgg.projectCount += lao.projectCount ?? 0;
+          laoAgg.totalBudget += lao.totalBudget ?? 0;
+          addBreakdown(laoAgg.statusBreakdown, lao.statusBreakdown);
+          laoAgg.projects.push(...(lao.projects ?? []));
+        }
+      }
+    }
+
+    const districts = Array.from(byAmphoe.values()).map(
+      ({ _laoIndex, ...rest }) => rest,
+    );
+    return {
+      planInfo: null,
+      districts,
+      statistics: null,
+      totalAmphoes: districts.length,
+      totalLocalOrgs: districts.reduce(
+        (s, d) => s + (d.localOrgCount ?? 0),
+        0,
+      ),
+      totalProjects: districts.reduce((s, d) => s + (d.projectCount ?? 0), 0),
+    };
   }
 
   /**
@@ -868,118 +1049,344 @@ export class PublicArchiveService {
     });
   }
 
-  async searchProjects(
+  async searchProjectsPaged(
     q: string,
-    limit: number = 50,
-  ): Promise<PublicProjectSearchHit[]> {
-    const trimmed = q?.trim();
-    if (!trimmed || trimmed.length < 2) return [];
+    page = 0,
+    pageSize = 10,
+    filters: ProjectSearchFilters = {},
+  ): Promise<{ items: PublicProjectSearchHit[]; total: number }> {
+    const trimmed = q?.trim() ?? '';
+    // A single character is too noisy to filter usefully; require >= 2
+    // chars to actually search. An EMPTY query is allowed and returns the
+    // most-recent published projects (the projects-page initial list).
+    if (trimmed.length === 1) return { items: [], total: 0 };
+    const pattern = trimmed ? `%${trimmed}%` : '%';
 
     const publishedPlanIds = await this.getPublishedPlanIds();
-    if (publishedPlanIds.size === 0) return [];
+    if (publishedPlanIds.size === 0) return { items: [], total: 0 };
+    const planIds = Array.from(publishedPlanIds);
 
-    // PG search.
-    const pgRows = await this.projectGroupRepo
-      .createQueryBuilder('pg')
-      .leftJoinAndSelect('pg.developmentPlan', 'plan')
-      .leftJoin('pg.trackingStatus', 'ts', 'ts.isLatest = true')
-      .leftJoin('ts.statusId', 'status')
-      .where('pg.title ILIKE :q', { q: `%${trimmed}%` })
-      .andWhere('pg.deletedAt IS NULL')
-      .andWhere('plan.id IN (:...planIds)', { planIds: Array.from(publishedPlanIds) })
-      .andWhere('status.name = :statusName', { statusName: 'Approved' })
-      .orderBy('pg.createdAt', 'DESC')
-      .limit(limit)
-      .getMany();
+    const safePage = Math.max(0, Math.floor(page));
+    const safeSize = Math.min(50, Math.max(1, Math.floor(pageSize)));
+    const windowSize = (safePage + 1) * safeSize;
 
-    const pgHits: PublicProjectSearchHit[] = pgRows.map((pg) => ({
-      projectId: pg.id,
-      projectTitle: pg.title,
-      projectYear: pg.projectYear,
-      sourceType: 'main_plan',
-      sourceId: pg.developmentPlan?.id ?? '',
-      planId: pg.developmentPlan?.id ?? '',
-      planName: pg.developmentPlan?.name ?? '',
-      bookName: pg.developmentPlan?.name ?? '',
-      likeCount: Number(pg.likeCount ?? 0),
-      viewCount: Number(pg.viewCount ?? 0),
+    const { year, amphoeId, agencyId, planId, sourceType, sort } = filters;
+    // Sort key: 'popular' → viewCount DESC, else (default) createdAt DESC.
+    const orderCol = sort === 'popular' ? 'viewCount' : 'createdAt';
+    // sourceType gating — which sub-types contribute. edit + change are BOTH
+    // RevisedProjectGroup, distinguished by revisionType.name.
+    const wantMain = !sourceType || sourceType === 'main';
+    const wantEdit = !sourceType || sourceType === 'edit';
+    const wantChange = !sourceType || sourceType === 'change';
+    const wantSupplement = !sourceType || sourceType === 'supplement';
+    const wantRpg = wantEdit || wantChange;
+    const CHANGE = 'เปลี่ยนแปลง';
+
+    // Apply the COMMON predicate (title / not-deleted / Approved + optional
+    // year / amphoe / agency filters) onto an already-base-joined builder.
+    const applyCommon = (
+      qb: import('typeorm').SelectQueryBuilder<ObjectLiteral>,
+      alias: string,
+    ) => {
+      qb.andWhere(`${alias}.title ILIKE :q`, { q: pattern })
+        .andWhere(`${alias}.deletedAt IS NULL`)
+        .andWhere('status.name = :statusName', { statusName: 'Approved' });
+      // Plan-book filter — every base builder joins its parent plan as 'plan'.
+      if (planId) {
+        qb.andWhere('plan.id = :planId', { planId });
+      }
+      if (typeof year === 'number') {
+        qb.andWhere(`${alias}.projectYear = :year`, { year });
+      }
+      if (amphoeId) {
+        qb.innerJoin(`${alias}.amphoe`, 'fAmphoe').andWhere(
+          'fAmphoe.id = :amphoeId',
+          { amphoeId },
+        );
+      }
+      if (agencyId) {
+        qb.innerJoin(`${alias}.responsibleAgency`, 'fRa').andWhere(
+          'fRa.id = :agencyId',
+          { agencyId },
+        );
+      }
+      return qb;
+    };
+    // Narrow RPG to edit-only or change-only when exactly one is selected.
+    const applyRpgType = (
+      qb: import('typeorm').SelectQueryBuilder<ObjectLiteral>,
+    ) => {
+      if (wantEdit && !wantChange) {
+        qb.andWhere('(revType.name IS NULL OR revType.name <> :changeName)', {
+          changeName: CHANGE,
+        });
+      } else if (wantChange && !wantEdit) {
+        qb.andWhere('revType.name = :changeName', { changeName: CHANGE });
+      }
+      return qb;
+    };
+
+    // ── Total = sum of the COUNTs of the included sub-types ──
+    const [pgTotal, rpgTotal, spgTotal] = await Promise.all([
+      wantMain
+        ? applyCommon(
+            this.projectGroupRepo
+              .createQueryBuilder('pg')
+              .leftJoin('pg.developmentPlan', 'plan')
+              .leftJoin('pg.trackingStatus', 'ts', 'ts.isLatest = true')
+              .leftJoin('ts.statusId', 'status')
+              .where('plan.id IN (:...planIds)', { planIds }),
+            'pg',
+          ).getCount()
+        : Promise.resolve(0),
+      wantRpg
+        ? applyRpgType(
+            applyCommon(
+              this.revisedProjectGroupRepo
+                .createQueryBuilder('rpg')
+                .leftJoin('rpg.developmentPlanRevision', 'rev')
+                .leftJoin('rev.developmentPlan', 'plan')
+                .leftJoin('rev.revisionType', 'revType')
+                .leftJoin('rpg.trackingStatus', 'ts', 'ts.isLatest = true')
+                .leftJoin('ts.statusId', 'status')
+                .where('plan.id IN (:...planIds)', { planIds }),
+              'rpg',
+            ),
+          ).getCount()
+        : Promise.resolve(0),
+      wantSupplement
+        ? applyCommon(
+            this.supplementProjectGroupRepo
+              .createQueryBuilder('spg')
+              .leftJoin('spg.developmentPlanSupplement', 'sup')
+              .leftJoin('sup.developmentPlan', 'plan')
+              .leftJoin('spg.trackingStatus', 'ts', 'ts.isLatest = true')
+              .leftJoin('ts.statusId', 'status')
+              .where('plan.id IN (:...planIds)', { planIds })
+              .andWhere('sup.deleted_at IS NULL'),
+            'spg',
+          ).getCount()
+        : Promise.resolve(0),
+    ]);
+    const total = pgTotal + rpgTotal + spgTotal;
+    if (total === 0) return { items: [], total: 0 };
+
+    // ── Windowed fetch (<= windowSize rows per included sub-type) ──
+    const [pgRows, rpgRows, spgRows] = await Promise.all([
+      wantMain
+        ? applyCommon(
+            this.projectGroupRepo
+              .createQueryBuilder('pg')
+              .leftJoinAndSelect('pg.developmentPlan', 'plan')
+              .leftJoin('pg.trackingStatus', 'ts', 'ts.isLatest = true')
+              .leftJoin('ts.statusId', 'status')
+              .where('plan.id IN (:...planIds)', { planIds }),
+            'pg',
+          )
+            .orderBy(`pg.${orderCol}`, 'DESC')
+            .limit(windowSize)
+            .getMany()
+        : Promise.resolve([]),
+      wantRpg
+        ? applyRpgType(
+            applyCommon(
+              this.revisedProjectGroupRepo
+                .createQueryBuilder('rpg')
+                .leftJoinAndSelect('rpg.developmentPlanRevision', 'rev')
+                .leftJoinAndSelect('rev.developmentPlan', 'plan')
+                .leftJoinAndSelect('rev.revisionType', 'revType')
+                .leftJoin('rpg.trackingStatus', 'ts', 'ts.isLatest = true')
+                .leftJoin('ts.statusId', 'status')
+                .where('plan.id IN (:...planIds)', { planIds }),
+              'rpg',
+            ),
+          )
+            .orderBy(`rpg.${orderCol}`, 'DESC')
+            .limit(windowSize)
+            .getMany()
+        : Promise.resolve([]),
+      wantSupplement
+        ? applyCommon(
+            this.supplementProjectGroupRepo
+              .createQueryBuilder('spg')
+              .leftJoinAndSelect('spg.developmentPlanSupplement', 'sup')
+              .leftJoinAndSelect('sup.developmentPlan', 'plan')
+              .leftJoin('spg.trackingStatus', 'ts', 'ts.isLatest = true')
+              .leftJoin('ts.statusId', 'status')
+              .where('plan.id IN (:...planIds)', { planIds })
+              .andWhere('sup.deleted_at IS NULL'),
+            'spg',
+          )
+            .orderBy(`spg.${orderCol}`, 'DESC')
+            .limit(windowSize)
+            .getMany()
+        : Promise.resolve([]),
+    ]);
+
+    // Map each sub-type to a hit, carrying the sort key for the global merge.
+    type Entry = { sortKey: number; hit: PublicProjectSearchHit };
+    const sortKeyOf = (row: ObjectLiteral): number =>
+      sort === 'popular'
+        ? Number(row.viewCount ?? 0)
+        : (row.createdAt as Date).getTime();
+
+    const pgEntries: Entry[] = pgRows.map((pg) => ({
+      sortKey: sortKeyOf(pg),
+      hit: {
+        projectId: pg.id,
+        projectTitle: pg.title,
+        projectYear: pg.projectYear,
+        sourceType: 'main_plan',
+        sourceId: pg.developmentPlan?.id ?? '',
+        planId: pg.developmentPlan?.id ?? '',
+        planName: pg.developmentPlan?.name ?? '',
+        bookName: pg.developmentPlan?.name ?? '',
+        likeCount: Number(pg.likeCount ?? 0),
+        viewCount: Number(pg.viewCount ?? 0),
+      },
     }));
 
-    // RPG search — joined via developmentPlanRevision → developmentPlan.
-    const rpgRows = await this.revisedProjectGroupRepo
-      .createQueryBuilder('rpg')
-      .leftJoinAndSelect('rpg.developmentPlanRevision', 'rev')
-      .leftJoinAndSelect('rev.developmentPlan', 'plan')
-      .leftJoinAndSelect('rev.revisionType', 'revType')
-      .leftJoin('rpg.trackingStatus', 'ts', 'ts.isLatest = true')
-      .leftJoin('ts.statusId', 'status')
-      .where('rpg.title ILIKE :q', { q: `%${trimmed}%` })
-      .andWhere('rpg.deletedAt IS NULL')
-      .andWhere('plan.id IN (:...planIds)', { planIds: Array.from(publishedPlanIds) })
-      .andWhere('status.name = :statusName', { statusName: 'Approved' })
-      .orderBy('rpg.createdAt', 'DESC')
-      .limit(limit)
-      .getMany();
-
-    const rpgHits: PublicProjectSearchHit[] = await Promise.all(
+    const rpgEntries: Entry[] = await Promise.all(
       rpgRows
         .filter((rpg) => rpg.developmentPlanRevision?.id)
         .map(async (rpg) => {
           const rev = rpg.developmentPlanRevision!;
-          const isChange = rev.revisionType?.name === 'เปลี่ยนแปลง';
+          const isChange = rev.revisionType?.name === CHANGE;
           const ordinal = await this.revisionTypeOrdinal(rev);
           return {
-            projectId: rpg.id,
-            projectTitle: rpg.title,
-            projectYear: rpg.projectYear,
-            sourceType: isChange ? 'change_revision' : 'edit_revision',
-            sourceId: rev.id,
-            planId: rev.developmentPlan?.id ?? '',
-            planName: rev.developmentPlan?.name ?? '',
-            bookName: `${rev.revisionType?.name ?? ''} ครั้งที่ ${ordinal}`,
-            likeCount: Number(rpg.likeCount ?? 0),
-            viewCount: Number(rpg.viewCount ?? 0),
+            sortKey: sortKeyOf(rpg),
+            hit: {
+              projectId: rpg.id,
+              projectTitle: rpg.title,
+              projectYear: rpg.projectYear,
+              sourceType: isChange ? 'change_revision' : 'edit_revision',
+              sourceId: rev.id,
+              planId: rev.developmentPlan?.id ?? '',
+              planName: rev.developmentPlan?.name ?? '',
+              bookName: `${rev.revisionType?.name ?? ''} ครั้งที่ ${ordinal}`,
+              likeCount: Number(rpg.likeCount ?? 0),
+              viewCount: Number(rpg.viewCount ?? 0),
+            } as PublicProjectSearchHit,
           };
         }),
     );
 
-    // SPG search — joined via developmentPlanSupplement → developmentPlan.
-    const spgRows = await this.supplementProjectGroupRepo
-      .createQueryBuilder('spg')
-      .leftJoinAndSelect('spg.developmentPlanSupplement', 'sup')
-      .leftJoinAndSelect('sup.developmentPlan', 'plan')
-      .leftJoin('spg.trackingStatus', 'ts', 'ts.isLatest = true')
-      .leftJoin('ts.statusId', 'status')
-      .where('spg.title ILIKE :q', { q: `%${trimmed}%` })
-      .andWhere('spg.deletedAt IS NULL')
-      .andWhere('sup.deleted_at IS NULL')
-      .andWhere('plan.id IN (:...planIds)', {
-        planIds: Array.from(publishedPlanIds),
-      })
-      .andWhere('status.name = :statusName', { statusName: 'Approved' })
-      .orderBy('spg.createdAt', 'DESC')
-      .limit(limit)
-      .getMany();
-
-    const spgHits: PublicProjectSearchHit[] = spgRows
+    const spgEntries: Entry[] = spgRows
       .filter((spg) => spg.developmentPlanSupplement?.id)
       .map((spg) => {
         const sup = spg.developmentPlanSupplement!;
         return {
-          projectId: spg.id,
-          projectTitle: spg.title,
-          projectYear: spg.projectYear,
-          sourceType: 'supplement' as const,
-          sourceId: sup.id,
-          planId: sup.developmentPlan?.id ?? '',
-          planName: sup.developmentPlan?.name ?? '',
-          bookName: `เพิ่มเติม ครั้งที่ ${sup.supplementNumber}`,
-          likeCount: Number(spg.likeCount ?? 0),
-          viewCount: Number(spg.viewCount ?? 0),
+          sortKey: sortKeyOf(spg),
+          hit: {
+            projectId: spg.id,
+            projectTitle: spg.title,
+            projectYear: spg.projectYear,
+            sourceType: 'supplement' as const,
+            sourceId: sup.id,
+            planId: sup.developmentPlan?.id ?? '',
+            planName: sup.developmentPlan?.name ?? '',
+            bookName: `เพิ่มเติม ครั้งที่ ${sup.supplementNumber}`,
+            likeCount: Number(spg.likeCount ?? 0),
+            viewCount: Number(spg.viewCount ?? 0),
+          },
         };
       });
 
-    return [...pgHits, ...rpgHits, ...spgHits].slice(0, limit);
+    const merged = [...pgEntries, ...rpgEntries, ...spgEntries].sort(
+      (a, b) => b.sortKey - a.sortKey,
+    );
+    const start = safePage * safeSize;
+    const items = merged.slice(start, start + safeSize).map((e) => e.hit);
+    return { items, total };
+  }
+
+  /**
+   * Filter-option lists for the public project-search page.
+   * Read-only; used to populate the FE filter dropdowns.
+   *  - `amphoes` / `agencies` = FULL master lists (per user direction) sourced
+   *    from the `amphoes` + `government_agencies` master tables (the same
+   *    source as `/v1/amphoes` and `/v1/government-agencies`). `.find()`
+   *    auto-excludes soft-deleted rows. Served via THIS single public endpoint
+   *    so the anonymous page needs no auth and `/v1/amphoes` stays guarded.
+   *  - `years` = derived from published-only + Approved projects (there is no
+   *    master "all years" table — only years that exist are meaningful).
+   */
+  async getProjectFilterOptions(): Promise<{
+    years: number[];
+    amphoes: { id: string; name: string }[];
+    agencies: { id: string; name: string }[];
+    plans: { id: string; name: string }[];
+  }> {
+    // FULL master lists (not only those with projects).
+    const [amphoeRows, agencyRows] = await Promise.all([
+      this.amphoeRepo.find({ order: { id: 'ASC' } }),
+      this.governmentAgencyRepo.find({ order: { name: 'ASC' } }),
+    ]);
+    const amphoes = amphoeRows.map((a) => ({ id: a.id, name: a.name }));
+    const agencies = agencyRows.map((a) => ({ id: String(a.id), name: a.name }));
+
+    const publishedPlanIds = await this.getPublishedPlanIds();
+    if (publishedPlanIds.size === 0) {
+      return { years: [], amphoes, agencies, plans: [] };
+    }
+    const planIds = Array.from(publishedPlanIds);
+
+    // Plan-book options = the published plans (COMPLETED main book), newest first.
+    const planRows = await this.devPlanRepo.find({
+      where: { id: In(planIds) },
+      order: { isLatest: 'DESC', startYear: 'DESC' },
+    });
+    const plans = planRows.map((p) => ({ id: p.id, name: p.name }));
+
+    // Distinct project years among published + Approved projects (per sub-type).
+    const yearsFor = (
+      repo: Repository<ObjectLiteral>,
+      alias: string,
+      planJoin: (qb: SelectQueryBuilder<ObjectLiteral>) => void,
+      extraWhere?: (qb: SelectQueryBuilder<ObjectLiteral>) => void,
+    ) => {
+      const qb = repo
+        .createQueryBuilder(alias)
+        .leftJoin(`${alias}.trackingStatus`, 'ts', 'ts.isLatest = true')
+        .leftJoin('ts.statusId', 'status')
+        .select(`${alias}.projectYear`, 'year')
+        .where('status.name = :statusName', { statusName: 'Approved' })
+        .andWhere(`${alias}.deletedAt IS NULL`);
+      planJoin(qb);
+      qb.andWhere('plan.id IN (:...planIds)', { planIds }).distinct(true);
+      if (extraWhere) extraWhere(qb);
+      return qb.getRawMany<{ year: number | null }>();
+    };
+
+    const [pgY, rpgY, spgY] = await Promise.all([
+      yearsFor(this.projectGroupRepo, 'pg', (qb) =>
+        qb.leftJoin('pg.developmentPlan', 'plan'),
+      ),
+      yearsFor(this.revisedProjectGroupRepo, 'rpg', (qb) =>
+        qb
+          .leftJoin('rpg.developmentPlanRevision', 'rev')
+          .leftJoin('rev.developmentPlan', 'plan'),
+      ),
+      yearsFor(
+        this.supplementProjectGroupRepo,
+        'spg',
+        (qb) =>
+          qb
+            .leftJoin('spg.developmentPlanSupplement', 'sup')
+            .leftJoin('sup.developmentPlan', 'plan'),
+        (qb) => qb.andWhere('sup.deleted_at IS NULL'),
+      ),
+    ]);
+
+    const years = Array.from(
+      new Set(
+        [...pgY, ...rpgY, ...spgY]
+          .map((r) => r.year)
+          .filter((y): y is number => typeof y === 'number'),
+      ),
+    ).sort((a, b) => b - a);
+
+    return { years, amphoes, agencies, plans };
   }
 
   /* ── #4 Project detail (anon access) ─────────────────────────── */

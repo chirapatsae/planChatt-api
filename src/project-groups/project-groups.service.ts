@@ -3583,6 +3583,24 @@ export class ProjectGroupsService {
       }
     }
 
+    return this.buildMapDistrictData(developmentPlan, isUsingMainPlan);
+  }
+
+  /**
+   * Core district-map aggregation (Amphoe > LAO > Projects), shared by the
+   * executive map (findExecutiveMapDistrictData) and the PUBLIC published-only
+   * map (PublicArchiveService.getProjectMap). Takes an already-resolved
+   * DevelopmentPlan plus an optional status allowlist:
+   *   - executive → default allowlist (Pending_Approval/Pending/Rejected/Approved/Verified)
+   *   - public    → ['Approved'] (เฉพาะโครงการที่อนุมัติ/เข้าเล่มแล้ว)
+   * NO auth/role gate here — each caller enforces its own access policy
+   * (executive: role gate; public: published-plan gate).
+   */
+  async buildMapDistrictData(
+    developmentPlan: DevelopmentPlan,
+    isUsingMainPlan: boolean,
+    allowedStatuses?: string[],
+  ): Promise<any> {
     // Get all amphoes
     const amphoes = await this.amphoeRepo.find({
       where: { deletedAt: IsNull() },
@@ -3628,7 +3646,7 @@ export class ProjectGroupsService {
     );
 
     // Transform to district structure: Amphoe > LAO > Projects
-    const districtData = this.transformToDistrictStructure(amphoes, localOrgs, allProjects);
+    const districtData = this.transformToDistrictStructure(amphoes, localOrgs, allProjects, allowedStatuses);
 
     // Calculate statistics
     const statistics = this.calculateDistrictStatistics(districtData);
@@ -3922,9 +3940,14 @@ export class ProjectGroupsService {
   /**
    * Transform data to district structure (Amphoe > LAO > Projects)
    */
-  private transformToDistrictStructure(amphoes: any[], localOrgs: any[], allProjects: any[]): any[] {
-    // กรองเฉพาะโครงการที่สถานะตรงตามที่กำหนด: Pending_Approval, Pending, Rejected, Approved, Verified
-    const allowedStatuses = ['Pending_Approval', 'Pending', 'Rejected', 'Approved', 'Verified'];
+  private transformToDistrictStructure(
+    amphoes: any[],
+    localOrgs: any[],
+    allProjects: any[],
+    allowedStatuses: string[] = ['Pending_Approval', 'Pending', 'Rejected', 'Approved', 'Verified'],
+  ): any[] {
+    // กรองเฉพาะโครงการที่สถานะตรงตามที่กำหนด (ค่าเริ่มต้น = มุมมองผู้บริหาร;
+    // แผนที่สาธารณะส่ง ['Approved'] เพื่อแสดงเฉพาะโครงการที่อนุมัติ/เข้าเล่มแล้ว)
     const filteredProjects = allProjects.filter(project => {
       let statusName = 'Unknown';
       if (project.trackingStatus && project.trackingStatus.length > 0) {
@@ -4014,6 +4037,16 @@ export class ProjectGroupsService {
             indicator: project.indicator || project.originalProject?.indicator,
             expected: project.expected || project.originalProject?.expected,
             projectYear: project.projectYear || project.originalProject?.projectYear,
+
+            // Geolocation (§13) — real project coordinates for map pins.
+            // DECIMAL columns return as strings → coerce. RPG falls back to
+            // its origin project's coords when the revised row has none.
+            startLat: ((v) => (v != null ? Number(v) : null))(
+              project.startLat ?? project.originalProject?.startLat,
+            ),
+            startLng: ((v) => (v != null ? Number(v) : null))(
+              project.startLng ?? project.originalProject?.startLng,
+            ),
 
             // Budget
             budget: Math.round(totalBudget * 100) / 100,
