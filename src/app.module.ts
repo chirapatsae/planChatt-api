@@ -158,6 +158,28 @@ import { PublicArchiveModule } from './public-archive/public-archive.module';
 // cleanup without ever being touched. IP / UA are NEVER persisted.
 import { PublicEngagementModule } from './public-engagement/public-engagement.module';
 import { EngagementLike } from './public-engagement/entities/engagement-like.entity';
+import { CitizenEngagementModule } from './citizen-engagement/citizen-engagement.module';
+import { CitizenIdentity } from './citizen-engagement/entities/citizen-identity.entity';
+import { CitizenPost } from './citizen-engagement/entities/citizen-post.entity';
+import { CitizenPostComment } from './citizen-engagement/entities/citizen-post-comment.entity';
+import { CitizenPostReaction } from './citizen-engagement/entities/citizen-post-reaction.entity';
+import { CitizenPostMedia } from './citizen-engagement/entities/citizen-post-media.entity';
+import { CitizenModerationLog } from './citizen-engagement/entities/citizen-moderation-log.entity';
+import { CitizenBackendAccessGrant } from './citizen-engagement/entities/citizen-backend-access-grant.entity';
+import { CitizenAuditLog } from './citizen-engagement/entities/citizen-audit-log.entity';
+import { CitizenFollow } from './citizen-engagement/entities/citizen-follow.entity';
+import { CitizenNotification } from './citizen-engagement/entities/citizen-notification.entity';
+import { CitizenOfficialResponse } from './citizen-engagement/entities/citizen-official-response.entity';
+import { CitizenReport } from './citizen-engagement/entities/citizen-report.entity';
+import { CitizenBookmark } from './citizen-engagement/entities/citizen-bookmark.entity';
+import { CitizenPollOption } from './citizen-engagement/entities/citizen-poll-option.entity';
+import { CitizenPollVote } from './citizen-engagement/entities/citizen-poll-vote.entity';
+import { CitizenHashtag } from './citizen-engagement/entities/citizen-hashtag.entity';
+import { CitizenPostHashtag } from './citizen-engagement/entities/citizen-post-hashtag.entity';
+import { CitizenStory } from './citizen-engagement/entities/citizen-story.entity';
+import { CitizenBlock } from './citizen-engagement/entities/citizen-block.entity';
+import { CitizenAppeal } from './citizen-engagement/entities/citizen-appeal.entity';
+import { CitizenMention } from './citizen-engagement/entities/citizen-mention.entity';
 import { EngagementViewEvent } from './public-engagement/entities/engagement-view-event.entity';
 import { EngagementDownloadEvent } from './public-engagement/entities/engagement-download-event.entity';
 // CLEANUP wave (2026-05-26) — the legacy `BookAssemblyDraft`,
@@ -628,6 +650,57 @@ import { UnifiedEquipmentModule } from './unified-equipment/unified-equipment.mo
         EngagementLike,
         EngagementViewEvent,
         EngagementDownloadEvent,
+        // Civic community (citizen-engagement) — isolated `citizen_*` namespace,
+        // NO FK to project / users / work_history / tracking_status (§17.3).
+        // Owned by `CitizenEngagementModule` via `forFeature`; root
+        // registration here is required for metadata resolution (Wave 41 footgun).
+        CitizenIdentity,
+        CitizenPost,
+        CitizenPostComment,
+        CitizenPostReaction,
+        CitizenPostMedia,
+        CitizenModerationLog,
+        CitizenBackendAccessGrant,
+        CitizenAuditLog,
+        CitizenFollow,
+        CitizenNotification,
+        CitizenOfficialResponse,
+        CitizenReport,
+        CitizenBookmark,
+        // W-S7 civic polls — isolated `citizen_*` namespace, FKs only into
+        // citizen_post / citizen_poll_option / citizen_identities (§17.3).
+        // Root registration here is required for metadata resolution (Wave 41
+        // footgun — the root uses an explicit entities[] array).
+        CitizenPollOption,
+        CitizenPollVote,
+        // W-S4 hashtags + trending — isolated `citizen_*` namespace. The
+        // dictionary `CitizenHashtag` has NO FK; the link `CitizenPostHashtag`
+        // has FKs only into citizen_post / citizen_hashtag (§17.3). Root
+        // registration here is required for metadata resolution (Wave 41
+        // footgun — the root uses an explicit entities[] array).
+        CitizenHashtag,
+        CitizenPostHashtag,
+        // W-GATE-3 ephemeral 24h stories — isolated `citizen_*` namespace, the
+        // only FK is author_identity_id → citizen_identities (§17.3). Root
+        // registration here is required for metadata resolution (Wave 41
+        // footgun — the root uses an explicit entities[] array).
+        CitizenStory,
+        // W-T1 block/mute — isolated `citizen_*` namespace, the only FK is
+        // blocker_identity_id → citizen_identities (§17.3); blocked_identity_id
+        // is a PLAIN uuid (no FK). Root registration here is required for
+        // metadata resolution (Wave 41 footgun — explicit entities[] array).
+        CitizenBlock,
+        // W-T3 moderation v2 appeals — isolated `citizen_*` namespace; FKs only
+        // into citizen_post / citizen_identities (§17.3); the resolving staff
+        // member is a PLAIN uuid + SNAPSHOT name (no FK). Root registration here
+        // is required for metadata resolution (Wave 41 footgun — explicit
+        // entities[] array).
+        CitizenAppeal,
+        // W-S6 @mention — isolated `citizen_*` namespace; FKs only into
+        // citizen_post / citizen_identities (§17.3); `comment_id` is a PLAIN uuid
+        // (no FK). Root registration here is required for metadata resolution
+        // (Wave 41 footgun — explicit entities[] array).
+        CitizenMention,
         // Wave wave-backup-login-thaid-fallback / DB-01 — five entities
         // backing the ThaiD-fallback backup login (BackupCredential,
         // TotpEnrollment, PasswordHistory, BackupLoginAuditLog,
@@ -772,6 +845,7 @@ import { UnifiedEquipmentModule } from './unified-equipment/unified-equipment.mo
     // shared `getPublishedPlanIdsPublic()` predicate (forwardRef on
     // both sides handles the bidirectional dependency).
     PublicEngagementModule,
+    CitizenEngagementModule,
     // Wave 110 W110-BE-01 — must be imported BEFORE the modules that
     // wire its service into their softRemove / finalize sites. Order
     // here is otherwise irrelevant because the service has no

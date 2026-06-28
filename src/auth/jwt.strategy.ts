@@ -1,5 +1,5 @@
 // jwt.strategy.ts
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 
@@ -33,6 +33,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: any): Promise<JwtPayloadUser & { purpose?: string }> {
+    // Dual-identity cross-rejection (civic-community plan D2): a CITIZEN token
+    // (aud:'citizen', issued by CitizenAuthService) MUST NEVER satisfy an
+    // internal staff route, even if CITIZEN_JWT_SECRET ever coincides with
+    // JWT_SECRET in some env. The citizen strategy symmetrically rejects
+    // internal tokens via its `audience: 'citizen'` option.
+    if (payload?.aud === 'citizen') {
+      throw new UnauthorizedException('Wrong token audience');
+    }
     return {
       userId: payload.sub,
       citizenId: payload.citizenId,

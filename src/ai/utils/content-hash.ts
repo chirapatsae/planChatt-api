@@ -93,7 +93,14 @@ function normalizeString(value: string | null | undefined): string {
 function normalizeNumber(value: number | null | undefined): number | null {
   if (value === null || value === undefined) return null;
   if (typeof value !== 'number' || Number.isNaN(value)) return null;
-  return value;
+  // Round to 7 decimal places — the precision of the lat/lng DB columns
+  // (decimal(10,7)). Submit-time payloads carry the map's FULL double
+  // precision; the DB rounds to 7 on store, so a hash over the raw value
+  // can never be reproduced from reloaded data → false-positive drift
+  // banner on the FE. Rounding here makes the submit-time hash and the
+  // reload hash collapse to the same value.
+  // MUST stay byte-identical to frontend/src/utils/computeProjectContentHash.ts.
+  return Math.round(value * 1e7) / 1e7;
 }
 
 function normalizeId(value: number | string | null | undefined): string | null {

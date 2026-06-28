@@ -297,6 +297,124 @@ export class BootstrapMigrationsService implements OnApplicationBootstrap {
       name: 'ai_target_kind ADD VALUE supplement-equipment-project-group (BE-B1)',
       sql: `ALTER TYPE "ai_target_kind" ADD VALUE IF NOT EXISTS 'supplement-equipment-project-group';`,
     },
+    // Wave wave-citizen-social-platform — W-GATE-1 (2026-06-25).
+    //
+    // §10 (APPROVED) permits follow-a-person. The C3 migration
+    // (1784000000000-CitizenFollowNotification) installed the CHECK
+    // `ck_citizen_follow_kind` restricting `target_kind` to
+    // ('amphoe','category') — the pre-§10 D11 forbid. This widens it to
+    // also allow 'person'. Mirrors migration
+    // `1784500000000-CitizenFollowPersonKind.ts` for dev boxes that run
+    // `synchronize: true` without the migration runner (synchronize does
+    // NOT alter existing CHECK constraints — user-memory
+    // `project_typeorm_synchronize.md`).
+    //
+    // Idempotent: DROP IF EXISTS + ADD converges the CHECK on every boot.
+    // On a fresh dev DB where the C3 CHECK was never created (synchronize
+    // does not emit it), the DROP is a no-op and the ADD installs the
+    // widened CHECK. §17.3 isolation preserved — no FK introduced, the
+    // CHECK lives on `citizen_follow` only; `target_key` for 'person' is a
+    // plain uuid (NOT a new FK). §17.11 no role exemption.
+    {
+      name: 'citizen_follow widen ck_citizen_follow_kind to include person — DROP (W-GATE-1)',
+      sql: `ALTER TABLE IF EXISTS "citizen_follow" DROP CONSTRAINT IF EXISTS "ck_citizen_follow_kind";`,
+    },
+    {
+      name: 'citizen_follow widen ck_citizen_follow_kind to include person — ADD (W-GATE-1)',
+      sql: `ALTER TABLE IF EXISTS "citizen_follow" ADD CONSTRAINT "ck_citizen_follow_kind" CHECK ("target_kind" IN ('amphoe','category','person'));`,
+    },
+    // Wave wave-citizen-social-platform — W-G1 PDPA DSAR (2026-06-26).
+    //
+    // Account erasure sets `citizen_identities.status = 'deleted'`. The M0
+    // CHECK `ck_citizen_identity_status` (1782000000000-CitizenEngagementInit)
+    // allowed only ('active','blocked') — widen to also allow 'deleted' so the
+    // erase transaction does not violate the CHECK on prod boxes (synchronize
+    // does NOT alter CHECKs; dev fresh boxes never had it). Idempotent DROP+ADD.
+    // §17.3 isolation preserved (no FK; CHECK lives on citizen_identities only).
+    {
+      name: 'citizen_identities widen ck_citizen_identity_status to include deleted — DROP (W-G1)',
+      sql: `ALTER TABLE IF EXISTS "citizen_identities" DROP CONSTRAINT IF EXISTS "ck_citizen_identity_status";`,
+    },
+    {
+      name: 'citizen_identities widen ck_citizen_identity_status to include deleted — ADD (W-G1)',
+      sql: `ALTER TABLE IF EXISTS "citizen_identities" ADD CONSTRAINT "ck_citizen_identity_status" CHECK ("status" IN ('active','blocked','deleted'));`,
+    },
+    // Wave wave-citizen-social-platform — W-T3 moderation v2 (2026-06-26).
+    //
+    // (1) The offender ladder sets `citizen_identities.status = 'suspended'` when
+    // staff remove N posts of an author. Widen the CHECK (already W-G1-widened to
+    // include 'deleted') to also allow 'suspended' so the suspend transaction does
+    // not violate the CHECK on prod boxes (synchronize does NOT alter CHECKs).
+    // Idempotent DROP+ADD; mirrors the W-G1 'deleted' widening above.
+    {
+      name: 'citizen_identities widen ck_citizen_identity_status to include suspended — DROP (W-T3)',
+      sql: `ALTER TABLE IF EXISTS "citizen_identities" DROP CONSTRAINT IF EXISTS "ck_citizen_identity_status";`,
+    },
+    {
+      name: 'citizen_identities widen ck_citizen_identity_status to include suspended — ADD (W-T3)',
+      sql: `ALTER TABLE IF EXISTS "citizen_identities" ADD CONSTRAINT "ck_citizen_identity_status" CHECK ("status" IN ('active','blocked','deleted','suspended'));`,
+    },
+    // (2) The appeal-uphold + offender suspend/reinstate paths write new
+    // `citizen_moderation_log.action` values. The M0 CHECK
+    // (1782000000000-CitizenEngagementInit) allowed only
+    // ('report','hide','remove','restore','block_author') — widen it to also allow
+    // 'appeal_uphold','suspend_author','reinstate_author' so those log writes do
+    // not violate the CHECK on prod boxes. Idempotent DROP+ADD.
+    {
+      name: 'citizen_moderation_log widen ck_citizen_moderation_action for W-T3 — DROP (W-T3)',
+      sql: `ALTER TABLE IF EXISTS "citizen_moderation_log" DROP CONSTRAINT IF EXISTS "ck_citizen_moderation_action";`,
+    },
+    {
+      name: 'citizen_moderation_log widen ck_citizen_moderation_action for W-T3 — ADD (W-T3)',
+      sql: `ALTER TABLE IF EXISTS "citizen_moderation_log" ADD CONSTRAINT "ck_citizen_moderation_action" CHECK ("action" IN ('report','hide','remove','restore','block_author','appeal_uphold','suspend_author','reinstate_author'));`,
+    },
+    // Wave wave-citizen-social-platform — W-G2 official-response v2 (2026-06-26).
+    //
+    // C4 added the `status` + `status_updated_at` columns to
+    // `citizen_official_response` (issue-handling lifecycle). `synchronize: true`
+    // adds the columns but does NOT emit the value CHECK; install
+    // `ck_citizen_official_response_status` here so the lifecycle values are
+    // constrained on prod boxes (fresh dev boxes never had it). Idempotent
+    // DROP+ADD; mirrors the W-G1 / W-T3 widenings above. §17.3 isolation
+    // preserved — no FK; the CHECK lives on citizen_official_response only.
+    // §17.2 advisory — this is the citizen issue-handling state, not a project
+    // workflow status. §17.11 no role exemption.
+    {
+      name: 'citizen_official_response add ck_citizen_official_response_status — DROP (W-G2)',
+      sql: `ALTER TABLE IF EXISTS "citizen_official_response" DROP CONSTRAINT IF EXISTS "ck_citizen_official_response_status";`,
+    },
+    {
+      name: 'citizen_official_response add ck_citizen_official_response_status — ADD (W-G2)',
+      sql: `ALTER TABLE IF EXISTS "citizen_official_response" ADD CONSTRAINT "ck_citizen_official_response_status" CHECK ("status" IN ('received','in_progress','resolved'));`,
+    },
+    // W-G2 latent-C4-defect fix: `citizen_notification.kind = 'official_response'`
+    // (17 chars) overflowed the M0 `varchar(16)` column. Never triggered until
+    // the W-G2 status-change notify (no official responses had ever been
+    // created). Widen to 32. Idempotent — `ALTER COLUMN … TYPE` to the same
+    // width is a no-op; widening never truncates. §17.3 preserved (length only).
+    {
+      name: 'citizen_notification widen kind to varchar(32) for official_response (W-G2)',
+      sql: `ALTER TABLE IF EXISTS "citizen_notification" ALTER COLUMN "kind" TYPE varchar(32);`,
+    },
+    // Wave wave-citizen-social-platform — W-S6 @mention (2026-06-26).
+    //
+    // The W-S6 mention-notify path writes `citizen_notification.kind = 'mention'`.
+    // The notification-kind CHECK was created in C3 as ('comment','heart') and
+    // widened by C4 to add 'official_response'. Widen it to ALSO admit 'mention'
+    // so the mention notify-write does not violate the CHECK on prod boxes
+    // (synchronize does NOT alter existing CHECK constraints — user-memory
+    // `project_typeorm_synchronize.md`). Idempotent DROP+ADD; re-asserts the full
+    // set so it converges regardless of which prior widening last ran. Mirrors the
+    // W-T3 status/action widenings above. §17.3 isolation preserved — no FK; the
+    // CHECK lives on citizen_notification only. §17.2 advisory.
+    {
+      name: 'citizen_notification widen ck_citizen_notification_kind to include mention — DROP (W-S6)',
+      sql: `ALTER TABLE IF EXISTS "citizen_notification" DROP CONSTRAINT IF EXISTS "ck_citizen_notification_kind";`,
+    },
+    {
+      name: 'citizen_notification widen ck_citizen_notification_kind to include mention — ADD (W-S6)',
+      sql: `ALTER TABLE IF EXISTS "citizen_notification" ADD CONSTRAINT "ck_citizen_notification_kind" CHECK ("kind" IN ('comment','heart','official_response','mention'));`,
+    },
   ];
 
   async onApplicationBootstrap(): Promise<void> {
