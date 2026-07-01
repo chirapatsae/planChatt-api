@@ -147,7 +147,27 @@ export class CitizenPostController {
       req.user.identityId,
       id,
       dto.text,
+      dto.parentCommentId,
       dto.mentions,
+    );
+  }
+
+  // Toggle the caller's LIKE (heart) on a comment. Advisory (§17.2). Owner /
+  // block checks + count are server-side; identity from the token (no IDOR).
+  @Throttle({
+    default: { limit: CITIZEN_RATE_LIMITS.TOGGLE_REACTION, ttl: CITIZEN_THROTTLE_TTL_MS },
+  })
+  @Post('posts/:postId/comments/:commentId/reactions/toggle')
+  @UseGuards(CitizenJwtGuard, ThrottlerGuard)
+  toggleCommentReaction(
+    @Req() req: CitizenRequest,
+    @Param('postId', new ParseUUIDPipe()) postId: string,
+    @Param('commentId', new ParseUUIDPipe()) commentId: string,
+  ) {
+    return this.citizenPostService.toggleCommentReaction(
+      req.user.identityId,
+      postId,
+      commentId,
     );
   }
 

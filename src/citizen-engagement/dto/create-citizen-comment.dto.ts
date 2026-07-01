@@ -15,6 +15,12 @@ export class CreateCitizenCommentDto {
   @MaxLength(2000)
   text: string;
 
+  /** Reply threading (1 level): the parent comment id when this is a reply;
+   *  omitted for a top-level comment. Validated + flattened server-side. */
+  @IsOptional()
+  @IsUUID()
+  parentCommentId?: string;
+
   /**
    * W-S6: resolved identity ids the author @mentioned in the comment body. Each
    * is validated (real, non-deleted, active citizen) + de-duped + self/blocked-

@@ -38,6 +38,7 @@ import { CitizenAuditLog } from './entities/citizen-audit-log.entity';
 import { CitizenIdentity } from './entities/citizen-identity.entity';
 import { CitizenPost } from './entities/citizen-post.entity';
 import { CitizenPostComment } from './entities/citizen-post-comment.entity';
+import { CitizenPostCommentReaction } from './entities/citizen-post-comment-reaction.entity';
 import { CitizenPostMedia } from './entities/citizen-post-media.entity';
 import { CitizenPostReaction } from './entities/citizen-post-reaction.entity';
 import { CitizenMediaService } from './media/citizen-media.service';
@@ -78,6 +79,8 @@ export class CitizenPostService {
     private readonly postRepo: Repository<CitizenPost>,
     @InjectRepository(CitizenPostComment)
     private readonly commentRepo: Repository<CitizenPostComment>,
+    @InjectRepository(CitizenPostCommentReaction)
+    private readonly commentReactionRepo: Repository<CitizenPostCommentReaction>,
     @InjectRepository(CitizenPostMedia)
     private readonly mediaRepo: Repository<CitizenPostMedia>,
     @InjectRepository(CitizenIdentity)
@@ -317,11 +320,13 @@ export class CitizenPostService {
     });
   }
 
-  /** Add a comment to a visible post; increments commentCount in the same tx. */
+  /** Add a comment (or a reply, when `parentCommentId` is set) to a visible
+   *  post; increments commentCount in the same tx. */
   async addComment(
     identityId: string,
     postId: string,
     text: string,
+    parentCommentId?: string | null,
     mentionIds?: string[],
   ): Promise<CommentDto> {
     return this.dataSource.transaction(async (em) => {
@@ -338,10 +343,30 @@ export class CitizenPostService {
         throw new ForbiddenException('CITIZEN_BLOCKED');
       }
 
+      // Reply threading (1 level): validate the parent is a visible comment on
+      // THIS post, then flatten to root (a reply to a reply attaches to the
+      // top-level parent) so the thread never nests deeper than one level.
+      let resolvedParentId: string | null = null;
+      if (parentCommentId) {
+        const parent = await em.getRepository(CitizenPostComment).findOne({
+          where: {
+            id: parentCommentId,
+            postId,
+            moderationState: 'visible',
+            deletedAt: IsNull(),
+          },
+        });
+        if (!parent) {
+          throw new NotFoundException('CITIZEN_PARENT_COMMENT_NOT_FOUND');
+        }
+        resolvedParentId = parent.parentCommentId ?? parent.id;
+      }
+
       const comment = em.getRepository(CitizenPostComment).create({
         postId,
         authorIdentityId: identityId,
         text,
+        parentCommentId: resolvedParentId,
         moderationState: 'visible',
       });
       const saved = await em.getRepository(CitizenPostComment).save(comment);
@@ -382,6 +407,57 @@ export class CitizenPostService {
 
       const alias = await this.resolveAlias(em, identityId);
       return this.toCommentDto(saved, alias, mentions);
+    });
+  }
+
+  /**
+   * Toggle the caller's LIKE (heart) on a visible comment. One live like per
+   * (comment, identity): a live like → soft-delete (unlike); none → insert
+   * (like). Returns the fresh state + count. §17.2 advisory; §17.3 citizen_*
+   * only. High-frequency + advisory, so no per-toggle audit row (mirrors posts).
+   */
+  async toggleCommentReaction(
+    identityId: string,
+    postId: string,
+    commentId: string,
+  ): Promise<{ reacted: boolean; heartCount: number }> {
+    return this.dataSource.transaction(async (em) => {
+      const commentRepo = em.getRepository(CitizenPostComment);
+      const reactionRepo = em.getRepository(CitizenPostCommentReaction);
+      const comment = await commentRepo.findOne({
+        where: {
+          id: commentId,
+          postId,
+          moderationState: 'visible',
+          deletedAt: IsNull(),
+        },
+      });
+      if (!comment) {
+        throw new NotFoundException('CITIZEN_COMMENT_NOT_FOUND');
+      }
+      if (
+        await this.blockService.isBlockedEitherWay(
+          identityId,
+          comment.authorIdentityId,
+        )
+      ) {
+        throw new ForbiddenException('CITIZEN_BLOCKED');
+      }
+      const live = await reactionRepo.findOne({
+        where: { commentId, identityId, deletedAt: IsNull() },
+      });
+      let reacted: boolean;
+      if (live) {
+        await reactionRepo.softDelete(live.id);
+        reacted = false;
+      } else {
+        await reactionRepo.save(reactionRepo.create({ commentId, identityId }));
+        reacted = true;
+      }
+      const heartCount = await reactionRepo.count({
+        where: { commentId, deletedAt: IsNull() },
+      });
+      return { reacted, heartCount };
     });
   }
 
@@ -695,6 +771,23 @@ export class CitizenPostService {
     }
     const comments = await commentsQb.orderBy('c.createdAt', 'ASC').getMany();
 
+    // Live LIKE (heart) count per comment — one grouped query for the batch.
+    const heartCountByComment = new Map<string, number>();
+    const commentIds = comments.map((c) => c.id);
+    if (commentIds.length > 0) {
+      const reactionRows = await this.commentReactionRepo
+        .createQueryBuilder('r')
+        .select('r.commentId', 'commentId')
+        .addSelect('COUNT(*)', 'cnt')
+        .where('r.commentId IN (:...ids)', { ids: commentIds })
+        .andWhere('r.deletedAt IS NULL')
+        .groupBy('r.commentId')
+        .getRawMany<{ commentId: string; cnt: string }>();
+      for (const row of reactionRows) {
+        heartCountByComment.set(row.commentId, Number(row.cnt));
+      }
+    }
+
     const media = await this.loadMediaForPost(this.dataSource.manager, id);
 
     // W-S1: live reaction breakdown for the detail view (single grouped query).
@@ -745,6 +838,7 @@ export class CitizenPostService {
           c,
           c.author?.displayAlias ?? '',
           mentionsByComment.get(c.id),
+          heartCountByComment.get(c.id) ?? 0,
         ),
       ),
       officialResponses,
@@ -1172,6 +1266,7 @@ export class CitizenPostService {
     comment: CitizenPostComment,
     displayAlias: string,
     mentions?: CitizenMentionDto[],
+    heartCount = 0,
   ): CommentDto {
     return {
       id: comment.id,
@@ -1179,6 +1274,8 @@ export class CitizenPostService {
       createdAt: (comment.createdAt ?? new Date()).toISOString(),
       // W-GATE-1: `author.id` = the comment author's identity uuid (opaque handle).
       author: { id: comment.authorIdentityId, displayAlias },
+      parentId: comment.parentCommentId ?? null,
+      heartCount,
       // W-S6: present ONLY when the comment carries @mentions (alias-only).
       ...(mentions !== undefined && mentions.length > 0 ? { mentions } : {}),
     };

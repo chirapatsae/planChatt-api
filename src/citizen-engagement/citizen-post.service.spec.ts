@@ -257,6 +257,10 @@ describe('CitizenPostService', () => {
     dsReactionRepo = makeRepo();
     dsReactionRepo.createQueryBuilder = jest.fn(() => makeBreakdownBuilder([]));
 
+    // Comment-like repo — `detail()` groups counts via createQueryBuilder.
+    const commentReactionRepo = makeRepo();
+    commentReactionRepo.createQueryBuilder = jest.fn(() => makeBreakdownBuilder([]));
+
     const dataSource = {
       transaction: async (cb: (em: unknown) => Promise<unknown>) => cb(em),
       // `detail()` loads media via `this.dataSource.manager.getRepository(...)`.
@@ -268,6 +272,7 @@ describe('CitizenPostService', () => {
     service = new CitizenPostService(
       postRepo as never,
       commentRepo as never,
+      commentReactionRepo as never,
       mediaRepo as never,
       identityRepo as never,
       mediaService as never,

@@ -35,6 +35,7 @@ import { CitizenHashtag } from './entities/citizen-hashtag.entity';
 import { CitizenPostHashtag } from './entities/citizen-post-hashtag.entity';
 import { CitizenPost } from './entities/citizen-post.entity';
 import { CitizenPostComment } from './entities/citizen-post-comment.entity';
+import { CitizenPostCommentReaction } from './entities/citizen-post-comment-reaction.entity';
 import { CitizenPostMedia } from './entities/citizen-post-media.entity';
 import { CitizenPostReaction } from './entities/citizen-post-reaction.entity';
 import { CitizenStory } from './entities/citizen-story.entity';
@@ -109,6 +110,7 @@ import { CitizenRetentionCron } from './citizen-retention.cron';
       CitizenIdentity,
       CitizenPost,
       CitizenPostComment,
+      CitizenPostCommentReaction,
       CitizenPostReaction,
       CitizenPostMedia,
       CitizenModerationLog,

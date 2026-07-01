@@ -136,6 +136,11 @@ export interface CommentDto {
   text: string;
   createdAt: string;
   author: CitizenPostAuthorDto;
+  /** Reply threading (1 level): null = top-level comment; else the parent
+   *  comment id it replies to. */
+  parentId: string | null;
+  /** Live LIKE (heart) count on this comment. */
+  heartCount: number;
   /**
    * W-S6: the citizens @mentioned in this comment body — `{ identityId,
    * displayAlias }` (alias-only). Omitted / `[]` when the comment mentions no one.

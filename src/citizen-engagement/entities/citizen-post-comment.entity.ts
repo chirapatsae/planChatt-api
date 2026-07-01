@@ -43,6 +43,14 @@ export class CitizenPostComment {
   @Column({ name: 'text', type: 'text' })
   text: string;
 
+  /**
+   * Reply threading (1 level, FB-style): null = a top-level comment; otherwise
+   * the parent comment's id (same post). Deeper replies flatten to the root
+   * parent at the service layer. §17.3: citizen_* → citizen_* only.
+   */
+  @Column({ name: 'parent_comment_id', type: 'uuid', nullable: true })
+  parentCommentId: string | null;
+
   /** `pending|visible|hidden|removed|shadow`. CHECK in migration. */
   @Column({ name: 'moderation_state', type: 'varchar', length: 16, default: 'visible' })
   moderationState: string;
