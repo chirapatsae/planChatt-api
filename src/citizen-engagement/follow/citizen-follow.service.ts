@@ -18,9 +18,17 @@ import { CitizenIdentity } from '../entities/citizen-identity.entity';
 /** The 5 idea categories — the only valid `category` follow targets. */
 const FOLLOW_CATEGORIES = ['road', 'water', 'public', 'safety', 'other'];
 
-/** Loose RFC-4122 uuid shape (amphoe target_key must be a uuid). */
+/** Loose RFC-4122 uuid shape (a `person` target_key is a citizen identity uuid). */
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Max length of an amphoe follow `target_key`. Amphoe ids are short string
+ * codes (e.g. "3001"), NOT uuids — the `Amphoe` entity's `id` is a
+ * `@PrimaryColumn` set from a code. 16 chars is a sane upper bound (well under
+ * the `target_key` varchar(64) column).
+ */
+const AMPHOE_KEY_MAX_LEN = 16;
 
 /**
  * CitizenFollowService — follow AREAS (amphoe), TOPICS (category), and
@@ -57,7 +65,7 @@ export class CitizenFollowService {
   /**
    * Toggle the caller's follow of `(targetKind, targetKey)`.
    *   - category → targetKey MUST be one of the 5 idea categories
-   *   - amphoe   → targetKey MUST be a uuid
+   *   - amphoe   → targetKey MUST be a non-empty amphoe code (≤16 chars)
    *   - person   → targetKey MUST be a uuid, NOT self, and an EXISTING + active
    *                (status='active', not soft-deleted) citizen identity
    * Invalid shape → `400 CITIZEN_FOLLOW_INVALID`; self → `400
@@ -79,7 +87,12 @@ export class CitizenFollowService {
     if (targetKind === 'category' && !FOLLOW_CATEGORIES.includes(targetKey)) {
       throw new BadRequestException('CITIZEN_FOLLOW_INVALID');
     }
-    if (targetKind === 'amphoe' && !UUID_RE.test(targetKey)) {
+    if (
+      targetKind === 'amphoe' &&
+      (targetKey.trim().length === 0 || targetKey.length > AMPHOE_KEY_MAX_LEN)
+    ) {
+      // Amphoe ids are short string codes (e.g. "3001"), NOT uuids — accept any
+      // non-empty, reasonably-short code rather than requiring a uuid.
       throw new BadRequestException('CITIZEN_FOLLOW_INVALID');
     }
     if (targetKind === 'person') {
@@ -148,7 +161,7 @@ export class CitizenFollowService {
   }
 
   /**
-   * The caller's live follows, split into amphoe uuids + category strings +
+   * The caller's live follows, split into amphoe codes + category strings +
    * followed-person identity ids (W-GATE-1). `people` is the caller's OWN
    * following list — D16-safe (never another citizen's roster).
    */
@@ -171,7 +184,10 @@ export class CitizenFollowService {
     return { amphoes, categories, people };
   }
 
-  /** Public DTO shape `{ amphoes, categories, people }` — same data as listFollowSets. */
+  /**
+   * Public DTO shape `{ amphoes, categories, people }` — same data as
+   * listFollowSets (`amphoes` holds amphoe codes, not uuids).
+   */
   async listFollows(identityId: string): Promise<FollowSetsDto> {
     return this.listFollowSets(identityId);
   }

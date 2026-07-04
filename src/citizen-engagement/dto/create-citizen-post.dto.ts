@@ -28,8 +28,12 @@ export class CreateCitizenPostDto {
   @IsNumber()
   lng?: number;
 
+  // Amphoe CODE (e.g. "3001" — matches `amphoes.id`), NOT a uuid. Normally
+  // derived server-side from the pin (lat/lng); accepted here only as an
+  // optional client hint.
   @IsOptional()
-  @IsUUID()
+  @IsString()
+  @MaxLength(16)
   amphoeId?: string;
 
   @IsOptional()

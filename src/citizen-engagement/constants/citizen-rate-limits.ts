@@ -55,4 +55,6 @@ export const CITIZEN_RATE_LIMITS = {
   DSAR_ERASE: 3,
   /** W-T3 appeal submission — a low-frequency owner action; tight cap against spam. */
   SUBMIT_APPEAL: 5,
+  /** Community Chat — 1:1 DM send; frequent like comments, bounded against flood. */
+  SEND_MESSAGE: 40,
 } as const;

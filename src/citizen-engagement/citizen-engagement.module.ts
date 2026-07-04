@@ -39,6 +39,12 @@ import { CitizenPostCommentReaction } from './entities/citizen-post-comment-reac
 import { CitizenPostMedia } from './entities/citizen-post-media.entity';
 import { CitizenPostReaction } from './entities/citizen-post-reaction.entity';
 import { CitizenStory } from './entities/citizen-story.entity';
+import { CitizenChatConversation } from './entities/citizen-chat-conversation.entity';
+import { CitizenChatMessage } from './entities/citizen-chat-message.entity';
+import { CitizenChatReadState } from './entities/citizen-chat-read-state.entity';
+import { CitizenChatController } from './chat/citizen-chat.controller';
+import { CitizenChatService } from './chat/citizen-chat.service';
+import { CitizenChatGateway } from './chat/citizen-chat.gateway';
 import { CitizenStoryController } from './stories/citizen-story.controller';
 import { CitizenStoryService } from './stories/citizen-story.service';
 import { CitizenBookmarkController } from './bookmark/citizen-bookmark.controller';
@@ -77,6 +83,7 @@ import { CitizenModerationInsightsService } from './moderation/citizen-moderatio
 import { CitizenBlock } from './entities/citizen-block.entity';
 import { CitizenBlockController } from './block/citizen-block.controller';
 import { CitizenBlockService } from './block/citizen-block.service';
+import { GeoBoundaryService } from '../ai/geo-boundary.service';
 import { CitizenMention } from './entities/citizen-mention.entity';
 import { CitizenDsarController } from './dsar/citizen-dsar.controller';
 import { CitizenDsarService } from './dsar/citizen-dsar.service';
@@ -142,6 +149,13 @@ import { CitizenRetentionCron } from './citizen-retention.cron';
       // citizen_post / citizen_identities (§17.3). `comment_id` is a PLAIN uuid
       // (no FK), like citizen_notification.comment_id.
       CitizenMention,
+      // Community Chat — isolated `citizen_*` namespace; the conversation's only
+      // FK is initiator_identity_id → citizen_identities (participant is a PLAIN
+      // uuid), messages/read-state FK only into citizen_chat_* + citizen_identities
+      // (§17.3). Message bodies are encrypted at rest.
+      CitizenChatConversation,
+      CitizenChatMessage,
+      CitizenChatReadState,
       // W-G3 — `WorkStatusApprovedGuard` (auth-layer, NOT data) injects a
       // `Repository<WorkHistory>` for the §2 live work-status read on the
       // EXEC_READ-gated insights routes. This is an AUTHORIZATION dependency on
@@ -188,6 +202,7 @@ import { CitizenRetentionCron } from './citizen-retention.cron';
     CitizenHashtagController,
     CitizenStoryController,
     CitizenBlockController,
+    CitizenChatController,
     CitizenDsarController,
     CitizenInsightsController,
     CitizenAchievementsController,
@@ -226,6 +241,8 @@ import { CitizenRetentionCron } from './citizen-retention.cron';
     CitizenHashtagService,
     CitizenStoryService,
     CitizenBlockService,
+    CitizenChatService,
+    CitizenChatGateway,
     CitizenDsarService,
     // W-G3 — executive insights aggregator + the auth guards its controller
     // composes (registered here so DI resolves them without leaning on the
@@ -238,6 +255,10 @@ import { CitizenRetentionCron } from './citizen-retention.cron';
     WorkStatusApprovedGuard,
     // PDPA blob retention sweeper (daily @Cron via the global ScheduleModule).
     CitizenRetentionCron,
+    // Point-in-polygon amphoe resolver — derives an idea's amphoe code from its
+    // pin (lat/lng) at create time. Self-contained (loads geojson at init, no
+    // deps), provided directly like `ProjectGroupsModule` does.
+    GeoBoundaryService,
   ],
   exports: [CitizenAuthService],
 })

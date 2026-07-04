@@ -142,6 +142,7 @@ describe('CitizenProfileService', () => {
       expect(result).toEqual({
         id: 'identity-1',
         displayAlias: 'สมชาย ม.',
+        bio: null,
         joinedAt: JOINED.toISOString(),
         postCount: 4,
         heartsReceived: 12,

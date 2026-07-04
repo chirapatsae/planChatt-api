@@ -7,6 +7,7 @@ import {
   IsString,
   IsUUID,
   Max,
+  MaxLength,
   Min,
 } from 'class-validator';
 
@@ -26,8 +27,11 @@ export class ListCitizenPostsQueryDto {
   @IsString()
   category?: string;
 
+  // Amphoe CODE (e.g. "3001" — matches `amphoes.id` / `citizen_post.amphoe_id`),
+  // NOT a uuid.
   @IsOptional()
-  @IsUUID()
+  @IsString()
+  @MaxLength(16)
   amphoeId?: string;
 
   @IsOptional()

@@ -42,6 +42,8 @@ async function bootstrap() {
   const defaultAllowedOrigins = [
     'http://localhost:5173',
     'http://localhost:5174',
+    'http://localhost:5175', // local Vite preview instance
+    'http://localhost:5176', // local Vite preview instance (fallback port)
     'https://pb.koratpao.go.th',
     'http://pb.thaiakitech.co.th:8080',
     'http://pb.thaiakitech.co.th',          // proxy may rewrite without port

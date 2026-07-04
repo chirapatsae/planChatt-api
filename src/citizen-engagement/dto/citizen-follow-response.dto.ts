@@ -13,7 +13,8 @@ export interface ToggleFollowResponseDto {
 
 /**
  * The caller's live follow targets, split by kind.
- * `amphoes` = amphoe uuids; `categories` = category strings; `people` = followed
+ * `amphoes` = amphoe codes (short string ids like "3001", NOT uuids);
+ * `categories` = category strings; `people` = followed
  * citizens' identity ids (W-GATE-1). The `me/follows` endpoint exposes the
  * area/topic split; `people` drives the followed-feed person UNION + the FE
  * follow-button marking (the caller's OWN following list — D16-safe).

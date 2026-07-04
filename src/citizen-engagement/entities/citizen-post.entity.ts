@@ -20,10 +20,12 @@ import { CitizenIdentity } from './citizen-identity.entity';
  * Comments + hearts hang off it.
  *
  * §17.3 isolation: the ONLY FK is `author_identity_id → citizen_identities`
- * (citizen_* → citizen_*). `amphoe_id` is a PLAIN uuid (no FK to the amphoes
- * master — validated in-app) so the table stays purely within the engagement
- * namespace. Zero FK into project / users / tracking_status. This board is
- * §17.2 ADVISORY — it creates no project and changes no workflow status.
+ * (citizen_* → citizen_*). `amphoe_id` is a PLAIN string amphoe code (e.g.
+ * "3001" — matches `amphoes.id`, the same code the FE map / follows use; NO FK
+ * to the amphoes master, validated in-app) so the table stays purely within the
+ * engagement namespace. It is derived from the pin (lat/lng) at create time via
+ * point-in-polygon. Zero FK into project / users / tracking_status. This board
+ * is §17.2 ADVISORY — it creates no project and changes no workflow status.
  */
 @Entity('citizen_post')
 @Index('ix_citizen_post_author', ['authorIdentityId'])
@@ -93,8 +95,10 @@ export class CitizenPost {
   @Column({ name: 'lng', type: 'decimal', precision: 10, scale: 7, nullable: true })
   lng: string | null;
 
-  /** Denormalized at write via point-in-polygon. Plain uuid — no FK. */
-  @Column({ name: 'amphoe_id', type: 'uuid', nullable: true })
+  /** Amphoe CODE string (e.g. "3001" — matches `amphoes.id`), NOT a uuid.
+   *  Derived at write from the pin via
+   *  `GeoBoundaryService.resolveAmphoeForPoint(lat,lng)?.amphoeCode`. No FK. */
+  @Column({ name: 'amphoe_id', type: 'varchar', length: 16, nullable: true })
   amphoeId: string | null;
 
   /** `road|water|public|safety|other`. Required for `idea`, null for `discussion`. CHECK in migration. */

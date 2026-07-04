@@ -6,8 +6,9 @@ import { IsIn, IsString, MaxLength } from 'class-validator';
  * W-GATE-1 (§10 APPROVED): follow targets are AREA (amphoe), TOPIC (category),
  * or PERSON (another citizen). `targetKind` is constrained to
  * `amphoe` | `category` | `person`; the service further validates `targetKey`
- * (uuid for amphoe, one of the 5 categories for category, an EXISTING + active
- * + non-self identity_id for person) and rejects with
+ * (a non-empty amphoe code ≤16 chars for amphoe — amphoe ids are short codes
+ * like "3001", NOT uuids — one of the 5 categories for category, an EXISTING +
+ * active + non-self identity_id for person) and rejects with
  * `400 CITIZEN_FOLLOW_INVALID` (shape) / `400 CITIZEN_FOLLOW_SELF` (self) /
  * `404 CITIZEN_IDENTITY_NOT_FOUND` (missing/blocked person).
  */

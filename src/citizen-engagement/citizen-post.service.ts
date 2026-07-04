@@ -55,6 +55,7 @@ import { CitizenFollowService } from './follow/citizen-follow.service';
 import { FollowSetsDto } from './dto/citizen-follow-response.dto';
 import { CitizenPublicProfileDto } from './dto/citizen-public-profile.dto';
 import { CitizenBlockService } from './block/citizen-block.service';
+import { GeoBoundaryService } from '../ai/geo-boundary.service';
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -94,6 +95,7 @@ export class CitizenPostService {
     private readonly hashtagService: CitizenHashtagService,
     private readonly followService: CitizenFollowService,
     private readonly blockService: CitizenBlockService,
+    private readonly geoBoundary: GeoBoundaryService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -133,6 +135,17 @@ export class CitizenPostService {
       category = null;
     }
 
+    // Derive the amphoe from the pin (point-in-polygon → amphoe code, e.g.
+    // "3001" == amphoes.id). The pin is the source of truth; a client-supplied
+    // amphoeId is only a fallback. Best-effort: a point outside every indexed
+    // amphoe leaves it null and never blocks creation.
+    const amphoeId =
+      lat !== null && lng !== null
+        ? this.geoBoundary.resolveAmphoeForPoint(lat, lng)?.amphoeCode ??
+          dto.amphoeId ??
+          null
+        : dto.amphoeId ?? null;
+
     return this.dataSource.transaction(async (em) => {
       const now = new Date();
       const post = em.getRepository(CitizenPost).create({
@@ -140,7 +153,7 @@ export class CitizenPostService {
         postKind: dto.postKind,
         lat: lat === null ? null : String(lat),
         lng: lng === null ? null : String(lng),
-        amphoeId: dto.amphoeId ?? null,
+        amphoeId,
         category,
         title,
         detail,
@@ -858,7 +871,7 @@ export class CitizenPostService {
     // PII columns (only the uuid + alias leave this service).
     const identity = await this.identityRepo.findOne({
       where: { id: identityId, status: 'active', deletedAt: IsNull() },
-      select: { id: true, displayAlias: true },
+      select: { id: true, displayAlias: true, bio: true },
     });
     if (!identity) {
       throw new NotFoundException('CITIZEN_IDENTITY_NOT_FOUND');
@@ -879,6 +892,7 @@ export class CitizenPostService {
     return {
       id: identity.id,
       displayAlias: identity.displayAlias,
+      bio: identity.bio ?? null,
       postCount,
       followerCount,
     };

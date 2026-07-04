@@ -52,6 +52,15 @@ export class CitizenIdentity {
   displayAlias: string;
 
   /**
+   * Optional public bio / "แนะนำตัว" (2026-07-03). Alias-only-safe free text
+   * (§17.3 — NOT PII; the citizen types it themselves). Shown on the public
+   * profile header. `null` / empty = no bio. `synchronize:true` auto-adds this
+   * column in dev; prod needs a migration to add `bio varchar(300) NULL`.
+   */
+  @Column({ name: 'bio', type: 'varchar', length: 300, nullable: true })
+  bio: string | null;
+
+  /**
    * `active` | `blocked` | `deleted` (W-G1 DSAR erase) | `suspended` (W-T3
    * offender-ladder auto-suspend). CHECK enforced in the migration and widened
    * idempotently in `bootstrap-migrations.service.ts` for prod parity.

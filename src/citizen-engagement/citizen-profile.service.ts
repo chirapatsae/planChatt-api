@@ -68,7 +68,7 @@ export class CitizenProfileService {
     // joinedAt) — never the *_enc / *_hash PII columns.
     const identity = await this.identityRepo.findOne({
       where: { id: identityId, deletedAt: IsNull() },
-      select: { id: true, displayAlias: true, createdAt: true },
+      select: { id: true, displayAlias: true, bio: true, createdAt: true },
     });
     if (!identity) {
       throw new NotFoundException('CITIZEN_IDENTITY_NOT_FOUND');
@@ -170,10 +170,16 @@ export class CitizenProfileService {
       }
 
       identity.displayAlias = dto.displayAlias.trim();
+      // bio: absent (undefined) = leave unchanged; empty/whitespace = clear.
+      if (dto.bio !== undefined) {
+        const trimmedBio = dto.bio.trim();
+        identity.bio = trimmedBio.length > 0 ? trimmedBio : null;
+      }
       await em.getRepository(CitizenIdentity).save(identity);
 
       await this.writeAudit(em, identityId, 'profile.update', 'identity', identityId, {
         displayAlias: identity.displayAlias,
+        bio: identity.bio,
       });
 
       return this.computeProfile(identity, em);
@@ -215,6 +221,7 @@ export class CitizenProfileService {
     return {
       id: identity.id,
       displayAlias: identity.displayAlias,
+      bio: identity.bio ?? null,
       joinedAt: (identity.createdAt ?? new Date()).toISOString(),
       postCount,
       heartsReceived,

@@ -284,6 +284,9 @@ describe('CitizenPostService', () => {
       hashtagService as never,
       followService as never,
       blockService as never,
+      // GeoBoundaryService — idea create derives amphoe from the pin; the mock
+      // returns null so create() falls back to dto.amphoeId (or null).
+      { resolveAmphoeForPoint: jest.fn(() => null) } as never,
       dataSource as never,
     );
   });
@@ -313,7 +316,7 @@ describe('CitizenPostService', () => {
         category: 'road',
         title: 'เพิ่มไฟส่องสว่างตรงทางโค้ง',
         // detail omitted — the citizen composer no longer collects it
-        amphoeId: '11111111-1111-1111-1111-111111111111',
+        amphoeId: '3001',
       };
       await expect(service.create('identity-1', dto)).resolves.toBeDefined();
       expect(emPostRepo.save).toHaveBeenCalled();
@@ -330,7 +333,7 @@ describe('CitizenPostService', () => {
         category: 'road',
         title: 'ถนนพัง',
         detail: 'หลุมเยอะ',
-        amphoeId: '11111111-1111-1111-1111-111111111111',
+        amphoeId: '3001',
       };
 
       const result = await service.create('identity-1', dto);
@@ -947,6 +950,7 @@ describe('CitizenPostService', () => {
       expect(result).toEqual({
         id: 'pub-1',
         displayAlias: 'ประชาชน ก',
+        bio: null,
         postCount: 3,
         followerCount: 12,
       });

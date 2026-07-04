@@ -22,11 +22,11 @@ import { CitizenIdentity } from './citizen-identity.entity';
  * keeps at most one live follow per target (migration).
  *
  * §17.3 isolation: the ONLY FK is `follower_identity_id → citizen_identities`
- * (citizen_* → citizen_*). `target_key` is a PLAIN string — amphoe uuid OR
- * category name OR (for `person`) the followed citizen's `identity_id` as a
- * PLAIN uuid (NOT a new FK — kept a plain string like amphoe/category to
- * preserve the §17.3 table-level zero-FK invariant). Zero FK into
- * project / users / work_history / tracking_status.
+ * (citizen_* → citizen_*). `target_key` is a PLAIN string — amphoe code (a
+ * short string id like "3001", NOT a uuid) OR category name OR (for `person`)
+ * the followed citizen's `identity_id` as a PLAIN uuid (NOT a new FK — kept a
+ * plain string like amphoe/category to preserve the §17.3 table-level zero-FK
+ * invariant). Zero FK into project / users / work_history / tracking_status.
  *
  * PRIVACY (D16): this table can answer "does X follow Y?" and "how many follow
  * Y?" (a COUNT) but the follower/following ROSTER (who-follows-whom) is PRIVATE.
@@ -50,9 +50,10 @@ export class CitizenFollow {
   targetKind: string;
 
   /**
-   * amphoe uuid (when `amphoe`) OR category string (when `category`) OR the
-   * followed citizen's identity_id as a PLAIN uuid (when `person`, W-GATE-1).
-   * A uuid is 36 chars — within the varchar(64) bound.
+   * amphoe code (when `amphoe` — a short string id like "3001", NOT a uuid) OR
+   * category string (when `category`) OR the followed citizen's identity_id as a
+   * PLAIN uuid (when `person`, W-GATE-1). A uuid is 36 chars — within the
+   * varchar(64) bound.
    */
   @Column({ name: 'target_key', type: 'varchar', length: 64 })
   targetKey: string;

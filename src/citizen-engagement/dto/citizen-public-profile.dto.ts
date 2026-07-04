@@ -12,6 +12,8 @@ export interface CitizenPublicProfileDto {
   /** The citizen's identity uuid (opaque public handle). */
   id: string;
   displayAlias: string;
+  /** Public self-written bio / "แนะนำตัว" (2026-07-03). `null` = none. */
+  bio: string | null;
   /** Public, non-removed posts authored by this citizen. */
   postCount: number;
   /** Live count of citizens who follow this person (D16 — count only, no roster). */

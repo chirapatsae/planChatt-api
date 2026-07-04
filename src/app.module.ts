@@ -159,10 +159,12 @@ import { PublicArchiveModule } from './public-archive/public-archive.module';
 import { PublicEngagementModule } from './public-engagement/public-engagement.module';
 import { EngagementLike } from './public-engagement/entities/engagement-like.entity';
 import { CitizenEngagementModule } from './citizen-engagement/citizen-engagement.module';
+import { CitizenPlanningModule } from './citizen-planning/citizen-planning.module';
 import { CitizenIdentity } from './citizen-engagement/entities/citizen-identity.entity';
 import { CitizenPost } from './citizen-engagement/entities/citizen-post.entity';
 import { CitizenPostComment } from './citizen-engagement/entities/citizen-post-comment.entity';
 import { CitizenPostReaction } from './citizen-engagement/entities/citizen-post-reaction.entity';
+import { CitizenPostCommentReaction } from './citizen-engagement/entities/citizen-post-comment-reaction.entity';
 import { CitizenPostMedia } from './citizen-engagement/entities/citizen-post-media.entity';
 import { CitizenModerationLog } from './citizen-engagement/entities/citizen-moderation-log.entity';
 import { CitizenBackendAccessGrant } from './citizen-engagement/entities/citizen-backend-access-grant.entity';
@@ -178,8 +180,17 @@ import { CitizenHashtag } from './citizen-engagement/entities/citizen-hashtag.en
 import { CitizenPostHashtag } from './citizen-engagement/entities/citizen-post-hashtag.entity';
 import { CitizenStory } from './citizen-engagement/entities/citizen-story.entity';
 import { CitizenBlock } from './citizen-engagement/entities/citizen-block.entity';
+import { CitizenChatConversation } from './citizen-engagement/entities/citizen-chat-conversation.entity';
+import { CitizenChatMessage } from './citizen-engagement/entities/citizen-chat-message.entity';
+import { CitizenChatReadState } from './citizen-engagement/entities/citizen-chat-read-state.entity';
 import { CitizenAppeal } from './citizen-engagement/entities/citizen-appeal.entity';
 import { CitizenMention } from './citizen-engagement/entities/citizen-mention.entity';
+// Executive private planning layer over the citizen idea board — isolated
+// `citizen_planning_*` namespace, NO FK to project / users / work_history /
+// citizen_* (§17.3). Owned by `CitizenPlanningModule` via `forFeature`; root
+// registration here is required for metadata resolution (Wave 41 footgun).
+import { CitizenPlanningEntry } from './citizen-planning/entities/citizen-planning-entry.entity';
+import { CitizenIdeaScoreSnapshot } from './citizen-planning/entities/citizen-idea-score-snapshot.entity';
 import { EngagementViewEvent } from './public-engagement/entities/engagement-view-event.entity';
 import { EngagementDownloadEvent } from './public-engagement/entities/engagement-download-event.entity';
 // CLEANUP wave (2026-05-26) — the legacy `BookAssemblyDraft`,
@@ -658,6 +669,11 @@ import { UnifiedEquipmentModule } from './unified-equipment/unified-equipment.mo
         CitizenPost,
         CitizenPostComment,
         CitizenPostReaction,
+        // Comment-level LIKE (heart) — was registered in CitizenEngagementModule
+        // forFeature but MISSING from this root entities[] array, so
+        // `getPostDetail`'s comment-heart query threw EntityMetadataNotFoundError
+        // (500) for everyone. Root registration is required (Wave 41 footgun).
+        CitizenPostCommentReaction,
         CitizenPostMedia,
         CitizenModerationLog,
         CitizenBackendAccessGrant,
@@ -690,6 +706,13 @@ import { UnifiedEquipmentModule } from './unified-equipment/unified-equipment.mo
         // is a PLAIN uuid (no FK). Root registration here is required for
         // metadata resolution (Wave 41 footgun — explicit entities[] array).
         CitizenBlock,
+        // Community Chat — isolated `citizen_*` namespace; conversation FK only
+        // initiator → citizen_identities (participant is a PLAIN uuid), message /
+        // read-state FK only into citizen_chat_* + citizen_identities (§17.3).
+        // Explicit root registration required (Wave 41 footgun — entities[] array).
+        CitizenChatConversation,
+        CitizenChatMessage,
+        CitizenChatReadState,
         // W-T3 moderation v2 appeals — isolated `citizen_*` namespace; FKs only
         // into citizen_post / citizen_identities (§17.3); the resolving staff
         // member is a PLAIN uuid + SNAPSHOT name (no FK). Root registration here
@@ -701,6 +724,16 @@ import { UnifiedEquipmentModule } from './unified-equipment/unified-equipment.mo
         // (no FK). Root registration here is required for metadata resolution
         // (Wave 41 footgun — explicit entities[] array).
         CitizenMention,
+        // Executive private planning layer — isolated `citizen_planning_*`
+        // namespace, NO FK to any project / users / work_history / citizen_*
+        // table (§17.2 advisory / §17.3 isolation). Owner + idea are plain
+        // uuid references. Root registration here is required for metadata
+        // resolution (Wave 41 footgun — explicit entities[] array).
+        CitizenPlanningEntry,
+        // B2 trend — daily absolute-score snapshots per idea (advisory,
+        // §17.3 isolated; ideaId is a plain uuid, no FK). Root registration
+        // required for metadata resolution (Wave 41 footgun).
+        CitizenIdeaScoreSnapshot,
         // Wave wave-backup-login-thaid-fallback / DB-01 — five entities
         // backing the ThaiD-fallback backup login (BackupCredential,
         // TotpEnrollment, PasswordHistory, BackupLoginAuditLog,
@@ -846,6 +879,7 @@ import { UnifiedEquipmentModule } from './unified-equipment/unified-equipment.mo
     // both sides handles the bidirectional dependency).
     PublicEngagementModule,
     CitizenEngagementModule,
+    CitizenPlanningModule,
     // Wave 110 W110-BE-01 — must be imported BEFORE the modules that
     // wire its service into their softRemove / finalize sites. Order
     // here is otherwise irrelevant because the service has no

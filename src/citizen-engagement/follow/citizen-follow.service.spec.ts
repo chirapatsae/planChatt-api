@@ -44,7 +44,8 @@ function makeInsertBuilder() {
   return b;
 }
 
-const VALID_AMPHOE = '11111111-1111-1111-1111-111111111111';
+// Amphoe ids are short string codes (e.g. "3001"), NOT uuids.
+const VALID_AMPHOE = '3001';
 const SELF_ID = '22222222-2222-2222-2222-222222222222';
 const OTHER_PERSON = '33333333-3333-3333-3333-333333333333';
 
@@ -110,10 +111,30 @@ describe('CitizenFollowService', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
-    it('rejects an amphoe target that is not a uuid', async () => {
+    it('rejects an empty or over-long amphoe target with CITIZEN_FOLLOW_INVALID', async () => {
+      // Amphoe ids are short codes (e.g. "3001") — reject only genuinely-invalid
+      // values: empty/whitespace or longer than the 16-char cap.
       await expect(
-        service.toggleFollow('identity-1', 'amphoe', 'not-a-uuid'),
+        service.toggleFollow('identity-1', 'amphoe', ''),
       ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(
+        service.toggleFollow('identity-1', 'amphoe', '   '),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(
+        service.toggleFollow('identity-1', 'amphoe', 'x'.repeat(17)),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(emFollowRepo.findOne).not.toHaveBeenCalled();
+    });
+
+    it('accepts a real amphoe code like "3001" → following=true', async () => {
+      emFollowRepo.findOne = jest.fn(async () => null);
+      const insertBuilder = makeInsertBuilder();
+      emFollowRepo.createQueryBuilder = jest.fn(() => insertBuilder);
+
+      const result = await service.toggleFollow('identity-1', 'amphoe', VALID_AMPHOE);
+
+      expect(insertBuilder.orIgnore).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ following: true });
     });
   });
 

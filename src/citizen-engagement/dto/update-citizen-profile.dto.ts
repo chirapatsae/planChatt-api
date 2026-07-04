@@ -1,13 +1,14 @@
 import { Transform } from 'class-transformer';
-import { IsString, MaxLength, MinLength } from 'class-validator';
+import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 /**
  * Body of `PATCH /v1/citizen-engagement/me/profile`.
  *
- * `displayAlias` is the ONLY editable, PII-safe field on a citizen identity
- * (§17.3 — the `*_enc` / `*_hash` columns are never accepted or returned).
- * The value is trimmed BEFORE validation so a whitespace-only alias is
- * rejected by `@MinLength(1)`.
+ * `displayAlias` + `bio` are the ONLY editable, PII-safe fields on a citizen
+ * identity (§17.3 — the `*_enc` / `*_hash` columns are never accepted or
+ * returned). Values are trimmed BEFORE validation so a whitespace-only alias is
+ * rejected by `@MinLength(1)`, and a whitespace-only bio normalises to empty
+ * (the service stores it as `null`).
  */
 export class UpdateCitizenProfileDto {
   @IsString()
@@ -15,4 +16,14 @@ export class UpdateCitizenProfileDto {
   @MinLength(1)
   @MaxLength(64)
   displayAlias: string;
+
+  /**
+   * Optional public bio (2026-07-03). Absent = leave unchanged; empty string =
+   * clear it. Max 300 chars after trim.
+   */
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @MaxLength(300)
+  bio?: string;
 }

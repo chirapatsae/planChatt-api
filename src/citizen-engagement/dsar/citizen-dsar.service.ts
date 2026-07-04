@@ -15,6 +15,10 @@ import { CitizenPostMedia } from '../entities/citizen-post-media.entity';
 import { CitizenPostReaction } from '../entities/citizen-post-reaction.entity';
 import { CitizenReport } from '../entities/citizen-report.entity';
 import { CitizenStory } from '../entities/citizen-story.entity';
+import { CitizenChatConversation } from '../entities/citizen-chat-conversation.entity';
+import { CitizenChatMessage } from '../entities/citizen-chat-message.entity';
+import { CitizenChatReadState } from '../entities/citizen-chat-read-state.entity';
+import { decryption, isLikelyCiphertext } from '../../util/encryption.util';
 
 /**
  * The alias placed on an erased identity's `display_alias`. After erasure the
@@ -42,6 +46,10 @@ export interface CitizenDsarExport {
   stories: Array<Record<string, unknown>>;
   blocks: Array<Record<string, unknown>>;
   reports: Array<Record<string, unknown>>;
+  /** Community Chat — the caller's conversations + their authored messages
+   *  (bodies DECRYPTED for the export, since it is the caller's own data). */
+  chatConversations: Array<Record<string, unknown>>;
+  chatMessages: Array<Record<string, unknown>>;
 }
 
 /**
@@ -154,6 +162,35 @@ export class CitizenDsarService {
       }),
     ]);
 
+    // Community Chat — conversations the caller is in (either side) + the
+    // caller's OWN authored messages (bodies decrypted for the caller's export).
+    const [chatConversations, chatMessages] = await Promise.all([
+      this.dataSource.getRepository(CitizenChatConversation).find({
+        where: [
+          { initiatorIdentityId: identityId },
+          { participantIdentityId: identityId },
+        ],
+        withDeleted: true,
+        order: { createdAt: 'ASC' },
+      }),
+      this.dataSource.getRepository(CitizenChatMessage).find({
+        where: { authorIdentityId: identityId },
+        withDeleted: true,
+        order: { createdAt: 'ASC' },
+      }),
+    ]);
+    const chatMessageRows = await Promise.all(
+      chatMessages.map(async (m) => ({
+        id: m.id,
+        conversationId: m.conversationId,
+        body: isLikelyCiphertext(m.body) ? await this.safeDecrypt(m.body) : m.body,
+        hasImage: !!m.imagePath,
+        moderationState: m.moderationState,
+        createdAt: m.createdAt,
+        deletedAt: m.deletedAt,
+      })),
+    );
+
     return {
       exportedAt: new Date().toISOString(),
       profile: {
@@ -173,7 +210,28 @@ export class CitizenDsarService {
       stories: stories.map((s) => this.toExportRow(s)),
       blocks: blocks.map((b) => this.toExportRow(b)),
       reports: reports.map((r) => this.toExportRow(r)),
+      chatConversations: chatConversations.map((c) => ({
+        id: c.id,
+        // The other member as an opaque uuid (no alias join for owned rows).
+        participantId:
+          c.initiatorIdentityId === identityId
+            ? c.participantIdentityId
+            : c.initiatorIdentityId,
+        lastMessageAt: c.lastMessageAt,
+        createdAt: c.createdAt,
+        deletedAt: c.deletedAt,
+      })),
+      chatMessages: chatMessageRows,
     };
+  }
+
+  /** Decrypt a chat body for export; never throw into the export pipeline. */
+  private async safeDecrypt(cipher: string): Promise<string> {
+    try {
+      return await decryption(cipher);
+    } catch {
+      return '';
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -243,12 +301,30 @@ export class CitizenDsarService {
         notifications: await this.softDeleteOwned(em, CitizenNotification, {
           recipientIdentityId: identityId,
         }),
+        // Community Chat — soft-delete the caller's OWN messages. The shared
+        // conversation row + the OTHER party's messages are NOT touched (that is
+        // the other citizen's data); the caller's identity anonymization below
+        // makes them show as the erased alias to their counterpart.
+        chatMessages: await this.softDeleteOwned(em, CitizenChatMessage, {
+          authorIdentityId: identityId,
+        }),
         // NOTE: citizen_official_response is authored by INTERNAL staff
         // (responder_work_history_id / responder_user_id) — a CITIZEN never
         // authors one, so there is no citizen-owned official-response row to
         // erase here. Included in the design for completeness; vacuous in
         // practice for a citizen caller.
       };
+
+      // Pseudonymize chat content: NULL the body of every message the caller
+      // authored (including already-soft-deleted rows) so no plaintext-recoverable
+      // ciphertext survives erasure. Then drop the caller's read-watermarks
+      // (non-content metadata; the read-state entity has no soft-delete column).
+      await em
+        .getRepository(CitizenChatMessage)
+        .update({ authorIdentityId: identityId }, { body: '' });
+      await em
+        .getRepository(CitizenChatReadState)
+        .delete({ readerIdentityId: identityId });
 
       // --- Phase 2: anonymize the identity + revoke the session --------------
       identity.nationalIdHash = null;

@@ -10,6 +10,7 @@ import { PostDto } from './citizen-post-response.dto';
 export interface MyProfileDto {
   id: string;
   displayAlias: string;
+  bio: string | null;
   joinedAt: string;
   postCount: number;
   heartsReceived: number;
