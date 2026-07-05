@@ -20,6 +20,13 @@ export interface NotificationDto {
   read: boolean;
   actor: CitizenPostAuthorDto;
   post: NotificationPostRefDto | null;
+  /**
+   * The comment this notification points at, so the FE can open the post's
+   * comment modal and scroll to / highlight that exact comment. Set for
+   * `comment` and comment-`mention` notices; NULL for `heart` or a post-mention.
+   * (`official_response` reuses it as the response pointer.)
+   */
+  commentId: string | null;
 }
 
 export interface ListNotificationsResponseDto {

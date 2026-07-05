@@ -362,6 +362,9 @@ export class CitizenNotificationService {
       // ignores actor for that kind), mirroring the empty-alias fallback above.
       actor: { id: n.actorIdentityId ?? '', displayAlias },
       post: post ? { id: post.id, title: post.title } : null,
+      // The comment the notice points at — lets the FE open the comment modal
+      // and scroll to / highlight that exact comment (NULL for heart / post-mention).
+      commentId: n.commentId ?? null,
     };
   }
 }

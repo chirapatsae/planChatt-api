@@ -11,6 +11,10 @@ export interface MyProfileDto {
   id: string;
   displayAlias: string;
   bio: string | null;
+  /** Presence privacy — false = appear offline to others (invisible mode). */
+  showOnlineStatus: boolean;
+  /** Public profile-photo URL (cache-busted), or null for the initial fallback. */
+  avatarUrl: string | null;
   joinedAt: string;
   postCount: number;
   heartsReceived: number;

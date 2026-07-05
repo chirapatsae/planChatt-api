@@ -12,6 +12,19 @@ import type { MessageDto } from '../dto/citizen-chat.dto';
 export const CITIZEN_CHAT_MESSAGE_EVENT = 'citizen-chat.message';
 export const CITIZEN_CHAT_READ_EVENT = 'citizen-chat.read';
 
+/**
+ * Emitted by CitizenProfileService when a citizen toggles `showOnlineStatus`,
+ * so the presence gateway can update its cache + re-broadcast the (now
+ * hidden/visible) online state mid-session — without the profile module
+ * depending on the WS layer.
+ */
+export const CITIZEN_PRESENCE_VISIBILITY_EVENT = 'citizen-presence.visibility';
+
+export interface CitizenPresenceVisibilityEvent {
+  identityId: string;
+  showOnlineStatus: boolean;
+}
+
 export interface CitizenChatMessageEvent {
   /** The OTHER participant (never the author) — the socket room to emit to. */
   recipientId: string;

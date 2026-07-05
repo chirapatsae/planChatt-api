@@ -5,13 +5,18 @@ import {
   Get,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   Req,
+  Res,
+  StreamableFile,
   UseGuards,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 
+import { CitizenAvatarService } from './media/citizen-avatar.service';
 import { CitizenJwtGuard } from './citizen-auth/citizen-jwt.guard';
 import { CitizenOptionalJwtGuard } from './citizen-auth/citizen-optional-jwt.guard';
 import {
@@ -28,6 +33,7 @@ import { ReactToPostDto } from './dto/react-to-post.dto';
 import { RepostDto } from './dto/repost-citizen-post.dto';
 import { ReportCitizenPostDto } from './dto/report-citizen-post.dto';
 import { SearchCitizensQueryDto } from './dto/search-citizens-query.dto';
+import { SetPostVisibilityDto } from './dto/set-post-visibility.dto';
 
 /** `req.user` shape set by CitizenJwtGuard / CitizenJwtStrategy. */
 interface CitizenRequest {
@@ -55,7 +61,24 @@ export class CitizenPostController {
     private readonly citizenPostService: CitizenPostService,
     private readonly mentionService: CitizenMentionService,
     private readonly moderationService: CitizenModerationService,
+    private readonly avatarService: CitizenAvatarService,
   ) {}
+
+  /**
+   * PUBLIC profile-photo serve — avatars are public (like post media). 404 when
+   * the citizen has no photo, so the FE falls back to the gradient + initial.
+   * Cache-busted by the `?v=` the DTO appends (bumped on each new upload).
+   */
+  @Get('citizens/:id/avatar')
+  async serveAvatar(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<StreamableFile> {
+    const { buffer, contentType } = await this.avatarService.serve(id);
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return new StreamableFile(buffer);
+  }
 
   // --- READS (public; OPTIONAL citizen auth for the W-T1 block/mute filter) ---
   // CitizenOptionalJwtGuard sets req.user.identityId IF a valid citizen token is
@@ -242,5 +265,22 @@ export class CitizenPostController {
   @UseGuards(CitizenJwtGuard, ThrottlerGuard)
   remove(@Req() req: CitizenRequest, @Param('id', new ParseUUIDPipe()) id: string) {
     return this.citizenPostService.softDeleteOwn(req.user.identityId, id);
+  }
+
+  // Owner toggles "hide from everyone but me" (ซ่อนให้เห็นเฉพาะฉัน) on their OWN
+  // post. Owner check is server-side (post.authorIdentityId === req.user), never
+  // a body field. A hidden post is excluded from every public read but stays
+  // visible (badged) to its author, who can unhide. §17.2 advisory.
+  @Throttle({
+    default: { limit: CITIZEN_RATE_LIMITS.CREATE_POST, ttl: CITIZEN_THROTTLE_TTL_MS },
+  })
+  @Patch('posts/:id/visibility')
+  @UseGuards(CitizenJwtGuard, ThrottlerGuard)
+  setVisibility(
+    @Req() req: CitizenRequest,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: SetPostVisibilityDto,
+  ) {
+    return this.citizenPostService.setOwnerHidden(req.user.identityId, id, dto.hidden);
   }
 }

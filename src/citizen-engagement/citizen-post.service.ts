@@ -54,6 +54,7 @@ import { CitizenHashtag } from './entities/citizen-hashtag.entity';
 import { CitizenFollowService } from './follow/citizen-follow.service';
 import { FollowSetsDto } from './dto/citizen-follow-response.dto';
 import { CitizenPublicProfileDto } from './dto/citizen-public-profile.dto';
+import { citizenAvatarUrl } from './media/citizen-avatar.util';
 import { CitizenBlockService } from './block/citizen-block.service';
 import { GeoBoundaryService } from '../ai/geo-boundary.service';
 
@@ -61,6 +62,16 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 /** Cap on the owner-scoped `/me/reactions` map (newest-first) — bounds the FE marking payload. */
 const MAX_MY_REACTIONS = 1000;
+
+/**
+ * The resolved public author view fed into `toPostDto` / `toCommentDto` — the
+ * alias-only name plus the cache-busted avatar URL (null when no photo). §17.3
+ * — carries NO PII beyond the public alias + the opaque avatar endpoint.
+ */
+interface AuthorView {
+  displayAlias: string;
+  avatarUrl: string | null;
+}
 
 /**
  * CitizenPostService — the §17.2 ADVISORY civic-community board.
@@ -206,9 +217,9 @@ export class CitizenPostService {
         postKind: saved.postKind,
       });
 
-      const alias = await this.resolveAlias(em, identityId);
+      const author = await this.resolveAuthorView(em, identityId);
       const media = await this.loadMediaForPost(em, saved.id);
-      return this.toPostDto(saved, alias, media, undefined, undefined, undefined, mentions);
+      return this.toPostDto(saved, author, media, undefined, undefined, undefined, mentions);
     });
   }
 
@@ -325,11 +336,11 @@ export class CitizenPostService {
         hasQuote: quote !== null,
       });
 
-      const alias = await this.resolveAlias(em, identityId);
+      const author = await this.resolveAuthorView(em, identityId);
       // The embed is the ROOT — visible here (guarded above) — with author +
       // media in ONE batch call. The new repost carries no media of its own.
       const embedByRoot = await this.repostEmbedService.batchLoadEmbeds([root.id]);
-      return this.toPostDto(saved, alias, [], undefined, embedByRoot.get(root.id));
+      return this.toPostDto(saved, author, [], undefined, embedByRoot.get(root.id));
     });
   }
 
@@ -418,8 +429,8 @@ export class CitizenPostService {
         postId,
       });
 
-      const alias = await this.resolveAlias(em, identityId);
-      return this.toCommentDto(saved, alias, mentions);
+      const author = await this.resolveAuthorView(em, identityId);
+      return this.toCommentDto(saved, author, mentions);
     });
   }
 
@@ -630,12 +641,13 @@ export class CitizenPostService {
       // §17.3 / PDPA: load ONLY the author's id + public alias — never the
       // *_enc / *_hash PII columns (the response exposes displayAlias only).
       .leftJoin('p.author', 'author')
-      .addSelect(['author.id', 'author.displayAlias'])
+      .addSelect(['author.id', 'author.displayAlias', 'author.avatarPath', 'author.updatedAt'])
       .where('p.moderationState = :state', { state: 'visible' })
       .andWhere('p.deletedAt IS NULL');
 
     // W-T1: hide muted/blocked authors + authors who blocked the viewer.
     await this.applyBlockFilter(qb, viewerId);
+    this.applyOwnerHiddenFilter(qb, viewerId);
 
     if (query.kind) {
       qb.andWhere('p.postKind = :kind', { kind: query.kind });
@@ -692,13 +704,14 @@ export class CitizenPostService {
       // §17.3 / PDPA: load ONLY the author's id + public alias — never the
       // *_enc / *_hash PII columns (the response exposes displayAlias only).
       .leftJoin('p.author', 'author')
-      .addSelect(['author.id', 'author.displayAlias'])
+      .addSelect(['author.id', 'author.displayAlias', 'author.avatarPath', 'author.updatedAt'])
       .where('p.moderationState = :state', { state: 'visible' })
       .andWhere('p.deletedAt IS NULL');
 
     // W-T1: the followed feed is always viewed by the authenticated follower —
     // hide muted/blocked authors + authors who blocked the viewer.
     await this.applyBlockFilter(qb, identityId);
+    this.applyOwnerHiddenFilter(qb, identityId);
 
     // Match a followed target: amphoe IN followed-areas OR category IN
     // followed-topics OR author IN followed-people (W-GATE-1). At least one set
@@ -751,7 +764,7 @@ export class CitizenPostService {
     const post = await this.postRepo
       .createQueryBuilder('p')
       .leftJoin('p.author', 'author')
-      .addSelect(['author.id', 'author.displayAlias'])
+      .addSelect(['author.id', 'author.displayAlias', 'author.avatarPath', 'author.updatedAt'])
       .where('p.id = :id', { id })
       .andWhere('p.moderationState = :state', { state: 'visible' })
       .andWhere('p.deletedAt IS NULL')
@@ -768,10 +781,16 @@ export class CitizenPostService {
       throw new NotFoundException('CITIZEN_POST_NOT_FOUND');
     }
 
+    // Owner-hide (ซ่อนให้เห็นเฉพาะฉัน): a hidden post is not-found for anyone
+    // but its author — consistent with the feed never surfacing it.
+    if (post.ownerHidden && post.authorIdentityId !== viewerId) {
+      throw new NotFoundException('CITIZEN_POST_NOT_FOUND');
+    }
+
     const commentsQb = this.commentRepo
       .createQueryBuilder('c')
       .leftJoin('c.author', 'author')
-      .addSelect(['author.id', 'author.displayAlias'])
+      .addSelect(['author.id', 'author.displayAlias', 'author.avatarPath', 'author.updatedAt'])
       .where('c.postId = :id', { id })
       .andWhere('c.moderationState = :state', { state: 'visible' })
       .andWhere('c.deletedAt IS NULL');
@@ -839,7 +858,7 @@ export class CitizenPostService {
     return {
       ...this.toPostDto(
         post,
-        post.author?.displayAlias ?? '',
+        this.authorViewFromEntity(post.author, post.authorIdentityId),
         media,
         breakdown,
         repostOf,
@@ -849,7 +868,7 @@ export class CitizenPostService {
       comments: comments.map((c) =>
         this.toCommentDto(
           c,
-          c.author?.displayAlias ?? '',
+          this.authorViewFromEntity(c.author, c.authorIdentityId),
           mentionsByComment.get(c.id),
           heartCountByComment.get(c.id) ?? 0,
         ),
@@ -871,7 +890,7 @@ export class CitizenPostService {
     // PII columns (only the uuid + alias leave this service).
     const identity = await this.identityRepo.findOne({
       where: { id: identityId, status: 'active', deletedAt: IsNull() },
-      select: { id: true, displayAlias: true, bio: true },
+      select: { id: true, displayAlias: true, bio: true, avatarPath: true, updatedAt: true },
     });
     if (!identity) {
       throw new NotFoundException('CITIZEN_IDENTITY_NOT_FOUND');
@@ -893,6 +912,7 @@ export class CitizenPostService {
       id: identity.id,
       displayAlias: identity.displayAlias,
       bio: identity.bio ?? null,
+      avatarUrl: citizenAvatarUrl(identity.id, identity.avatarPath, identity.updatedAt),
       postCount,
       followerCount,
     };
@@ -927,7 +947,7 @@ export class CitizenPostService {
       // §17.3 / PDPA: load ONLY the author's id + public alias — never the
       // *_enc / *_hash PII columns (the response exposes displayAlias only).
       .leftJoin('p.author', 'author')
-      .addSelect(['author.id', 'author.displayAlias'])
+      .addSelect(['author.id', 'author.displayAlias', 'author.avatarPath', 'author.updatedAt'])
       .where('p.authorIdentityId = :identityId', { identityId })
       .andWhere('p.moderationState = :state', { state: 'visible' })
       .andWhere('p.deletedAt IS NULL');
@@ -935,6 +955,7 @@ export class CitizenPostService {
     // W-T1: if the viewer mutes/blocks this author (or this author blocked the
     // viewer), the whole page is filtered out → an empty page.
     await this.applyBlockFilter(qb, viewerId);
+    this.applyOwnerHiddenFilter(qb, viewerId);
 
     if (query.beforeRankScore !== undefined && query.beforeId) {
       // W-F2 keyset: rows strictly after the cursor by (rankScore, id) DESC.
@@ -986,12 +1007,13 @@ export class CitizenPostService {
       // §17.3 / PDPA: load ONLY the author's id + public alias — never the
       // *_enc / *_hash PII columns (the response exposes displayAlias only).
       .leftJoin('p.author', 'author')
-      .addSelect(['author.id', 'author.displayAlias'])
+      .addSelect(['author.id', 'author.displayAlias', 'author.avatarPath', 'author.updatedAt'])
       .where('p.moderationState = :state', { state: 'visible' })
       .andWhere('p.deletedAt IS NULL');
 
     // W-T1: hide muted/blocked authors + authors who blocked the viewer.
     await this.applyBlockFilter(qb, viewerId);
+    this.applyOwnerHiddenFilter(qb, viewerId);
 
     if (query.beforeRankScore !== undefined && query.beforeId) {
       // W-F2 keyset: rows strictly after the cursor by (rankScore, id) DESC.
@@ -1051,7 +1073,7 @@ export class CitizenPostService {
     const items = rows.map((p) =>
       this.toPostDto(
         p,
-        p.author?.displayAlias ?? '',
+        this.authorViewFromEntity(p.author, p.authorIdentityId),
         mediaByPost.get(p.id) ?? [],
         breakdownByPost.get(p.id),
         p.repostOfId ? embedByRoot.get(p.repostOfId) : undefined,
@@ -1090,6 +1112,66 @@ export class CitizenPostService {
     }
   }
 
+  /**
+   * Owner-hide visibility filter (ซ่อนให้เห็นเฉพาะฉัน). Excludes
+   * `owner_hidden = true` posts from every PUBLIC read UNLESS the viewer IS the
+   * author (who keeps seeing their own hidden post, badged, so they can unhide).
+   * Anonymous viewer → hidden posts are always excluded. Mirrors the
+   * `applyBlockFilter` alias-`p` convention.
+   */
+  private applyOwnerHiddenFilter(
+    qb: SelectQueryBuilder<CitizenPost>,
+    viewerId: string | undefined,
+  ): void {
+    if (viewerId) {
+      qb.andWhere(
+        '(p.ownerHidden = false OR p.authorIdentityId = :ownerHiddenViewerId)',
+        { ownerHiddenViewerId: viewerId },
+      );
+    } else {
+      qb.andWhere('p.ownerHidden = false');
+    }
+  }
+
+  /**
+   * Owner toggles the "hide from everyone but me" flag on their OWN post. The
+   * owner check is enforced here (post.authorIdentityId === identityId), never a
+   * body field. §17.2 advisory — hiding writes NO tracking_status, changes no
+   * workflow; the isolated `citizen_audit_logs` row is the only side-effect.
+   * Returns the new flag so the FE can reconcile without a refetch.
+   */
+  async setOwnerHidden(
+    identityId: string,
+    postId: string,
+    hidden: boolean,
+  ): Promise<{ ownerHidden: boolean }> {
+    return this.dataSource.transaction(async (em) => {
+      const repo = em.getRepository(CitizenPost);
+      const post = await repo.findOne({
+        where: { id: postId, deletedAt: IsNull() },
+      });
+      if (!post) {
+        throw new NotFoundException('CITIZEN_POST_NOT_FOUND');
+      }
+      if (post.authorIdentityId !== identityId) {
+        throw new ForbiddenException('CITIZEN_POST_NOT_OWNER');
+      }
+      if (post.ownerHidden !== hidden) {
+        post.ownerHidden = hidden;
+        await repo.save(post);
+        await this.writeAudit(
+          em,
+          identityId,
+          hidden ? 'post.hide' : 'post.unhide',
+          'post',
+          post.id,
+          { ownerHidden: hidden },
+        );
+      }
+      return { ownerHidden: hidden };
+    });
+  }
+
   /** Insert the isolated audit row (§17.3 — NEVER tracking_status). */
   private async writeAudit(
     em: EntityManager,
@@ -1110,22 +1192,51 @@ export class CitizenPostService {
     await em.getRepository(CitizenAuditLog).save(row);
   }
 
-  private async resolveAlias(
+  private async resolveAuthorView(
     em: EntityManager,
     identityId: string,
-  ): Promise<string> {
+  ): Promise<AuthorView> {
     const identity = await em.getRepository(CitizenIdentity).findOne({
       where: { id: identityId },
-      // §17.3 / PDPA: alias-only — never pull *_enc / *_hash into memory just to
-      // read the public alias.
-      select: { id: true, displayAlias: true },
+      // §17.3 / PDPA: alias + avatar only — never pull *_enc / *_hash into memory.
+      // `avatarPath` / `updatedAt` feed the public, cache-busted avatar URL.
+      select: {
+        id: true,
+        displayAlias: true,
+        avatarPath: true,
+        updatedAt: true,
+      },
     });
-    return identity?.displayAlias ?? '';
+    return {
+      displayAlias: identity?.displayAlias ?? '',
+      avatarUrl: citizenAvatarUrl(
+        identityId,
+        identity?.avatarPath,
+        identity?.updatedAt,
+      ),
+    };
+  }
+
+  /**
+   * Build the public author view from a partially-hydrated author relation
+   * (the `.leftJoin('*.author')` sites select id + displayAlias + avatarPath +
+   * updatedAt). `fallbackId` is the row's `authorIdentityId` for the (rare) case
+   * the join did not hydrate.
+   */
+  private authorViewFromEntity(
+    author: Partial<CitizenIdentity> | undefined | null,
+    fallbackId: string,
+  ): AuthorView {
+    const id = author?.id ?? fallbackId;
+    return {
+      displayAlias: author?.displayAlias ?? '',
+      avatarUrl: citizenAvatarUrl(id, author?.avatarPath, author?.updatedAt),
+    };
   }
 
   private toPostDto(
     post: CitizenPost,
-    displayAlias: string,
+    author: AuthorView,
     media: CitizenPostMediaDto[],
     breakdown?: Record<CitizenReactionType, number>,
     repostOf?: RepostEmbedDto | RepostTombstoneDto,
@@ -1156,7 +1267,14 @@ export class CitizenPostService {
       createdAt: (post.createdAt ?? new Date()).toISOString(),
       // W-GATE-1: `author.id` = the authorIdentityId (an opaque uuid handle for
       // follow + profile link). NEVER the *_enc / *_hash PII columns.
-      author: { id: post.authorIdentityId, displayAlias },
+      author: {
+        id: post.authorIdentityId,
+        displayAlias: author.displayAlias,
+        avatarUrl: author.avatarUrl,
+      },
+      // Owner-hide flag — true only on the owner's own view of a hidden post
+      // (public reads exclude hidden posts entirely for everyone else).
+      ownerHidden: post.ownerHidden ?? false,
       media,
       // W-S2: present ONLY when this post is a repost; the caller resolves the
       // embed (or tombstone) via CitizenRepostEmbedService.
@@ -1278,7 +1396,7 @@ export class CitizenPostService {
 
   private toCommentDto(
     comment: CitizenPostComment,
-    displayAlias: string,
+    author: AuthorView,
     mentions?: CitizenMentionDto[],
     heartCount = 0,
   ): CommentDto {
@@ -1287,7 +1405,11 @@ export class CitizenPostService {
       text: comment.text,
       createdAt: (comment.createdAt ?? new Date()).toISOString(),
       // W-GATE-1: `author.id` = the comment author's identity uuid (opaque handle).
-      author: { id: comment.authorIdentityId, displayAlias },
+      author: {
+        id: comment.authorIdentityId,
+        displayAlias: author.displayAlias,
+        avatarUrl: author.avatarUrl,
+      },
       parentId: comment.parentCommentId ?? null,
       heartCount,
       // W-S6: present ONLY when the comment carries @mentions (alias-only).

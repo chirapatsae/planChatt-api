@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsBoolean, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 /**
  * Body of `PATCH /v1/citizen-engagement/me/profile`.
@@ -26,4 +26,13 @@ export class UpdateCitizenProfileDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @MaxLength(300)
   bio?: string;
+
+  /**
+   * Presence privacy toggle (community presence, 2026-07). Absent = leave
+   * unchanged; false = appear offline to others (invisible mode). §17.3 — the
+   * citizen's own control over presence metadata.
+   */
+  @IsOptional()
+  @IsBoolean()
+  showOnlineStatus?: boolean;
 }

@@ -61,6 +61,27 @@ export class CitizenIdentity {
   bio: string | null;
 
   /**
+   * Opaque storage key of the citizen's profile photo (community avatars,
+   * 2026-07), or null for the gradient+initial fallback. The bytes are
+   * EXIF-stripped on upload (PDPA — no embedded GPS/device metadata) and held by
+   * CitizenStorageService, NEVER a raw disk path leaked to clients. Public read
+   * via `GET citizens/:id/avatar`. `synchronize:true` auto-adds this column in
+   * dev; prod needs a migration (`avatar_path varchar(512) NULL`).
+   */
+  @Column({ name: 'avatar_path', type: 'varchar', length: 512, nullable: true })
+  avatarPath: string | null;
+
+  /**
+   * Presence privacy (community presence, 2026-07): when false the citizen is
+   * reported OFFLINE to others (they still see everyone) — Facebook "invisible"
+   * mode. The citizen's own PDPA control over presence metadata (§17.3).
+   * `synchronize:true` auto-adds this column in dev; prod needs a migration
+   * (`show_online_status boolean NOT NULL DEFAULT true`).
+   */
+  @Column({ name: 'show_online_status', type: 'boolean', default: true })
+  showOnlineStatus: boolean;
+
+  /**
    * `active` | `blocked` | `deleted` (W-G1 DSAR erase) | `suspended` (W-T3
    * offender-ladder auto-suspend). CHECK enforced in the migration and widened
    * idempotently in `bootstrap-migrations.service.ts` for prod parity.

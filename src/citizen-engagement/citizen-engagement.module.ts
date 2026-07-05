@@ -45,6 +45,7 @@ import { CitizenChatReadState } from './entities/citizen-chat-read-state.entity'
 import { CitizenChatController } from './chat/citizen-chat.controller';
 import { CitizenChatService } from './chat/citizen-chat.service';
 import { CitizenChatGateway } from './chat/citizen-chat.gateway';
+import { CitizenPresenceService } from './chat/citizen-presence.service';
 import { CitizenStoryController } from './stories/citizen-story.controller';
 import { CitizenStoryService } from './stories/citizen-story.service';
 import { CitizenBookmarkController } from './bookmark/citizen-bookmark.controller';
@@ -59,6 +60,7 @@ import { CitizenMediaController } from './media/citizen-media.controller';
 import { CitizenMediaService } from './media/citizen-media.service';
 import { CitizenMediaModerationService } from './media/citizen-media-moderation.service';
 import { CitizenStorageService } from './media/citizen-storage.service';
+import { CitizenAvatarService } from './media/citizen-avatar.service';
 import { CitizenNotificationBus } from './notification/citizen-notification.bus';
 import { CitizenNotificationController } from './notification/citizen-notification.controller';
 import { CitizenNotificationService } from './notification/citizen-notification.service';
@@ -223,6 +225,7 @@ import { CitizenRetentionCron } from './citizen-retention.cron';
     // cannot participate in a service↔service import cycle.
     CitizenMediaModerationService,
     CitizenStorageService,
+    CitizenAvatarService,
     CitizenFollowService,
     // W-T2 — in-memory realtime fan-out for the notification SSE stream.
     CitizenNotificationBus,
@@ -243,6 +246,7 @@ import { CitizenRetentionCron } from './citizen-retention.cron';
     CitizenBlockService,
     CitizenChatService,
     CitizenChatGateway,
+    CitizenPresenceService,
     CitizenDsarService,
     // W-G3 — executive insights aggregator + the auth guards its controller
     // composes (registered here so DI resolves them without leaning on the

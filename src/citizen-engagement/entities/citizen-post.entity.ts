@@ -115,6 +115,15 @@ export class CitizenPost {
   @Column({ name: 'moderation_state', type: 'varchar', length: 16, default: 'visible' })
   moderationState: string;
 
+  /**
+   * Owner-controlled "hide from everyone but me" flag (ซ่อนให้เห็นเฉพาะฉัน).
+   * DISTINCT from `moderationState` (staff / auto moderation): the owner sets
+   * this on their OWN post, and every public read excludes `owner_hidden = true`
+   * unless the viewer IS the author. Default false; existing rows stay visible.
+   */
+  @Column({ name: 'owner_hidden', type: 'boolean', default: false })
+  ownerHidden: boolean;
+
   /** Denormalized counters (reconciled nightly). */
   @Column({ name: 'heart_count', type: 'int', default: 0 })
   heartCount: number;

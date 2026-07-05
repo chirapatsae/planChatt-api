@@ -10,6 +10,7 @@ import {
 import { CitizenPost } from './entities/citizen-post.entity';
 import { CitizenPostMedia } from './entities/citizen-post-media.entity';
 import { CitizenMediaService } from './media/citizen-media.service';
+import { citizenAvatarUrl } from './media/citizen-avatar.util';
 
 /**
  * CitizenRepostEmbedService — W-S2 shared embed batch-loader.
@@ -67,7 +68,12 @@ export class CitizenRepostEmbedService {
     const originals = await this.postRepo
       .createQueryBuilder('p')
       .leftJoin('p.author', 'author')
-      .addSelect(['author.id', 'author.displayAlias'])
+      .addSelect([
+        'author.id',
+        'author.displayAlias',
+        'author.avatarPath',
+        'author.updatedAt',
+      ])
       .where('p.id IN (:...ids)', { ids })
       .andWhere('p.deletedAt IS NULL')
       .getMany();
@@ -129,6 +135,11 @@ export class CitizenRepostEmbedService {
       author: {
         id: post.author?.id ?? post.authorIdentityId,
         displayAlias: post.author?.displayAlias ?? '',
+        avatarUrl: citizenAvatarUrl(
+          post.author?.id ?? post.authorIdentityId,
+          post.author?.avatarPath,
+          post.author?.updatedAt,
+        ),
       },
       media,
     };

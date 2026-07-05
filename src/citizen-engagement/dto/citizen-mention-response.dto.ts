@@ -16,6 +16,10 @@
 export interface CitizenMentionSearchResultDto {
   id: string;
   displayAlias: string;
+  /** Axios-relative profile-photo URL (cache-busted), or null — so the picker
+   *  shows the real avatar (falls back to the alias initial when null). §17.3 —
+   *  the served endpoint is public and exposes only the opaque identity id. */
+  avatarUrl: string | null;
 }
 
 /**

@@ -4,6 +4,7 @@ import { EntityManager, In, IsNull, Repository } from 'typeorm';
 
 import { CitizenBlockService } from './block/citizen-block.service';
 import { escapeLike } from './citizen-search.util';
+import { citizenAvatarUrl } from './media/citizen-avatar.util';
 import {
   CitizenMentionDto,
   CitizenMentionSearchResultDto,
@@ -60,38 +61,42 @@ export class CitizenMentionService {
    * pair with the viewer (either direction).
    */
   async searchByAlias(
-    q: string,
+    q: string | undefined,
     viewerId?: string,
   ): Promise<CitizenMentionSearchResultDto[]> {
-    const term = q.trim();
-    if (term.length < 1) {
-      return [];
-    }
+    // Empty / absent `q` (a bare `@`) → default suggestions.
+    const term = (q ?? '').trim();
 
     const qb = this.identityRepo
       .createQueryBuilder('c')
-      // §17.3 / PDPA: load ONLY the id + public alias — never the *_enc / *_hash
-      // PII columns (the response exposes id + displayAlias only).
-      .select(['c.id', 'c.displayAlias'])
+      // §17.3 / PDPA: load ONLY the id + public alias (+ avatar fields for the
+      // picker photo) — never the *_enc / *_hash PII columns.
+      .select(['c.id', 'c.displayAlias', 'c.avatarPath', 'c.updatedAt'])
       .where('c.status = :status', { status: 'active' })
-      .andWhere('c.deletedAt IS NULL')
-      // Prefix ILIKE: the LIKE metachars are escaped + bound as a parameter (no
-      // SQL injection, no ReDoS — ILIKE is not a regex). Thai has no word
-      // boundaries, so a prefix match on the alias is the correct + simple shape.
-      .andWhere('c.displayAlias ILIKE :like', { like: `${escapeLike(term)}%` });
+      .andWhere('c.deletedAt IS NULL');
+
+    // A bare `@` (empty term) shows DEFAULT suggestions — newest active members —
+    // so the picker pops immediately (FB-style). A typed term prefix-matches the
+    // alias (ILIKE metachars escaped + bound; no injection / ReDoS).
+    if (term.length >= 1) {
+      qb.andWhere('c.displayAlias ILIKE :like', { like: `${escapeLike(term)}%` });
+    }
 
     // Never offer the caller themselves (self-mention is meaningless).
     if (viewerId) {
       qb.andWhere('c.id <> :viewerId', { viewerId });
     }
 
+    // Prefix search → alias order; default suggestions → newest first.
+    if (term.length >= 1) {
+      qb.orderBy('c.displayAlias', 'ASC').addOrderBy('c.id', 'ASC');
+    } else {
+      qb.orderBy('c.createdAt', 'DESC').addOrderBy('c.id', 'DESC');
+    }
+
     // Over-fetch a little so the post-query W-T1 block filter can drop pairs and
     // still return up to SEARCH_LIMIT rows.
-    const rows = await qb
-      .orderBy('c.displayAlias', 'ASC')
-      .addOrderBy('c.id', 'ASC')
-      .take(SEARCH_LIMIT * 2)
-      .getMany();
+    const rows = await qb.take(SEARCH_LIMIT * 2).getMany();
 
     // W-T1: drop block pairs with the viewer (EITHER direction) — a viewer can't
     // @mention someone they blocked / who blocked them. `mute` does NOT restrict
@@ -105,7 +110,11 @@ export class CitizenMentionService {
       if (viewerId && (await this.blockService.isBlockedEitherWay(viewerId, r.id))) {
         continue;
       }
-      kept.push({ id: r.id, displayAlias: r.displayAlias });
+      kept.push({
+        id: r.id,
+        displayAlias: r.displayAlias,
+        avatarUrl: citizenAvatarUrl(r.id, r.avatarPath, r.updatedAt),
+      });
     }
     return kept;
   }

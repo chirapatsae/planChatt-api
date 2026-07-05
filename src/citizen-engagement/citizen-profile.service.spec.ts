@@ -116,12 +116,16 @@ describe('CitizenProfileService', () => {
     // W-S2: the repost embed batch-loader. Default → no embeds (empty map).
     const repostEmbedService = { batchLoadEmbeds: jest.fn(async () => new Map()) };
 
+    // Presence wave added an EventEmitter2 dependency (visibility-change event).
+    const events = { emit: jest.fn() };
+
     service = new CitizenProfileService(
       identityRepo as never,
       postRepo as never,
       mediaRepo as never,
       repostEmbedService as never,
       dataSource as never,
+      events as never,
     );
   });
 

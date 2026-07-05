@@ -18,6 +18,14 @@ export interface CitizenPostAuthorDto {
    */
   id: string;
   displayAlias: string;
+  /**
+   * Axios-relative profile-photo URL (cache-busted), or null when the author
+   * has no uploaded photo (FE falls back to the gradient+initial). §17.3 — the
+   * served endpoint is public and exposes only the opaque identity id, never a
+   * disk path. Optional so author constructors that don't resolve it (chat /
+   * bookmark / poll) stay source-compatible.
+   */
+  avatarUrl?: string | null;
 }
 
 export interface CitizenPostMediaDto {
@@ -129,6 +137,15 @@ export interface PostDto {
    * post mentions no one.
    */
   mentions?: CitizenMentionDto[];
+  /**
+   * Owner-controlled "hide" state (ซ่อนให้เห็นเฉพาะฉัน). When `true` the post is
+   * excluded from every PUBLIC read and appears ONLY to its author — so this
+   * flag is `true` only on the owner's own view of their hidden post; other
+   * viewers never receive a hidden post at all. The FE shows a "เห็นเฉพาะคุณ"
+   * badge + an unhide action when this is `true`. §17.2 advisory — hiding
+   * changes no workflow and no project data.
+   */
+  ownerHidden?: boolean;
 }
 
 export interface CommentDto {

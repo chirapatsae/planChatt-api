@@ -11,12 +11,18 @@ import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { OnEvent } from '@nestjs/event-emitter';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 
+import { CitizenIdentity } from '../entities/citizen-identity.entity';
+import { CitizenPresenceService } from './citizen-presence.service';
 import {
   CITIZEN_CHAT_MESSAGE_EVENT,
   CITIZEN_CHAT_READ_EVENT,
+  CITIZEN_PRESENCE_VISIBILITY_EVENT,
   type CitizenChatMessageEvent,
   type CitizenChatReadEvent,
+  type CitizenPresenceVisibilityEvent,
 } from './citizen-chat.events';
 
 /**
@@ -69,9 +75,14 @@ export class CitizenChatGateway
   /** socket.id → citizen identityId (JWT-derived, never client-supplied). */
   private readonly connected = new Map<string, string>();
 
-  constructor(private readonly jwt: JwtService) {}
+  constructor(
+    private readonly jwt: JwtService,
+    private readonly presence: CitizenPresenceService,
+    @InjectRepository(CitizenIdentity)
+    private readonly identities: Repository<CitizenIdentity>,
+  ) {}
 
-  handleConnection(client: Socket) {
+  async handleConnection(client: Socket) {
     const raw =
       (client.handshake.auth as { token?: unknown } | undefined)?.token ||
       this.bearer(client.handshake.headers?.authorization);
@@ -100,10 +111,80 @@ export class CitizenChatGateway
     (client.data as { identityId?: string }).identityId = identityId;
     this.connected.set(client.id, identityId);
     client.join(`citizen-${identityId}`);
+
+    // Presence: register this socket + broadcast if the citizen just came online
+    // (respecting their showOnlineStatus privacy preference, loaded once here).
+    let showOnlineStatus = true;
+    try {
+      const row = await this.identities.findOne({
+        where: { id: identityId },
+        select: { id: true, showOnlineStatus: true },
+      });
+      showOnlineStatus = row?.showOnlineStatus ?? true;
+    } catch {
+      /* default visible on any read failure */
+    }
+    const { flippedOnline } = this.presence.register(identityId, client.id, showOnlineStatus);
+    if (flippedOnline) this.broadcastPresence(identityId);
   }
 
   handleDisconnect(client: Socket) {
+    const identityId = this.connected.get(client.id);
     this.connected.delete(client.id);
+    if (!identityId) return;
+    const { flippedOffline } = this.presence.deregister(identityId, client.id);
+    if (flippedOffline) this.broadcastPresence(identityId);
+  }
+
+  /**
+   * Subscribe this socket to presence updates for a set of citizen ids (the
+   * caller's conversation partners / on-screen avatars). Joins one
+   * `presence-<id>` room per id so updates are TARGETED (no global fan-out), and
+   * replies with an immediate snapshot. Capped so a client can't join unbounded
+   * rooms.
+   */
+  @SubscribeMessage('presence:subscribe')
+  handlePresenceSubscribe(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { ids?: unknown },
+  ) {
+    const ids = this.sanitizeIds(data?.ids).slice(0, 500);
+    for (const id of ids) client.join(`presence-${id}`);
+    client.emit('presence:snapshot', { states: this.presence.snapshot(ids) });
+  }
+
+  @SubscribeMessage('presence:unsubscribe')
+  handlePresenceUnsubscribe(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { ids?: unknown },
+  ) {
+    for (const id of this.sanitizeIds(data?.ids)) client.leave(`presence-${id}`);
+  }
+
+  /**
+   * The profile toggle flipped `showOnlineStatus` — update the cached visibility
+   * and re-broadcast if the public online state changed (invisible mode).
+   */
+  @OnEvent(CITIZEN_PRESENCE_VISIBILITY_EVENT)
+  onPresenceVisibility(event: CitizenPresenceVisibilityEvent) {
+    if (!event?.identityId) return;
+    const { changed } = this.presence.setVisibility(event.identityId, event.showOnlineStatus);
+    if (changed) this.broadcastPresence(event.identityId);
+  }
+
+  private broadcastPresence(identityId: string) {
+    const state = this.presence.publicState(identityId);
+    this.server.to(`presence-${identityId}`).emit('presence:update', {
+      id: identityId,
+      online: state.online,
+      lastSeenAt: state.lastSeenAt,
+    });
+  }
+
+  private sanitizeIds(ids: unknown): string[] {
+    return Array.isArray(ids)
+      ? (ids as unknown[]).filter((x): x is string => typeof x === 'string' && x.length > 0)
+      : [];
   }
 
   /**

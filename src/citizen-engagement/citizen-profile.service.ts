@@ -1,6 +1,13 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { DataSource, EntityManager, In, IsNull, Not, Repository } from 'typeorm';
+
+import {
+  CITIZEN_PRESENCE_VISIBILITY_EVENT,
+  type CitizenPresenceVisibilityEvent,
+} from './chat/citizen-chat.events';
+import { citizenAvatarUrl } from './media/citizen-avatar.util';
 
 import {
   CitizenReactionType,
@@ -50,6 +57,7 @@ export class CitizenProfileService {
     private readonly mediaRepo: Repository<CitizenPostMedia>,
     private readonly repostEmbedService: CitizenRepostEmbedService,
     private readonly dataSource: DataSource,
+    private readonly events: EventEmitter2,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -68,7 +76,15 @@ export class CitizenProfileService {
     // joinedAt) — never the *_enc / *_hash PII columns.
     const identity = await this.identityRepo.findOne({
       where: { id: identityId, deletedAt: IsNull() },
-      select: { id: true, displayAlias: true, bio: true, createdAt: true },
+      select: {
+        id: true,
+        displayAlias: true,
+        bio: true,
+        showOnlineStatus: true,
+        avatarPath: true,
+        createdAt: true,
+        updatedAt: true,
+      },
     });
     if (!identity) {
       throw new NotFoundException('CITIZEN_IDENTITY_NOT_FOUND');
@@ -91,15 +107,20 @@ export class CitizenProfileService {
   ): Promise<MyPostsResponseDto> {
     const take = Math.min(limit ?? DEFAULT_LIMIT, MAX_LIMIT);
 
-    // §17.3 / PDPA: existence check only — load just the id, never the
-    // *_enc / *_hash PII columns.
+    // §17.3 / PDPA: alias + avatar only — never the *_enc / *_hash PII columns.
+    // `avatarPath` / `updatedAt` feed the owner's own avatar on the card.
     const identity = await this.identityRepo.findOne({
       where: { id: identityId, deletedAt: IsNull() },
-      select: { id: true },
+      select: { id: true, displayAlias: true, avatarPath: true, updatedAt: true },
     });
     if (!identity) {
       throw new NotFoundException('CITIZEN_IDENTITY_NOT_FOUND');
     }
+    const authorAvatarUrl = citizenAvatarUrl(
+      identity.id,
+      identity.avatarPath,
+      identity.updatedAt,
+    );
 
     const qb = this.postRepo
       .createQueryBuilder('p')
@@ -134,6 +155,7 @@ export class CitizenProfileService {
         mediaByPost.get(p.id) ?? [],
         breakdownByPost.get(p.id),
         p.repostOfId ? embedByRoot.get(p.repostOfId) : undefined,
+        authorAvatarUrl,
       ),
     );
 
@@ -175,14 +197,31 @@ export class CitizenProfileService {
         const trimmedBio = dto.bio.trim();
         identity.bio = trimmedBio.length > 0 ? trimmedBio : null;
       }
+      // Presence privacy toggle — absent = leave unchanged.
+      let onlineStatusChanged = false;
+      if (dto.showOnlineStatus !== undefined && dto.showOnlineStatus !== identity.showOnlineStatus) {
+        identity.showOnlineStatus = dto.showOnlineStatus;
+        onlineStatusChanged = true;
+      }
       await em.getRepository(CitizenIdentity).save(identity);
 
       await this.writeAudit(em, identityId, 'profile.update', 'identity', identityId, {
         displayAlias: identity.displayAlias,
         bio: identity.bio,
+        showOnlineStatus: identity.showOnlineStatus,
       });
 
-      return this.computeProfile(identity, em);
+      const profile = await this.computeProfile(identity, em);
+      // Tell the presence gateway to re-broadcast the (now hidden/visible) state
+      // mid-session. Fired AFTER the row is saved; the gateway is decoupled via
+      // the global EventEmitter (no WS dependency in this service).
+      if (onlineStatusChanged) {
+        this.events.emit(CITIZEN_PRESENCE_VISIBILITY_EVENT, {
+          identityId,
+          showOnlineStatus: identity.showOnlineStatus,
+        } satisfies CitizenPresenceVisibilityEvent);
+      }
+      return profile;
     });
   }
 
@@ -222,6 +261,8 @@ export class CitizenProfileService {
       id: identity.id,
       displayAlias: identity.displayAlias,
       bio: identity.bio ?? null,
+      showOnlineStatus: identity.showOnlineStatus ?? true,
+      avatarUrl: citizenAvatarUrl(identity.id, identity.avatarPath, identity.updatedAt),
       joinedAt: (identity.createdAt ?? new Date()).toISOString(),
       postCount,
       heartsReceived,
@@ -254,6 +295,7 @@ export class CitizenProfileService {
     media: CitizenPostMediaDto[],
     breakdown?: Record<CitizenReactionType, number>,
     repostOf?: RepostEmbedDto | RepostTombstoneDto,
+    avatarUrl: string | null = null,
   ): MyPostDto {
     const reactionBreakdown = breakdown ?? emptyReactionBreakdown();
     return {
@@ -275,7 +317,9 @@ export class CitizenProfileService {
       createdAt: (post.createdAt ?? new Date()).toISOString(),
       moderationState: post.moderationState,
       // W-GATE-1: `author.id` = the authorIdentityId (opaque uuid handle).
-      author: { id: post.authorIdentityId, displayAlias },
+      author: { id: post.authorIdentityId, displayAlias, avatarUrl },
+      // Owner-hide flag so the profile "my posts" view can badge a hidden post.
+      ownerHidden: post.ownerHidden ?? false,
       media,
       // W-S2: present ONLY when this owned post is a repost.
       ...(repostOf !== undefined ? { repostOf } : {}),

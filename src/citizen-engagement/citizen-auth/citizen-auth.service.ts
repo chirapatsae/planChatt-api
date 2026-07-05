@@ -11,6 +11,7 @@ import { Repository } from 'typeorm';
 
 import { hashCitizenId, hashSecret } from 'src/util/encryption.util';
 import { CitizenIdentity } from '../entities/citizen-identity.entity';
+import { citizenAvatarUrl } from '../media/citizen-avatar.util';
 
 const THAID_ISSUER = 'https://imauth.bora.dopa.go.th';
 const CONSENT_VERSION = 'v1';
@@ -24,6 +25,8 @@ const THAID_EXP_CLOCK_TOLERANCE_SEC = 60;
 export interface CitizenProfile {
   id: string;
   displayAlias: string;
+  /** Axios-relative profile-photo URL (cache-busted), or null when none. */
+  avatarUrl: string | null;
 }
 
 /**
@@ -66,7 +69,15 @@ export class CitizenAuthService {
   }
 
   private toProfile(identity: CitizenIdentity): CitizenProfile {
-    return { id: identity.id, displayAlias: identity.displayAlias };
+    return {
+      id: identity.id,
+      displayAlias: identity.displayAlias,
+      avatarUrl: citizenAvatarUrl(
+        identity.id,
+        identity.avatarPath,
+        identity.updatedAt,
+      ),
+    };
   }
 
   private sign(identity: CitizenIdentity): string {

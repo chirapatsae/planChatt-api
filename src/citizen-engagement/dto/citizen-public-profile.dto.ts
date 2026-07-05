@@ -14,6 +14,8 @@ export interface CitizenPublicProfileDto {
   displayAlias: string;
   /** Public self-written bio / "แนะนำตัว" (2026-07-03). `null` = none. */
   bio: string | null;
+  /** Public profile-photo URL (cache-busted), or null for the initial fallback. */
+  avatarUrl: string | null;
   /** Public, non-removed posts authored by this citizen. */
   postCount: number;
   /** Live count of citizens who follow this person (D16 — count only, no roster). */
