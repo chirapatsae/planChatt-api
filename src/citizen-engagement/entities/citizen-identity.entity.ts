@@ -31,9 +31,14 @@ export class CitizenIdentity {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  /** HMAC of the ThaID OIDC `sub`. Lookup key. Partial-unique (migration). */
-  @Column({ name: 'thaid_sub_hash', type: 'varchar', length: 64 })
-  thaidSubHash: string;
+  /**
+   * HMAC of the ThaID OIDC `sub`. Lookup key. Partial-unique (migration).
+   * AUTH-REDESIGN (2026-07-08): now NULLABLE — ThaID is removed, so
+   * email/password + Google identities carry no `thaid_sub_hash`. Existing
+   * ThaID rows keep their value.
+   */
+  @Column({ name: 'thaid_sub_hash', type: 'varchar', length: 64, nullable: true })
+  thaidSubHash: string | null;
 
   /** HMAC of the 13-digit national ID. Dedup / erasure lookup. Partial-unique (migration). */
   @Column({ name: 'national_id_hash', type: 'varchar', length: 64, nullable: true })
@@ -46,6 +51,37 @@ export class CitizenIdentity {
   /** AES `iv:ciphertext` of the full name. DEFAULT NULL — never displayed publicly. */
   @Column({ name: 'full_name_enc', type: 'varchar', length: 512, nullable: true })
   fullNameEnc: string | null;
+
+  // -------------------------------------------------------------------
+  // AUTH-REDESIGN (2026-07-08) — email/password + Google registration.
+  // Replaces the ThaID-only citizen login. See docs/AUTH-REDESIGN.md §3.2.
+  // `synchronize:true` auto-adds these in dev; prod parity via
+  // BootstrapMigrationsService allow-list.
+  // -------------------------------------------------------------------
+
+  /** AES `iv:ciphertext` of the login email (PDPA — encrypted at rest). */
+  @Column({ name: 'email_enc', type: 'varchar', length: 512, nullable: true })
+  emailEnc: string | null;
+
+  /** HMAC-SHA256(LOWER(TRIM(email))) — deterministic lookup + uniqueness. Partial-unique (migration). */
+  @Column({ name: 'email_hash', type: 'varchar', length: 64, nullable: true })
+  emailHash: string | null;
+
+  /** Argon2id PHC string. NULL = registered via Google only (no password). */
+  @Column({ name: 'password_hash', type: 'varchar', length: 512, nullable: true })
+  passwordHash: string | null;
+
+  /** HMAC of the Google OIDC `sub`. NULL = not linked to Google. Partial-unique (migration). */
+  @Column({ name: 'google_sub_hash', type: 'varchar', length: 64, nullable: true })
+  googleSubHash: string | null;
+
+  /** Timestamp email was verified via link flow. NULL = unverified (Google logins are pre-verified). */
+  @Column({ name: 'email_verified_at', type: 'timestamptz', nullable: true })
+  emailVerifiedAt: Date | null;
+
+  /** `password` | `google` | `both` — how this citizen authenticates. */
+  @Column({ name: 'auth_provider', type: 'varchar', length: 16, default: 'password' })
+  authProvider: string;
 
   /** The ONLY public name. */
   @Column({ name: 'display_alias', type: 'varchar', length: 64 })

@@ -1,7 +1,5 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { AuthService } from './auth.service';
-import { AuthController } from './auth.controller';
 import { PassportModule } from '@nestjs/passport';
 import { JwtStrategy } from './jwt.strategy';
 import { JwtModule } from '@nestjs/jwt';
@@ -10,6 +8,13 @@ import { User } from 'src/users/entities/user.entity';
 import { NotificationsEmailModule } from 'src/notifications/email/notifications-email.module';
 import { AuthEmailService } from './email-verification/auth-email.service';
 import { EmailVerificationController } from './email-verification/email-verification.controller';
+
+// AUTH-REDESIGN (2026-07-08) — ThaID removed. `AuthService.handleOAuthLogin`
+// + `AuthController` (`POST /auth/oauth-login`) + `SecretKeyGuard` +
+// `CreateAuthDto` were deleted. Primary staff login now lives in
+// BackupLoginModule (`/auth/login` + `/auth/login/mfa`, email + password +
+// TOTP). This module now only wires the shared `JwtStrategy` (passport
+// 'jwt') + the email-verification surface. See docs/AUTH-REDESIGN.md §4.1.
 
 // W89B — `TypeOrmModule.forFeature([WorkHistory, User])` was removed: the
 // AuthService no longer injects either repository (W89-BE-AUTH-INTEGRATION
@@ -35,7 +40,7 @@ import { EmailVerificationController } from './email-verification/email-verifica
     TypeOrmModule.forFeature([User]),
     NotificationsEmailModule,
   ],
-  controllers: [AuthController, EmailVerificationController],
-  providers: [AuthService, JwtStrategy, AuthEmailService],
+  controllers: [EmailVerificationController],
+  providers: [JwtStrategy, AuthEmailService],
 })
 export class AuthModule {}

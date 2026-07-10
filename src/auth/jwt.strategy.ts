@@ -16,7 +16,11 @@ export interface JwtPayloadUser {
   userId: string;
   citizenId: string;
   role: string;
-  loginMethod: 'thaid' | 'backup';
+  // AUTH-REDESIGN (2026-07-08): 'password' is the new primary staff login
+  // method (email + password + TOTP via the promoted backup-login pipeline).
+  // 'thaid' / 'backup' retained ONLY for backward-compat with tokens issued
+  // before ThaID removal; those expire within the session window.
+  loginMethod: 'thaid' | 'backup' | 'password';
   mfaVerified: boolean;
   sessionVersion: number;
   requirePasswordChange: boolean;
@@ -49,7 +53,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       // new claims so guards can discriminate ThaiD vs backup sessions
       // and so `RequirePasswordChangeNotPendingGuard` can read the
       // forced-change flag.
-      loginMethod: payload.loginMethod ?? 'thaid',
+      loginMethod: payload.loginMethod ?? 'password',
       mfaVerified: payload.mfaVerified ?? true,
       sessionVersion: payload.sessionVersion ?? 0,
       requirePasswordChange: payload.requirePasswordChange ?? false,

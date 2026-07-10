@@ -21,7 +21,14 @@ import * as path from 'path';
 // `ConfigService`. The NODE_ENV-specific file is the single source of
 // truth — no fallback path masks a missing var.
 const nodeEnv = process.env.NODE_ENV || 'development';
-const envFileToLoad = path.resolve(process.cwd(), `.env.${nodeEnv}`);
+// Resolve from project root (3 levels up from src/util/ → src/ → backend/)
+// Falls back to process.cwd() so existing behaviour is preserved when __dirname
+// is not available (e.g. in some test runners).
+const projectRoot = path.resolve(__dirname, '..', '..', '..');
+const envFileToLoad =
+  fs.existsSync(path.resolve(projectRoot, `.env.${nodeEnv}`))
+    ? path.resolve(projectRoot, `.env.${nodeEnv}`)
+    : path.resolve(process.cwd(), `.env.${nodeEnv}`);
 if (fs.existsSync(envFileToLoad)) {
   dotenv.config({ path: envFileToLoad });
 }

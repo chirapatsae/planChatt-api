@@ -56,6 +56,12 @@ export class DuplicateUserCleanup {
     
     for (const user of users) {
       try {
+        // AUTH-REDESIGN: citizenId is now nullable (admin-created members
+        // have no national ID). A user with no citizenId cannot be a ThaID
+        // duplicate — skip it rather than attempting to decrypt undefined.
+        if (!user.citizenId) {
+          continue;
+        }
         const decryptedPid = await decryption(user.citizenId);
         actualPids.push(decryptedPid);
       } catch (error) {

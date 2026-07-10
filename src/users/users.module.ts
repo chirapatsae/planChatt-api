@@ -10,6 +10,9 @@ import { Status } from 'src/status/entities/status.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
 import { AiUsageQuotasModule } from 'src/ai-usage-quotas/ai-usage-quotas.module';
 import { StorageModule } from 'src/storage/storage.module';
+// AUTH-REDESIGN §6 — staff PDPA DSAR (export / erase own account).
+import { UsersDsarController } from './dsar/users-dsar.controller';
+import { UsersDsarService } from './dsar/users-dsar.service';
 
 @Module({
   imports: [
@@ -34,8 +37,8 @@ import { StorageModule } from 'src/storage/storage.module';
     AiUsageQuotasModule,
     StorageModule,
   ],
-  controllers: [UsersController],
-  providers: [UsersService],
+  controllers: [UsersController, UsersDsarController],
+  providers: [UsersService, UsersDsarService],
   exports: [UsersService],
 })
 export class UsersModule { }

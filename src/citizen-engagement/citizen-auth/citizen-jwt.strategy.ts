@@ -5,7 +5,9 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 /** `req.user` shape for an authenticated CITIZEN (never carries `role`). */
 export interface CitizenJwtUser {
   identityId: string;
-  loginMethod: 'thaid';
+  // AUTH-REDESIGN (2026-07-08): ThaID removed → 'password' | 'google'.
+  // Kept as a widened string so in-flight pre-redesign tokens still parse.
+  loginMethod: string;
   sessionVersion: number;
   aud: 'citizen';
 }
@@ -39,7 +41,7 @@ export class CitizenJwtStrategy extends PassportStrategy(Strategy, 'citizen-jwt'
     }
     return {
       identityId: payload.sub,
-      loginMethod: 'thaid',
+      loginMethod: payload.loginMethod ?? 'password',
       sessionVersion: payload.sessionVersion ?? 0,
       aud: 'citizen',
     };

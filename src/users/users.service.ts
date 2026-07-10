@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -173,6 +174,78 @@ export class UsersService {
       this.logger.error(
         `Failed to create user: ${error?.constructor?.name ?? 'UnknownError'}`,
         error?.stack,
+      );
+      handleException(this.logger, error);
+    }
+  }
+
+  /**
+   * AUTH-REDESIGN (2026-07-08) — create a staff MEMBER without a ThaID
+   * national ID. The admin supplies name + email; identity is keyed on
+   * `email_hash` (the login username). `citizen_id` / `citizen_id_hash`
+   * stay NULL (nullable post-redesign). Email is AES-encrypted + HMAC-
+   * hashed in lockstep via the same util as `create`.
+   *
+   * PDPA: `consentVersion` / `consentAt` capture the privacy-policy
+   * acceptance recorded at member creation (may be null if the org
+   * captures consent at first login instead).
+   *
+   * Throws 409 CONFLICT if the email is already registered (checked via
+   * the deterministic `email_hash`, never by decrypting rows).
+   */
+  async createMember(input: {
+    prefix: string;
+    firstname: string;
+    lastname: string;
+    email: string;
+    phone?: string;
+    consentVersion?: string | null;
+  }): Promise<User> {
+    try {
+      const emailNorm = input.email.trim().toLowerCase();
+      const emailHashed = hashEmail(emailNorm);
+
+      const existing = await this.userRepository.findOne({
+        where: { emailHash: emailHashed },
+      });
+      if (existing) {
+        throw new ConflictException('EMAIL_ALREADY_EXISTS');
+      }
+
+      const payload: Partial<User> = {
+        prefix: input.prefix,
+        firstname: input.firstname,
+        lastname: input.lastname,
+        email: await encryption(emailNorm),
+        emailHash: emailHashed,
+        // citizenId / citizenIdHash intentionally omitted → inserted as
+        // NULL (AUTH-REDESIGN: members carry no ThaID national ID).
+        isFirstLogin: true,
+        consentVersion: input.consentVersion ?? null,
+        consentAt: input.consentVersion ? new Date() : null,
+      };
+      if (input.phone) {
+        const phoneNorm = input.phone.replace(/\D/g, '');
+        if (phoneNorm) {
+          payload.phone = await encryption(phoneNorm);
+          payload.phoneHash = hashPhone(phoneNorm);
+        }
+      }
+
+      const user = this.userRepository.create(payload);
+      const saved = await this.userRepository.save(user);
+      await this.aiUsageQuotasService.createDefaultQuota(saved.id);
+      return await this.decryptUserPii(saved);
+    } catch (error) {
+      if (error instanceof ConflictException) throw error;
+      // Postgres unique-violation on email_hash → 409 (race with a
+      // concurrent create). Never log the DTO (plaintext PII — W83).
+      if ((error as { code?: string })?.code === '23505') {
+        throw new ConflictException('EMAIL_ALREADY_EXISTS');
+      }
+      this.logger.error(
+        `Failed to create member: ${error?.constructor?.name ?? 'UnknownError'}`,
+        (error as Error)?.stack,
       );
       handleException(this.logger, error);
     }

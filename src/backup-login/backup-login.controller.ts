@@ -16,7 +16,8 @@ import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { RolesGuard } from 'src/auth/roles.guard';
 import { Roles } from 'src/auth/roles.decorator';
 import { WorkStatusApprovedGuard } from 'src/auth/work-status-approved.guard';
-import { SUPER_ADMIN_ONLY, STAFF_LEAD } from 'src/auth/role-groups';
+import { SUPER_ADMIN_ONLY, STAFF_LEAD, ADMIN_OR_ABOVE } from 'src/auth/role-groups';
+import { CreateMemberDto } from './dto/create-member.dto';
 import { BackupLoginService } from './backup-login.service';
 import { BackupLoginInitDto } from './dto/backup-login-init.dto';
 import { BackupLoginCompleteDto } from './dto/backup-login-complete.dto';
@@ -115,6 +116,50 @@ export class BackupLoginController {
   }
 
   // -------------------------------------------------------------
+  //  PRIMARY staff login aliases (AUTH-REDESIGN 2026-07-08)
+  //
+  //  Since ThaID is removed, email + password + TOTP IS the primary
+  //  staff login. These read-friendly aliases (`/auth/login`,
+  //  `/auth/login/mfa`) delegate to the exact same pipeline as the
+  //  historical `backup-login/init` + `backup-login/complete` routes,
+  //  which stay mounted for backward-compat. Same throttling.
+  // -------------------------------------------------------------
+
+  @Post('login')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({
+    'backup-login-ip': { limit: 10, ttl: 60_000 },
+    'backup-login-subnet': { limit: 100, ttl: 60_000 },
+  })
+  async login(@Body() dto: BackupLoginInitDto, @Req() req: Request) {
+    const ip = req.ip || '0.0.0.0';
+    const userAgent = (req.headers['user-agent'] as string) || null;
+    return this.backupLogin.attemptInit({
+      username: dto.username,
+      password: dto.password,
+      ip,
+      userAgent,
+    });
+  }
+
+  @Post('login/mfa')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({
+    'backup-login-ip': { limit: 30, ttl: 60_000 },
+    'backup-login-subnet': { limit: 100, ttl: 60_000 },
+  })
+  async loginMfa(@Body() dto: BackupLoginCompleteDto, @Req() req: Request) {
+    const ip = req.ip || '0.0.0.0';
+    const userAgent = (req.headers['user-agent'] as string) || null;
+    return this.backupLogin.attemptComplete({
+      mfaChallengeToken: dto.mfaChallengeToken,
+      totpCode: dto.totpCode,
+      ip,
+      userAgent,
+    });
+  }
+
+  // -------------------------------------------------------------
   //  Profile self-service: status + self-enroll
   //  (Wave wave-backup-login-profile-self-enroll / BE-01)
   // -------------------------------------------------------------
@@ -192,7 +237,7 @@ export class BackupLoginController {
     @Body() dto: ChangePasswordDto,
     @Req()
     req: Request & {
-      user: { userId: string; loginMethod?: 'thaid' | 'backup' };
+      user: { userId: string; loginMethod?: 'thaid' | 'backup' | 'password' };
     },
   ) {
     // Returns a NEW accessToken because the password change bumps
@@ -211,7 +256,7 @@ export class BackupLoginController {
       dto.oldPassword,
       dto.newPassword,
       dto.totpCode,
-      req.user.loginMethod ?? 'thaid',
+      req.user.loginMethod ?? 'password',
     );
     return { ok: true, accessToken };
   }
@@ -255,6 +300,32 @@ export class BackupLoginController {
       isForcedFlow,
     );
     return { ok: true, accessToken, user };
+  }
+
+  // -------------------------------------------------------------
+  //  Admin: create member (AUTH-REDESIGN 2026-07-08)
+  // -------------------------------------------------------------
+
+  /**
+   * Admin "add member" — replaces ThaID auto-provisioning. Creates the
+   * user + pending work_history + initial one-time password in one call.
+   * Restricted to admin / super-admin / c-level (user direction:
+   * "admin เพิ่มให้เท่านั้น"). Returns the plaintext one-time password so
+   * the admin can hand it to the member securely.
+   */
+  @Post('members')
+  @UseGuards(
+    JwtAuthGuard,
+    RolesGuard,
+    WorkStatusApprovedGuard,
+    RequirePasswordChangeNotPendingGuard,
+  )
+  @Roles(...ADMIN_OR_ABOVE)
+  async createMember(
+    @Body() dto: CreateMemberDto,
+    @Req() req: Request & { user: { userId: string } },
+  ) {
+    return this.backupLogin.createMember(req.user.userId, dto);
   }
 
   // -------------------------------------------------------------

@@ -11,6 +11,7 @@ import { RolesGuard } from '../auth/roles.guard';
 import { WorkStatusApprovedGuard } from '../auth/work-status-approved.guard';
 import { CitizenAuthController } from './citizen-auth/citizen-auth.controller';
 import { CitizenAuthService } from './citizen-auth/citizen-auth.service';
+import { Argon2Service } from '../backup-login/argon2.service';
 import { CitizenJwtGuard } from './citizen-auth/citizen-jwt.guard';
 import { CitizenOptionalJwtGuard } from './citizen-auth/citizen-optional-jwt.guard';
 import { CitizenJwtStrategy } from './citizen-auth/citizen-jwt.strategy';
@@ -211,6 +212,11 @@ import { CitizenRetentionCron } from './citizen-retention.cron';
   ],
   providers: [
     CitizenAuthService,
+    // AUTH-REDESIGN (2026-07-08) — Argon2id hashing for citizen
+    // email/password register + login. Standalone injectable (no deps),
+    // provided directly so CitizenAuthService can inject it without
+    // importing BackupLoginModule.
+    Argon2Service,
     CitizenJwtStrategy,
     CitizenJwtGuard,
     CitizenOptionalJwtGuard,

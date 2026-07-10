@@ -32,6 +32,10 @@ import {
 } from './constants/error-messages';
 import { isBackupLoginEligibleRole } from './constants/eligible-roles';
 import { Role } from 'src/auth/roles.enum';
+import { UsersService } from 'src/users/users.service';
+import { WorkHistoryService } from 'src/work-history/work-history.service';
+import { WorkStatus } from 'src/work-status/entities/work-status.entity';
+import { CreateMemberDto } from './dto/create-member.dto';
 
 /**
  * SECURITY-01 §7.7 — JWT shapes.
@@ -55,7 +59,9 @@ interface BackupSessionPayload {
   sub: string;
   role: string | null;
   workStatus: string | null;
-  loginMethod: 'backup';
+  // AUTH-REDESIGN (2026-07-08): promoted from fallback to PRIMARY staff login.
+  // Sessions are now labelled 'password' (email + password + TOTP).
+  loginMethod: 'password';
   mfaVerified: boolean;
   sessionVersion: number;
   requirePasswordChange?: boolean;
@@ -93,9 +99,78 @@ export class BackupLoginService {
     private readonly killSwitch: KillSwitchService,
     private readonly audit: BackupAttemptAuditService,
     private readonly lineNotifier: BackupLineNotifier,
+    // AUTH-REDESIGN (2026-07-08) — admin create-member orchestration.
+    private readonly usersService: UsersService,
+    private readonly workHistoryService: WorkHistoryService,
     @InjectDataSource()
     private readonly dataSource: DataSource,
   ) {}
+
+  // ============================================================
+  //  Admin: create member (AUTH-REDESIGN 2026-07-08)
+  // ============================================================
+
+  /**
+   * Create a brand-new staff member and issue their initial credential
+   * in one call. Replaces ThaID auto-provisioning. Steps:
+   *   1. Create the `users` row (email identity, no national ID).
+   *   2. Create a pending `work_history` (role + org placement).
+   *   3. Issue a one-time password (mustChangeOnNextLogin=true).
+   * The member then logs in via `/auth/login`, is forced to change the
+   * password, and MUST enrol TOTP before the session is usable.
+   *
+   * Returns the plaintext one-time password so the admin can hand it to
+   * the member through a secure side channel. It is NEVER logged.
+   */
+  async createMember(
+    actorUserId: string,
+    dto: CreateMemberDto,
+  ): Promise<{ userId: string; email: string; plaintextPassword: string }> {
+    const user = await this.usersService.createMember({
+      prefix: dto.prefix,
+      firstname: dto.firstname,
+      lastname: dto.lastname,
+      email: dto.email,
+      phone: dto.phone,
+      consentVersion: dto.consentVersion ?? null,
+    });
+
+    // AUTH-REDESIGN (2026-07-08): admin-created members are approved on
+    // creation — the admin act IS the authorization. Without this the
+    // member's work_history defaults to `pending` and the promoted
+    // backup-login pipeline (which requires `approved` to authenticate)
+    // would refuse their first login. See docs/AUTH-REDESIGN.md §8.1.
+    const approvedStatus = await this.dataSource
+      .getRepository(WorkStatus)
+      .findOneBy({ name: 'approved' });
+
+    await this.workHistoryService.create(
+      {
+        userId: user.id,
+        amphoeId: dto.amphoeId,
+        localAdministrativeOrganizationId:
+          dto.localAdministrativeOrganizationId,
+        roleId: dto.roleId,
+        governmentAgenciesId: dto.governmentAgenciesId,
+        // Approved on creation (falls back to 'pending' if the seed row
+        // is somehow absent).
+        workStatusId: approvedStatus?.id,
+      },
+      actorUserId,
+    );
+
+    const issued = await this.issueCredential(actorUserId, user.id);
+
+    this.logger.log(
+      `auth.member.create actorId=${actorUserId} memberId=${user.id} at=${new Date().toISOString()}`,
+    );
+
+    return {
+      userId: user.id,
+      email: dto.email,
+      plaintextPassword: issued.plaintextPassword,
+    };
+  }
 
   // ============================================================
   //  /init — credential stage
@@ -267,13 +342,17 @@ export class BackupLoginService {
     });
     const totpConfirmed = !!totpRow?.confirmedAt;
 
-    // 9. Bootstrap exemption: first-ever credential, no TOTP, must
-    //    change on next login. Allows the dual-bootstrap path.
-    const totalCredCount = await this.credRepo.count();
+    // 9. First-login TOTP-enrollment grace (AUTH-REDESIGN 2026-07-08).
+    //    Previously this was a narrow "first-ever credential" bootstrap
+    //    exemption (totalCredCount === 1) because staff enrolled TOTP via
+    //    their ThaID-authenticated /profile session. With ThaID removed,
+    //    EVERY admin-issued member must be able to enrol TOTP on their
+    //    first password login — so the grace now applies to ANY freshly
+    //    issued credential (mustChangeOnNextLogin) that has no confirmed
+    //    TOTP yet. TOTP is still MANDATORY: the /complete stage forces
+    //    enrollment (requireTotpEnrollment) before the session is usable.
     const isBootstrap =
-      totalCredCount === 1 &&
-      !totpConfirmed &&
-      credential.mustChangeOnNextLogin === true;
+      !totpConfirmed && credential.mustChangeOnNextLogin === true;
 
     const mfaChallengeToken = this.jwtService.sign(
       {
@@ -511,7 +590,7 @@ export class BackupLoginService {
       sub: user.id,
       role: roleName,
       workStatus: workStatusName,
-      loginMethod: 'backup',
+      loginMethod: 'password',
       mfaVerified,
       sessionVersion,
       ...(requirePasswordChange ? { requirePasswordChange: true } : {}),
@@ -743,7 +822,7 @@ export class BackupLoginService {
     oldPassword: string,
     newPassword: string,
     totpCode: string | undefined,
-    callerLoginMethod: 'thaid' | 'backup' | undefined,
+    callerLoginMethod: 'thaid' | 'backup' | 'password' | undefined,
   ): Promise<{ accessToken: string }> {
     const user = await this.userRepo.findOne({ where: { id: callerUserId } });
     if (!user) throw new NotFoundException('USER_NOT_FOUND');
@@ -795,7 +874,9 @@ export class BackupLoginService {
     const isForcedFlowException =
       credential.mustChangeOnNextLogin === true &&
       hasConfirmedTotp === false &&
-      callerLoginMethod === 'backup';
+      // AUTH-REDESIGN: 'password' is the promoted primary session label
+      // ('backup' kept for backward-compat with in-flight tokens).
+      (callerLoginMethod === 'password' || callerLoginMethod === 'backup');
 
     if (!isForcedFlowException) {
       // §7.7 row "/change-password TOTP missing" — SAME generic 401
@@ -899,7 +980,7 @@ export class BackupLoginService {
       sub: callerUserId,
       role: roleName,
       workStatus: workStatusName,
-      loginMethod: 'backup',
+      loginMethod: 'password',
       mfaVerified: false,
       sessionVersion,
       ...(requireTotpEnrollment ? { requireTotpEnrollment: true } : {}),
@@ -964,7 +1045,7 @@ export class BackupLoginService {
       sub: callerUserId,
       role: roleName,
       workStatus: workStatusName,
-      loginMethod: 'backup',
+      loginMethod: 'password',
       mfaVerified: true,
       sessionVersion,
     };

@@ -415,6 +415,80 @@ export class BootstrapMigrationsService implements OnApplicationBootstrap {
       name: 'citizen_notification widen ck_citizen_notification_kind to include mention — ADD (W-S6)',
       sql: `ALTER TABLE IF EXISTS "citizen_notification" ADD CONSTRAINT "ck_citizen_notification_kind" CHECK ("kind" IN ('comment','heart','official_response','mention'));`,
     },
+
+    // ===================================================================
+    // AUTH-REDESIGN (2026-07-08) — remove ThaID, member login + Google.
+    // See docs/AUTH-REDESIGN.md §3. All statements idempotent:
+    //   - DROP NOT NULL on an already-nullable column is a no-op.
+    //   - ADD COLUMN IF NOT EXISTS is a no-op after synchronize.
+    //   - CREATE UNIQUE INDEX IF NOT EXISTS is a no-op once present.
+    // §17.3 isolation preserved — no cross-table FK added. No workflow
+    // gate touched (§17.11).
+    // ===================================================================
+
+    // P1a — `users.citizen_id` / `citizen_id_hash` no longer come from
+    // ThaID; admin-created members have NO national ID. Drop NOT NULL so
+    // NULL rows can be inserted. Postgres UNIQUE allows multiple NULLs,
+    // so the existing unique constraints are safe to keep.
+    {
+      name: 'users.citizen_id DROP NOT NULL (AUTH-REDESIGN §3.1)',
+      sql: `ALTER TABLE IF EXISTS "users" ALTER COLUMN "citizen_id" DROP NOT NULL;`,
+    },
+    {
+      name: 'users.citizen_id_hash DROP NOT NULL (AUTH-REDESIGN §3.1)',
+      sql: `ALTER TABLE IF EXISTS "users" ALTER COLUMN "citizen_id_hash" DROP NOT NULL;`,
+    },
+
+    // P1b — PDPA consent anchors on `users`.
+    {
+      name: 'users.consent_version ADD COLUMN (AUTH-REDESIGN §6)',
+      sql: `ALTER TABLE IF EXISTS "users" ADD COLUMN IF NOT EXISTS "consent_version" varchar(32);`,
+    },
+    {
+      name: 'users.consent_at ADD COLUMN (AUTH-REDESIGN §6)',
+      sql: `ALTER TABLE IF EXISTS "users" ADD COLUMN IF NOT EXISTS "consent_at" timestamptz;`,
+    },
+
+    // P1c — citizen email/password + Google columns.
+    // `thaid_sub_hash` was NOT NULL in the ThaID era; email/Google identities
+    // carry no ThaID sub, so drop the constraint (existing rows keep values).
+    {
+      name: 'citizen_identities.thaid_sub_hash DROP NOT NULL (AUTH-REDESIGN §3.2)',
+      sql: `ALTER TABLE IF EXISTS "citizen_identities" ALTER COLUMN "thaid_sub_hash" DROP NOT NULL;`,
+    },
+    {
+      name: 'citizen_identities.email_enc ADD COLUMN (AUTH-REDESIGN §3.2)',
+      sql: `ALTER TABLE IF EXISTS "citizen_identities" ADD COLUMN IF NOT EXISTS "email_enc" varchar(512);`,
+    },
+    {
+      name: 'citizen_identities.email_hash ADD COLUMN (AUTH-REDESIGN §3.2)',
+      sql: `ALTER TABLE IF EXISTS "citizen_identities" ADD COLUMN IF NOT EXISTS "email_hash" varchar(64);`,
+    },
+    {
+      name: 'citizen_identities.password_hash ADD COLUMN (AUTH-REDESIGN §3.2)',
+      sql: `ALTER TABLE IF EXISTS "citizen_identities" ADD COLUMN IF NOT EXISTS "password_hash" varchar(512);`,
+    },
+    {
+      name: 'citizen_identities.google_sub_hash ADD COLUMN (AUTH-REDESIGN §3.2)',
+      sql: `ALTER TABLE IF EXISTS "citizen_identities" ADD COLUMN IF NOT EXISTS "google_sub_hash" varchar(64);`,
+    },
+    {
+      name: 'citizen_identities.email_verified_at ADD COLUMN (AUTH-REDESIGN §3.2)',
+      sql: `ALTER TABLE IF EXISTS "citizen_identities" ADD COLUMN IF NOT EXISTS "email_verified_at" timestamptz;`,
+    },
+    {
+      name: 'citizen_identities.auth_provider ADD COLUMN (AUTH-REDESIGN §3.2)',
+      sql: `ALTER TABLE IF EXISTS "citizen_identities" ADD COLUMN IF NOT EXISTS "auth_provider" varchar(16) DEFAULT 'password';`,
+    },
+    // Partial-unique indexes: only one active citizen per email / Google sub.
+    {
+      name: 'citizen_identities.email_hash partial-unique (AUTH-REDESIGN §3.2)',
+      sql: `CREATE UNIQUE INDEX IF NOT EXISTS "uq_citizen_identities_email_hash" ON "citizen_identities" ("email_hash") WHERE "email_hash" IS NOT NULL;`,
+    },
+    {
+      name: 'citizen_identities.google_sub_hash partial-unique (AUTH-REDESIGN §3.2)',
+      sql: `CREATE UNIQUE INDEX IF NOT EXISTS "uq_citizen_identities_google_sub_hash" ON "citizen_identities" ("google_sub_hash") WHERE "google_sub_hash" IS NOT NULL;`,
+    },
   ];
 
   async onApplicationBootstrap(): Promise<void> {

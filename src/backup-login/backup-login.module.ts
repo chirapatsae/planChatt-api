@@ -27,6 +27,8 @@ import { BackupRetentionSweepCron } from './crons/backup-retention-sweep.cron';
 import { BackupDailySummaryCron } from './crons/backup-daily-summary.cron';
 import { BackupLoginBootstrapService } from './backup-login-bootstrap.service';
 import { RequirePasswordChangeNotPendingGuard } from './guards/require-password-change-not-pending.guard';
+import { UsersModule } from 'src/users/users.module';
+import { WorkHistoryModule } from 'src/work-history/work-history.module';
 
 /**
  * Backup-login subsystem — wave-backup-login-thaid-fallback.
@@ -67,6 +69,12 @@ import { RequirePasswordChangeNotPendingGuard } from './guards/require-password-
       { name: 'backup-login-subnet', ttl: 60_000, limit: 100 },
     ]),
     LineModule,
+    // AUTH-REDESIGN (2026-07-08) — admin create-member orchestration:
+    // UsersService (create the member row) + WorkHistoryService (place
+    // role + org). Both modules export their service; neither imports
+    // BackupLoginModule, so there is no circular dependency.
+    UsersModule,
+    WorkHistoryModule,
   ],
   controllers: [BackupLoginController],
   providers: [

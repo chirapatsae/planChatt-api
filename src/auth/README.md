@@ -1,5 +1,17 @@
 # `backend/src/auth/` — Canonical Role/Auth Pattern
 
+> **AUTH-REDESIGN (2026-07-08).** ThaID was removed. The primary staff login is
+> now **email + password + mandatory TOTP**, served by the promoted
+> `backup-login` pipeline (`POST /auth/login` + `/auth/login/mfa`). Staff
+> accounts are created by an admin (`POST /auth/members`). Session JWTs now
+> carry `loginMethod: 'password'` (`'thaid'` / `'backup'` kept only for
+> backward-compat with in-flight tokens). `AuthController` /
+> `AuthService.handleOAuthLogin` / `SecretKeyGuard` / `CreateAuthDto` were
+> deleted; `AuthModule` now only wires the shared `JwtStrategy` + the
+> email-verification surface. Staff PDPA DSAR lives at `users/me/*`. **The
+> role/guard pattern below is UNCHANGED.** Full plan:
+> [`docs/AUTH-REDESIGN.md`](../../../docs/AUTH-REDESIGN.md).
+
 This directory is the single source of truth for role-based admission on
 NestJS controllers. If you need to gate an endpoint by role (and optionally
 by `workStatus = approved` per CLAUDE.md §2), you MUST use the pattern

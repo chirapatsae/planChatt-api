@@ -21,12 +21,21 @@ export class User {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ name: 'citizen_id', unique: true })
-  citizenId: string;
+  /**
+   * AUTH-REDESIGN (2026-07-08): was `NOT NULL UNIQUE` when identity came
+   * from ThaID. After ThaID is removed, members are created by an admin
+   * with EMAIL as the primary identity (`email_hash`) and carry NO
+   * national ID. Made nullable so admin-created members can be inserted.
+   * Postgres UNIQUE treats NULLs as distinct → multiple NULL rows are
+   * allowed, so the unique constraint is retained as-is.
+   * See docs/AUTH-REDESIGN.md §3.1.
+   */
+  @Column({ name: 'citizen_id', unique: true, nullable: true })
+  citizenId?: string;
 
-  @Column({ name: 'citizen_id_hash', unique: true })
+  @Column({ name: 'citizen_id_hash', unique: true, nullable: true })
   @Exclude()
-  citizenIdHash: string;
+  citizenIdHash?: string;
 
   @Column()
   prefix: string;
@@ -170,6 +179,17 @@ export class User {
 
   @Column({ name: 'line_id', nullable: true })
   lineId?: string;
+
+  /**
+   * PDPA (AUTH-REDESIGN §6): version of the privacy policy the user
+   * accepted, and when. Set at member creation / first-login consent.
+   * NULL = consent not yet captured. See docs/AUTH-REDESIGN.md §6.
+   */
+  @Column({ name: 'consent_version', type: 'varchar', length: 32, nullable: true })
+  consentVersion?: string | null;
+
+  @Column({ name: 'consent_at', type: 'timestamptz', nullable: true })
+  consentAt?: Date | null;
 
   @OneToMany(() => WorkHistory, (workHistory) => workHistory.user, {
     onDelete: 'CASCADE',
