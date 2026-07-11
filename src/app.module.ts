@@ -311,6 +311,7 @@ import { AiKnowledgeToolBinding } from './ai-knowledge-hub/entities/ai-knowledge
 // See `docs/tasks/wave44/DB-W44-02.md` and
 // `docs/reports/WAVE44_RUNTIME_FAILURE_RCA.md` §5 (fix F3c).
 import { BootstrapModule } from './bootstrap/bootstrap.module';
+import { OrgSeedModule } from './org-seed/org-seed.module';
 import { AiExecutiveConversation } from './ai-executive-chat/entities/ai-executive-conversation.entity';
 import { AiExecutiveMessage } from './ai-executive-chat/entities/ai-executive-message.entity';
 // PRIV-W44-01 — global LLM client abstraction (CLAUDE.md §17). Every
@@ -944,6 +945,10 @@ import { UnifiedEquipmentModule } from './unified-equipment/unified-equipment.mo
     // so every other module's TypeORM registration completes first,
     // giving the allow-listed ALTERs a settled DataSource).
     BootstrapModule,
+    // Single-LAO rescope (2026-07) — boot-time seed guaranteeing the one
+    // home org (amphoe 3001 + lao 3001027 = เทศบาลตำบลหนองกระทุ่ม) exists.
+    // After BootstrapModule so table structure/DDL is settled first.
+    OrgSeedModule,
     // Wave 2 BE-PATH-SERVICE — `@Global` module exposing
     // `StoragePathService` for every downstream PDF writer / reader.
     // Order is irrelevant because the service has no module-level

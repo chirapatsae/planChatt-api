@@ -32,8 +32,12 @@
  *                          and printed. If set, that password is used as the
  *                          initial one instead — still forced-change + TOTP
  *                          enrol on first login, so a weak value is fine.)
- *   SEED_AMPHOE_ID        (default: first amphoe in DB, with a warning)
- *   SEED_LAO_ID           (default: first LAO in DB, with a warning)
+ *   SEED_AMPHOE_ID        (default "3001" — the home-org amphoe เมืองนครราชสีมา;
+ *                          single-LAO rescope 2026-07. Must already exist —
+ *                          OrgSeedService seeds it on boot. An unresolved id is
+ *                          a hard exit(1), NOT a first-row fallback.)
+ *   SEED_LAO_ID           (default "3001027" — เทศบาลตำบลหนองกระทุ่ม, the home
+ *                          org. Must already exist; unresolved id → exit(1).)
  *
  * SAFETY
  *   - Refuses to run if SEED_ADMIN_EMAIL is missing.
@@ -88,34 +92,39 @@ async function main(): Promise<number> {
       return 1;
     }
 
-    // Defaults exclude soft-deleted rows (WorkHistoryService.create resolves
-    // amphoe/LAO via findOneBy, which ignores soft-deleted — so a soft-deleted
-    // default would fail with "not found"). amphoes soft-delete column is the
-    // camelCase "deletedAt"; LAO uses snake_case delete_at.
-    let amphoeId = process.env.SEED_AMPHOE_ID?.trim();
-    if (!amphoeId) {
-      const a = await dataSource.query(
-        'SELECT id, name FROM amphoes WHERE "deletedAt" IS NULL ORDER BY id LIMIT 1',
+    // Single-LAO deployment (2026-07 rescope): default to the HOME org
+    // เทศบาลตำบลหนองกระทุ่ม = (amphoe '3001', lao '3001027') — the pair the
+    // whole app treats as the full-feature agency. OrgSeedService guarantees
+    // these rows exist on first boot, so this seed just needs to point at them;
+    // SEED_AMPHOE_ID / SEED_LAO_ID still override. We verify the specific row
+    // exists (WorkHistoryService.create resolves amphoe/LAO via findOneBy, which
+    // ignores soft-deleted rows — amphoes soft-delete = camelCase "deletedAt",
+    // LAO = snake_case delete_at).
+    const amphoeId = process.env.SEED_AMPHOE_ID?.trim() || '3001';
+    const amphoeRow = await dataSource.query(
+      'SELECT id, name FROM amphoes WHERE id = $1 AND "deletedAt" IS NULL',
+      [amphoeId],
+    );
+    if (!amphoeRow[0]) {
+      console.error(
+        `❌ Amphoe "${amphoeId}" not found. Start the app once (OrgSeedService seeds the home org) or set SEED_AMPHOE_ID to an existing amphoe.`,
       );
-      if (!a[0]) {
-        console.error('❌ No amphoes in DB. Provide SEED_AMPHOE_ID.');
-        return 1;
-      }
-      amphoeId = a[0].id;
-      console.warn(`⚠️  SEED_AMPHOE_ID not set — defaulting to "${a[0].name}" (${amphoeId}).`);
+      return 1;
     }
-    let laoId = process.env.SEED_LAO_ID?.trim();
-    if (!laoId) {
-      const l = await dataSource.query(
-        'SELECT id, name FROM local_administrative_organizations WHERE delete_at IS NULL ORDER BY id LIMIT 1',
+    const laoId = process.env.SEED_LAO_ID?.trim() || '3001027';
+    const laoRow = await dataSource.query(
+      'SELECT id, name FROM local_administrative_organizations WHERE id = $1 AND delete_at IS NULL',
+      [laoId],
+    );
+    if (!laoRow[0]) {
+      console.error(
+        `❌ Local administrative organization "${laoId}" not found. Start the app once (OrgSeedService seeds the home org) or set SEED_LAO_ID to an existing LAO.`,
       );
-      if (!l[0]) {
-        console.error('❌ No local_administrative_organizations in DB. Provide SEED_LAO_ID.');
-        return 1;
-      }
-      laoId = l[0].id;
-      console.warn(`⚠️  SEED_LAO_ID not set — defaulting to "${l[0].name}" (${laoId}).`);
+      return 1;
     }
+    console.log(
+      `▶ Placing under "${laoRow[0].name}" (${laoId}) in amphoe "${amphoeRow[0].name}" (${amphoeId}).`,
+    );
 
     // ── 1. Create the user (email identity, no ThaID national ID) ─────
     console.log(`\n▶ Creating ${roleName} "${firstname} ${lastname}" <${email}> …`);
@@ -125,9 +134,9 @@ async function main(): Promise<number> {
     await workHistory.create(
       {
         userId: user.id,
-        // Guaranteed defined by the guards above (env value or DB default).
-        amphoeId: amphoeId!,
-        localAdministrativeOrganizationId: laoId!,
+        // Verified to exist above (env value or the '3001'/'3001027' default).
+        amphoeId,
+        localAdministrativeOrganizationId: laoId,
         roleId: role[0].id,
         workStatusId: approved[0].id,
       },
