@@ -164,7 +164,7 @@ export class DigestFlexBuilderService {
         contents: [
           {
             type: 'text',
-            text: 'ธนาคารโครงการ · อบจ.นครราชสีมา',
+            text: 'ธนาคารโครงการ · เทศบาลตำบลหนองกระทุ่ม',
             size: 'xxs',
             color: '#6B7280',
             weight: 'regular',

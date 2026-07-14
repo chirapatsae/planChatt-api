@@ -37,7 +37,7 @@ export const createIssueBasedSummaryPartDocDefinition = (
     stack: [
       'บัญชีสรุปโครงการพัฒนา \n',
       developmentPlanName + '\n',
-      'องค์การบริหารส่วนจังหวัดนครราชสีมา\n',
+      'เทศบาลตำบลหนองกระทุ่ม จังหวัดนครราชสีมา\n',
     ],
     alignment: 'center',
     bold: true,

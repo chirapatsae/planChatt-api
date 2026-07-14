@@ -38,7 +38,7 @@ export const createSummaryPartDocDefinition = (params: CoverSummaryDocParams): T
     stack: [
       'บัญชีสรุปโครงการพัฒนา \n',
       developmentPlanName + '\n',
-      'องค์การบริหารส่วนจังหวัดนครราชสีมา\n',
+      'เทศบาลตำบลหนองกระทุ่ม จังหวัดนครราชสีมา\n',
     ],
     alignment: 'center',
     bold: true,

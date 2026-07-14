@@ -6278,21 +6278,21 @@ export class ProjectGroupsService {
     return warnings.length > 0 ? warnings.join(' และ ') : null;
   }
 
+  // Single-อปท (หนองกระทุ่ม): every submitter belongs to the internal
+  // agency (ส่วนราชการภายใน) — the LAO/"การประสานแผน" coordination phase is
+  // retired, so a main-plan round has only the AGENCY window. Always require
+  // the open AGENCY phase. `workHistory` is retained for signature stability.
   private async validatePlanPhase(manager: EntityManager, developmentPlan: DevelopmentPlan, workHistory: WorkHistory): Promise<void> {
-    const isAgency =
-      workHistory.amphoe?.id === '3001' &&
-      workHistory.localAdministrativeOrganization?.id === '3001027';
-    const requiredPhaseType = isAgency ? PhaseType.AGENCY : PhaseType.LAO;
+    void workHistory;
     const openPhase = await manager.findOne(PlanPhase, {
       where: {
         developmentPlan: { id: developmentPlan.id },
-        phaseType: requiredPhaseType,
+        phaseType: PhaseType.AGENCY,
         isOpen: true,
       },
     });
     if (!openPhase) {
-      const typeLabel = isAgency ? 'ส่วนราชการ (AGENCY)' : 'อปท. (LAO)';
-      throw new BadRequestException(`ระยะเวลายื่นโครงการสำหรับ ${typeLabel} ยังไม่เปิด หรือปิดแล้ว`);
+      throw new BadRequestException('ระยะเวลายื่นโครงการยังไม่เปิด หรือปิดแล้ว');
     }
   }
 

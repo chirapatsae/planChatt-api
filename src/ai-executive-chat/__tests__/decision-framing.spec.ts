@@ -38,22 +38,30 @@ describe('BE-W44-02 / decision-framing system prompt (§17.2)', () => {
     expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(/ประเด็นการพัฒนา/);
   });
 
-  it('W55-BE-01 — includes PAO provincial context block (อบจ.นครราชสีมา / ระดับจังหวัด / อปท. / โครงการประสานแผน / โครงการปกติ)', () => {
+  it('W55-BE-01 — includes municipal context block (เทศบาลตำบลหนองกระทุ่ม / อปท. เดียว / no cross-อปท aggregation)', () => {
     // §17.2 advisory-only framing requires the assistant to default its
-    // answers to the provincial aggregation owned by อบจ.นครราชสีมา, not
-    // to the caller's own municipality. See SEC-CONTEXT-AUDIT GAP-1 / GAP-2.
-    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(/อบจ\.นครราชสีมา/);
-    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(/ระดับจังหวัด/);
-    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(/อปท\./);
-    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(/อบต\./);
-    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(/เทศบาล/);
-    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(/เทศบาลนคร/);
-    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(/โครงการประสานแผน/);
-    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(/โครงการปกติ/);
-    // Explicit province-wide aggregation framing (not scoped to caller's LAO).
+    // answers to the whole municipality (เทศบาลตำบลหนองกระทุ่ม) — the sole
+    // อปท. in this single-tenant system — NOT to a provincial aggregation.
+    // Rescoped from the retired province-wide two-cohort model.
+    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(/เทศบาลตำบลหนองกระทุ่ม/);
+    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(/อปท\. เดียว/);
+    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(/กอง\/สำนัก/);
+    // Explicitly single-tenant: no external intake, no cross-อปท comparison.
     expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(
-      /ทั่วทั้งจังหวัด|ในระดับจังหวัด/,
+      /ไม่มีการรวมข้อมูลหรือรับโครงการจากหน่วยงานภายนอก/,
     );
+    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toMatch(/ไม่มีการเปรียบเทียบข้าม อปท\./);
+    // The retired province-wide two-cohort framing must NOT reappear in the
+    // persona/context block (guards against a copy-paste regression). Scoped
+    // to the persona/context block — the two-cohort execution-stage mapping
+    // in rule #25c is a separate PR (PR3 two-cohort collapse) and still
+    // references those tokens downstream.
+    const personaBlock = EXECUTIVE_CHAT_SYSTEM_PROMPT.slice(
+      0,
+      EXECUTIVE_CHAT_SYSTEM_PROMPT.indexOf('กฎสำคัญ'),
+    );
+    expect(personaBlock).not.toMatch(/โครงการประสานแผน/);
+    expect(personaBlock).not.toMatch(/โครงการปกติ/);
   });
 
   it('W55-BE-03 — includes rule 13 (must surface missingDimensions / advisories)', () => {

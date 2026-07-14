@@ -157,7 +157,16 @@ export class UsersController {
       new ParseFilePipe({
         validators: [
           new MaxFileSizeValidator({ maxSize: 5 * 1024 * 1024 }), // 5MB limit
-          new FileTypeValidator({ fileType: /(jpg|jpeg|png|webp)$/ }), // Layer 1 — extension/MIME claim. Magic-byte sniff is layer 2 in service.
+          // Layer 1 — extension/MIME claim only. `skipMagicNumbersValidation`
+          // is REQUIRED on @nestjs/common v11: its FileTypeValidator now does
+          // magic-number detection via a dynamic `file-type` ESM import, which
+          // is NOT installed here — without this flag the loader throws and the
+          // validator rejects EVERY upload (400). The authoritative magic-byte
+          // sniff is layer 2 in the service (`sniffImage`), so security holds.
+          new FileTypeValidator({
+            fileType: /(jpg|jpeg|png|webp)$/,
+            skipMagicNumbersValidation: true,
+          }),
         ],
         exceptionFactory: () => {
           return new BadRequestException(

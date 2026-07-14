@@ -284,23 +284,24 @@ export class BulkUploadValidator {
     // → agency phase). DRAFT skips because no plan submission is
     // happening yet; the requester's classification still applies on
     // the eventual publish promotion.
-    const isAgency = isAgencyWorkHistory(workHistory);
+    // Single-อปท (หนองกระทุ่ม): the LAO/"การประสานแผน" coordination phase is
+    // retired — every submitter publishes into the AGENCY (ส่วนราชการภายใน)
+    // window.
+    void isAgencyWorkHistory;
     let matchedPhase: PlanPhase | null = null;
     if (saveType === BulkSaveType.PUBLISH) {
-      const requiredPhaseType = isAgency ? PhaseType.AGENCY : PhaseType.LAO;
       matchedPhase = await manager.findOne(PlanPhase, {
         where: {
           developmentPlan: { id: developmentPlanId },
-          phaseType: requiredPhaseType,
+          phaseType: PhaseType.AGENCY,
           isOpen: true,
         },
       });
       if (!matchedPhase) {
-        const typeLabel = isAgency ? 'ส่วนราชการ (AGENCY)' : 'อปท. (LAO)';
         throw new BadRequestException({
           code: 'BULK_PRECONDITION_FAILED',
           reason: 'PHASE_CLOSED',
-          message: `ระยะเวลายื่นโครงการสำหรับ ${typeLabel} ยังไม่เปิด หรือปิดแล้ว`,
+          message: 'ระยะเวลายื่นโครงการยังไม่เปิด หรือปิดแล้ว',
         });
       }
     }

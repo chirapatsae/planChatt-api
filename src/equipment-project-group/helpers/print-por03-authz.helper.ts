@@ -64,7 +64,7 @@ export function assertAgencyCaller(workHistory: WorkHistory): void {
   if (!isAgencyWorkHistory(workHistory)) {
     throw new ForbiddenException({
       code: 'EQUIPMENT_AGENCY_ONLY',
-      message: 'เฉพาะผู้ใช้สังกัด อบจ.',
+      message: 'เฉพาะผู้ใช้ของเทศบาลตำบลหนองกระทุ่ม',
     });
   }
 }

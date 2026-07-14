@@ -59,7 +59,7 @@ export class GmailProvider implements EmailProvider {
     // Result: nodemailer / Gmail SMTP auto-generate a Message-ID at the From
     // domain (`@gmail.com`), which DKIM-aligns and lands in the inbox.
     const mailOptions: nodemailer.SendMailOptions = {
-      from: message.from || `"ระบบธนาคารโครงการ อบจ.นม" <${process.env.EMAIL_USER}>`,
+      from: message.from || `"ระบบธนาคารโครงการ เทศบาลตำบลหนองกระทุ่ม" <${process.env.EMAIL_USER}>`,
       to: message.to,
       subject: message.subject,
       text: message.text,

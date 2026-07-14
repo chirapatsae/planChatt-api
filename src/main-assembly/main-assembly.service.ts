@@ -1616,13 +1616,17 @@ export class MainAssemblyService {
       .andWhere('status.name = :name', { name: STATUS_NAMES.APPROVED })
       .getCount();
 
-    // §21.2 — final gate formula. Both sources MUST contribute.
+    // §21.2 — readiness gate. Single-อปท (หนองกระทุ่ม): the plan-
+    // coordination ("การประสานแผน" / LAO) source is retired, so ALL
+    // projects are agency-origin and `approvedLaoCount` is always 0.
+    // The old both-sources requirement (`approvedLaoCount > 0`) is dropped
+    // — the gate is now single-source: every project approved, the plan's
+    // phase closed, and at least one approved project/equipment present.
     const agencySideContribution = approvedAgencyCount + approvedEquipmentCount;
     const isReady =
       approvedCount === totalCount &&
       totalCount > 0 &&
       !hasOpenPhase &&
-      approvedLaoCount > 0 &&
       agencySideContribution > 0;
 
     // Status counts.
@@ -1669,9 +1673,9 @@ export class MainAssemblyService {
    * `generatePart3` as defense-in-depth; FE has already enforced via
    * the disabled merge button but BE cannot trust FE.
    *
-   * Throws `409 BOTH_SOURCES_REQUIRED` with a structured body when the
-   * gate fails. Body shape mirrors `MainReadinessDto` so the FE 409
-   * handler can render the same per-source missing-reason copy.
+   * Throws `409 NO_APPROVED_PROJECTS` with a structured body when the
+   * gate fails. Single-อปท: readiness is single-source (all projects are
+   * agency-origin), so the former both-sources requirement is dropped.
    *
    * Constraints:
    *   - §21.2.2 — ABSOLUTE GATE. No role bypass; super-admin hits the
@@ -1748,19 +1752,22 @@ export class MainAssemblyService {
       .andWhere('pp.isOpen = :isOpen', { isOpen: true })
       .getExists();
 
+    // Single-อปท (หนองกระทุ่ม): plan-coordination (LAO) source retired —
+    // readiness is single-source. Drop the `approvedLaoCount > 0` term
+    // (always 0 now); require every project approved + at least one
+    // approved project/equipment present, and the phase closed.
     const agencySideContribution = approvedAgencyCount + approvedEquipmentCount;
     const isReady =
       approvedCount === totalCount &&
       totalCount > 0 &&
       !openPhaseExists &&
-      approvedLaoCount > 0 &&
       agencySideContribution > 0;
 
     if (!isReady) {
       throw new ConflictException({
-        code: 'BOTH_SOURCES_REQUIRED',
+        code: 'NO_APPROVED_PROJECTS',
         message:
-          'เล่มแผนหลักต้องมีโครงการอนุมัติของฝั่ง อปท. และ ฝั่ง อบจ./ครุภัณฑ์ อย่างน้อย 1 รายการต่อฝั่ง จึงจะรวมเล่มได้',
+          'เล่มแผนหลักต้องมีโครงการที่อนุมัติแล้วอย่างน้อย 1 รายการ และทุกโครงการต้องได้รับการอนุมัติก่อน จึงจะรวมเล่มได้',
         breakdown: {
           approvedLaoCount,
           approvedAgencyCount,

@@ -177,7 +177,7 @@ export class Por03PdfService {
     if (!isAgencyWorkHistory(callerWh)) {
       throw new ForbiddenException({
         code: 'EQUIPMENT_AGENCY_ONLY',
-        message: 'ฟีเจอร์ครุภัณฑ์ (ผ.03) ใช้ได้เฉพาะผู้ใช้สังกัด อบจ.',
+        message: 'ฟีเจอร์ครุภัณฑ์ (ผ.03) ใช้ได้เฉพาะผู้ใช้ของเทศบาลตำบลหนองกระทุ่ม',
       });
     }
 
@@ -343,7 +343,7 @@ export class Por03PdfService {
     if (!isAgencyWorkHistory(callerWh)) {
       throw new ForbiddenException({
         code: 'EQUIPMENT_AGENCY_ONLY',
-        message: 'ฟีเจอร์ครุภัณฑ์ (ผ.03) ใช้ได้เฉพาะผู้ใช้สังกัด อบจ.',
+        message: 'ฟีเจอร์ครุภัณฑ์ (ผ.03) ใช้ได้เฉพาะผู้ใช้ของเทศบาลตำบลหนองกระทุ่ม',
       });
     }
 
@@ -517,7 +517,7 @@ export class Por03PdfService {
     if (!isAgencyWorkHistory(callerWh)) {
       throw new ForbiddenException({
         code: 'EQUIPMENT_AGENCY_ONLY',
-        message: 'ฟีเจอร์ครุภัณฑ์ (ผ.03) ใช้ได้เฉพาะผู้ใช้สังกัด อบจ.',
+        message: 'ฟีเจอร์ครุภัณฑ์ (ผ.03) ใช้ได้เฉพาะผู้ใช้ของเทศบาลตำบลหนองกระทุ่ม',
       });
     }
 

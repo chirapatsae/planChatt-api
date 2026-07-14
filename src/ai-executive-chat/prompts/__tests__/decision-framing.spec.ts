@@ -155,9 +155,9 @@ describe('EXECUTIVE_CHAT_SYSTEM_PROMPT — decision-framing rules', () => {
       );
     });
 
-    it('rule #15 — default scope badge = ทั้งจังหวัดนครราชสีมา', () => {
+    it('rule #15 — default scope badge = เทศบาลตำบลหนองกระทุ่ม', () => {
       expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain(
-        'ขอบเขต: ทั้งจังหวัดนครราชสีมา',
+        'ขอบเขต: เทศบาลตำบลหนองกระทุ่ม',
       );
     });
 
@@ -249,7 +249,7 @@ describe('EXECUTIVE_CHAT_SYSTEM_PROMPT — decision-framing rules', () => {
 
     it('rule #26 — pending-assignment filter', () => {
       expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain(
-        "`responsible_agency_id IS NULL AND originType = 'lao-coordinated'`",
+        '`responsible_agency_id IS NULL`',
       );
     });
   });

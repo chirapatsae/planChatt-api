@@ -58,7 +58,7 @@ const renderStrategyBasedSummary = (params: SupplementSummaryDocParams): TDocume
     stack: [
       'บัญชีสรุปโครงการพัฒนา \n',
       developmentPlanSupplementName + '\n',
-      'องค์การบริหารส่วนจังหวัดนครราชสีมา\n',
+      'เทศบาลตำบลหนองกระทุ่ม จังหวัดนครราชสีมา\n',
     ],
     alignment: 'center',
     bold: true,
@@ -282,7 +282,7 @@ const renderIssueBasedSummary = (params: SupplementSummaryDocParams): TDocumentD
     stack: [
       'บัญชีสรุปโครงการพัฒนา \n',
       developmentPlanSupplementName + '\n',
-      'องค์การบริหารส่วนจังหวัดนครราชสีมา\n',
+      'เทศบาลตำบลหนองกระทุ่ม จังหวัดนครราชสีมา\n',
     ],
     alignment: 'center',
     bold: true,

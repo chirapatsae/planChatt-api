@@ -625,7 +625,7 @@ export class TrackingStatusService {
               if (dp?.isBooked) throw new BadRequestException('แผนพัฒนาฯ ถูกรวมเล่มแล้ว');
               const isAgency = workHistory.amphoe?.id === '3001' && workHistory.localAdministrativeOrganization?.id === '3001027';
               const openPhase = await manager.findOne(PlanPhase, {
-                where: { developmentPlan: { id: dp.id }, phaseType: isAgency ? PhaseType.AGENCY : PhaseType.LAO, isOpen: true },
+                where: { developmentPlan: { id: dp.id }, phaseType: PhaseType.AGENCY /* single-อปท: LAO coordination phase retired */, isOpen: true },
               });
               if (!openPhase) throw new BadRequestException('ระยะเวลายื่นโครงการปิดแล้ว ไม่สามารถดึงกลับได้');
 
@@ -738,7 +738,7 @@ export class TrackingStatusService {
                 const latestPhase = await manager.findOne(PlanPhase, {
                   where: {
                     developmentPlan: { id: latestEligible.id },
-                    phaseType: isAgencyClassMig ? PhaseType.AGENCY : PhaseType.LAO,
+                    phaseType: PhaseType.AGENCY /* single-อปท: LAO coordination phase retired */,
                     isOpen: true,
                   },
                 });
@@ -827,7 +827,7 @@ export class TrackingStatusService {
               }
               const isAgency = workHistory.amphoe?.id === '3001' && workHistory.localAdministrativeOrganization?.id === '3001027';
               const openPhase = await manager.findOne(PlanPhase, {
-                where: { developmentPlan: { id: dp.id }, phaseType: isAgency ? PhaseType.AGENCY : PhaseType.LAO, isOpen: true },
+                where: { developmentPlan: { id: dp.id }, phaseType: PhaseType.AGENCY /* single-อปท: LAO coordination phase retired */, isOpen: true },
               });
               if (!openPhase) throw new BadRequestException('ระยะเวลายื่นโครงการปิดแล้ว ไม่สามารถส่งโครงการได้');
 
@@ -1549,7 +1549,7 @@ export class TrackingStatusService {
           const openPhase = await manager.findOne(PlanPhase, {
             where: {
               developmentPlan: { id: dp.id },
-              phaseType: isSubmitterAgency ? PhaseType.AGENCY : PhaseType.LAO,
+              phaseType: PhaseType.AGENCY /* single-อปท: LAO coordination phase retired */,
               isOpen: true,
             },
           });

@@ -55,6 +55,7 @@ import {
   parseBudgetString,
   clampBudget,
 } from './budget/budget-rules';
+import { MUNICIPAL_PROFILE } from './municipal-profile';
 
 @Controller({
   version: '1',
@@ -310,7 +311,13 @@ export class AiController {
     // NOT applied here per service contract in budget-rules.ts; the
     // missing-value signal (budget=null) is more faithful than a
     // fabricated floor. FE hides the budget card on null.
-    const budgetFloor = resolveBudgetFloor(body.organizationType);
+    // Single-อปท rescope: mirror the service — fall back to the municipal
+    // profile's type when the caller omits organizationType, so the
+    // defensive clamp uses the same floor the prompt clause advertised and
+    // the budget card stays visible for agency (กอง/สำนัก) users.
+    const budgetFloor = resolveBudgetFloor(
+      body.organizationType ?? MUNICIPAL_PROFILE.laoType,
+    );
     const rawBudgetText = this.parseSection(rawResult, 'งบประมาณ:');
     const parsedBudget = parseBudgetString(rawBudgetText);
     const budget = clampBudget(parsedBudget, budgetFloor);

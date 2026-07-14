@@ -172,10 +172,11 @@ export function composeCriteriaContextBlock(
   // Lines are concatenated without trailing blank lines inside each
   // section to keep the prompt compact; a single blank line separates
   // sections so the LLM parses them as distinct blocks.
+  // Single-อปท: the [ROLE] line is intentionally DROPPED here — the system
+  // prompt already sets the municipal analyst persona (MUNICIPAL_PROFILE).
+  // Re-stating a provincial ("จังหวัดนครราชสีมา") role here previously
+  // overrode that identity and leaked อบจ./จังหวัด framing into every draft.
   return [
-    '[ROLE]',
-    'คุณเป็นผู้เชี่ยวชาญด้านการวางแผนพัฒนาท้องถิ่น จังหวัดนครราชสีมา ที่ต้องร่างโครงการให้สอดคล้องกับประเด็นและหลักเกณฑ์ของจังหวัดอย่างเคร่งครัด',
-    '',
     '[FORMAT]',
     'รายงานนี้เป็น ISSUE_BASED (ประเด็นการพัฒนา) — ห้ามใช้ฟิลด์ ยุทธศาสตร์/กลยุทธ์/แผนงาน/ตัวชี้วัด',
     '',
@@ -196,7 +197,7 @@ export function composeCriteriaContextBlock(
     criteriaLines || '(ไม่มีหลักเกณฑ์)',
     '',
     '[RULES]',
-    'กรุณาร่างเนื้อหาโครงการให้สอดคล้องกับประเด็นและหลักเกณฑ์ข้างต้น โดยเฉพาะเรื่องขอบเขตพื้นที่ ความคาบเกี่ยวระหว่าง อปท. และการหลีกเลี่ยงพื้นที่คุ้มครอง',
+    'กรุณาร่างเนื้อหาโครงการให้สอดคล้องกับประเด็นและหลักเกณฑ์ข้างต้น โดยเฉพาะเรื่องขอบเขตพื้นที่ต้องอยู่ในเขตเทศบาลตำบลหนองกระทุ่ม อยู่ในอำนาจหน้าที่ของเทศบาล และการหลีกเลี่ยงพื้นที่คุ้มครอง',
     'เนื้อหาต้องสะท้อน "ลักษณะโครงการที่สอดคล้อง" และไม่ขัดต่อหลักเกณฑ์ข้อใดข้อหนึ่ง',
     // Wave 28 N1 — intentional redundancy with [SUB_TYPE_SCOPE] to harden
     // the prompt against topic drift across sub-types under the same issue.

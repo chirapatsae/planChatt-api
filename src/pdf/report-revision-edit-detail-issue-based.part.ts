@@ -181,7 +181,7 @@ export const createIssueBasedRevisionGroupDetailDocDefinition = (
     text: [
       { text: 'รายละเอียดโครงการ\n' },
       developmentPlanRevisionName + '\n',
-      'องค์การบริหารส่วนจังหวัดนครราชสีมา\n',
+      'เทศบาลตำบลหนองกระทุ่ม จังหวัดนครราชสีมา\n',
     ],
     alignment: 'center',
     margin: [0, 0, 0, 10],

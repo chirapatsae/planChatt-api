@@ -21,10 +21,14 @@ import { DataSource } from 'typeorm';
  * in-repo, idempotent guarantee for the two rows that MUST exist for the app to
  * function, so a green-field DB needs no manual SQL for them.
  *
- * CREATE-ONLY (`ON CONFLICT (id) DO NOTHING`): on a fresh DB it creates the rows
- * on first boot; if a row already exists it is left untouched, so a later rename
- * via the admin UI is never reverted. Values are env-overridable. Mirrors
- * `BackupLoginBootstrapService`: it runs on `onApplicationBootstrap` and NEVER
+ * ENFORCING UPSERT (`ON CONFLICT (id) DO UPDATE`): the LAO table is the single
+ * source of truth for the home-org identity (owner decision 2026-07-12), so
+ * boot GUARANTEES row 3001027 carries the canonical name/type — this repairs
+ * the pre-rescope province DB where 3001027 was still named
+ * "องค์การบริหารส่วนจังหวัดนครราชสีมา" (the old create-only seed could not
+ * rename it, which is why the UI/AI kept showing "อบจ.นม"). A deliberate
+ * rename goes through the ORG_* env vars, never ad-hoc edits. Mirrors
+ * `BackupLoginBootstrapService`: runs on `onApplicationBootstrap` and NEVER
  * crashes boot on a seed hiccup.
  */
 @Injectable()
@@ -58,17 +62,21 @@ export class OrgSeedService implements OnApplicationBootstrap {
       await this.dataSource.query(
         `INSERT INTO amphoes (id, name)
            VALUES ($1, $2)
-           ON CONFLICT (id) DO NOTHING`,
+           ON CONFLICT (id) DO UPDATE
+             SET name = EXCLUDED.name`,
         [this.amphoeId, this.amphoeName],
       );
       await this.dataSource.query(
         `INSERT INTO local_administrative_organizations (id, name, type, amphoe_id)
            VALUES ($1, $2, $3, $4)
-           ON CONFLICT (id) DO NOTHING`,
+           ON CONFLICT (id) DO UPDATE
+             SET name = EXCLUDED.name,
+                 type = EXCLUDED.type,
+                 amphoe_id = EXCLUDED.amphoe_id`,
         [this.laoId, this.laoName, this.laoType, this.amphoeId],
       );
       this.logger.log(
-        `[OrgSeed] home org ensured — amphoe ${this.amphoeId}="${this.amphoeName}", ` +
+        `[OrgSeed] home org enforced — amphoe ${this.amphoeId}="${this.amphoeName}", ` +
           `lao ${this.laoId}="${this.laoName}" (${this.laoType}).`,
       );
     } catch (err) {

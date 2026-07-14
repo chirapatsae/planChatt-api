@@ -277,7 +277,7 @@ export const createSupplementGroupDetailDocDefinition = (
     text: [
       { text: 'รายละเอียดโครงการ\n' },
       developmentPlanSupplementName + '\n',
-      'องค์การบริหารส่วนจังหวัดนครราชสีมา\n',
+      'เทศบาลตำบลหนองกระทุ่ม จังหวัดนครราชสีมา\n',
     ],
     alignment: 'center',
     margin: [0, 0, 0, 10],

@@ -31,7 +31,7 @@ export const createIssueBasedRevisionEditSummaryPartDocDefinition = (
     stack: [
       'บัญชีสรุปโครงการพัฒนา \n',
       developmentPlanRevisionName + '\n',
-      'องค์การบริหารส่วนจังหวัดนครราชสีมา\n',
+      'เทศบาลตำบลหนองกระทุ่ม จังหวัดนครราชสีมา\n',
     ],
     alignment: 'center',
     bold: true,

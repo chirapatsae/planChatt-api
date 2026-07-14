@@ -18,7 +18,7 @@ import { SupplementEquipmentProjectGroup } from 'src/supplement-equipment-projec
 // — §8 PlanPhase (main) + §9 DevelopmentPlanRevision / DevelopmentPlanSupplement
 // (revision / change / supplement). READ-ONLY (§17.2): the window is a
 // display overlay, NEVER a workflow gate.
-import { PlanPhase, PhaseType } from 'src/plan-phase/entities/plan-phase.entity';
+import { PlanPhase } from 'src/plan-phase/entities/plan-phase.entity';
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
 import { DevelopmentPlanSupplement } from 'src/development-plan-supplement/entities/development-plan-supplement.entity';
 import { STATUS_NAMES } from 'src/common/status-names';
@@ -944,7 +944,9 @@ export class ExecutiveService {
     })[0];
 
     return {
-      phaseType: phase.phaseType === PhaseType.AGENCY ? 'AGENCY' : 'LAO',
+      // Single-อปท: only AGENCY (ส่วนราชการภายใน) phases exist now — the
+      // LAO/"การประสานแผน" coordination phase is retired.
+      phaseType: 'AGENCY',
       openDate: this.toIso(phase.openDate),
       closeDate: this.toIso(phase.closeDate),
       isOpen: phase.isOpen,

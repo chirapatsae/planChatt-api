@@ -343,7 +343,8 @@ describe('MainAssemblyService.getReadiness', () => {
     repos.planPhaseRepo.createQueryBuilder.mockReturnValueOnce(
       buildQbStub({ getExists: false }),
     );
-    // §21.2 BE-01 — equipment Approved count (0 is fine here; LAO=0 still fails gate)
+    // §21.2 BE-01 — equipment Approved count (0 is fine; single-source gate
+    // passes on approvedAgencyCount>0 alone).
     repos.equipmentRepo.createQueryBuilder.mockReturnValueOnce(
       buildQbStub({ getCount: 0 }),
     );
@@ -353,8 +354,9 @@ describe('MainAssemblyService.getReadiness', () => {
     expect(result.totalCount).toBe(3);
     expect(result.approvedCount).toBe(3);
     expect(result.hasOpenPhase).toBe(false);
-    // §21.2 — LAO Approved = 0 so the both-sources gate makes isReady false
-    expect(result.isReady).toBe(false);
+    // Single-อปท: readiness is single-source (LAO/การประสานแผน retired) —
+    // all approved + no open phase + approvedAgencyCount>0 ⇒ ready.
+    expect(result.isReady).toBe(true);
     expect(result.breakdown).toMatchObject({
       agencyCount: 3,
       laoCount: 0,

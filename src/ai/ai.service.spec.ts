@@ -6,6 +6,7 @@ import { AiUsageQuotasService } from 'src/ai-usage-quotas/ai-usage-quotas.servic
 import { IssueCriteriaRegistryService } from './criteria/issue-criteria-registry.service';
 import { IssueCriteriaGeoCheckService } from './criteria/issue-criteria-geo-check.service';
 import { IssueCriteriaEvidenceCheckService } from './criteria/issue-criteria-evidence-check.service';
+import { IssueCriteriaTitleUniquenessCheckService } from './criteria/issue-criteria-title-uniqueness-check.service';
 import { GeoFeatureLookupService } from './geo-feature-lookup.service';
 import { GeoConflictService } from './conflict/geo-conflict.service';
 import type { GeoAnalysisResult } from './conflict/geo-conflict.types';
@@ -120,6 +121,10 @@ describe('AiService.generatePromptSuggestions', () => {
         {
           provide: IssueCriteriaEvidenceCheckService,
           useValue: mockEvidenceCheck,
+        },
+        {
+          provide: IssueCriteriaTitleUniquenessCheckService,
+          useValue: { resolveTitleUniqueness: jest.fn().mockResolvedValue([]) },
         },
         {
           provide: GeoFeatureLookupService,
@@ -402,6 +407,10 @@ describe('AiService — buildIssueBasedPrompt (Wave 30 N2 prompt blocks)', () =>
         {
           provide: IssueCriteriaEvidenceCheckService,
           useValue: mockEvidenceCheck,
+        },
+        {
+          provide: IssueCriteriaTitleUniquenessCheckService,
+          useValue: { resolveTitleUniqueness: jest.fn().mockResolvedValue([]) },
         },
         { provide: GeoFeatureLookupService, useValue: mockGeoFeatureLookup },
         { provide: GeoConflictService, useValue: mockGeoConflict },
@@ -1401,6 +1410,7 @@ describe('AiService.generatePreSubmitReview — STRATEGY_BASED LAO parity (N3)',
         { provide: IssueCriteriaRegistryService, useValue: mockRegistry },
         { provide: IssueCriteriaGeoCheckService, useValue: mockGeoCheck },
         { provide: IssueCriteriaEvidenceCheckService, useValue: mockEvidenceCheck },
+        { provide: IssueCriteriaTitleUniquenessCheckService, useValue: { resolveTitleUniqueness: jest.fn().mockResolvedValue([]) } },
         {
           provide: GeoFeatureLookupService,
           useValue: { resolveFeatureForPoint: jest.fn().mockReturnValue(null) },

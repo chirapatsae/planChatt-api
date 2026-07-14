@@ -108,8 +108,8 @@ export class IssueCriteriaGeoCheckService {
         criterionId: criterion.id,
         suggestedVerdict: crossAmphoe ? 'pass' : 'needs-evidence',
         reason: crossAmphoe
-          ? `จุดเริ่มอยู่ในอำเภอรหัส ${startResolved.amphoeCode} และจุดปลายอยู่ในอำเภอรหัส ${endResolved.amphoeCode} — คาบเกี่ยวระหว่าง อปท.`
-          : `จุดเริ่มและจุดปลายอยู่ในอำเภอเดียวกัน (รหัส ${startResolved.amphoeCode}) — ไม่พบหลักฐานคาบเกี่ยวโดยอัตโนมัติ`,
+          ? `จุดเริ่มอยู่ในอำเภอรหัส ${startResolved.amphoeCode} และจุดปลายอยู่ในอำเภอรหัส ${endResolved.amphoeCode} — มีบางส่วนอยู่นอกเขตพื้นที่รับผิดชอบของเทศบาล`
+          : `จุดเริ่มและจุดปลายอยู่ในอำเภอเดียวกัน (รหัส ${startResolved.amphoeCode}) — อยู่ในเขตพื้นที่รับผิดชอบ`,
         kind: 'geo-auto',
         // Geo auto-check is authoritative — the polygon answer is a
         // fact, not an opinion (architecture §7).
