@@ -71,10 +71,17 @@ export class StaffHomeService {
 
   private static readonly LANE_LABEL_TH: Record<StaffOverdueLane, string> = {
     mainPlan: 'เล่มหลัก',
-    revision: 'แก้ไข/เปลี่ยนแปลง',
+    revisionEdit: 'แก้ไข',
+    revisionChange: 'เปลี่ยนแปลง',
     supplement: 'เพิ่มเติม',
     equipment: 'ครุภัณฑ์',
   };
+
+  /** Combined เล่ม label for revision-book drill items (RPG/RELPG) — used as
+   *  the `composeBookLabel` fallback when the parent plan name is absent. Kept
+   *  as the pre-split "แก้ไข/เปลี่ยนแปลง" wording (the lane is now split, but a
+   *  single drill item is still "in the revision book"). */
+  private static readonly REVISION_BASE_LABEL = 'แก้ไข/เปลี่ยนแปลง';
 
   /**
    * Canonical review-page deep-links per (bookKind × stage).
@@ -206,7 +213,8 @@ export class StaffHomeService {
         bookKind: 'mainPlan',
         bookJoin: 'plan',
       }),
-      await this.aggregateRevisionLane(responsibleAgencyIds, bypassAreaFilter),
+      await this.aggregateRevisionEditLane(responsibleAgencyIds, bypassAreaFilter),
+      await this.aggregateRevisionChangeLane(responsibleAgencyIds, bypassAreaFilter),
       await this.aggregateSupplementLane(
         responsibleAgencyIds,
         bypassAreaFilter,
@@ -247,18 +255,53 @@ export class StaffHomeService {
   }
 
   /**
-   * The `revision` lane folds RPG + RELPG into one lane (both agency-scoped,
-   * both revision-book sub-types per §14/§18). Aggregate each then merge
-   * stage-by-stage. Each item keeps its OWN `bookKind` / `actionRoute`:
-   * RPG → `edit`/`change` (branch on the joined revision_type.name); RELPG →
-   * `revised-equipment` (DOCS-01 §7.4).
+   * The revision books (RPG + RELPG, both agency-scoped per §14/§18) are
+   * surfaced as TWO lanes split by parent `revision_type.name`:
+   * `revisionEdit` (แก้ไข) and `revisionChange` (เปลี่ยนแปลง). 2026-07-14 —
+   * previously one combined `revision` lane.
+   *
+   * Each lane merges its RPG + RELPG halves (both filtered to the SAME
+   * revision type via `revisionTypePredicate`). Item-level `bookKind` /
+   * `actionRoute` are UNCHANGED: RPG → `edit`/`change` (per-row from
+   * revision_type.name); RELPG → `revised-equipment` (DOCS-01 §7.4, still
+   * routed to the /revise/edit admin queue per §9.1.2). Splitting is a pure
+   * lane repartition — the RPG-edit/RPG-change/RELPG-edit/RELPG-change
+   * sub-queries partition the exact same row set, so per-bucket counts and
+   * `totalOverdue` reconcile with the pre-split combined lane.
    */
-  private async aggregateRevisionLane(
+  private aggregateRevisionEditLane(
+    responsibleAgencyIds: string[],
+    bypassAreaFilter: boolean,
+  ): Promise<StaffOverdueLaneEntry> {
+    return this.aggregateRevisionTypeLane(
+      'revisionEdit',
+      'edit',
+      responsibleAgencyIds,
+      bypassAreaFilter,
+    );
+  }
+
+  private aggregateRevisionChangeLane(
+    responsibleAgencyIds: string[],
+    bypassAreaFilter: boolean,
+  ): Promise<StaffOverdueLaneEntry> {
+    return this.aggregateRevisionTypeLane(
+      'revisionChange',
+      'change',
+      responsibleAgencyIds,
+      bypassAreaFilter,
+    );
+  }
+
+  /** Shared body — merge the RPG + RELPG halves for ONE revision type. */
+  private async aggregateRevisionTypeLane(
+    lane: 'revisionEdit' | 'revisionChange',
+    revisionTypePredicate: 'edit' | 'change',
     responsibleAgencyIds: string[],
     bypassAreaFilter: boolean,
   ): Promise<StaffOverdueLaneEntry> {
     const rpg = await this.aggregateLane(
-      'revision',
+      lane,
       'revisedProjectGroupId',
       'revised_project_groups',
       {
@@ -270,10 +313,11 @@ export class StaffHomeService {
         // RPG bookKind is resolved per-row from revision_type.name.
         bookKind: 'edit',
         bookJoin: 'revision',
+        revisionTypePredicate,
       },
     );
     const relpg = await this.aggregateLane(
-      'revision',
+      lane,
       'revisedEquipmentProjectGroupId',
       'revised_equipment_project_groups',
       {
@@ -284,6 +328,7 @@ export class StaffHomeService {
         excludeDraft: false,
         bookKind: 'revised-equipment',
         bookJoin: 'revision',
+        revisionTypePredicate,
       },
     );
     return this.mergeLanes(rpg, relpg);
@@ -358,6 +403,16 @@ export class StaffHomeService {
       bookKind: StaffOverdueBookKind;
       /** which parent-book chain to JOIN for the human เล่ม label. */
       bookJoin: 'plan' | 'revision' | 'supplement';
+      /**
+       * Restrict a revision-book aggregation to ONE revision_type
+       * (2026-07-14, revisionEdit/revisionChange lane split). Only honoured
+       * when `bookJoin === 'revision'`. 'change' = rows whose parent
+       * `revision_type.name = เปลี่ยนแปลง`; 'edit' = the TOTAL catch-all
+       * (`<> เปลี่ยนแปลง OR IS NULL`) — mirrors `resolveBookKind` so an item's
+       * lane and its bookKind can never disagree, and the two predicates
+       * partition the RPG/RELPG row set exactly (no drop, no double-count).
+       */
+      revisionTypePredicate?: 'edit' | 'change';
     },
   ): Promise<StaffOverdueLaneEntry> {
     // Fail-closed: plain staff with zero responsibilities for this scope sees
@@ -415,6 +470,17 @@ export class StaffHomeService {
         .addSelect('plan.name', 'planname')
         .addSelect('dpr.revision_number', 'revisionnumber')
         .addSelect('rtype.name', 'revisiontypename');
+
+      // Lane split (revisionEdit / revisionChange). 'change' = exact type
+      // match; 'edit' = total catch-all incl. a hypothetical null-type row,
+      // so the two predicates disjointly partition the whole revision set.
+      if (opts.revisionTypePredicate === 'change') {
+        qb.andWhere('rtype.name = :changeName', { changeName: 'เปลี่ยนแปลง' });
+      } else if (opts.revisionTypePredicate === 'edit') {
+        qb.andWhere('(rtype.name <> :changeName OR rtype.name IS NULL)', {
+          changeName: 'เปลี่ยนแปลง',
+        });
+      }
     } else {
       // supplement
       qb.innerJoin(
@@ -496,15 +562,15 @@ export class StaffHomeService {
       case 'equipment':
         return planName ?? StaffHomeService.LANE_LABEL_TH.equipment;
       case 'edit': {
-        const base = planName ?? StaffHomeService.LANE_LABEL_TH.revision;
+        const base = planName ?? StaffHomeService.REVISION_BASE_LABEL;
         return `${base} · แก้ไข ครั้งที่ ${row.revisionnumber ?? '-'}`;
       }
       case 'change': {
-        const base = planName ?? StaffHomeService.LANE_LABEL_TH.revision;
+        const base = planName ?? StaffHomeService.REVISION_BASE_LABEL;
         return `${base} · เปลี่ยนแปลง ครั้งที่ ${row.revisionnumber ?? '-'}`;
       }
       case 'revised-equipment': {
-        const base = planName ?? StaffHomeService.LANE_LABEL_TH.revision;
+        const base = planName ?? StaffHomeService.REVISION_BASE_LABEL;
         const prefix =
           row.revisiontypename === 'เปลี่ยนแปลง' ? 'เปลี่ยนแปลง' : 'แก้ไข';
         return `${base} · ${prefix} ครั้งที่ ${row.revisionnumber ?? '-'}`;
@@ -700,7 +766,8 @@ export class StaffHomeService {
   private emptyResponse(): StaffOverdueResponseDto {
     const lanes: StaffOverdueLane[] = [
       'mainPlan',
-      'revision',
+      'revisionEdit',
+      'revisionChange',
       'supplement',
       'equipment',
     ];

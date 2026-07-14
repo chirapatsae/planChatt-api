@@ -12,18 +12,23 @@
  * in-memory string build — ZERO writes (§18.13).
  */
 
-/** Lane = project sub-type grouping surfaced to the staff dashboard. */
+/** Lane = project sub-type grouping surfaced to the staff dashboard.
+ *  2026-07-14 — the former combined `revision` lane is split into two
+ *  (`revisionEdit` / `revisionChange`) so the aging table shows แก้ไข and
+ *  เปลี่ยนแปลง separately. Each is partitioned by the parent
+ *  `revision_type.name` (RPG + RELPG). */
 export type StaffOverdueLane =
   | 'mainPlan'
-  | 'revision'
+  | 'revisionEdit'
+  | 'revisionChange'
   | 'supplement'
   | 'equipment';
 
 /**
  * Fine-grained sub-type discriminator (DOCS-01 §7.2 DECISION-B). Finer than
- * `StaffOverdueLane` — disambiguates edit vs change (both fold into the
- * `revision` lane) and RPG vs RELPG, so the BE can resolve the precise
- * action / detail / history route per item.
+ * `StaffOverdueLane` — disambiguates edit vs change (they populate the
+ * `revisionEdit` / `revisionChange` lanes respectively) and RPG vs RELPG, so
+ * the BE can resolve the precise action / detail / history route per item.
  */
 export type StaffOverdueBookKind =
   | 'mainPlan' // ProjectGroup (ผ.02 main plan)

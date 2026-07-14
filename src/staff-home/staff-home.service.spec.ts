@@ -101,10 +101,11 @@ describe('StaffHomeService (PHASE2-BE-01 + BE-01 enrichment)', () => {
     const res = await service.getOverdue('user-1');
     expect(res.totalAging).toBe(0);
     expect(res.totalOverdue).toBe(0);
-    expect(res.lanes).toHaveLength(4);
+    expect(res.lanes).toHaveLength(5);
     expect(res.lanes.map((l) => l.lane)).toEqual([
       'mainPlan',
-      'revision',
+      'revisionEdit',
+      'revisionChange',
       'supplement',
       'equipment',
     ]);
@@ -250,7 +251,7 @@ describe('StaffHomeService (PHASE2-BE-01 + BE-01 enrichment)', () => {
     expect(pending.oldest?.ageDays).toBe(ages[0]);
   });
 
-  it('revision lane merges RPG + RELPG with distinct bookKind/actionRoute', async () => {
+  it('splits revision into revisionEdit / revisionChange lanes (RPG + RELPG per type) and reconciles', async () => {
     (workHistoryRepo.findOne as jest.Mock).mockResolvedValue({
       role: { name: 'super-admin' }, // bypass
       workStatus: { name: 'approved' },
@@ -258,10 +259,14 @@ describe('StaffHomeService (PHASE2-BE-01 + BE-01 enrichment)', () => {
       workHistoryResponsibleGovernmentAgency: [],
     });
 
-    // Call order: 0=mainPlan, 1=RPG(revision), 2=RELPG(revision),
-    // 3=supplement, 4=equipment.
+    // 2026-07-14 — revision lane split. The aggregator now issues FOUR
+    // revision sub-queries; the mock returns rows by call index (it does NOT
+    // apply the revision_type predicate itself), so edit rows go in the
+    // edit-lane indices and change rows in the change-lane indices.
+    // Call order: 0=mainPlan, 1=RPG-edit, 2=RELPG-edit, 3=RPG-change,
+    // 4=RELPG-change, 5=SPG, 6=SEPG, 7=EPG.
     rawRowsByCall[1] = [
-      // edit RPG
+      // edit RPG → revisionEdit
       row({
         projectid: 'r1',
         title: 'R-edit',
@@ -271,22 +276,12 @@ describe('StaffHomeService (PHASE2-BE-01 + BE-01 enrichment)', () => {
         revisionnumber: 2,
         revisiontypename: 'แก้ไข',
       }),
-      // change RPG
-      row({
-        projectid: 'r2',
-        title: 'R-change',
-        statusname: 'Pending',
-        createat: daysAgo(8),
-        planname: 'แผน X',
-        revisionnumber: 3,
-        revisiontypename: 'เปลี่ยนแปลง',
-      }),
     ];
     rawRowsByCall[2] = [
-      // RELPG
+      // edit RELPG → revisionEdit
       row({
         projectid: 'e1',
-        title: 'E-equip',
+        title: 'E-equip-edit',
         statusname: 'Pending',
         createat: daysAgo(1),
         planname: 'แผน X',
@@ -294,36 +289,84 @@ describe('StaffHomeService (PHASE2-BE-01 + BE-01 enrichment)', () => {
         revisiontypename: 'แก้ไข',
       }),
     ];
+    rawRowsByCall[3] = [
+      // change RPG → revisionChange (overdue: 20d → d15p)
+      row({
+        projectid: 'r2',
+        title: 'R-change',
+        statusname: 'Pending',
+        createat: daysAgo(20),
+        planname: 'แผน X',
+        revisionnumber: 3,
+        revisiontypename: 'เปลี่ยนแปลง',
+      }),
+    ];
+    rawRowsByCall[4] = [
+      // change RELPG → revisionChange (RELPG keeps the /revise/edit route per §9.1.2)
+      row({
+        projectid: 'e2',
+        title: 'E-equip-change',
+        statusname: 'Pending',
+        createat: daysAgo(2),
+        planname: 'แผน X',
+        revisionnumber: 2,
+        revisiontypename: 'เปลี่ยนแปลง',
+      }),
+    ];
 
     const res = await service.getOverdue('user-1');
-    const revision = res.lanes.find((l) => l.lane === 'revision')!;
-    const pending = revision.stages.find((s) => s.stage === 'Pending')!;
-    expect(pending.total).toBe(3);
 
-    const byId = new Map(pending.topItems.map((i) => [i.projectId, i]));
-    const edit = byId.get('r1')!;
-    const change = byId.get('r2')!;
-    const relpg = byId.get('e1')!;
+    // The combined 'revision' lane no longer exists.
+    expect(
+      res.lanes.find((l) => (l.lane as string) === 'revision'),
+    ).toBeUndefined();
+    const editLane = res.lanes.find((l) => l.lane === 'revisionEdit')!;
+    const changeLane = res.lanes.find((l) => l.lane === 'revisionChange')!;
+    const editPending = editLane.stages.find((s) => s.stage === 'Pending')!;
+    const changePending = changeLane.stages.find((s) => s.stage === 'Pending')!;
 
-    // edit RPG
+    expect(editPending.total).toBe(2); // r1 + e1
+    expect(changePending.total).toBe(2); // r2 + e2
+
+    // Reconciliation: edit + change == pre-split combined (4), and the overdue
+    // count is unchanged (only r2 at 20d is d15p).
+    expect(editPending.total + changePending.total).toBe(4);
+    expect(res.totalOverdue).toBe(1);
+
+    const editById = new Map(editPending.topItems.map((i) => [i.projectId, i]));
+    const changeById = new Map(
+      changePending.topItems.map((i) => [i.projectId, i]),
+    );
+    const edit = editById.get('r1')!;
+    const editRelpg = editById.get('e1')!;
+    const change = changeById.get('r2')!;
+    const changeRelpg = changeById.get('e2')!;
+
+    // edit RPG — in revisionEdit lane
     expect(edit.bookKind).toBe('edit');
     expect(edit.bookLabel).toBe('แผน X · แก้ไข ครั้งที่ 2');
     expect(edit.actionRoute).toBe('/revise/edit/admin/pending');
     expect(edit.detailRoute).toBe('/revision/detail/version/r1');
     expect(edit.historyRoute).toBe('/revision/tracking/detail/r1');
 
-    // change RPG
+    // edit RELPG — in revisionEdit lane, /revise/edit/* queue
+    expect(editRelpg.bookKind).toBe('revised-equipment');
+    expect(editRelpg.bookLabel).toBe('แผน X · แก้ไข ครั้งที่ 2');
+    expect(editRelpg.actionRoute).toBe('/revise/edit/admin/pending');
+    expect(editRelpg.detailRoute).toBe('/revision/detail/equipment/version/e1');
+    expect(editRelpg.historyRoute).toBe('/revision/tracking/equipment/detail/e1');
+
+    // change RPG — in revisionChange lane
     expect(change.bookKind).toBe('change');
     expect(change.bookLabel).toBe('แผน X · เปลี่ยนแปลง ครั้งที่ 3');
     expect(change.actionRoute).toBe('/revise/change/admin/pending');
     expect(change.detailRoute).toBe('/revision/detail/version/r2');
 
-    // RELPG — folded onto /revise/edit/* queue, equipment detail/history routes
-    expect(relpg.bookKind).toBe('revised-equipment');
-    expect(relpg.bookLabel).toBe('แผน X · แก้ไข ครั้งที่ 2');
-    expect(relpg.actionRoute).toBe('/revise/edit/admin/pending');
-    expect(relpg.detailRoute).toBe('/revision/detail/equipment/version/e1');
-    expect(relpg.historyRoute).toBe('/revision/tracking/equipment/detail/e1');
+    // change RELPG — sits in revisionChange lane BUT its item actionRoute
+    // stays /revise/edit/admin/pending (§9.1.2 RELPG→edit-queue fold, unchanged).
+    expect(changeRelpg.bookKind).toBe('revised-equipment');
+    expect(changeRelpg.bookLabel).toBe('แผน X · เปลี่ยนแปลง ครั้งที่ 2');
+    expect(changeRelpg.actionRoute).toBe('/revise/edit/admin/pending');
   });
 
   it('supplement items: bookLabel + null detail route; equipment items: pageNumber null', async () => {
@@ -334,9 +377,10 @@ describe('StaffHomeService (PHASE2-BE-01 + BE-01 enrichment)', () => {
       workHistoryResponsibleGovernmentAgency: [],
     });
 
-    // Call order: 0=mainPlan, 1=RPG, 2=RELPG, 3=SPG(supplement),
-    // 4=SEPG(supplement-equipment), 5=EPG(equipment).
-    rawRowsByCall[3] = [
+    // Call order (post revision-split): 0=mainPlan, 1=RPG-edit, 2=RELPG-edit,
+    // 3=RPG-change, 4=RELPG-change, 5=SPG(supplement),
+    // 6=SEPG(supplement-equipment), 7=EPG(equipment).
+    rawRowsByCall[5] = [
       row({
         projectid: 's1',
         title: 'S1',
@@ -346,7 +390,7 @@ describe('StaffHomeService (PHASE2-BE-01 + BE-01 enrichment)', () => {
         supplementnumber: 1,
       }),
     ];
-    rawRowsByCall[4] = [
+    rawRowsByCall[6] = [
       // SEPG — folds into the supplement lane with its own bookKind.
       row({
         projectid: 'sq1',
@@ -358,7 +402,7 @@ describe('StaffHomeService (PHASE2-BE-01 + BE-01 enrichment)', () => {
         supplementnumber: 1,
       }),
     ];
-    rawRowsByCall[5] = [
+    rawRowsByCall[7] = [
       row({
         projectid: 'q1',
         title: 'ครุภัณฑ์ 1',
