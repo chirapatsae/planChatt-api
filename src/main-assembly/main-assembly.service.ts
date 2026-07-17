@@ -1560,45 +1560,10 @@ export class MainAssemblyService {
 
     const hasOpenPhase = openPhaseExists;
 
-    // Origin breakdown.
-    const agencyCount = await this.projectGroupRepo
-      .createQueryBuilder('pg')
-      .innerJoin('pg.createdBy', 'wh')
-      .innerJoin('wh.amphoe', 'amp')
-      .innerJoin('wh.localAdministrativeOrganization', 'lao')
-      .innerJoin('pg.trackingStatus', 'ts')
-      .innerJoin('ts.statusId', 'status')
-      .where('pg.developmentPlan = :id', { id: developmentPlanId })
-      .andWhere('pg.deletedAt IS NULL')
-      .andWhere('pg.isDraft = :isDraft', { isDraft: false })
-      .andWhere('ts.isLatest = :isLatest', { isLatest: true })
-      .andWhere('status.name NOT IN (:...excluded)', {
-        excluded: READINESS_EXCLUSION_STATUSES,
-      })
-      .andWhere('amp.id = :amphoeId', { amphoeId: '3001' })
-      .andWhere('lao.id = :laoId', { laoId: '3001027' })
-      .getCount();
-    const laoCount = totalCount - agencyCount;
-
-    // §21.2 both-sources merge gate — per-source Approved sub-counts.
-    // Agency Approved (§1 classification on creator WorkHistory):
-    const approvedAgencyCount = await this.projectGroupRepo
-      .createQueryBuilder('pg')
-      .innerJoin('pg.createdBy', 'wh')
-      .innerJoin('wh.amphoe', 'amp')
-      .innerJoin('wh.localAdministrativeOrganization', 'lao')
-      .innerJoin('pg.trackingStatus', 'ts')
-      .innerJoin('ts.statusId', 'status')
-      .where('pg.developmentPlan = :id', { id: developmentPlanId })
-      .andWhere('pg.deletedAt IS NULL')
-      .andWhere('pg.isDraft = :isDraft', { isDraft: false })
-      .andWhere('ts.isLatest = :isLatest', { isLatest: true })
-      .andWhere('status.name = :name', { name: STATUS_NAMES.APPROVED })
-      .andWhere('amp.id = :amphoeId', { amphoeId: '3001' })
-      .andWhere('lao.id = :laoId', { laoId: '3001027' })
-      .getCount();
-    // LAO Approved = total Approved − Agency Approved.
-    const approvedLaoCount = approvedCount - approvedAgencyCount;
+    // 2026-07-14 — single agency-source (หนองกระทุ่ม): the LAO /
+    // "การประสานแผน" origin breakdown (agencyCount / laoCount /
+    // approvedAgencyCount / approvedLaoCount) is retired. Every project is
+    // agency-origin, so those counts were phantom (laoCount always 0).
 
     // Approved equipment (§5.3) — agency-origin only by construction.
     // Mirrors the EXISTS clause used in por03-pdf.service.ts approved
@@ -1616,18 +1581,16 @@ export class MainAssemblyService {
       .andWhere('status.name = :name', { name: STATUS_NAMES.APPROVED })
       .getCount();
 
-    // §21.2 — readiness gate. Single-อปท (หนองกระทุ่ม): the plan-
-    // coordination ("การประสานแผน" / LAO) source is retired, so ALL
-    // projects are agency-origin and `approvedLaoCount` is always 0.
-    // The old both-sources requirement (`approvedLaoCount > 0`) is dropped
-    // — the gate is now single-source: every project approved, the plan's
-    // phase closed, and at least one approved project/equipment present.
-    const agencySideContribution = approvedAgencyCount + approvedEquipmentCount;
+    // Readiness gate — single agency-source (หนองกระทุ่ม; LAO /
+    // "การประสานแผน" coordination retired). Ready when every non-excluded
+    // project under the plan is Approved (which already implies ≥1 approved
+    // project) and the plan's phase is closed. The former both-sources
+    // `approvedLaoCount > 0` term is dropped (always 0); the agency-side
+    // floor is redundant given `approvedCount === totalCount && totalCount > 0`.
     const isReady =
       approvedCount === totalCount &&
       totalCount > 0 &&
-      !hasOpenPhase &&
-      agencySideContribution > 0;
+      !hasOpenPhase;
 
     // Status counts.
     const statusRows: { statusName: string; cnt: string }[] = await this.projectGroupRepo
@@ -1647,11 +1610,6 @@ export class MainAssemblyService {
     }
 
     const breakdown: MainReadinessBreakdownDto = {
-      agencyCount,
-      laoCount,
-      // §21.2 — new per-source Approved sub-counts.
-      approvedAgencyCount,
-      approvedLaoCount,
       approvedEquipmentCount,
       pendingCount: statusMap[STATUS_NAMES.PENDING] ?? 0,
       verifiedCount: statusMap[STATUS_NAMES.VERIFIED] ?? 0,
@@ -1668,14 +1626,16 @@ export class MainAssemblyService {
   }
 
   /**
-   * §21.2 — Re-asserts the both-sources merge gate without the role
-   * check that `getReadiness` performs. Used by `merge` and
-   * `generatePart3` as defense-in-depth; FE has already enforced via
-   * the disabled merge button but BE cannot trust FE.
+   * Re-asserts the merge readiness gate without the role check that
+   * `getReadiness` performs. Used by `merge` and `generatePart3` as
+   * defense-in-depth; FE has already enforced via the disabled merge
+   * button but BE cannot trust FE.
    *
    * Throws `409 NO_APPROVED_PROJECTS` with a structured body when the
-   * gate fails. Single-อปท: readiness is single-source (all projects are
-   * agency-origin), so the former both-sources requirement is dropped.
+   * gate fails. 2026-07-14 single agency-source (หนองกระทุ่ม): readiness
+   * is single-source (all projects agency-origin, LAO / "การประสานแผน"
+   * retired), so the former both-sources requirement is dropped — ready
+   * when every project is Approved and the plan's phase is closed.
    *
    * Constraints:
    *   - §21.2.2 — ABSOLUTE GATE. No role bypass; super-admin hits the
@@ -1716,23 +1676,6 @@ export class MainAssemblyService {
       .andWhere('status.name = :name', { name: STATUS_NAMES.APPROVED })
       .getCount();
 
-    const approvedAgencyCount = await this.projectGroupRepo
-      .createQueryBuilder('pg')
-      .innerJoin('pg.createdBy', 'wh')
-      .innerJoin('wh.amphoe', 'amp')
-      .innerJoin('wh.localAdministrativeOrganization', 'lao')
-      .innerJoin('pg.trackingStatus', 'ts')
-      .innerJoin('ts.statusId', 'status')
-      .where('pg.developmentPlan = :id', { id: developmentPlanId })
-      .andWhere('pg.deletedAt IS NULL')
-      .andWhere('pg.isDraft = :isDraft', { isDraft: false })
-      .andWhere('ts.isLatest = :isLatest', { isLatest: true })
-      .andWhere('status.name = :name', { name: STATUS_NAMES.APPROVED })
-      .andWhere('amp.id = :amphoeId', { amphoeId: '3001' })
-      .andWhere('lao.id = :laoId', { laoId: '3001027' })
-      .getCount();
-    const approvedLaoCount = approvedCount - approvedAgencyCount;
-
     const approvedEquipmentCount = await this.equipmentRepo
       .createQueryBuilder('eq')
       .innerJoin(
@@ -1752,16 +1695,14 @@ export class MainAssemblyService {
       .andWhere('pp.isOpen = :isOpen', { isOpen: true })
       .getExists();
 
-    // Single-อปท (หนองกระทุ่ม): plan-coordination (LAO) source retired —
-    // readiness is single-source. Drop the `approvedLaoCount > 0` term
-    // (always 0 now); require every project approved + at least one
-    // approved project/equipment present, and the phase closed.
-    const agencySideContribution = approvedAgencyCount + approvedEquipmentCount;
+    // Single agency-source (หนองกระทุ่ม; LAO / "การประสานแผน" retired).
+    // Ready when every non-excluded project is Approved (implies ≥1 approved)
+    // and the plan's phase is closed. The former both-sources LAO term is
+    // dropped (always 0).
     const isReady =
       approvedCount === totalCount &&
       totalCount > 0 &&
-      !openPhaseExists &&
-      agencySideContribution > 0;
+      !openPhaseExists;
 
     if (!isReady) {
       throw new ConflictException({
@@ -1769,8 +1710,6 @@ export class MainAssemblyService {
         message:
           'เล่มแผนหลักต้องมีโครงการที่อนุมัติแล้วอย่างน้อย 1 รายการ และทุกโครงการต้องได้รับการอนุมัติก่อน จึงจะรวมเล่มได้',
         breakdown: {
-          approvedLaoCount,
-          approvedAgencyCount,
           approvedEquipmentCount,
           approvedCount,
           totalCount,

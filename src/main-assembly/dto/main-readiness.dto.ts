@@ -5,10 +5,15 @@
 // Readiness envelope returned by
 // `GET /v1/main-assembly/:developmentPlanId/readiness`.
 //
-// Shape kept byte-for-byte parity with `RevisionReadinessDto` /
-// `SupplementReadinessDto` so the shared FE `BookAssemblyDashboard` /
-// `DraftPanel` components can consume it without an adapter fork.
-// Q3=B isolation — duplicated, not shared.
+// 2026-07-14 — single-อปท (หนองกระทุ่ม): the LAO / "การประสานแผน"
+// coordination axis is retired for the MAIN book. This DTO now
+// INTENTIONALLY DIVERGES from `RevisionReadinessDto` /
+// `SupplementReadinessDto` (which keep vestigial agencyCount/laoCount):
+// the four LAO-axis fields (agencyCount / laoCount / approvedAgencyCount /
+// approvedLaoCount) are dropped and readiness is single agency-source.
+// Do NOT re-add them "for parity". The shared FE `ReadinessBreakdown`
+// interface makes agencyCount/laoCount optional so all three siblings
+// still compile.
 //
 // CLAUDE.md compliance:
 //   - §15 — `hasOpenPhase` is derived from any `PlanPhase.isOpen` row
@@ -20,25 +25,10 @@
 // ===================================================================
 
 export class MainReadinessBreakdownDto {
-  /** Projects created by agency-classified WorkHistory (amphoe.id=3001 AND lao.id=3001027). */
-  agencyCount: number;
-  /** Projects created by lao-classified WorkHistory (all other cases). */
-  laoCount: number;
-  /**
-   * Approved PGs whose creator WorkHistory is agency-classified (§1).
-   * §21.2 both-sources merge gate — agency-side contribution sub-count.
-   */
-  approvedAgencyCount: number;
-  /**
-   * Approved PGs whose creator WorkHistory is lao-classified (§1).
-   * §21.2 both-sources merge gate — LAO-side contribution sub-count.
-   */
-  approvedLaoCount: number;
   /**
    * Approved equipment (ผ.03) rows under the plan. Per §5.3,
-   * equipment is agency-origin-only by construction. Counted toward
-   * the agency-side contribution per §21.2 — INTERCHANGEABLE with
-   * `approvedAgencyCount`: either alone satisfies the agency-side floor.
+   * equipment is agency-origin-only by construction. Surfaced so the
+   * agency-only checklist can show "มีโครงการ/ครุภัณฑ์อนุมัติ".
    */
   approvedEquipmentCount: number;
   /** Projects whose latest TrackingStatus is Pending. */

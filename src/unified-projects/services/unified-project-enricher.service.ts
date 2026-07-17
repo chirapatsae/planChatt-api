@@ -518,9 +518,27 @@ function mapDevelopmentPlan(plan: {
   };
 }
 
+/**
+ * Public avatar URL only (not contact PII). The DB stores a RELATIVE
+ * path (`/uploads/profiles/…`), so we prefix APP_URL to hand the FE an
+ * absolute URL (a bare relative path would resolve against the frontend
+ * origin and 404 → fall back to initials). Mirrors
+ * `UnifiedEquipmentService.creatorProfileImage`.
+ */
+function absoluteProfileImage(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  const base = (process.env.APP_URL ?? '').replace(/\/+$/, '');
+  return base ? `${base}${raw.startsWith('/') ? '' : '/'}${raw}` : raw;
+}
+
 function mapCreator(wh: {
   id: string;
-  user?: { firstname?: string | null; lastname?: string | null } | null;
+  user?: {
+    firstname?: string | null;
+    lastname?: string | null;
+    profileImageUrl?: string | null;
+  } | null;
   amphoe?: { id: string; name: string } | null;
   localAdministrativeOrganization?: { id: string; name: string } | null;
 }): EnrichedCreator {
@@ -535,6 +553,7 @@ function mapCreator(wh: {
         name: wh.localAdministrativeOrganization.name,
       }
       : null,
+    profileImageUrl: absoluteProfileImage(wh.user?.profileImageUrl),
   };
 }
 

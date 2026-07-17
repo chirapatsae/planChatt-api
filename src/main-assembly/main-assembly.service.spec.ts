@@ -53,6 +53,7 @@ import { BookAssemblyFileService } from 'src/book-assembly/book-assembly-file.se
 import { StoragePathService } from 'src/storage/storage-path.service';
 import { BookLockService } from 'src/common/book-lock/book-lock.service';
 import { OrphanCleanupService } from 'src/orphan-cleanup/orphan-cleanup.service';
+import { LineageLockService } from 'src/common/lineage-lock/lineage-lock.service';
 
 import { STATUS_NAMES } from 'src/common/status-names';
 
@@ -168,6 +169,10 @@ async function buildService(): Promise<{
       { provide: BookAssemblyFileService, useValue: {} },
       { provide: StoragePathService, useValue: {} },
       { provide: BookLockService, useValue: bookLockService },
+      // Constructor index [17] — pre-existing harness gap (service gained
+      // this dep but buildService was never updated). Mock the one method
+      // the readiness/staleness paths call.
+      { provide: LineageLockService, useValue: { hasNonDeletedDescendant: jest.fn().mockResolvedValue(false) } },
       { provide: OrphanCleanupService, useValue: {} },
       { provide: DataSource, useValue: {} },
     ],
@@ -330,10 +335,6 @@ describe('MainAssemblyService.getReadiness', () => {
       .mockReturnValueOnce(buildQbStub({ getCount: 3 }))
       // approved
       .mockReturnValueOnce(buildQbStub({ getCount: 3 }))
-      // agency
-      .mockReturnValueOnce(buildQbStub({ getCount: 3 }))
-      // §21.2 BE-01 — approvedAgencyCount
-      .mockReturnValueOnce(buildQbStub({ getCount: 3 }))
       // status aggregate
       .mockReturnValueOnce(
         buildQbStub({
@@ -343,8 +344,8 @@ describe('MainAssemblyService.getReadiness', () => {
     repos.planPhaseRepo.createQueryBuilder.mockReturnValueOnce(
       buildQbStub({ getExists: false }),
     );
-    // §21.2 BE-01 — equipment Approved count (0 is fine; single-source gate
-    // passes on approvedAgencyCount>0 alone).
+    // Equipment Approved count (0 is fine; the single agency-source gate
+    // is satisfied by approvedCount === totalCount && totalCount > 0).
     repos.equipmentRepo.createQueryBuilder.mockReturnValueOnce(
       buildQbStub({ getCount: 0 }),
     );
@@ -354,12 +355,10 @@ describe('MainAssemblyService.getReadiness', () => {
     expect(result.totalCount).toBe(3);
     expect(result.approvedCount).toBe(3);
     expect(result.hasOpenPhase).toBe(false);
-    // Single-อปท: readiness is single-source (LAO/การประสานแผน retired) —
-    // all approved + no open phase + approvedAgencyCount>0 ⇒ ready.
+    // Single agency-source (LAO/การประสานแผน retired): all approved +
+    // no open phase ⇒ ready.
     expect(result.isReady).toBe(true);
     expect(result.breakdown).toMatchObject({
-      agencyCount: 3,
-      laoCount: 0,
       approvedCount: 3,
       pendingCount: 0,
       verifiedCount: 0,
@@ -376,11 +375,11 @@ describe('MainAssemblyService.getReadiness', () => {
     const { service, repos } = await buildService();
 
     repos.projectGroupRepo.createQueryBuilder
+      // total
       .mockReturnValueOnce(buildQbStub({ getCount: 2 }))
+      // approved
       .mockReturnValueOnce(buildQbStub({ getCount: 2 }))
-      .mockReturnValueOnce(buildQbStub({ getCount: 1 }))
-      // §21.2 BE-01 — approvedAgencyCount
-      .mockReturnValueOnce(buildQbStub({ getCount: 1 }))
+      // status aggregate
       .mockReturnValueOnce(
         buildQbStub({
           getRawMany: [{ statusName: STATUS_NAMES.APPROVED, cnt: '2' }],
@@ -399,19 +398,18 @@ describe('MainAssemblyService.getReadiness', () => {
     expect(result.approvedCount).toBe(2);
     expect(result.hasOpenPhase).toBe(true);
     expect(result.isReady).toBe(false);
-    expect(result.breakdown.agencyCount).toBe(1);
-    expect(result.breakdown.laoCount).toBe(1);
+    expect(result.breakdown.totalCount).toBe(2);
   });
 
   it('returns isReady=false and totalCount=0 on an empty plan', async () => {
     const { service, repos } = await buildService();
 
     repos.projectGroupRepo.createQueryBuilder
+      // total
       .mockReturnValueOnce(buildQbStub({ getCount: 0 }))
+      // approved
       .mockReturnValueOnce(buildQbStub({ getCount: 0 }))
-      .mockReturnValueOnce(buildQbStub({ getCount: 0 }))
-      // §21.2 BE-01 — approvedAgencyCount
-      .mockReturnValueOnce(buildQbStub({ getCount: 0 }))
+      // status aggregate
       .mockReturnValueOnce(buildQbStub({ getRawMany: [] }));
     repos.planPhaseRepo.createQueryBuilder.mockReturnValueOnce(
       buildQbStub({ getExists: false }),

@@ -537,6 +537,7 @@ export class UnifiedEquipmentService {
             workHistoryId: epg.createdBy.id,
             firstName: this.creatorFirstName(epg.createdBy),
             lastName: this.creatorLastName(epg.createdBy),
+            profileImageUrl: this.creatorProfileImage(epg.createdBy),
           }
         : null,
       createdByWorkHistoryId: epg.createdBy?.id ?? null,
@@ -620,6 +621,7 @@ export class UnifiedEquipmentService {
             workHistoryId: relpg.createdBy.id,
             firstName: this.creatorFirstName(relpg.createdBy),
             lastName: this.creatorLastName(relpg.createdBy),
+            profileImageUrl: this.creatorProfileImage(relpg.createdBy),
           }
         : null,
       createdByWorkHistoryId: relpg.createdBy?.id ?? null,
@@ -698,6 +700,7 @@ export class UnifiedEquipmentService {
             workHistoryId: sepg.createdBy.id,
             firstName: this.creatorFirstName(sepg.createdBy),
             lastName: this.creatorLastName(sepg.createdBy),
+            profileImageUrl: this.creatorProfileImage(sepg.createdBy),
           }
         : null,
       createdByWorkHistoryId: sepg.createdBy?.id ?? null,
@@ -775,6 +778,20 @@ export class UnifiedEquipmentService {
     const u = (wh as unknown as { user?: { lastname?: string; lastName?: string } })
       .user;
     return u?.lastname ?? u?.lastName ?? null;
+  }
+
+  // Public avatar URL only (not contact PII) — mirrors the project list so the
+  // owner-table creator avatar renders a photo instead of initials. The DB
+  // stores a RELATIVE path (`/uploads/profiles/…`), so we prefix APP_URL to
+  // hand the FE an absolute URL (a bare relative path would resolve against the
+  // frontend origin and 404 → fall back to initials).
+  private creatorProfileImage(wh: WorkHistory): string | null {
+    const u = (wh as unknown as { user?: { profileImageUrl?: string } }).user;
+    const raw = u?.profileImageUrl ?? null;
+    if (!raw) return null;
+    if (/^https?:\/\//i.test(raw)) return raw;
+    const base = (process.env.APP_URL ?? '').replace(/\/+$/, '');
+    return base ? `${base}${raw.startsWith('/') ? '' : '/'}${raw}` : raw;
   }
 
   private toIso(value: Date | string | null | undefined): string | null {

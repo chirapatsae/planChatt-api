@@ -109,6 +109,8 @@ export interface UnifiedEquipmentCreator {
   workHistoryId: string;
   firstName: string | null;
   lastName: string | null;
+  /** Public avatar URL (not contact PII) — lets the owner table render a photo. */
+  profileImageUrl: string | null;
 }
 
 /**

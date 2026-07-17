@@ -104,12 +104,17 @@ export interface EnrichedBudget {
  * - `amphoe.name` / `localAdministrativeOrganization.name` — creator's
  *   org context at the time of project creation. NOT PII; required for
  *   the existing "อำเภอ / อปท" column.
+ * - `profileImageUrl` — public avatar URL (absolute). Surfaced so the
+ *   browse-table creator column renders the same photo the owner
+ *   `/project` list and the unified-equipment browse already show. This
+ *   is a display avatar, not contact PII; consistent with those
+ *   surfaces (added 2026-07-16).
  *
- * Strict PII (`citizenId`, `email`, `phone`, `profileImageUrl`) is NOT
- * surfaced — those remain forbidden per §17 PII discipline. The §17
- * intent is to prevent person-level identifiers from leaking into AI
- * surfaces; user-facing dashboards have always shown name + org and
- * this enriched envelope preserves that contract.
+ * Strict contact PII (`citizenId`, `email`, `phone`) is NOT surfaced —
+ * those remain forbidden per §17 PII discipline. The §17 intent is to
+ * prevent person-level identifiers from leaking into AI surfaces;
+ * user-facing dashboards have always shown name + org + avatar and this
+ * enriched envelope preserves that contract.
  */
 export interface EnrichedCreator {
   workHistoryId: string;
@@ -117,6 +122,8 @@ export interface EnrichedCreator {
   lastName: string | null;
   amphoe: { id: string; name: string } | null;
   localAdministrativeOrganization: { id: string; name: string } | null;
+  /** Public avatar URL (absolute) — powers the browse-table creator avatar. */
+  profileImageUrl: string | null;
 }
 
 /**
