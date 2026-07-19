@@ -52,9 +52,30 @@ describe('derived-domain-map — registry bijection (drift detector)', () => {
   // BE-04 (2026-06-12): 7 locked report-§1.2 domains + the
   // `knowledge-hub` meta-domain backing `searchKnowledgeBase` (task §7
   // — bijection preserved for the widened registry).
-  it('declares the 7 locked derived domains (report §1.2) + the BE-04 knowledge-hub meta-domain', () => {
-    expect(KNOWLEDGE_DOMAINS).toHaveLength(8);
+  // Wave AI-Exec-Chat-Equipment-ผ.03 (2026-07-18): + the `equipment-p03`
+  // derived domain backing the seven equipment tools (8 → 9; bijection
+  // preserved for the 37-tool registry).
+  it('declares the 7 locked derived domains (report §1.2) + knowledge-hub + equipment-p03', () => {
+    expect(KNOWLEDGE_DOMAINS).toHaveLength(9);
     expect(KNOWLEDGE_DOMAINS.every((d) => d.layer === 'derived')).toBe(true);
+  });
+
+  it('maps the seven equipment tools to the dedicated equipment-p03 domain (ผ.03 wave)', () => {
+    const equipmentDomain = KNOWLEDGE_DOMAINS.find(
+      (d) => d.key === 'equipment-p03',
+    );
+    expect(equipmentDomain).toBeDefined();
+    expect([...(equipmentDomain?.toolNames ?? [])].sort()).toEqual(
+      [
+        'searchEquipmentByKeyword',
+        'listEquipmentInPlan',
+        'getEquipmentBudgetSummary',
+        'getEquipmentStatusBreakdown',
+        'getEquipmentCategoryBreakdown',
+        'listEquipmentInRevisionBook',
+        'listEquipmentInSupplementBook',
+      ].sort(),
+    );
   });
 
   it('maps searchKnowledgeBase to the dedicated knowledge-hub meta-domain (BE-04)', () => {
@@ -110,7 +131,12 @@ describe('derived-domain-map — registry bijection (drift detector)', () => {
     const equipment = COVERAGE_GAPS.find((gap) => gap.key === 'equipment');
     expect(equipment).toBeDefined();
     expect(equipment?.labelTh).toBe('ครุภัณฑ์');
-    expect(equipment?.reason).toBe('no executive tool registered');
+    // Wave AI-Exec-Chat-Equipment-ผ.03 (2026-07-18): the aggregate gap
+    // is CLOSED by the `equipment-p03` domain; the gap node persists
+    // (stable overlay key) with an honest residual-scope reason.
+    expect(equipment?.reason).toBe(
+      'ผ.03 aggregate tools shipped 2026-07-18 (domain equipment-p03) — residual gap: per-item detail / document surfaces',
+    );
     // Gap nodes must never shadow a real domain node.
     for (const gap of COVERAGE_GAPS) {
       expect(ALL_KNOWLEDGE_DOMAIN_KEYS).not.toContain(gap.key);

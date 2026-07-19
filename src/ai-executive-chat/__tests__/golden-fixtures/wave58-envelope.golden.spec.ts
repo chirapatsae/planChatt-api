@@ -1083,7 +1083,11 @@ describe('Wave 59 / FX-DB — listProjectsInPlan objective + objectiveTruncated'
       SupplementProjectGroup: [],
     });
     return await handler(
-      { planId: PLAN_ID, scope: 'main', limit: 50, groupBy: 'flat' },
+      // Wave HEAD-BOOK-ROSTER-AND-VERBOSE-OMIT — objective/objectiveTruncated
+      // are now verbose-only fields (rule #60): they are nulled unless
+      // `verbose: true`. This block exercises the objective truncation
+      // behavior, so it opts into verbose explicitly.
+      { planId: PLAN_ID, scope: 'main', limit: 50, groupBy: 'flat', verbose: true },
       makeCtx(),
       deps,
     );

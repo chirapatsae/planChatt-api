@@ -155,6 +155,28 @@ export const KNOWLEDGE_DOMAINS: readonly KnowledgeDomainDescriptor[] = [
     layer: 'derived',
     toolNames: ['searchKnowledgeBase'],
   },
+  // Wave AI-Exec-Chat-Equipment-ผ.03 (2026-07-18) — the "separate wave
+  // with its own clause note" promised by the Q1 LOCKED comment below:
+  // the seven equipment (ผ.03) tools now exist, so equipment gets its
+  // own derived domain and the registry ⇄ map bijection holds for the
+  // 37-tool registry. Key is `equipment-p03` (NOT `equipment`) so the
+  // legacy coverage-gap node key below never shadows a real domain
+  // node (spec: "Gap nodes must never shadow a real domain node").
+  {
+    key: 'equipment-p03',
+    labelTh: 'ครุภัณฑ์ (ผ.03)',
+    labelEn: 'Equipment (ผ.03)',
+    layer: 'derived',
+    toolNames: [
+      'searchEquipmentByKeyword',
+      'listEquipmentInPlan',
+      'getEquipmentBudgetSummary',
+      'getEquipmentStatusBreakdown',
+      'getEquipmentCategoryBreakdown',
+      'listEquipmentInRevisionBook',
+      'listEquipmentInSupplementBook',
+    ],
+  },
 ] as const;
 
 /**
@@ -224,16 +246,23 @@ export const ALL_KNOWLEDGE_DOMAIN_KEYS: readonly string[] = [
 ].map((domain) => domain.key);
 
 /**
- * Q1 LOCKED (2026-06-12): equipment (ครุภัณฑ์) has ZERO executive-chat
- * tools — EPG / RELPG / SEPG are invisible to the chat (§17.15.1,
- * report §1.3 FINDING). The mind-map renders this honestly as a muted
- * coverage-gap node; this wave ships NO equipment tools. Closing the
- * gap is a separate wave with its own clause note.
+ * Q1 LOCKED (2026-06-12): equipment (ครุภัณฑ์) had ZERO executive-chat
+ * tools — EPG / RELPG / SEPG were invisible to the chat (§17.15.1,
+ * report §1.3 FINDING).
+ *
+ * Wave AI-Exec-Chat-Equipment-ผ.03 (2026-07-18) CLOSED the aggregate
+ * gap — the `equipment-p03` derived domain above now carries seven
+ * ผ.03 tools. The gap NODE is retained (key unchanged — it is the
+ * stable `domain_key` for admin gap-overlay rows seeded by
+ * `structure-seed.service.ts` and exercised by the structure CRUD
+ * specs) with an updated honest `reason`: only per-item detail /
+ * document surfaces remain outside chat coverage.
  */
 export const COVERAGE_GAPS: readonly KnowledgeCoverageGap[] = [
   {
     key: 'equipment',
     labelTh: 'ครุภัณฑ์',
-    reason: 'no executive tool registered',
+    reason:
+      'ผ.03 aggregate tools shipped 2026-07-18 (domain equipment-p03) — residual gap: per-item detail / document surfaces',
   },
 ] as const;

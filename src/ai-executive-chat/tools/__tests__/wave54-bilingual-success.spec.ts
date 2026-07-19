@@ -459,7 +459,79 @@ describe('BE-W54-08 / Wave 54 bilingual success-criteria prompts (§4)', () => {
     // tool-catalog entries) that landed without bumping this constant —
     // measured total stood at ~99.5 KB BEFORE BE-04 touched the prompt.
     // 102400 restores the conventional ~600-token (~2.4 KB) headroom.
-    const TOTAL_BYTES_CAP = 102400;
+    // Wave AI-Exec-Chat-Equipment-ผ.03 (2026-07-18): cap raised
+    // 102400 → 107520 to credit (a) rules #49–#53 (~2.8 KB — equipment
+    // hard routing, ผ.02-vs-ผ.03 book disambiguation, 4-group status
+    // lock, budget semantics, anti-hallucination) and (b) the seven
+    // equipment tool-catalog entries (~1.9 KB) in
+    // EXECUTIVE_CHAT_TOOL_INSTRUCTIONS. ~5 KB net growth total;
+    // ~2.8 KB headroom preserved.
+    // Wave AI-Exec-Chat-Book-Answer-Quality (2026-07-18): cap raised
+    // 107520 → 110592 (105 KB → 108 KB) to credit Rule #47 "Step 0"
+    // (orchestrator-first book routing), Rule #54 (answer-scope HARD
+    // discipline + 4-book taxonomy), and Rule #55 (count-definition
+    // explainer). Measured total = 107569; new cap preserves ~3 KB
+    // (~750-token) headroom.
+    // Wave AI-Exec-Chat-Followup-Scope-And-Count-Intent (2026-07-18): cap
+    // raised 110592 → 114688 (108 KB → 112 KB) to credit Rule #56
+    // (follow-up scope-carry — subjectless project/budget/status follow-up
+    // inherits the prior plan/book scope, default main) and Rule #57
+    // (count-intent vs list-intent — "กี่/จำนวน" answers count-only, no
+    // per-project dump). ~1.6 KB net growth on the system prompt; new cap
+    // preserves ~3 KB headroom.
+    // Wave AI-Exec-Chat-Book-Timeline-View (2026-07-18): cap raised
+    // 114688 → 118784 (112 KB → 116 KB) to credit Rule #59 (book-timeline
+    // view — routes "ไทม์ไลน์เล่มแผน/ลำดับเล่ม" to a numbered full-name
+    // book-lineage list composed from listActivePlans + listDevelopmentPlan
+    // Revisions/Supplements `roundLabel`, with NO project/count dump).
+    // ~1.3 KB net growth; new cap restores ~3 KB headroom.
+    // Wave AI-Exec-Chat-Head-Book-Roster-And-Verbose-Omit (2026-07-18): cap
+    // raised 118784 → 122880 (116 KB → 120 KB) to credit Rule #61 (origin-
+    // book → head-book roster) + Rule #62 (plan HEAD roster via
+    // byRevisionRound). ~1.8 KB net growth; new cap restores ~3 KB headroom.
+    // Wave AI-Exec-Chat-Query-Mode-Carry + Equipment-Head-Roster (2026-07-18):
+    // cap raised 122880 → 126976 (120 KB → 124 KB) to credit Rule #63
+    // (query-mode carry — subjectless "ครุภัณฑ์ละ"/"โครงการละ" inherits the
+    // prior query-mode with the new subject) + the listEquipmentHeadRoster
+    // tool-catalog entry (ผ.03 analog of listProjectHeadRoster). ~2.1 KB net
+    // growth; new cap restores ~3 KB headroom.
+    // Wave AI-EXEC-CHAT-LIVE-QA-5BUG (2026-07-18): cap raised 126976 →
+    // 131072 (124 KB → 128 KB) to credit Rule #64 (in-book count → DOCUMENT
+    // count; forbid HEAD analytical tools for in-book counts), Rule #65
+    // (type-specific book listing — แก้ไข vs เปลี่ยนแปลง must route via
+    // listDevelopmentPlanRevisions → listProjectsInRevisionBook, never
+    // scope='revised'), Rule #66 (cosmetic label render), and the #57
+    // count-intent strengthening. ~2.4 KB net growth on the system prompt;
+    // new cap restores ~3 KB headroom.
+    // Wave AI-EXEC-CHAT-LIVE-QA-4BUG (2026-07-18): cap raised 131072 →
+    // 135168 (128 KB → 132 KB) to credit Rule #67 (classification breakdown
+    // → getExecutiveDashboardSnapshot groupBy=strategy/issue; FORBID the
+    // main-PG-only getProjectClassificationBreakdown which undercounts),
+    // Rule #68 (single-project keyword extraction — strip trailing question
+    // words before searchProjectsByKeyword), Rule #69 (answer-language +
+    // suggestion-integrity + ties), the getEquipmentBudgetSummary byBook
+    // edit/change split (แก้ไข≠เปลี่ยนแปลง), the getPlanOverview
+    // headProjectCount rename manifest, and the classification-breakdown
+    // deprecation warning. ~2.9 KB net growth; new cap restores ~3 KB.
+    // Wave AI-EXEC-CHAT-LIVE-QA-4BUG follow-up (2026-07-18): cap raised
+    // 135168 → 139264 (132 KB → 136 KB) to credit Rule #70 (which-project
+    // superlative "โครงการไหนงบสูงสุด" → highlightBudgetOutliers, FORBID
+    // getCrossPlanInsights plan-total), the Rule #64 English in-book-count
+    // triggers (ISSUE-B), and the Rule #69 explicit English answer-language
+    // example. ~1.7 KB net growth; new cap restores ~3 KB headroom.
+    // Wave AI-EXEC-CHAT-FOLLOWUP-CONTINUITY (2026-07-18): cap raised
+    // 139264 → 143360 (136 KB → 140 KB) to credit the OPTIONAL-planId
+    // manifest reword on listEquipmentInPlan + listProjectsInPlan (planId
+    // omit = whole municipality = current plan → follow-up ขอรายละเอียด
+    // after a plan-less turn resolves). ~0.6 KB net growth in
+    // TOOL_INSTRUCTIONS only; SYSTEM_PROMPT (decision-framing cap) untouched.
+    // Wave AI-EXEC-CHAT-WHOLE-PLAN-EQUIPMENT-LISTING-HEAD-CONSISTENCY
+    // (2026-07-18): cap raised 143360 → 147456 (140 KB → 144 KB) to credit
+    // Rule #71 (whole-plan listing = count = HEAD/distinct; per-book stays
+    // document) in SYSTEM_PROMPT + the scope-semantics reword on the
+    // listEquipmentInPlan manifest line in TOOL_INSTRUCTIONS. ~1.4 KB net
+    // growth across both blocks; new cap restores headroom.
+    const TOTAL_BYTES_CAP = 147456;
 
     const PROMPT_BYTES = EXECUTIVE_CHAT_SYSTEM_PROMPT.length;
     const TOOLS_BYTES = EXECUTIVE_CHAT_TOOL_INSTRUCTIONS.length;

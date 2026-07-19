@@ -60,6 +60,46 @@ export function resolveRevisionRoundLabel(args: {
 }
 
 /**
+ * Wave AI-EXEC-CHAT-BOOK-LABEL-DOUBLING-FIX (2026-07-18) — deterministic
+ * book-label display normaliser for the roster / head-book envelopes.
+ *
+ * Problem: the label families are INCONSISTENT about the "เล่ม" prefix.
+ *   - `REVISION_ROUND_LABEL_MAIN` = "เล่มหลัก"                (INCLUDES "เล่ม")
+ *   - the fallback templates       = "เล่มแก้ไขครั้งที่ N" …    (INCLUDE "เล่ม")
+ *   - a DPR/DPS `description` verbatim = "แก้ไข ครั้งที่ 1/2569" (NO "เล่ม")
+ * The head-roster render templates used to prepend "เล่ม" themselves, which
+ * doubled the prefix for the already-prefixed main label ("เล่มเล่มหลัก").
+ *
+ * `bookDisplayLabel` makes the label the LLM sees FULLY SELF-CONTAINED: it
+ * prepends "เล่ม" only when the raw label does not already start with it, so
+ * the render template can emit the value verbatim (no prepend) → doubling is
+ * structurally impossible.
+ *
+ * Idempotent: `bookDisplayLabel(bookDisplayLabel(x)) === bookDisplayLabel(x)`.
+ * Safe for BOTH label families (constant/fallback already-prefixed →
+ * unchanged; description-verbatim → gains exactly one prefix). Empty / blank
+ * input is returned unchanged (never produces a bare "เล่ม").
+ *
+ * NOTE — apply this ONLY at the roster / head-book envelope layer
+ * (`listHeadRoster`, `getProjectHeadBook`, equipment `headRoster`). Do NOT
+ * mutate `resolveRevisionRoundLabel` / `REVISION_ROUND_LABEL_MAIN` output:
+ * timeline rule #59, `getPlanCatalogOverview` (BUG3 wave) and
+ * `listDevelopmentPlanRevisions.roundLabel` consume those verbatim and must
+ * keep the description-style ("แก้ไข ครั้งที่ 1/2569", no "เล่ม") labels.
+ *
+ * §17.9 — static literal prefix; no user-controlled interpolation.
+ */
+const BOOK_LABEL_PREFIX = 'เล่ม' as const;
+
+export function bookDisplayLabel(rawLabel: string | null | undefined): string {
+  const trimmed = typeof rawLabel === 'string' ? rawLabel.trim() : '';
+  if (trimmed.length === 0) return '';
+  return trimmed.startsWith(BOOK_LABEL_PREFIX)
+    ? trimmed
+    : `${BOOK_LABEL_PREFIX}${trimmed}`;
+}
+
+/**
  * Canonical W57 rule #26 disclosure copy used when an LAO-origin project
  * has a null `responsible_agency_id` FK. Static literal — must not be
  * derived from any user-controlled or DB-row text (§17.9). The exact

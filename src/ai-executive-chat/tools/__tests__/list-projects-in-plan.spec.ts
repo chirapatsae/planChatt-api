@@ -97,13 +97,17 @@ describe('BE-W48-03 / listProjectsInPlan', () => {
       expect(EXECUTIVE_TOOL_NAMES).toContain('listProjectsInPlan');
     });
 
-    it('requires planId; UUID validation owned by handler (Wave 60c)', () => {
+    it('planId is OPTIONAL (Wave FOLLOWUP-CONTINUITY); validation owned by handler', () => {
       // W60c (2026-04-25): dropped strict `format: 'uuid'` from the
       // schema so the schema validator stops short-circuiting the turn
-      // BEFORE the handler can return its friendly hint envelope. The
-      // handler at executive-tool-handlers.ts:1393-1402 still validates
-      // UUID via UUID_RX and returns a graceful planId-not-found message.
-      expect(spec.paramsSchema.required).toContain('planId');
+      // BEFORE the handler can return its friendly hint envelope.
+      // Wave FOLLOWUP-CONTINUITY (2026-07-18): planId dropped from
+      // `required` — omitting it makes the handler default to a
+      // WHOLE-MUNICIPALITY listing (symmetric with listEquipmentInPlan),
+      // so a detail/listing follow-up after a plan-less turn still
+      // resolves. A non-empty MALFORMED planId still returns the handler's
+      // friendly-hint envelope (UUID_RX check).
+      expect(spec.paramsSchema.required).not.toContain('planId');
       expect(spec.paramsSchema.properties?.planId?.type).toBe('string');
     });
 
@@ -390,27 +394,34 @@ describe('BE-W48-03 / listProjectsInPlan', () => {
       ).toBeGreaterThan(0);
     });
 
-    it('BE-W49-01: empty-string planId returns soft-error envelope', async () => {
+    // Wave FOLLOWUP-CONTINUITY (2026-07-18) — empty / null planId is NO
+    // LONGER a soft-error. It now defaults to a WHOLE-MUNICIPALITY listing
+    // (no plan WHERE filter, no `message`), echoing NIL_UUID as the
+    // "no plan anchored" sentinel. This fixes the follow-up-continuity bug
+    // (detail/listing follow-up after a plan-less turn returns the items).
+    // `groupBy: 'flat'` keeps the `items[]` envelope shape for the assertion.
+    it('W-FOLLOWUP: empty-string planId → whole-municipality listing (no soft-error)', async () => {
       const deps = makeDeps([]);
       const out = await handler(
-        { planId: '' } as unknown as Record<string, unknown>,
+        { planId: '', groupBy: 'flat' } as unknown as Record<string, unknown>,
         makeCtx(),
         deps,
       );
       expect(out.items).toEqual([]);
       expect(out.planId).toBe(NIL_UUID);
-      expect(typeof (out as { message?: unknown }).message).toBe('string');
+      expect((out as { message?: unknown }).message).toBeUndefined();
     });
 
-    it('BE-W49-01: null planId returns soft-error envelope', async () => {
+    it('W-FOLLOWUP: null planId → whole-municipality listing (no soft-error)', async () => {
       const deps = makeDeps([]);
       const out = await handler(
-        { planId: null } as unknown as Record<string, unknown>,
+        { planId: null, groupBy: 'flat' } as unknown as Record<string, unknown>,
         makeCtx(),
         deps,
       );
       expect(out.items).toEqual([]);
       expect(out.planId).toBe(NIL_UUID);
+      expect((out as { message?: unknown }).message).toBeUndefined();
     });
 
     it('BE-W49-01: plan-name string is rejected as non-UUID (soft-error envelope)', async () => {

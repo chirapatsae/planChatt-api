@@ -59,5 +59,11 @@ import { UnifiedEquipmentService } from './unified-equipment.service';
     RolesGuard,
     WorkStatusApprovedGuard,
   ],
+  // Wave AI-Exec-Chat-Equipment-ผ.03 (2026-07-18) — exported so the
+  // executive-chat `AggregationModule` can compose the canonical
+  // HEAD-of-lineage equipment merge (`UnifiedEquipmentAggregatorService`
+  // → `executiveList`) instead of re-implementing the §14.2 anti-joins.
+  // Read-only consumption; no write surface is exposed (§17.2 / §17.3).
+  exports: [UnifiedEquipmentService],
 })
 export class UnifiedEquipmentModule {}

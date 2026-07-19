@@ -82,6 +82,9 @@ describe('SEC-W44-01 / injection-basic (§17.9)', () => {
         // Wave 61 — Mode 3 lineage tools
         'getProjectHeadBook',
         'getProjectLineage',
+        // Wave AI-Exec-Chat-Head-Book-Roster (2026-07-18) — deterministic
+        // per-plan HEAD roster (read-only over ProjectLineageService).
+        'listProjectHeadRoster',
         // Wave 66 (W66-BE-AGG-01) — explicit "no responsibleAgency" lister
         'listProjectsWithoutResponsibleAgency',
         // Wave 67 (W67-AMPHOE-FIX-PROMPT-01 Path A) — amphoe name → PK resolver
@@ -104,6 +107,19 @@ describe('SEC-W44-01 / injection-basic (§17.9)', () => {
         // knowledge retrieval (§17.15.4). Read aggregator over
         // ai_knowledge_entries; derived data wins on conflict (§17.2).
         'searchKnowledgeBase',
+        // Wave AI-Exec-Chat-Equipment-ผ.03 (2026-07-18) — equipment (ผ.03)
+        // read aggregators mirroring the ผ.02 tool families. All seven are
+        // strict READ tools over UnifiedEquipmentService (§17.2 / §17.11).
+        'searchEquipmentByKeyword',
+        'listEquipmentInPlan',
+        // Wave AI-Exec-Chat-Equipment-Head-Roster (2026-07-18) — ผ.03 analog
+        // of listProjectHeadRoster (read-only over UnifiedEquipmentService).
+        'listEquipmentHeadRoster',
+        'getEquipmentBudgetSummary',
+        'getEquipmentStatusBreakdown',
+        'getEquipmentCategoryBreakdown',
+        'listEquipmentInRevisionBook',
+        'listEquipmentInSupplementBook',
       ]),
     );
   });

@@ -257,7 +257,7 @@ const getPlanOverview: ExecutiveToolSpec = {
   name: 'getPlanOverview',
   thaiLabel: 'สรุปภาพรวมของเล่มแผน',
   description:
-    'สรุปภาพรวมของเล่มแผน (main + revised + supplement) แบบรวมศูนย์ — จำนวนโครงการ / งบประมาณรวม / สถานะล่าสุด / พื้นที่ / หน่วยงานรับผิดชอบ. ต้องระบุ planId. อ่านอย่างเดียว.',
+    'สรุปภาพรวมของเล่มแผน (main + revised + supplement) แบบรวมศูนย์ — จำนวนโครงการ (\`headProjectCount\`) / งบประมาณรวม / สถานะล่าสุด / พื้นที่ / หน่วยงานรับผิดชอบ. ต้องระบุ planId. ⚠️ **BUG2: \`headProjectCount\` = จำนวน HEAD-of-lineage (เวอร์ชันล่าสุด) ตาม scope ไม่ใช่จำนวนที่พิมพ์ในเล่ม (document) — ห้ามใช้ตอบ "เล่ม X มีกี่โครงการ" (เล่มหลัก HEAD=1 แต่ document=3); ใช้ getPlanCatalogOverview / listProjectsInPlan totalCount ตามกฎ #64**. อ่านอย่างเดียว.',
   paramsSchema: (() => {
     const schema = cloneExecutiveQuerySchema();
     schema.required = [...(schema.required ?? []), 'planId'];
@@ -301,7 +301,7 @@ const listActivePlans: ExecutiveToolSpec = {
   name: 'listActivePlans',
   thaiLabel: 'รายการแผนที่เปิดใช้งาน',
   description:
-    'คืนรายการ DevelopmentPlan ทั้งหมดที่ยังไม่ถูกลบ (รวมเล่มเก่าด้วย) พร้อมข้อมูลสรุป: id, ชื่อ, reportFormat, จำนวนโครงการ และ planActivityStatus. ใช้ latestOnly=true เพื่อกรองเฉพาะ isLatest=true. อ่านอย่างเดียว.',
+    'คืนรายการ DevelopmentPlan ทั้งหมดที่ยังไม่ถูกลบ (รวมเล่มเก่าด้วย) พร้อมข้อมูลสรุป: id, ชื่อ, reportFormat, จำนวนโครงการ และ planActivityStatus. ใช้ latestOnly=true เพื่อกรองเฉพาะ isLatest=true. **ใช้สำหรับ lookup ภายใน chain (เช่น หา planId ก่อนเรียก sub-book tools)** — สำหรับคำถาม general plan listing ("มีเล่มแผนอะไรบ้าง"/"มีกี่เล่ม") ให้ใช้ getPlanCatalogOverview แทน (คืนภาพรวมเล่มย่อย + counts ครบในรอบเดียว). อ่านอย่างเดียว.',
   paramsSchema: {
     type: 'object',
     additionalProperties: false,
@@ -667,7 +667,7 @@ const searchProjectsByKeyword: ExecutiveToolSpec = {
   name: 'searchProjectsByKeyword',
   thaiLabel: 'ค้นหาโครงการด้วยคำค้น',
   description:
-    'ค้นหาโครงการจาก เล่มหลัก (ProjectGroup) / เล่มแก้ไข-เปลี่ยนแปลง (RevisedProjectGroup) / เล่มเพิ่มเติม (SupplementProjectGroup) ด้วยคำค้น (ชื่อโครงการ). ถ้าระบุ planId จะจำกัดผลลัพธ์เฉพาะโครงการที่ผูกกับแผนนั้น. อ่านอย่างเดียว.',
+    'ค้นหาโครงการจาก เล่มหลัก (ProjectGroup) / เล่มแก้ไข-เปลี่ยนแปลง (RevisedProjectGroup) / เล่มเพิ่มเติม (SupplementProjectGroup) ด้วยคำค้น (ชื่อโครงการ). ถ้าระบุ planId จะจำกัดผลลัพธ์เฉพาะโครงการที่ผูกกับแผนนั้น. อ่านอย่างเดียว. **คำเตือนสำคัญ**: ผลลัพธ์เป็น document-level — โครงการเดียวกันอาจปรากฏในหลายเล่ม (ต้นฉบับในเล่มหลัก + เวอร์ชันที่ถูกแก้ในเล่มแก้ไข/เปลี่ยนแปลง). `projectKind`/เล่มของแต่ละ match **ไม่ใช่** เล่ม HEAD ล่าสุดเสมอไป. **ห้ามใช้ tool นี้ตอบคำถาม "โครงการ X ล่าสุด/ตอนนี้อยู่เล่มไหน/อยู่รอบไหน"** — ต้องเรียก `getProjectHeadBook(projectId)` เพื่อหาเล่ม HEAD ที่แท้จริง (กฎ #33). tool นี้ใช้เพื่อ (1) หา projectId จากชื่อ หรือ (2) enumerate ผลค้นหาเท่านั้น.',
   paramsSchema: {
     type: 'object',
     additionalProperties: false,
@@ -1031,11 +1031,15 @@ const listProjectsInPlan: ExecutiveToolSpec = {
   name: 'listProjectsInPlan',
   thaiLabel: 'รายการโครงการในแผน',
   description:
-    'คืนรายการโครงการที่ผูกกับแผนตาม planId ที่ระบุ. รองรับ scope = main (เล่มหลัก) | revised (เล่มแก้ไข/เปลี่ยนแปลง) | supplement (เล่มเพิ่มเติม) | all. สำหรับ scope=all จะแบ่งโควตา limit ระหว่างสามกลุ่ม (main ~50%, revised ~30%, supplement ส่วนที่เหลือ) และไม่เกิน limit รวม. ใช้เมื่อต้องการ enumerate โครงการในแผน (ห้ามใช้ searchProjectsByKeyword เพื่อจุดประสงค์นี้). **W68-FIX-05 (2026-04-28)**: รองรับพารามิเตอร์ `verbose: boolean` (default `false`) สำหรับเปิดโหมดแสดงฟิลด์เพิ่มเติม (วัตถุประสงค์ / เป้าหมาย / ผลที่คาดว่าจะได้รับ / ตัวชี้วัด / ประเด็นการพัฒนา) ใน `renderedMarkdown`. ส่ง `verbose: true` **เฉพาะเมื่อ** ข้อความผู้ใช้มี trigger word จากกฎ #30 (เช่น "ทุกคอลัมน์" / "พร้อมรายละเอียด" / "และวัตถุประสงค์" / "พร้อมตัวชี้วัด"); ค่าปกติให้ละเว้นหรือส่ง `false`. อ่านอย่างเดียว.',
+    'คืนรายการโครงการที่ผูกกับแผน. **planId เป็นตัวเลือก (optional)** — ถ้าระบุ ต้องเป็น UUID จาก listActivePlans.items[i].planId; ถ้าไม่ระบุ = ทั้งเทศบาล (แผนปัจจุบันของ อปท. นี้) เหมือน getEquipmentBudgetSummary → ใช้ตอบ follow-up ขอรายละเอียด/รายการหลัง turn ที่ไม่มี planId ถูก anchor ไว้ได้ทันที. รองรับ scope = main (เล่มหลัก) | revised (เล่มแก้ไข/เปลี่ยนแปลง) | supplement (เล่มเพิ่มเติม) | all. สำหรับ scope=all จะแบ่งโควตา limit ระหว่างสามกลุ่ม (main ~50%, revised ~30%, supplement ส่วนที่เหลือ) และไม่เกิน limit รวม. ใช้เมื่อต้องการ enumerate โครงการในแผน (ห้ามใช้ searchProjectsByKeyword เพื่อจุดประสงค์นี้). **W68-FIX-05 (2026-04-28)**: รองรับพารามิเตอร์ `verbose: boolean` (default `false`) สำหรับเปิดโหมดแสดงฟิลด์เพิ่มเติม (วัตถุประสงค์ / เป้าหมาย / ผลที่คาดว่าจะได้รับ / ตัวชี้วัด / ประเด็นการพัฒนา) ใน `renderedMarkdown`. ส่ง `verbose: true` **เฉพาะเมื่อ** ข้อความผู้ใช้มี trigger word จากกฎ #30 (เช่น "ทุกคอลัมน์" / "พร้อมรายละเอียด" / "และวัตถุประสงค์" / "พร้อมตัวชี้วัด"); ค่าปกติให้ละเว้นหรือส่ง `false`. อ่านอย่างเดียว.',
   paramsSchema: {
     type: 'object',
     additionalProperties: false,
-    required: ['planId'],
+    // Wave FOLLOWUP-CONTINUITY — `planId` is OPTIONAL. Omitting it makes the
+    // handler default to a WHOLE-MUNICIPALITY listing (single-LAO = the one
+    // plan), symmetric with listEquipmentInPlan / getEquipmentBudgetSummary,
+    // so a detail/listing follow-up after a plan-less turn still resolves.
+    required: [],
     properties: {
       // Wave 60c (2026-04-25): drop strict `format: 'uuid'` here. The
       // handler at executive-tool-handlers.ts:1393-1402 already validates
@@ -1295,6 +1299,10 @@ const getProjectClassificationBreakdown: ExecutiveToolSpec = {
   name: 'getProjectClassificationBreakdown',
   thaiLabel: 'สรุปการจัดหมวดโครงการตามแผน',
   description:
+    '⚠️ DEPRECATED สำหรับ chat routing — ห้ามใช้ตอบ "แยกตามยุทธศาสตร์/ประเด็น/หมวดโครงการ" (กฎ #67). ' +
+    'tool นี้ query เฉพาะ เล่มหลัก (ProjectGroup) HEAD เท่านั้น ไม่รวม RevisedProjectGroup → ' +
+    'โครงการที่ HEAD ย้ายไปอยู่เล่มแก้ไข/เปลี่ยนแปลงจะหายไป → นับ under (undercount). ' +
+    'ให้ใช้ getExecutiveDashboardSnapshot(groupBy=[\'strategy\'|\'issue\']) แทน (เห็น HEAD ครบทุกเล่ม). ' +
     'สรุปจำนวนโครงการในแผนตาม planId แยกตามโครงสร้างการจัดหมวด. ' +
     'ถ้าแผนเป็น STRATEGY_BASED จะแบ่งตาม ยุทธศาสตร์ → กลยุทธ์ → แผนงาน. ' +
     'ถ้าเป็น ISSUE_BASED จะแบ่งตาม ประเด็นการพัฒนา. ' +
@@ -1388,7 +1396,7 @@ const listDevelopmentPlanRevisions: ExecutiveToolSpec = {
   name: 'listDevelopmentPlanRevisions',
   thaiLabel: 'รายการรอบแก้ไข/เปลี่ยนแปลงของแผน',
   description:
-    'คืนรายการ DevelopmentPlanRevision ของแผนตาม planId พร้อมประเภท (แก้ไข / เปลี่ยนแปลง) สถานะเปิด และจำนวนโครงการในรอบนั้น. อ่านอย่างเดียว.',
+    'คืนรายการ DevelopmentPlanRevision ของแผนตาม planId พร้อมประเภท (แก้ไข / เปลี่ยนแปลง), roundLabel (ชื่อรอบเต็มเช่น "แก้ไข ครั้งที่ 1/2569" ใช้กับไทม์ไลน์เล่ม กฎ #59), สถานะเปิด และจำนวนโครงการในรอบนั้น. อ่านอย่างเดียว.',
   paramsSchema: {
     type: 'object',
     additionalProperties: false,
@@ -1411,6 +1419,7 @@ const listDevelopmentPlanRevisions: ExecutiveToolSpec = {
             'revisionId',
             'revisionNumber',
             'revisionTypeName',
+            'roundLabel',
             'isLatest',
             'isOpen',
             'isBooked',
@@ -1420,6 +1429,10 @@ const listDevelopmentPlanRevisions: ExecutiveToolSpec = {
             revisionId: uuidField,
             revisionNumber: { type: 'integer', minimum: 1 },
             revisionTypeName: { type: 'string' },
+            // Wave AI-EXEC-CHAT-BOOK-TIMELINE-VIEW — full round label
+            // ("แก้ไข ครั้งที่ 1/2569", DPR description-based) for the
+            // book-timeline view (rule #58).
+            roundLabel: { type: 'string' },
             isLatest: { type: 'boolean' },
             isOpen: { type: 'boolean' },
             isBooked: { type: 'boolean' },
@@ -1444,7 +1457,7 @@ const listDevelopmentPlanSupplements: ExecutiveToolSpec = {
   name: 'listDevelopmentPlanSupplements',
   thaiLabel: 'รายการเล่มเพิ่มเติมของแผน',
   description:
-    'คืนรายการ DevelopmentPlanSupplement ของแผนตาม planId พร้อม supplementNumber, สถานะเปิด, จำนวนโครงการในเล่ม. อ่านอย่างเดียว.',
+    'คืนรายการ DevelopmentPlanSupplement ของแผนตาม planId พร้อม supplementNumber, roundLabel (ชื่อรอบเต็มเช่น "เพิ่มเติม ครั้งที่ 1/2569" ใช้กับไทม์ไลน์เล่ม กฎ #59), สถานะเปิด, จำนวนโครงการในเล่ม. อ่านอย่างเดียว.',
   paramsSchema: {
     type: 'object',
     additionalProperties: false,
@@ -1466,6 +1479,7 @@ const listDevelopmentPlanSupplements: ExecutiveToolSpec = {
           required: [
             'supplementId',
             'supplementNumber',
+            'roundLabel',
             'isLatest',
             'isOpen',
             'isBooked',
@@ -1474,6 +1488,10 @@ const listDevelopmentPlanSupplements: ExecutiveToolSpec = {
           properties: {
             supplementId: uuidField,
             supplementNumber: { type: 'integer', minimum: 1 },
+            // Wave AI-EXEC-CHAT-BOOK-TIMELINE-VIEW — full round label
+            // ("เพิ่มเติม ครั้งที่ N/ปี", DPS description-based) for the
+            // book-timeline view (rule #58).
+            roundLabel: { type: 'string' },
             isLatest: { type: 'boolean' },
             isOpen: { type: 'boolean' },
             isBooked: { type: 'boolean' },
@@ -1566,7 +1584,7 @@ const getProjectHeadBook: ExecutiveToolSpec = {
   name: 'getProjectHeadBook',
   thaiLabel: 'เล่มล่าสุดของโครงการ',
   description:
-    'คืน "เล่มล่าสุด" (HEAD-of-lineage) ของโครงการที่ระบุด้วย projectId. รับ UUID ของ ProjectGroup / RevisedProjectGroup / SupplementProjectGroup ก็ได้. ระบบจะเดินไปข้างหน้าตามลูกของ lineage จนถึงเวอร์ชันล่าสุด แล้วบอกว่า HEAD อยู่ในเล่มไหน (เล่มหลัก / เล่มแก้ไขครั้งที่ N / เล่มเปลี่ยนแปลงครั้งที่ N / เล่มเพิ่มเติมครั้งที่ N). อ่านอย่างเดียว.',
+    'คืน "เล่มล่าสุด" (HEAD-of-lineage) ของโครงการที่ระบุด้วย projectId. รับ UUID ของ ProjectGroup / RevisedProjectGroup / SupplementProjectGroup ก็ได้. ระบบจะเดินไปข้างหน้าตามลูกของ lineage จนถึงเวอร์ชันล่าสุด แล้วบอกว่า HEAD อยู่ในเล่มไหน (เล่มหลัก / เล่มแก้ไขครั้งที่ N / เล่มเปลี่ยนแปลงครั้งที่ N / เล่มเพิ่มเติมครั้งที่ N) พร้อม headPageNumber (หน้าในเล่มปลายทาง), headStatusTh (สถานะล่าสุด), headTitle. ใช้วนต่อโครงการเพื่อทำ roster "เล่มล่าสุดของทุกโครงการในเล่ม X" (กฎ #61). อ่านอย่างเดียว.',
   paramsSchema: {
     type: 'object',
     additionalProperties: false,
@@ -1597,8 +1615,78 @@ const getProjectHeadBook: ExecutiveToolSpec = {
       headRevisionNumber: { type: 'integer', minimum: 1 },
       headDprId: uuidField,
       headDpsId: uuidField,
+      // Wave HEAD-BOOK-ROSTER-AND-VERBOSE-OMIT — HEAD row page / Thai status
+      // / title (dropped by stripNulls when absent) for the origin-book→
+      // head-book roster (rule #61).
+      headPageNumber: { type: 'integer', minimum: 1 },
+      headStatusTh: { type: 'string' },
+      headTitle: { type: 'string' },
       isInputHead: { type: 'boolean' },
       advisories: { type: 'array', items: { type: 'string' } },
+      asOf: { type: 'string', format: 'date-time' },
+    },
+  },
+  handlerPlaceholder: null,
+};
+
+// Wave AI-EXEC-CHAT-HEAD-BOOK-ROSTER-AND-VERBOSE-OMIT (rework) — deterministic
+// single-call roster of every project's HEAD-of-lineage in a plan. Solves the
+// prompt-chain failure (LLM would not loop getProjectHeadBook). §17.2 / §17.11.
+const listProjectHeadRoster: ExecutiveToolSpec = {
+  name: 'listProjectHeadRoster',
+  thaiLabel: 'เล่มล่าสุดของทุกโครงการในแผน',
+  description:
+    'คืน roster เวอร์ชันล่าสุด (HEAD-of-lineage) ของ**ทุกโครงการในแผน** ในครั้งเดียว — 1 แถวต่อโครงการ (dedup ต่อสายเวอร์ชัน) พร้อม projectTitle, headBookLabel (เล่มปลายทางที่ HEAD อยู่), headPageNumber (หน้าในเล่มนั้น), headStatusTh. ระบุ originScope=main/revised/supplement เพื่อกรองเฉพาะโครงการที่ **origin (ต้นสาย)** อยู่เล่มนั้น (เช่น main = โครงการที่เริ่มในเล่มหลัก); ไม่ระบุ = ทุกโครงการในแผน. **ใช้เครื่องมือนี้เท่านั้น**สำหรับ "เล่มล่าสุดของทุกโครงการในเล่ม X" (กฎ #61) และ "โครงการล่าสุดทุกอันในแผน" (กฎ #62) — ห้ามใช้ listProjectsInPlan. อ่านอย่างเดียว.',
+  paramsSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['planId'],
+    properties: {
+      planId: uuidField,
+      originScope: {
+        type: 'string',
+        enum: ['main', 'revised', 'supplement'],
+        description:
+          'กรองตามเล่มต้นสาย (origin) ของโครงการ: main=เล่มหลัก, revised=เล่มแก้ไข/เปลี่ยนแปลง, supplement=เล่มเพิ่มเติม. ไม่ระบุ = ทุกโครงการในแผน',
+      },
+    },
+  },
+  returnSchema: {
+    type: 'object',
+    required: ['planId', 'items', 'asOf'],
+    properties: {
+      planId: uuidField,
+      items: {
+        type: 'array',
+        items: {
+          type: 'object',
+          // headPageNumber / headRevisionNumber / headStatusTh follow the
+          // W58 nullable-via-required-only convention (listed in required so
+          // the key presence is contractual; omitted from properties so the
+          // validator accepts absence via stripNulls / null).
+          required: [
+            'projectTitle',
+            'originBookType',
+            'headBookLabel',
+            'headBookType',
+          ],
+          properties: {
+            projectTitle: { type: 'string' },
+            originBookType: {
+              type: 'string',
+              enum: ['main', 'edit', 'change', 'supplement'],
+            },
+            headBookLabel: { type: 'string' },
+            headBookType: {
+              type: 'string',
+              enum: ['main', 'edit', 'change', 'supplement'],
+            },
+            headRevisionNumber: { type: 'integer', minimum: 1 },
+            headPageNumber: { type: 'integer', minimum: 1 },
+            headStatusTh: { type: 'string' },
+          },
+        },
+      },
       asOf: { type: 'string', format: 'date-time' },
     },
   },
@@ -2392,7 +2480,7 @@ const getPlanCatalogOverview: ExecutiveToolSpec = {
   name: 'getPlanCatalogOverview',
   thaiLabel: 'ภาพรวมเล่มแผน + เล่มย่อย',
   description:
-    'ดึงภาพรวมทุกเล่มแผน + เล่มย่อย ในรอบเดียว — คืน renderedMarkdown ที่ประกอบเสร็จแล้วสำหรับ LLM ใช้ verbatim ตามกฎ #47 + #48. ใช้เมื่อ user ถาม general plan listing ("มีเล่มแผนอะไรบ้าง" / "มีกี่แผน" / "แผนทั้งหมด"). อ่านอย่างเดียว.',
+    'เครื่องมือหลัก (เรียกก่อนเสมอ) สำหรับ general plan listing — ดึงภาพรวมทุกเล่มแผน + เล่มย่อย + จำนวนโครงการ/ครุภัณฑ์ต่อเล่มลูกแต่ละรอบ ในรอบเดียว. คืน renderedMarkdown ที่ประกอบเสร็จ (ขึ้นต้นด้วยบรรทัดสรุปจำนวนเล่มแยก 4 ชนิด: เล่มหลัก/เล่มแก้ไข/เล่มเปลี่ยนแปลง/เล่มเพิ่มเติม) สำหรับ LLM ใช้ verbatim ตามกฎ #47 + #48. ใช้เมื่อ user ถาม "มีเล่มแผนอะไรบ้าง" / "มีกี่เล่ม" / "แผนทั้งหมด" / "เล่มล่าสุดคือเล่มไหน". อ่านอย่างเดียว.',
   paramsSchema: {
     type: 'object',
     additionalProperties: false,
@@ -2432,7 +2520,7 @@ const getPlanCatalogOverview: ExecutiveToolSpec = {
         ],
         properties: {
           generatedAt: { type: 'string', format: 'date-time' },
-          documentVersion: { type: 'string', enum: ['1.0'] },
+          documentVersion: { type: 'string', enum: ['1.1'] },
           totalPlans: { type: 'integer', minimum: 0 },
           expandedPlans: { type: 'integer', minimum: 0 },
           deferredPlans: { type: 'integer', minimum: 0 },
@@ -2528,6 +2616,467 @@ const searchKnowledgeBase: ExecutiveToolSpec = {
   handlerPlaceholder: null,
 };
 
+// ──────────────────────────────────────────────────────────────────────
+// Wave AI-Exec-Chat-Equipment-ผ.03 (2026-07-18) — seven standalone
+// equipment (ผ.03) tools. Contract:
+// docs/tasks/AI_EXEC_CHAT_EQUIPMENT_P03_COVERAGE.md.
+//
+//   - Spine = `UnifiedEquipmentAggregatorService` →
+//     `UnifiedEquipmentService.executiveList` (EPG+RELPG+SEPG merge,
+//     §14.2 HEAD-of-lineage REPLACE, W67 Ready/Pull_Back/
+//     Returned_For_Revision strip + `executiveStatusGroup` 4-group tag).
+//   - Deliberately NOT part of the Tier-C ExecutiveQuery DSL (task §3.1
+//     D1): the DSL fragment above stays byte-identical across the three
+//     Tier-C tools per dsl-contract.spec.
+//   - Nullable item fields follow the W58 nullable-via-required-only
+//     convention (present in `required`, omitted from `properties`).
+//   - §17.9 params: every object level carries
+//     `additionalProperties: false`; free-text `keyword` is the only
+//     unconstrained string (same posture as searchProjectsByKeyword).
+//   - PII: items are creator-free by aggregator construction (§17.3).
+// ──────────────────────────────────────────────────────────────────────
+
+const equipmentScopeParam: ToolJsonSchema = {
+  type: 'string',
+  enum: ['all', 'main', 'revision', 'supplement'],
+  default: 'all',
+};
+
+// Shared per-row equipment envelope. Nullable members (categoryCode /
+// categoryName / planId / planName / currentStatus / statusTh /
+// executiveStatus / responsibleAgencyName / pageNumber) are required-only
+// per the W58 convention — `additionalProperties: false` intentionally
+// omitted at this nested level (see subBookProjectItemSchema rationale).
+const equipmentItemSchema: ToolJsonSchema = {
+  type: 'object',
+  required: [
+    'equipmentId',
+    'equipmentKind',
+    'bookLabel',
+    'name',
+    'categoryCode',
+    'categoryName',
+    'planId',
+    'planName',
+    'currentStatus',
+    'statusTh',
+    'executiveStatus',
+    'responsibleAgencyName',
+    'totalBudget',
+    'isBooked',
+    'pageNumber',
+    'createdAt',
+  ],
+  properties: {
+    equipmentId: uuidField,
+    equipmentKind: {
+      type: 'string',
+      enum: ['equipment', 'revised-equipment', 'supplement-equipment'],
+    },
+    bookLabel: { type: 'string' },
+    name: { type: 'string' },
+    totalBudget: { type: 'number', minimum: 0 },
+    isBooked: { type: 'boolean' },
+    createdAt: { type: 'string', format: 'date-time' },
+  },
+};
+
+const searchEquipmentByKeyword: ExecutiveToolSpec = {
+  name: 'searchEquipmentByKeyword',
+  thaiLabel: 'ค้นหาครุภัณฑ์ด้วยคำค้น',
+  description:
+    'ค้นหาครุภัณฑ์ (ผ.03) ด้วยคำค้น (ชื่อครุภัณฑ์ / ชื่อหมวดครุภัณฑ์) จาก เล่มหลัก / เล่มแก้ไขครุภัณฑ์ / เล่มเพิ่มเติมครุภัณฑ์. HEAD-of-lineage เท่านั้น. กรองสถานะ in-flight (Ready / Pull_Back / Returned_For_Revision) ออกตามมุมมองผู้บริหาร. ถ้าระบุ planId จะจำกัดเฉพาะครุภัณฑ์ในแผนนั้น. อ่านอย่างเดียว.',
+  paramsSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['keyword'],
+    properties: {
+      keyword: { type: 'string' },
+      scope: equipmentScopeParam,
+      planId: uuidField,
+      limit: { type: 'integer', minimum: 1, maximum: 50, default: 10 },
+    },
+  },
+  returnSchema: {
+    type: 'object',
+    required: ['items', 'totalMatched', 'asOf'],
+    properties: {
+      items: { type: 'array', items: equipmentItemSchema },
+      totalMatched: { type: 'integer', minimum: 0 },
+      asOf: { type: 'string', format: 'date-time' },
+    },
+  },
+  handlerPlaceholder: null,
+};
+
+const listEquipmentInPlan: ExecutiveToolSpec = {
+  name: 'listEquipmentInPlan',
+  thaiLabel: 'รายการครุภัณฑ์ในแผน',
+  description:
+    'รายการครุภัณฑ์ (ผ.03) ที่ผูกกับแผนพัฒนา. **planId เป็นตัวเลือก (optional)** — ถ้าระบุ ต้องเป็น UUID จาก listActivePlans.items[i].planId; ถ้าไม่ระบุ = ทั้งเทศบาล (แผนปัจจุบันของ อปท. นี้) เหมือน getEquipmentBudgetSummary → ใช้ตอบ follow-up "ขอดูรายละเอียดทั้งสามรายการ" หลัง turn ที่ไม่มี planId ถูก anchor ไว้ได้ทันที. **scope กำหนดความหมายของรายการ**: scope=all/ไม่ระบุ (default) → **รายการล่าสุด (HEAD) ของแต่ละครุภัณฑ์ในแผน** (distinct 1 แถวต่อสายเวอร์ชัน เวอร์ชันล่าสุด — totalCount ตรงกับ getEquipmentBudgetSummary.headItemCount / getEquipmentStatusBreakdown.totalCount; ป้ายเล่มใช้เล่มปลายทางที่ HEAD อยู่ เช่น "เล่มแก้ไข ครั้งที่ 1/2569"); scope=main (เล่มหลัก) / revision (เล่มแก้ไข/เปลี่ยนแปลง) / supplement (เล่มเพิ่มเติม) → **ตามที่พิมพ์จริงในเล่มนั้น (document)** ทุกแถวตามเล่มเอกสาร (เล่มหลักรวมรายการที่ถูกแก้ไขในเล่มอื่นด้วย). รองรับ pagination ผ่าน limit (default 50, max 50) + offset. กรองสถานะ in-flight ออก. อ่านอย่างเดียว.',
+  paramsSchema: {
+    type: 'object',
+    additionalProperties: false,
+    // Wave FOLLOWUP-CONTINUITY — `planId` OPTIONAL (omit = whole
+    // municipality = the current plan for this LAO); symmetric with
+    // getEquipmentBudgetSummary / getEquipmentStatusBreakdown.
+    required: [],
+    properties: {
+      // UUID validation owned by the handler (friendly-hint envelope
+      // instead of AI_SCHEMA_DRIFT — listProjectsInPlan convention).
+      planId: { type: 'string' },
+      scope: equipmentScopeParam,
+      status: {
+        type: 'string',
+        enum: [
+          'Ready',
+          'Pending',
+          'Verified',
+          'Pending_Approval',
+          'Approved',
+          'Pull_Back',
+          'Returned_For_Revision',
+          'Rejected',
+        ],
+      },
+      // Cap 50 — symmetric with `listProjectsInPlan` (ผ.02 sibling) and
+      // within the runaway-hops (§17.8) non-sub-book pagination ceiling.
+      limit: { type: 'integer', minimum: 1, maximum: 50, default: 50 },
+      offset: { type: 'integer', minimum: 0, default: 0 },
+    },
+  },
+  returnSchema: {
+    type: 'object',
+    required: ['items', 'totalCount', 'limit', 'offset', 'nextOffset', 'asOf'],
+    properties: {
+      items: { type: 'array', items: equipmentItemSchema },
+      totalCount: { type: 'integer', minimum: 0 },
+      limit: { type: 'integer', minimum: 1, maximum: 50 },
+      offset: { type: 'integer', minimum: 0 },
+      // integer | null — no `type` so the in-house validator accepts
+      // both (listProjectsInRevisionBook convention).
+      nextOffset: {
+        description: 'integer offset of the next page, or null when at end',
+      },
+      asOf: { type: 'string', format: 'date-time' },
+    },
+  },
+  handlerPlaceholder: null,
+};
+
+// Wave AI-EXEC-CHAT-EQUIPMENT-HEAD-ROSTER — ผ.03 analog of
+// listProjectHeadRoster (deterministic, deduped HEAD roster). Enables the
+// query-MODE carry ("ครุภัณฑ์ละ" after a project head-roster → rule #63).
+const listEquipmentHeadRoster: ExecutiveToolSpec = {
+  name: 'listEquipmentHeadRoster',
+  thaiLabel: 'เล่มล่าสุดของทุกครุภัณฑ์ในแผน',
+  description:
+    'คืน roster เวอร์ชันล่าสุด (HEAD-of-lineage) ของ**ทุกครุภัณฑ์ (ผ.03) ในแผน** ในครั้งเดียว — 1 แถวต่อครุภัณฑ์ (dedup ต่อสายเวอร์ชัน) พร้อม equipmentName, headBookLabel (เล่มปลายทางที่ HEAD อยู่ ใช้ป้ายเดียวกับ roster โครงการ เช่น "แก้ไข ครั้งที่ 1/2569"), headPageNumber, headStatusTh, categoryName. ระบุ originScope=main/revised/supplement กรองตามเล่มต้นสาย; ไม่ระบุ = ทุกครุภัณฑ์. เป็น ผ.03 analog ของ listProjectHeadRoster — ใช้เมื่อ follow-up เปลี่ยน subject เป็นครุภัณฑ์ ("ครุภัณฑ์ละ") หลัง project head-roster (กฎ #63) หรือถามตรง "เล่มล่าสุดของทุกครุภัณฑ์". **ห้ามใช้ listEquipmentInPlan สำหรับ intent เล่มล่าสุด** (นั่นคือ document listing). อ่านอย่างเดียว.',
+  paramsSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['planId'],
+    properties: {
+      planId: uuidField,
+      originScope: {
+        type: 'string',
+        enum: ['main', 'revised', 'supplement'],
+        description:
+          'กรองตามเล่มต้นสาย (origin) ของครุภัณฑ์: main=เล่มหลัก, revised=เล่มแก้ไข/เปลี่ยนแปลง, supplement=เล่มเพิ่มเติม. ไม่ระบุ = ทุกครุภัณฑ์ในแผน',
+      },
+    },
+  },
+  returnSchema: {
+    type: 'object',
+    required: ['planId', 'items', 'asOf'],
+    properties: {
+      planId: uuidField,
+      items: {
+        type: 'array',
+        items: {
+          type: 'object',
+          // categoryName / headRevisionNumber / headPageNumber / headStatusTh
+          // follow the W58 nullable-via-required-only convention (omitted
+          // from properties; may be absent via stripNulls).
+          required: [
+            'equipmentName',
+            'originBookType',
+            'headBookLabel',
+            'headBookType',
+          ],
+          properties: {
+            equipmentName: { type: 'string' },
+            originBookType: {
+              type: 'string',
+              enum: ['main', 'revised', 'supplement'],
+            },
+            headBookLabel: { type: 'string' },
+            headBookType: {
+              type: 'string',
+              enum: ['main', 'edit', 'change', 'supplement'],
+            },
+            headRevisionNumber: { type: 'integer', minimum: 1 },
+            headPageNumber: { type: 'integer', minimum: 1 },
+            headStatusTh: { type: 'string' },
+          },
+        },
+      },
+      asOf: { type: 'string', format: 'date-time' },
+    },
+  },
+  handlerPlaceholder: null,
+};
+
+const getEquipmentBudgetSummary: ExecutiveToolSpec = {
+  name: 'getEquipmentBudgetSummary',
+  thaiLabel: 'สรุปงบประมาณครุภัณฑ์',
+  description:
+    'สรุปงบประมาณครุภัณฑ์ (ผ.03) — งบรวม / งบเฉลี่ย / รายปีงบประมาณ (byYear) / รายเล่ม (byBook: main=เล่มหลัก / edit=เล่มแก้ไข / change=เล่มเปลี่ยนแปลง / supplement=เล่มเพิ่มเติม). **BUG3: byBook แยก edit (แก้ไข) กับ change (เปลี่ยนแปลง) เป็นคนละ bucket เสมอ — ห้ามรวม 2 ชนิดเข้าด้วยกัน (แก้ไข≠เปลี่ยนแปลง); render "เล่มแก้ไข" จาก byBook.edit และ "เล่มเปลี่ยนแปลง" จาก byBook.change แยกยอดกัน**. planId เป็นตัวเลือก (ไม่ระบุ = ทั้งเทศบาล). uncapped aggregate — ไม่มี items[]; ใช้ listEquipmentInPlan สำหรับรายการ. HEAD-only. กรองสถานะ in-flight ออก. ⚠️ headItemCount = จำนวนเวอร์ชันล่าสุด (HEAD) ไม่ใช่จำนวนที่พิมพ์ในเล่ม; สำหรับ "เล่ม X มีกี่ครุภัณฑ์" ใช้ getPlanCatalogOverview / listEquipmentInPlan totalCount (document) ตามกฎ #64. นี่คือเครื่องมือ งบประมาณ ล้วน ๆ. อ่านอย่างเดียว.',
+  paramsSchema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      planId: { type: 'string' },
+      scope: equipmentScopeParam,
+    },
+  },
+  returnSchema: {
+    type: 'object',
+    required: [
+      'headItemCount',
+      'totalBudget',
+      'averageBudget',
+      'byYear',
+      'byBook',
+      'asOf',
+    ],
+    properties: {
+      // headItemCount = HEAD-of-lineage count (latest version per lineage),
+      // NOT the document count printed in the book (กฎ #64).
+      headItemCount: { type: 'integer', minimum: 0 },
+      totalBudget: { type: 'number', minimum: 0 },
+      averageBudget: { type: 'number', minimum: 0 },
+      byYear: {
+        type: 'array',
+        items: {
+          type: 'object',
+          // `year` is integer | null (budget rows may lack a year) —
+          // required-only per the W58 nullable convention.
+          required: ['year', 'headItemCount', 'totalBudget'],
+          properties: {
+            headItemCount: { type: 'integer', minimum: 0 },
+            totalBudget: { type: 'number', minimum: 0 },
+          },
+        },
+      },
+      byBook: {
+        type: 'object',
+        additionalProperties: false,
+        // BUG3 (แก้ไข≠เปลี่ยนแปลง) — the merged `revision` bucket was split
+        // into `edit` (เล่มแก้ไข) + `change` (เล่มเปลี่ยนแปลง) so the two
+        // revision types are reported separately with correct amounts.
+        required: ['main', 'edit', 'change', 'supplement'],
+        properties: {
+          main: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['headItemCount', 'totalBudget'],
+            properties: {
+              headItemCount: { type: 'integer', minimum: 0 },
+              totalBudget: { type: 'number', minimum: 0 },
+            },
+          },
+          edit: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['headItemCount', 'totalBudget'],
+            properties: {
+              headItemCount: { type: 'integer', minimum: 0 },
+              totalBudget: { type: 'number', minimum: 0 },
+            },
+          },
+          change: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['headItemCount', 'totalBudget'],
+            properties: {
+              headItemCount: { type: 'integer', minimum: 0 },
+              totalBudget: { type: 'number', minimum: 0 },
+            },
+          },
+          supplement: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['headItemCount', 'totalBudget'],
+            properties: {
+              headItemCount: { type: 'integer', minimum: 0 },
+              totalBudget: { type: 'number', minimum: 0 },
+            },
+          },
+        },
+      },
+      asOf: { type: 'string', format: 'date-time' },
+    },
+  },
+  handlerPlaceholder: null,
+};
+
+const getEquipmentStatusBreakdown: ExecutiveToolSpec = {
+  name: 'getEquipmentStatusBreakdown',
+  thaiLabel: 'สัดส่วนสถานะครุภัณฑ์',
+  description:
+    'นับจำนวนครุภัณฑ์ (ผ.03) ในแต่ละสถานะ พร้อม executiveStatusBreakdown 4 กลุ่มตามกฎ #11b (รอตรวจสอบ / รออนุมัติ / อนุมัติ / เกินศักยภาพ). planId เป็นตัวเลือก. HEAD-only. กรองสถานะ in-flight ออก. อ่านอย่างเดียว.',
+  paramsSchema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      planId: { type: 'string' },
+      scope: equipmentScopeParam,
+    },
+  },
+  returnSchema: {
+    type: 'object',
+    required: ['items', 'executiveStatusBreakdown', 'totalCount', 'asOf'],
+    properties: {
+      items: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['status', 'statusTh', 'count'],
+          properties: {
+            status: { type: 'string' },
+            statusTh: { type: 'string' },
+            count: { type: 'integer', minimum: 0 },
+          },
+        },
+      },
+      executiveStatusBreakdown: executiveStatusBreakdownSchema,
+      totalCount: { type: 'integer', minimum: 0 },
+      asOf: { type: 'string', format: 'date-time' },
+    },
+  },
+  handlerPlaceholder: null,
+};
+
+const getEquipmentCategoryBreakdown: ExecutiveToolSpec = {
+  name: 'getEquipmentCategoryBreakdown',
+  thaiLabel: 'สัดส่วนหมวดครุภัณฑ์',
+  description:
+    'สรุปจำนวนรายการและงบประมาณรวมของครุภัณฑ์ (ผ.03) แยกตามหมวดครุภัณฑ์ (equipment category). แถวที่ไม่ระบุหมวดรวมเป็น bucket เดียว (categoryName = null → แสดง "ไม่ระบุหมวด"). planId เป็นตัวเลือก. HEAD-only. กรองสถานะ in-flight ออก. อ่านอย่างเดียว.',
+  paramsSchema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      planId: { type: 'string' },
+      scope: equipmentScopeParam,
+    },
+  },
+  returnSchema: {
+    type: 'object',
+    required: ['items', 'totalCount', 'asOf'],
+    properties: {
+      items: {
+        type: 'array',
+        items: {
+          type: 'object',
+          // categoryCode / categoryName are nullable (uncategorized
+          // bucket) — required-only per the W58 convention.
+          required: ['categoryCode', 'categoryName', 'itemCount', 'totalBudget'],
+          properties: {
+            itemCount: { type: 'integer', minimum: 0 },
+            totalBudget: { type: 'number', minimum: 0 },
+          },
+        },
+      },
+      totalCount: { type: 'integer', minimum: 0 },
+      asOf: { type: 'string', format: 'date-time' },
+    },
+  },
+  handlerPlaceholder: null,
+};
+
+const listEquipmentInRevisionBook: ExecutiveToolSpec = {
+  name: 'listEquipmentInRevisionBook',
+  thaiLabel: 'รายการครุภัณฑ์ในเล่มแก้ไขครุภัณฑ์',
+  description:
+    'รายการครุภัณฑ์ (RELPG) ในเล่มแก้ไข/เปลี่ยนแปลงเดียว. ต้องระบุ revisionId (UUID ของ DevelopmentPlanRevision จาก listDevelopmentPlanRevisions หรือ CTX_HINT; ห้ามแต่งเอง). รองรับ limit (default 50, max 200) + offset. HEAD-only. กรองสถานะ in-flight ออก. **สำหรับครุภัณฑ์ ผ.03 เท่านั้น — เล่มแก้ไขของโครงการ (ผ.02) ใช้ listProjectsInRevisionBook**. อ่านอย่างเดียว.',
+  paramsSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['revisionId'],
+    properties: {
+      revisionId: { type: 'string' },
+      limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+      offset: { type: 'integer', minimum: 0, default: 0 },
+    },
+  },
+  returnSchema: {
+    type: 'object',
+    required: [
+      'items',
+      'totalCount',
+      'limit',
+      'offset',
+      'nextOffset',
+      'revisionMeta',
+      'asOf',
+    ],
+    properties: {
+      items: { type: 'array', items: equipmentItemSchema },
+      totalCount: { type: 'integer', minimum: 0 },
+      limit: { type: 'integer', minimum: 1, maximum: 200 },
+      offset: { type: 'integer', minimum: 0 },
+      nextOffset: {
+        description: 'integer offset of the next page, or null when at end',
+      },
+      revisionMeta: revisionMetaSchema,
+      asOf: { type: 'string', format: 'date-time' },
+    },
+  },
+  handlerPlaceholder: null,
+};
+
+const listEquipmentInSupplementBook: ExecutiveToolSpec = {
+  name: 'listEquipmentInSupplementBook',
+  thaiLabel: 'รายการครุภัณฑ์ในเล่มเพิ่มเติมครุภัณฑ์',
+  description:
+    'รายการครุภัณฑ์ (SEPG) ในเล่มเพิ่มเติมเดียว. ต้องระบุ supplementId (UUID ของ DevelopmentPlanSupplement จาก listDevelopmentPlanSupplements หรือ CTX_HINT; ห้ามแต่งเอง). รองรับ limit (default 50, max 200) + offset. กรองสถานะ in-flight ออก. **สำหรับครุภัณฑ์ ผ.03 เท่านั้น — เล่มเพิ่มเติมของโครงการ (ผ.02) ใช้ listProjectsInSupplementBook**. อ่านอย่างเดียว.',
+  paramsSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['supplementId'],
+    properties: {
+      supplementId: { type: 'string' },
+      limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+      offset: { type: 'integer', minimum: 0, default: 0 },
+    },
+  },
+  returnSchema: {
+    type: 'object',
+    required: [
+      'items',
+      'totalCount',
+      'limit',
+      'offset',
+      'nextOffset',
+      'supplementMeta',
+      'asOf',
+    ],
+    properties: {
+      items: { type: 'array', items: equipmentItemSchema },
+      totalCount: { type: 'integer', minimum: 0 },
+      limit: { type: 'integer', minimum: 1, maximum: 200 },
+      offset: { type: 'integer', minimum: 0 },
+      nextOffset: {
+        description: 'integer offset of the next page, or null when at end',
+      },
+      supplementMeta: supplementMetaSchema,
+      asOf: { type: 'string', format: 'date-time' },
+    },
+  },
+  handlerPlaceholder: null,
+};
+
 export const EXECUTIVE_TOOL_REGISTRY: Record<
   ExecutiveToolName,
   ExecutiveToolSpec
@@ -2558,6 +3107,9 @@ export const EXECUTIVE_TOOL_REGISTRY: Record<
   getCrossPlanInsights,
   // Wave 61 — Mode 3 lineage tools (HEAD-book + full-chain).
   getProjectHeadBook,
+  // Wave HEAD-BOOK-ROSTER — per-plan HEAD roster (deterministic, replaces
+  // the failed prompt-chain loop).
+  listProjectHeadRoster,
   getProjectLineage,
   // Wave 66 W66-BE-AGG-01 — explicit "no responsibleAgency" lister
   // (NULL FK across PG / RPG-edit / RPG-change). Disambiguates from
@@ -2596,6 +3148,19 @@ export const EXECUTIVE_TOOL_REGISTRY: Record<
   // retrieval (§17.15.4). Derived data wins on conflict; provenance is
   // mandatory; rides existing executive-chat cooldown keys (§17.8).
   searchKnowledgeBase,
+  // Wave AI-Exec-Chat-Equipment-ผ.03 (2026-07-18) — seven standalone
+  // equipment (ผ.03) tools. Spine = UnifiedEquipmentAggregatorService
+  // (canonical HEAD-of-lineage + W67 strip/tag via
+  // UnifiedEquipmentService.executiveList). NOT part of the Tier-C DSL
+  // (task §3.1 D1 — dsl-contract byte-identity preserved).
+  searchEquipmentByKeyword,
+  listEquipmentInPlan,
+  listEquipmentHeadRoster,
+  getEquipmentBudgetSummary,
+  getEquipmentStatusBreakdown,
+  getEquipmentCategoryBreakdown,
+  listEquipmentInRevisionBook,
+  listEquipmentInSupplementBook,
 };
 
 /**

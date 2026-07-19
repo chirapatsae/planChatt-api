@@ -97,6 +97,11 @@ import { AgencyProjectsCanonicalAggregatorService } from './aggregation/services
 // chat → hub (the hub module never imports this module); §17.15.4
 // exposure invariant lives inside the service's query. §17.2 advisory.
 import { KnowledgeSearchService } from 'src/ai-knowledge-hub/services/knowledge-search.service';
+// Wave AI-Exec-Chat-Equipment-ผ.03 (2026-07-18) — equipment (ผ.03)
+// aggregation backend for the seven equipment tools. Provided by
+// `AggregationModule` (exports by class, ProjectLineageService
+// convention). §17.2 advisory; §17.3 read-only.
+import { UnifiedEquipmentAggregatorService } from './aggregation/services/unified-equipment-aggregator.service';
 import type {
   IAgencyEnrichment,
   IBudgetAggregator,
@@ -347,6 +352,9 @@ export class AiExecutiveChatService {
     // backend (published-only per §17.15.4). Provided by the imported
     // `AiKnowledgeHubModule`; handed to the handler via the deps bag.
     private readonly knowledgeSearch: KnowledgeSearchService,
+    // Wave AI-Exec-Chat-Equipment-ผ.03 — equipment (ผ.03) tools backend.
+    // Handed to the seven equipment handlers via the deps bag.
+    private readonly unifiedEquipmentAggregator: UnifiedEquipmentAggregatorService,
   ) {}
 
   // ────────────────────────────────────────────────────────────────
@@ -1336,6 +1344,10 @@ export class AiExecutiveChatService {
       // Optional in the bag (test-surface convention); always concrete
       // in production wiring.
       knowledgeSearch: this.knowledgeSearch,
+      // Wave AI-Exec-Chat-Equipment-ผ.03 — equipment (ผ.03) aggregation
+      // backend. Optional in the bag (test-surface convention); always
+      // concrete in production wiring.
+      unifiedEquipment: this.unifiedEquipmentAggregator,
     };
     return handler(params, caller, deps);
   }

@@ -41,6 +41,7 @@ type SupplementRow = {
   isLatest: boolean;
   isOpen: boolean;
   isBooked: boolean;
+  description?: string | null;
 };
 
 type CountRow = { dpsid: string; cnt: string };
@@ -170,6 +171,7 @@ describe('BE-W53-04 / listDevelopmentPlanSupplements', () => {
             isLatest: false,
             isOpen: false,
             isBooked: true,
+            description: 'เพิ่มเติม ครั้งที่ 1/2569',
           },
           {
             id: UUID_DPS2,
@@ -177,6 +179,7 @@ describe('BE-W53-04 / listDevelopmentPlanSupplements', () => {
             isLatest: true,
             isOpen: true,
             isBooked: false,
+            description: null,
           },
         ],
         [
@@ -192,6 +195,9 @@ describe('BE-W53-04 / listDevelopmentPlanSupplements', () => {
       expect(byId.get(UUID_DPS1)?.projectCount).toBe(3);
       expect(byId.get(UUID_DPS2)?.projectCount).toBe(7);
       expect(byId.get(UUID_DPS2)?.isLatest).toBe(true);
+      // BOOK-TIMELINE-VIEW roundLabel — description verbatim, else fallback.
+      expect(byId.get(UUID_DPS1)?.roundLabel).toBe('เพิ่มเติม ครั้งที่ 1/2569');
+      expect(byId.get(UUID_DPS2)?.roundLabel).toBe('เล่มเพิ่มเติมครั้งที่ 2');
       assertNoPii(out);
     });
 

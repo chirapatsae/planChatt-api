@@ -219,12 +219,19 @@ describe('EXECUTIVE_CHAT_SYSTEM_PROMPT — decision-framing rules', () => {
       expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain('getPlanOverview × N');
     });
 
-    it('rule #24 — dual-bucket classification when no plan', () => {
+    it('rule #24 — dual-bucket classification when no plan (Thai-only labels)', () => {
+      // 2026-07-18 — enum removed from the OUTPUT example: raw reportFormat
+      // enums (STRATEGY_BASED/ISSUE_BASED) must NOT appear in user-facing
+      // prose (rule #21). The enum still lives in routing rules #10/#21.
       expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain(
-        'แบบยุทธศาสตร์ (STRATEGY_BASED): N โครงการ',
+        'แบบยุทธศาสตร์: N โครงการ',
       );
       expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain(
-        'แบบประเด็นการพัฒนา (ISSUE_BASED): M โครงการ',
+        'แบบประเด็นการพัฒนา: M โครงการ',
+      );
+      // Rule #21 must forbid echoing the raw reportFormat enum in prose.
+      expect(EXECUTIVE_CHAT_SYSTEM_PROMPT).toContain(
+        'ห้ามแสดงในคำตอบต่อผู้ใช้',
       );
     });
 

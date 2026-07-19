@@ -21,6 +21,11 @@ import type { AgencyProjectsCanonicalAggregatorService } from '../../aggregation
 // concrete instance is provided by `AiExecutiveChatService` via the
 // hub module's exported provider.
 import type { KnowledgeSearchService } from 'src/ai-knowledge-hub/services/knowledge-search.service';
+// Wave AI-Exec-Chat-Equipment-ผ.03 — equipment (ผ.03) aggregation
+// backend for the seven equipment tools. Type-only import (erased at
+// runtime); the concrete instance is provided by `AiExecutiveChatService`
+// via `AggregationModule`'s exported provider.
+import type { UnifiedEquipmentAggregatorService } from '../../aggregation/services/unified-equipment-aggregator.service';
 
 /**
  * Caller-identity snapshot resolved once per turn and passed into every
@@ -85,6 +90,13 @@ export interface ExecutiveToolHandlerDeps {
   // envelope when absent. Production wiring always provides the real
   // service. §17.2 advisory; §17.3 read-only (`ai_knowledge_*` only).
   knowledgeSearch?: KnowledgeSearchService;
+  // Wave AI-Exec-Chat-Equipment-ผ.03 — equipment (ผ.03) tools backend.
+  // OPTIONAL (same convention as `projectLineage` / `knowledgeSearch`)
+  // so the wide test surface doesn't need a stub; each equipment
+  // handler guards `if (!deps.unifiedEquipment)` and returns an empty,
+  // schema-valid envelope when absent. Production wiring always
+  // provides the real service. §17.2 advisory; §17.3 read-only.
+  unifiedEquipment?: UnifiedEquipmentAggregatorService;
 }
 
 /**

@@ -256,7 +256,71 @@ describe('BE-W44-02 / decision-framing system prompt (§17.2)', () => {
     // precedence (Renderer > Specific Rule > Default Tone). Future
     // presentation waves MUST defer to #48 instead of restating tone.
     // Net growth ~10 KB; ~2 KB (~500-token) headroom preserved.
-    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT.length).toBeLessThanOrEqual(97280);
+    // Wave AI-Exec-Chat-Equipment-ผ.03 (2026-07-18): cap raised
+    // 97280 → 102400 to credit rules #49–#53 (equipment ผ.03 hard
+    // routing / book disambiguation ผ.02-vs-ผ.03 / 4-group status
+    // vocabulary lock / budget semantics / anti-hallucination). ~2.8 KB
+    // net growth on the system prompt (the 7 tool-catalog entries live
+    // in EXECUTIVE_CHAT_TOOL_INSTRUCTIONS — credited in
+    // wave54-bilingual-success.spec.ts). ~2.7 KB headroom preserved.
+    // Wave AI-EXEC-CHAT-BOOK-ANSWER-QUALITY (2026-07-18): cap raised
+    // 102400 → 106496 to credit (a) Rule #47 "Step 0" orchestrator-first
+    // amendment (getPlanCatalogOverview called first; manual chain
+    // demoted to fallback), (b) NEW rule #54 (answer-scope discipline —
+    // HARD 3-domain gate + D1 4-type book taxonomy: เล่มหลัก/แก้ไข/
+    // เปลี่ยนแปลง/เพิ่มเติม never collapsed + direct-question exception),
+    // and (c) NEW rule #55 (count-definition HEAD-of-lineage vs all-books,
+    // answered only-when-asked). ~3 KB net growth; ~1 KB headroom
+    // preserved.
+    // Wave AI-Exec-Chat-Book-Scope-And-Document-Counts (2026-07-18): Rule
+    // #54 extended with the book-scoped paragraph (listProjectsInPlan
+    // scope=main when a specific book is named — ~1.9 KB) landed without
+    // bumping this constant.
+    // Wave AI-Exec-Chat-Followup-Scope-And-Count-Intent (2026-07-18): cap
+    // raised 106496 → 108544 to credit Rule #56 (follow-up scope-carry)
+    // and Rule #57 (count-intent vs list-intent). ~1.6 KB net growth on
+    // the system prompt; headroom restored.
+    // Wave AI-Exec-Chat-Book-Timeline-View (2026-07-18): cap raised
+    // 108544 → 111616 to credit Rule #59 (book-timeline view) plus the
+    // previously-uncredited Rule #58 (single-fact lookup). ~1.3 KB net
+    // growth this wave; headroom restored.
+    // Wave AI-Exec-Chat-Document-Equipment-Listing-And-Verbosity
+    // (2026-07-18): cap raised 111616 → 113664 to credit Rule #60 (list
+    // verbosity — list-intent shows names + minimal only, never verbose
+    // objective/goal/expected/indicator unless the #30 trigger is present).
+    // ~0.9 KB net growth; headroom restored.
+    // Wave AI-Exec-Chat-Head-Book-Roster-And-Verbose-Omit (2026-07-18): cap
+    // raised 113664 → 116736 to credit Rule #61 (origin-book → head-book
+    // roster) + Rule #62 (plan HEAD roster). ~1.8 KB net growth; headroom
+    // restored.
+    // Wave AI-Exec-Chat-Query-Mode-Carry (2026-07-18): cap raised
+    // 116736 → 118784 to credit Rule #63 (query-mode carry — subjectless
+    // subject-swap follow-ups inherit the prior query-mode). ~1.6 KB net
+    // growth; headroom restored.
+    // Wave AI-Exec-Chat-Live-QA-5Bug (2026-07-18): cap raised 118784 →
+    // 122880 to credit Rule #64 (in-book count → DOCUMENT count), Rule #65
+    // (type-specific book listing — แก้ไข vs เปลี่ยนแปลง never merged), Rule
+    // #66 (cosmetic label render), and the #57 count-intent strengthening.
+    // ~2.4 KB net growth; headroom restored.
+    // Wave AI-Exec-Chat-Live-QA-4Bug (2026-07-18): cap raised 122880 →
+    // 126976 to credit Rule #67 (classification breakdown → dashboard
+    // groupBy=strategy/issue; forbid the undercounting main-PG-only
+    // getProjectClassificationBreakdown), Rule #68 (single-project keyword
+    // extraction — strip trailing question words), Rule #69 (answer-language
+    // + suggestion-integrity + ties), and the #52 byBook edit/change split
+    // note + #64 headProjectCount rename ref. ~3.5 KB net growth; headroom
+    // restored.
+    // Wave AI-Exec-Chat-Live-QA-4Bug follow-up (2026-07-18): cap raised
+    // 126976 → 131072 to credit Rule #70 (which-project superlative routing
+    // → highlightBudgetOutliers, forbid getCrossPlanInsights plan-total),
+    // the Rule #64 English in-book-count triggers, and the Rule #69 explicit
+    // English answer-language example. ~1.7 KB net growth; headroom restored.
+    // Wave AI-EXEC-CHAT-WHOLE-PLAN-EQUIPMENT-LISTING-HEAD-CONSISTENCY
+    // (2026-07-18): cap raised 131072 → 135168 to credit Rule #71 (whole-plan
+    // equipment/project listing = count = HEAD/distinct; per-book listing
+    // stays document — resolves the count(3)≠listing(5) inconsistency).
+    // ~1.1 KB net growth in SYSTEM_PROMPT; headroom restored.
+    expect(EXECUTIVE_CHAT_SYSTEM_PROMPT.length).toBeLessThanOrEqual(135168);
     // W59-BE-PROMPT-01 (2026-04-25): cap raised 16384 → 18432 to credit
     // rules #27f (D-B objective disclosure, 200-char truncation),
     // #27g (D-C location triple — amphoeName / laoName / geoCoordinates),

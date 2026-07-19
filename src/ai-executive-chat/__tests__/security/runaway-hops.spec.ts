@@ -66,6 +66,12 @@ describe('SEC-W44-01 / runaway-hops (§17.8)', () => {
     const SUB_BOOK_PAGINATED_TOOLS = new Set([
       'listProjectsInRevisionBook',
       'listProjectsInSupplementBook',
+      // Wave AI-Exec-Chat-Equipment-ผ.03 (2026-07-18) — the equipment
+      // sub-book listers mirror their ผ.02 siblings above (offset-paginated,
+      // ≤200). `listEquipmentInPlan` stays in the legacy ≤50 tier, symmetric
+      // with `listProjectsInPlan`.
+      'listEquipmentInRevisionBook',
+      'listEquipmentInSupplementBook',
     ]);
     for (const [name, spec] of Object.entries(EXECUTIVE_TOOL_REGISTRY)) {
       const limit = spec.paramsSchema.properties?.limit;

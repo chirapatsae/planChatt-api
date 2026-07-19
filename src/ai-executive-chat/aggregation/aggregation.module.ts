@@ -83,9 +83,19 @@ import { Strategy } from 'src/strategy/entities/strategy.entity';
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
 import { Tactic } from 'src/tactic/entities/tactic.entity';
 import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.entity';
+// Wave AI-Exec-Chat-Equipment-ผ.03 (2026-07-18) — equipment (ผ.03)
+// aggregation. `UnifiedEquipmentModule` exports the canonical
+// HEAD-of-lineage equipment merge service; the aggregator below wraps
+// it for the seven executive equipment tools. One-way dependency:
+// aggregation → unified-equipment (the equipment module only imports a
+// plain constants file from this package, never the Nest module — no
+// module cycle).
+import { UnifiedEquipmentModule } from 'src/unified-equipment/unified-equipment.module';
+import { UnifiedEquipmentAggregatorService } from './services/unified-equipment-aggregator.service';
 
 @Module({
   imports: [
+    UnifiedEquipmentModule,
     TypeOrmModule.forFeature([
       DevelopmentPlan,
       DevelopmentPlanRevision,
@@ -161,6 +171,12 @@ import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.ent
     // so it's resolvable in DI graph and unit tests. §17.2 advisory,
     // §17.3 read-only, §11 / §14 / §15 lineage-aware.
     AgencyProjectsCanonicalAggregatorService,
+    // Wave AI-Exec-Chat-Equipment-ผ.03 (2026-07-18) — Tier-B equipment
+    // aggregator backing the seven ผ.03 executive tools. Spine =
+    // `UnifiedEquipmentService.executiveList` (§14.2 HEAD REPLACE + W67
+    // strip/tag single-sourced there). §17.2 advisory; §17.3 read-only
+    // + PII-free item projection.
+    UnifiedEquipmentAggregatorService,
   ],
   // Re-export `TypeOrmModule` so concrete providers (BE-W54-02..05,
   // BE-W54-07) resolve the repositories through this module once
@@ -186,6 +202,10 @@ import { TrackingStatus } from 'src/tracking-status/entities/tracking-status.ent
     // the concrete service when the canonical-aggregator feature flag
     // is on.
     AgencyProjectsCanonicalAggregatorService,
+    // Wave AI-Exec-Chat-Equipment-ผ.03 — exposed by class (no DI token;
+    // same convention as ProjectLineageService) so AiExecutiveChatService
+    // can hand it to the equipment tool handlers via the deps bag.
+    UnifiedEquipmentAggregatorService,
   ],
 })
 export class AggregationModule {}

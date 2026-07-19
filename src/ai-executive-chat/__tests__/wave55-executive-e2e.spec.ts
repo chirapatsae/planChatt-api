@@ -409,7 +409,9 @@ describe('W55-QA-02 / Wave 55 executive question suite (structural E2E)', () => 
 
       expect(envelope.shape).toBe('planOverview');
       expect(envelope.data.planId).toBe(PLAN_A_ID);
-      expect(envelope.data.projectCount).toBe(5);
+      // BUG2 — getPlanOverview now exposes `headProjectCount` (was
+      // `projectCount`) to self-label the HEAD-of-lineage pool size.
+      expect(envelope.data.headProjectCount).toBe(5);
       expect(envelope.data.scope).toEqual(['all']);
       // Province scope — aggregator saw NO caller-scope narrowing.
       assertProvinceScope(listUnifiedProjectsSpy);
@@ -449,7 +451,7 @@ describe('W55-QA-02 / Wave 55 executive question suite (structural E2E)', () => 
 
       // Proof that HEAD-of-lineage is the default — 7 rows only when the
       // opt-in flag is set; default path above returned 5.
-      expect(envelope.data.projectCount).toBe(7);
+      expect(envelope.data.headProjectCount).toBe(7); // BUG2 rename
     });
   });
 
@@ -812,7 +814,7 @@ describe('W55-QA-02 / Wave 55 executive question suite (structural E2E)', () => 
         makeCtx(),
         deps,
       )) as unknown as ExecutiveEnvelope<Record<string, unknown>>;
-      expect(envelope.data.projectCount).toBe(5);
+      expect(envelope.data.headProjectCount).toBe(5); // BUG2 rename
     });
   });
 });

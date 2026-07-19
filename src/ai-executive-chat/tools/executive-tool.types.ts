@@ -56,6 +56,7 @@ export type ExecutiveToolName =
   //     lookup ("เล่มล่าสุดของโครงการ X") and full forward chain
   //     ("ไทม์ไลน์โครงการ X"). Both are advisory/read-only (§17.2 / §17.3).
   | 'getProjectHeadBook'
+  | 'listProjectHeadRoster'
   | 'getProjectLineage'
   // --- Wave 66 (W66-BE-AGG-01): explicit "no responsibleAgency" lister.
   //     Counts AND lists projects whose `responsible_agency_id` is NULL
@@ -130,7 +131,26 @@ export type ExecutiveToolName =
   //     mandatory in the envelope so the LLM can cite ที่มา. Rides the
   //     existing executive-chat cooldown/quota keys (§17.8 — no new
   //     key). Read-only (§17.2 / §17.3); §17.11 no role exemption.
-  | 'searchKnowledgeBase';
+  | 'searchKnowledgeBase'
+  // --- Wave AI-Exec-Chat-Equipment-ผ.03 (2026-07-18,
+  //     docs/tasks/AI_EXEC_CHAT_EQUIPMENT_P03_COVERAGE.md): seven
+  //     standalone equipment (ผ.03) tools. Spine = the canonical
+  //     `UnifiedEquipmentService.executiveList` (EPG + RELPG + SEPG,
+  //     §14.2 HEAD-of-lineage REPLACE, W67 strip+4-group tag) via
+  //     `UnifiedEquipmentAggregatorService`. Deliberately NOT folded
+  //     into the Tier-C ExecutiveQuery DSL (task §3.1 D1 — byte-identity
+  //     invariant of dsl-contract.spec + pending PR3 collapse).
+  //     Read-only (§17.2 / §17.3); §17.11 no role exemption; §16.5
+  //     dual classification shape honored (no STRATEGY_BASED
+  //     assumption).
+  | 'searchEquipmentByKeyword'
+  | 'listEquipmentInPlan'
+  | 'listEquipmentHeadRoster'
+  | 'getEquipmentBudgetSummary'
+  | 'getEquipmentStatusBreakdown'
+  | 'getEquipmentCategoryBreakdown'
+  | 'listEquipmentInRevisionBook'
+  | 'listEquipmentInSupplementBook';
 
 /**
  * Minimal structural subset of JSON Schema Draft-07. Consumed by the

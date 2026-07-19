@@ -1857,17 +1857,28 @@ const NIL_UUID = '00000000-0000-0000-0000-000000000000';
 
 const listProjectsInPlan: ExecutiveToolHandler = async (params, ctx, deps) => {
   assertExecutiveRole(ctx);
-  const planIdRaw = String(params.planId ?? '');
-  if (!UUID_RX.test(planIdRaw)) {
+  // Wave FOLLOWUP-CONTINUITY — `planId` is OPTIONAL (mirrors
+  // listEquipmentInPlan + getEquipmentBudgetSummary). Missing / empty /
+  // whitespace → WHOLE-MUNICIPALITY listing: the plan WHERE clause below is
+  // applied only when `planFilter` is present, so a detail/listing follow-up
+  // after a plan-less turn still returns the items. A NON-EMPTY but MALFORMED
+  // (non-UUID) value is a genuine LLM error → keep the guidance message
+  // (do not mask a hallucinated / garbled id that might mean a DIFFERENT
+  // plan). `planId` is the value echoed in the envelope (NIL_UUID = whole
+  // municipality / no plan anchored); `planFilter` gates the WHERE clause.
+  const planIdRaw = String(params.planId ?? '').trim();
+  if (planIdRaw !== '' && !UUID_RX.test(planIdRaw)) {
     return {
       planId: NIL_UUID,
       items: [],
       asOf: nowIso(),
       message:
-        'planId ต้องเป็น UUID ที่ได้จาก listActivePlans.items[i].planId เท่านั้น กรุณาเรียก listActivePlans ก่อน แล้วส่ง UUID ของแผนที่ตรงกัน',
+        'ถ้าระบุ planId ต้องเป็น UUID ที่ได้จาก listActivePlans.items[i].planId; ถ้าไม่ระบุ = ทั้งเทศบาล (แผนปัจจุบัน)',
     };
   }
-  const planId = planIdRaw;
+  const planId = planIdRaw === '' ? NIL_UUID : planIdRaw;
+  const planFilter: string | undefined =
+    planIdRaw === '' ? undefined : planIdRaw;
   const scope = String(params.scope ?? 'main');
   const overallLimit = Math.min(Math.max(Number(params.limit ?? 20), 1), 50);
   // Wave 58 W58-BE-AGG-01 (D4) — opt-in `groupBy=byRevisionRound` mode.
@@ -1897,6 +1908,12 @@ const listProjectsInPlan: ExecutiveToolHandler = async (params, ctx, deps) => {
   // Soft-delete (`deletedAt IS NULL`) and Ready-hidden (W57 EXEC_VISIBLE_STATUSES)
   // filters continue to apply.
   const groupByBookCompleteness = groupBy === 'byBookCompleteness';
+
+  // Wave HEAD-BOOK-ROSTER-AND-VERBOSE-OMIT — resolve the verbose gate ONCE
+  // at the handler top so BOTH the item builders (which now null the verbose
+  // text fields when false — rule #60) and the server-side markdown renderer
+  // read the same flag. Opt-in via prompt rule #30 (`verbose: true`).
+  const verbose = params.verbose === true;
 
   // BE-W53-02 — scope split for `scope === 'all'`.
   // Quota: main ≤ ceil(limit*0.5), revised ≤ ceil(limit*0.3), supplement
@@ -2006,13 +2023,19 @@ const listProjectsInPlan: ExecutiveToolHandler = async (params, ctx, deps) => {
       .leftJoin('pg.developmentIssue', 'di', 'di.deletedAt IS NULL')
       .leftJoin('pg.developmentPlan', 'dp')
       .where('pg.deletedAt IS NULL')
-      .andWhere('pg.development_plan_id = :planId', { planId })
       // W60c (2026-04-25) — sort by pageNumber asc nulls last, then
       // title for stable ordering. Per user preference: executive
       // expects book-page reading order.
       .orderBy('pg.pageNumber', 'ASC', 'NULLS LAST')
       .addOrderBy('pg.title', 'ASC')
       .limit(mainQuota);
+    // Wave FOLLOWUP-CONTINUITY — apply the plan filter only when a planId is
+    // anchored; omit = whole-municipality listing (single-LAO = the one plan).
+    if (planFilter) {
+      listMainQb.andWhere('pg.development_plan_id = :planId', {
+        planId: planFilter,
+      });
+    }
     if (groupByBookCompleteness) {
       // Wave 60 W60-BE-AGG-01 — book-completeness mode keeps historical
       // rows visible. HEAD filter is SKIPPED; instead `isHead` is
@@ -2059,6 +2082,7 @@ const listProjectsInPlan: ExecutiveToolHandler = async (params, ctx, deps) => {
         title: r.title,
         statusname: r.statusname,
         planId,
+        verbose,
         budget: r.budget,
         amphoeId: r.amphoeid,
         agencyId: r.agencyid,
@@ -2159,11 +2183,16 @@ const listProjectsInPlan: ExecutiveToolHandler = async (params, ctx, deps) => {
       .leftJoin('rpg.developmentPlan', 'dp')
       .where('rpg.deletedAt IS NULL')
       .andWhere('dpr.deletedAt IS NULL')
-      .andWhere('dpr.development_plan_id = :planId', { planId })
       // W60c — sort by pageNumber asc nulls last, then title.
       .orderBy('rpg.pageNumber', 'ASC', 'NULLS LAST')
       .addOrderBy('rpg.title', 'ASC')
       .limit(revisedBudget);
+    // Wave FOLLOWUP-CONTINUITY — conditional plan filter (see main branch).
+    if (planFilter) {
+      listRevQb.andWhere('dpr.development_plan_id = :planId', {
+        planId: planFilter,
+      });
+    }
     if (groupByBookCompleteness) {
       // Wave 60 W60-BE-AGG-01 — same opt-in. Skip HEAD filter, project
       // `isHead`, hide Ready.
@@ -2221,6 +2250,7 @@ const listProjectsInPlan: ExecutiveToolHandler = async (params, ctx, deps) => {
         title: r.title,
         statusname: r.statusname,
         planId,
+        verbose,
         budget: r.budget,
         amphoeId: r.amphoeid,
         agencyId: r.agencyid,
@@ -2328,8 +2358,13 @@ const listProjectsInPlan: ExecutiveToolHandler = async (params, ctx, deps) => {
       .leftJoin('spg.developmentIssue', 'di', 'di.deletedAt IS NULL')
       .leftJoin('dps.developmentPlan', 'dp')
       .where('spg.deletedAt IS NULL')
-      .andWhere('dps.deletedAt IS NULL')
-      .andWhere('dps.development_plan_id = :planId', { planId });
+      .andWhere('dps.deletedAt IS NULL');
+    // Wave FOLLOWUP-CONTINUITY — conditional plan filter (see main branch).
+    if (planFilter) {
+      spgQb.andWhere('dps.development_plan_id = :planId', {
+        planId: planFilter,
+      });
+    }
     if (groupByBookCompleteness) {
       // Wave 60 — Ready hidden under EXEC_VISIBLE_STATUSES. SPG has no
       // descendant in the §14.1 lineage model (RPG.prev_project_type is
@@ -2378,6 +2413,7 @@ const listProjectsInPlan: ExecutiveToolHandler = async (params, ctx, deps) => {
         title: r.title,
         statusname: r.statusname,
         planId,
+        verbose,
         budget: r.budget,
         amphoeId: null,
         agencyId: r.agencyid,
@@ -2450,7 +2486,7 @@ const listProjectsInPlan: ExecutiveToolHandler = async (params, ctx, deps) => {
     // trigger words. The LLM forwards the trigger detection by setting
     // `verbose: true` on this tool call; default (absent / false) keeps
     // the core-fields-only render and appends the Q4 hint footer.
-    const verbose = params.verbose === true;
+    // `verbose` resolved once at the handler top (Wave HEAD-BOOK-ROSTER).
     const renderedMarkdown = renderBookCompletenessMarkdown(groups, {
       verbose,
     });
@@ -2724,6 +2760,14 @@ interface BuildProjectEntryArgs {
   indicatorRaw?: string | null;
   developmentIssueLabel?: string | null;
   reportFormat?: 'STRATEGY_BASED' | 'ISSUE_BASED' | null | undefined;
+  // Wave AI-EXEC-CHAT-HEAD-BOOK-ROSTER-AND-VERBOSE-OMIT — data-layer verbose
+  // gate. When EXPLICITLY `false` (list-intent, rule #60), the verbose text
+  // fields (objective / goal / expected / indicator / developmentIssueLabel)
+  // are set to null in the item payload so there is NOTHING for the LLM to
+  // echo (the renderedMarkdown was already clean; the leak was raw items).
+  // `undefined` (other callers) preserves the legacy behavior (fields kept).
+  // `true` keeps the fields (opt-in verbose per rule #30).
+  verbose?: boolean;
 }
 
 /**
@@ -2782,6 +2826,11 @@ function composeGeoCoordinates(
 function buildProjectEntry(
   args: BuildProjectEntryArgs,
 ): Record<string, unknown> {
+  // Wave HEAD-BOOK-ROSTER-AND-VERBOSE-OMIT — verbose text fields are emitted
+  // UNLESS `verbose` is explicitly false. `undefined` (legacy callers) keeps
+  // the fields to preserve their envelope shape; only listProjectsInPlan's
+  // non-verbose path passes `false`.
+  const emitVerboseFields = args.verbose !== false;
   const trimmedAgencyName =
     typeof args.agencyName === 'string' ? args.agencyName.trim() : '';
   const responsibleAgencyName =
@@ -2920,22 +2969,28 @@ function buildProjectEntry(
     // Wave 59 D-B — objective + truncation flag. `objective` is null when
     // the column is null/empty; the LLM treats null as "no objective
     // recorded" rather than synthesizing copy.
-    objective: truncatedObjective.text,
-    objectiveTruncated: truncatedObjective.truncated,
+    // Wave HEAD-BOOK-ROSTER-AND-VERBOSE-OMIT — when `verbose === false`
+    // (list-intent, rule #60) the five verbose text fields are nulled so
+    // the raw item carries NOTHING for the LLM to echo. `verbose` undefined
+    // (other callers) or true keeps the fields.
+    objective: emitVerboseFields ? truncatedObjective.text : null,
+    objectiveTruncated: emitVerboseFields
+      ? truncatedObjective.truncated
+      : false,
     // Wave 62 W62-BE-AGG-01 — `goal` / `expected` mirror the
     // `objective` shape (truncated text + boolean flag). Always
     // surfaced as keys; null when the source column is null/empty.
-    goal: truncatedGoal.text,
-    goalTruncated: truncatedGoal.truncated,
-    expected: truncatedExpected.text,
-    expectedTruncated: truncatedExpected.truncated,
+    goal: emitVerboseFields ? truncatedGoal.text : null,
+    goalTruncated: emitVerboseFields ? truncatedGoal.truncated : false,
+    expected: emitVerboseFields ? truncatedExpected.text : null,
+    expectedTruncated: emitVerboseFields ? truncatedExpected.truncated : false,
     // Wave 62 W62-BE-AGG-01 — §17.7 format branching. EXACTLY ONE of
     // these two fields is non-null per row (§16.5 invariant): STRATEGY_BASED
     // → `indicator` populated; ISSUE_BASED → `developmentIssueLabel`
     // populated; missing reportFormat → both null. The handler does NOT
     // emit `indicator` for ISSUE_BASED rows even if the column has data.
-    indicator,
-    developmentIssueLabel,
+    indicator: emitVerboseFields ? indicator : null,
+    developmentIssueLabel: emitVerboseFields ? developmentIssueLabel : null,
     // Wave 59 D-C — location triple. amphoeName / laoName / geoCoordinates
     // are ALWAYS surfaced as keys with `null` permitted at runtime
     // (per the W58-BE-AGG-02 nullable-via-required-only convention).
@@ -3379,15 +3434,30 @@ const listDevelopmentPlanRevisions: ExecutiveToolHandler = async (
 
   return {
     planId,
-    items: revisions.map((r) => ({
-      revisionId: r.id,
-      revisionNumber: r.revisionNumber,
-      revisionTypeName: r.revisionType?.name ?? '(ไม่ระบุ)',
-      isLatest: !!r.isLatest,
-      isOpen: !!r.isOpen,
-      isBooked: !!r.isBooked,
-      projectCount: countByRevision.get(r.id) ?? 0,
-    })),
+    items: revisions.map((r) => {
+      const typeName = r.revisionType?.name ?? '(ไม่ระบุ)';
+      // Wave AI-EXEC-CHAT-BOOK-TIMELINE-VIEW — full round label
+      // ("แก้ไข ครั้งที่ 1/2569") sourced from the DPR description
+      // verbatim (or the static fallback when empty). Enables the
+      // book-timeline view (rule #58) to render "{planName} {roundLabel}"
+      // without listing any projects. Same label the grouped
+      // listProjectsInPlan header already uses (buildProjectEntry).
+      const roundLabel = resolveRevisionRoundLabel({
+        type: typeName.includes('เปลี่ยนแปลง') ? 'change' : 'edit',
+        number: r.revisionNumber,
+        description: r.description,
+      });
+      return {
+        revisionId: r.id,
+        revisionNumber: r.revisionNumber,
+        revisionTypeName: typeName,
+        roundLabel,
+        isLatest: !!r.isLatest,
+        isOpen: !!r.isOpen,
+        isBooked: !!r.isBooked,
+        projectCount: countByRevision.get(r.id) ?? 0,
+      };
+    }),
     asOf: nowIso(),
   };
 };
@@ -3447,6 +3517,14 @@ const listDevelopmentPlanSupplements: ExecutiveToolHandler = async (
     items: supplements.map((s) => ({
       supplementId: s.id,
       supplementNumber: s.supplementNumber,
+      // Wave AI-EXEC-CHAT-BOOK-TIMELINE-VIEW — full round label
+      // ("เพิ่มเติม ครั้งที่ N/ปี") from the DPS description verbatim (or
+      // static fallback). Feeds the book-timeline view (rule #58).
+      roundLabel: resolveRevisionRoundLabel({
+        type: 'supplement',
+        number: s.supplementNumber,
+        description: s.description,
+      }),
       isLatest: !!s.isLatest,
       isOpen: !!s.isOpen,
       isBooked: !!s.isBooked,
@@ -3970,7 +4048,11 @@ const getPlanOverview: ExecutiveToolHandler = async (params, ctx, deps) => {
     // validator is bypassed.
     return {
       shape: 'planOverview',
-      data: { planId: NIL_UUID, projectCount: 0 },
+      // BUG2 — `headProjectCount` (was `projectCount`): this is the
+      // HEAD-of-lineage pool size per scope, NOT the document count. The
+      // plain name let the LLM misgrab it for "เล่ม X มีกี่โครงการ"
+      // (main HEAD=1 but document=3). Renamed so the field self-labels HEAD.
+      data: { planId: NIL_UUID, headProjectCount: 0 },
       asOf: nowIso(),
       partial: true,
       missingDimensions: ['classification'],
@@ -4038,7 +4120,13 @@ const getPlanOverview: ExecutiveToolHandler = async (params, ctx, deps) => {
 
       const data: Record<string, unknown> = {
         planId,
-        projectCount: projects.length,
+        // BUG2 — `headProjectCount` (was `projectCount`): HEAD-of-lineage
+        // pool size for the requested scope, NOT the printed document count.
+        // Renamed so the LLM cannot misgrab it for an in-book project count
+        // ("เล่มหลักมีกี่โครงการ" → must be document 3, not HEAD 1). See
+        // rule #64; document counts come from getPlanCatalogOverview /
+        // listProjectsInPlan totalCount.
+        headProjectCount: projects.length,
         reportFormat: reportFormat ?? undefined,
         scope,
       };
@@ -4810,10 +4898,81 @@ const getProjectHeadBook: ExecutiveToolHandler = async (params, ctx, deps) => {
     headRevisionNumber: result.headRevisionNumber,
     headDprId: result.headDprId,
     headDpsId: result.headDpsId,
+    // Wave HEAD-BOOK-ROSTER-AND-VERBOSE-OMIT — page + Thai status + title of
+    // the HEAD row so the roster (rule #61) renders "โครงการ X → {headBookLabel}
+    // หน้า N (สถานะ)". headBookLabel is self-contained (one "เล่ม" prefix, Wave
+    // BOOK-LABEL-DOUBLING-FIX) so the template emits it verbatim — no double
+    // "เล่ม". `stripNulls` drops page/status when absent.
+    headPageNumber: result.headPageNumber,
+    headStatusTh: result.headStatusName
+      ? toThaiStatus(result.headStatusName)
+      : null,
+    headTitle: result.headTitle,
     isInputHead: result.isInputHead,
     advisories: result.advisories,
     asOf: result.asOf,
   });
+};
+
+// Wave AI-EXEC-CHAT-HEAD-BOOK-ROSTER-AND-VERBOSE-OMIT (rework) —
+// `listProjectHeadRoster` returns, in ONE call, the HEAD-of-lineage of every
+// project in a plan (one row per lineage, deduped) with the head book label
+// + page + Thai status. Replaces the prompt-chain (loop getProjectHeadBook)
+// that the LLM would not trigger in live E2E. `originScope` filters by the
+// lineage's ORIGIN book (main / revised / supplement); omit → whole plan.
+const listProjectHeadRoster: ExecutiveToolHandler = async (
+  params,
+  ctx,
+  deps,
+) => {
+  assertExecutiveRole(ctx);
+  const planIdRaw = String(params.planId ?? '');
+  if (!UUID_RX.test(planIdRaw)) {
+    return {
+      planId: NIL_UUID,
+      items: [],
+      asOf: nowIso(),
+      message:
+        'planId ต้องเป็น UUID ที่ได้จาก listActivePlans.items[i].planId เท่านั้น',
+    };
+  }
+  if (!deps.projectLineage) {
+    return {
+      planId: planIdRaw,
+      items: [],
+      asOf: nowIso(),
+      advisories: ['lineage-service-unavailable'],
+    };
+  }
+  const originScopeRaw = params.originScope
+    ? String(params.originScope)
+    : undefined;
+  const originScope =
+    originScopeRaw === 'main' ||
+    originScopeRaw === 'revised' ||
+    originScopeRaw === 'supplement'
+      ? originScopeRaw
+      : undefined;
+
+  const roster = await deps.projectLineage.listHeadRoster(
+    planIdRaw,
+    originScope,
+  );
+  return {
+    planId: planIdRaw,
+    items: roster.map((r) =>
+      stripNulls({
+        projectTitle: r.projectTitle,
+        originBookType: r.originBookType,
+        headBookLabel: r.headBookLabel,
+        headBookType: r.headBookType,
+        headRevisionNumber: r.headRevisionNumber,
+        headPageNumber: r.headPageNumber,
+        headStatusTh: r.headStatusName ? toThaiStatus(r.headStatusName) : null,
+      }),
+    ),
+    asOf: nowIso(),
+  };
 };
 
 const getProjectLineage: ExecutiveToolHandler = async (params, ctx, deps) => {
@@ -6558,6 +6717,375 @@ const searchKnowledgeBase: ExecutiveToolHandler = async (
 };
 
 // ────────────────────────────────────────────────────────────────────
+// Wave AI-Exec-Chat-Equipment-ผ.03 (2026-07-18) — seven equipment
+// (ผ.03) tool handlers. Contract:
+// docs/tasks/AI_EXEC_CHAT_EQUIPMENT_P03_COVERAGE.md.
+//
+// All seven delegate to `deps.unifiedEquipment`
+// (`UnifiedEquipmentAggregatorService`) whose spine is the canonical
+// `UnifiedEquipmentService.executiveList` — §14.2 HEAD-of-lineage
+// REPLACE, W67 in-flight strip + 4-group tag, ONE batched spine query
+// set per call (no N+1; asserted by the aggregator spec).
+//
+// Conventions:
+//   - `assertExecutiveRole(ctx)` first (§17.11 belt-and-braces).
+//   - `deps.unifiedEquipment` is OPTIONAL in the deps bag (test-surface
+//     convention, see handler-types.ts) — absence returns an empty,
+//     schema-valid envelope with a Thai advisory `message`.
+//   - UUID validation is handler-owned (friendly-hint envelope instead
+//     of AI_SCHEMA_DRIFT — listProjectsInPlan convention).
+//   - PII: items are creator-free by aggregator construction (§17.3).
+// ────────────────────────────────────────────────────────────────────
+
+const EQUIPMENT_BACKEND_UNAVAILABLE_MSG =
+  'ระบบข้อมูลครุภัณฑ์ยังไม่พร้อมใช้งานในขณะนี้ กรุณาลองใหม่ภายหลัง';
+
+/** Narrow an LLM-provided scope param to the aggregator vocabulary. */
+function parseEquipmentScope(
+  raw: unknown,
+): 'all' | 'main' | 'revision' | 'supplement' {
+  return raw === 'main' || raw === 'revision' || raw === 'supplement'
+    ? raw
+    : 'all';
+}
+
+const searchEquipmentByKeyword: ExecutiveToolHandler = async (
+  params,
+  ctx,
+  deps,
+) => {
+  assertExecutiveRole(ctx);
+  if (!deps.unifiedEquipment) {
+    return {
+      items: [],
+      totalMatched: 0,
+      asOf: nowIso(),
+      message: EQUIPMENT_BACKEND_UNAVAILABLE_MSG,
+    };
+  }
+  const keyword = String(params.keyword ?? '');
+  const planIdRaw = typeof params.planId === 'string' ? params.planId : undefined;
+  const result = await deps.unifiedEquipment.search(keyword, {
+    scope: parseEquipmentScope(params.scope),
+    planId: planIdRaw && UUID_RX.test(planIdRaw) ? planIdRaw : undefined,
+    limit: Number(params.limit ?? 10),
+  });
+  return {
+    items: result.items as unknown as Record<string, unknown>[],
+    totalMatched: result.totalMatched,
+    asOf: nowIso(),
+  };
+};
+
+const listEquipmentInPlan: ExecutiveToolHandler = async (
+  params,
+  ctx,
+  deps,
+) => {
+  assertExecutiveRole(ctx);
+  if (!deps.unifiedEquipment) {
+    return {
+      items: [],
+      totalCount: 0,
+      limit: 50,
+      offset: 0,
+      nextOffset: null,
+      asOf: nowIso(),
+      message: EQUIPMENT_BACKEND_UNAVAILABLE_MSG,
+    };
+  }
+  // Wave FOLLOWUP-CONTINUITY — `planId` is OPTIONAL. A missing / empty /
+  // whitespace value falls back to a WHOLE-MUNICIPALITY document listing:
+  // the underlying loaders apply the plan filter CONDITIONALLY (passing
+  // `undefined` = no filter), symmetric with getEquipmentBudgetSummary /
+  // getEquipmentStatusBreakdown. This fixes the follow-up-continuity bug —
+  // when turn 1 used the budget/status tools (whole-municipality, no planId
+  // anchored) a turn-2 "ขอดูรายละเอียดทั้งสามรายการ" reaches here with NO
+  // planId and must still return the (single-LAO) plan's ผ.03 items rather
+  // than totalCount:0. A NON-EMPTY but MALFORMED (non-UUID) planId is a
+  // genuine LLM error (a hallucinated / garbled id that might mean a
+  // DIFFERENT plan) → keep the guidance message instead of masking it.
+  const planIdRaw = String(params.planId ?? '').trim();
+  if (planIdRaw !== '' && !UUID_RX.test(planIdRaw)) {
+    return {
+      items: [],
+      totalCount: 0,
+      limit: 50,
+      offset: 0,
+      nextOffset: null,
+      asOf: nowIso(),
+      message:
+        'ถ้าระบุ planId ต้องเป็น UUID ที่ได้จาก listActivePlans.items[i].planId; ถ้าไม่ระบุ = ทั้งเทศบาล (แผนปัจจุบัน)',
+    };
+  }
+  const planId = planIdRaw === '' ? undefined : planIdRaw;
+  const result = await deps.unifiedEquipment.listInPlan(planId, {
+    scope: parseEquipmentScope(params.scope),
+    status:
+      typeof params.status === 'string' && params.status.length > 0
+        ? params.status
+        : undefined,
+    limit: Number(params.limit ?? 50),
+    offset: Number(params.offset ?? 0),
+  });
+  return {
+    items: result.items as unknown as Record<string, unknown>[],
+    totalCount: result.totalCount,
+    limit: result.limit,
+    offset: result.offset,
+    nextOffset: result.nextOffset,
+    asOf: nowIso(),
+  };
+};
+
+// Wave AI-EXEC-CHAT-EQUIPMENT-HEAD-ROSTER — ผ.03 analog of
+// `listProjectHeadRoster`: HEAD-of-lineage of every equipment lineage in a
+// plan (deduped, in-flight stripped), with head book label (DPR/DPS
+// description, consistent with the project roster) + page + Thai status.
+// `originScope` filters by the lineage's origin book. Enables the query-MODE
+// carry (rule #63): "ครุภัณฑ์ละ" after a project head-roster.
+const listEquipmentHeadRoster: ExecutiveToolHandler = async (
+  params,
+  ctx,
+  deps,
+) => {
+  assertExecutiveRole(ctx);
+  const planIdRaw = String(params.planId ?? '');
+  if (!deps.unifiedEquipment || !UUID_RX.test(planIdRaw)) {
+    return {
+      planId: !deps.unifiedEquipment ? NIL_UUID : planIdRaw,
+      items: [],
+      asOf: nowIso(),
+      message: !deps.unifiedEquipment
+        ? EQUIPMENT_BACKEND_UNAVAILABLE_MSG
+        : 'planId ต้องเป็น UUID ที่ได้จาก listActivePlans.items[i].planId เท่านั้น',
+    };
+  }
+  const originScopeRaw = params.originScope
+    ? String(params.originScope)
+    : undefined;
+  const originScope =
+    originScopeRaw === 'main' ||
+    originScopeRaw === 'revised' ||
+    originScopeRaw === 'supplement'
+      ? originScopeRaw
+      : undefined;
+
+  const roster = await deps.unifiedEquipment.headRoster(planIdRaw, originScope);
+  return {
+    planId: planIdRaw,
+    items: roster.map((r) =>
+      stripNulls({
+        equipmentName: r.equipmentName,
+        categoryName: r.categoryName,
+        originBookType: r.originBookType,
+        headBookLabel: r.headBookLabel,
+        headBookType: r.headBookType,
+        headRevisionNumber: r.headRevisionNumber,
+        headPageNumber: r.headPageNumber,
+        headStatusTh: r.headStatusTh,
+      }),
+    ),
+    asOf: nowIso(),
+  };
+};
+
+const getEquipmentBudgetSummary: ExecutiveToolHandler = async (
+  params,
+  ctx,
+  deps,
+) => {
+  assertExecutiveRole(ctx);
+  const emptyBook = { headItemCount: 0, totalBudget: 0 };
+  if (!deps.unifiedEquipment) {
+    return {
+      headItemCount: 0,
+      totalBudget: 0,
+      averageBudget: 0,
+      byYear: [],
+      byBook: {
+        main: emptyBook,
+        edit: emptyBook,
+        change: emptyBook,
+        supplement: emptyBook,
+      },
+      asOf: nowIso(),
+      message: EQUIPMENT_BACKEND_UNAVAILABLE_MSG,
+    };
+  }
+  const planIdRaw = typeof params.planId === 'string' ? params.planId : undefined;
+  const result = await deps.unifiedEquipment.budgetSummary({
+    planId: planIdRaw && UUID_RX.test(planIdRaw) ? planIdRaw : undefined,
+    scope: parseEquipmentScope(params.scope),
+  });
+  return {
+    headItemCount: result.headItemCount,
+    totalBudget: result.totalBudget,
+    averageBudget: result.averageBudget,
+    byYear: result.byYear as unknown as Record<string, unknown>[],
+    byBook: result.byBook as unknown as Record<string, unknown>,
+    asOf: nowIso(),
+  };
+};
+
+const getEquipmentStatusBreakdown: ExecutiveToolHandler = async (
+  params,
+  ctx,
+  deps,
+) => {
+  assertExecutiveRole(ctx);
+  if (!deps.unifiedEquipment) {
+    return {
+      items: [],
+      executiveStatusBreakdown: {
+        pendingReviewCount: 0,
+        awaitingApprovalCount: 0,
+        approvedCount: 0,
+        rejectedCount: 0,
+      },
+      totalCount: 0,
+      asOf: nowIso(),
+      message: EQUIPMENT_BACKEND_UNAVAILABLE_MSG,
+    };
+  }
+  const planIdRaw = typeof params.planId === 'string' ? params.planId : undefined;
+  const result = await deps.unifiedEquipment.statusBreakdown({
+    planId: planIdRaw && UUID_RX.test(planIdRaw) ? planIdRaw : undefined,
+    scope: parseEquipmentScope(params.scope),
+  });
+  return {
+    items: result.items as unknown as Record<string, unknown>[],
+    executiveStatusBreakdown: result.executiveStatusBreakdown,
+    totalCount: result.totalCount,
+    asOf: nowIso(),
+  };
+};
+
+const getEquipmentCategoryBreakdown: ExecutiveToolHandler = async (
+  params,
+  ctx,
+  deps,
+) => {
+  assertExecutiveRole(ctx);
+  if (!deps.unifiedEquipment) {
+    return {
+      items: [],
+      totalCount: 0,
+      asOf: nowIso(),
+      message: EQUIPMENT_BACKEND_UNAVAILABLE_MSG,
+    };
+  }
+  const planIdRaw = typeof params.planId === 'string' ? params.planId : undefined;
+  const result = await deps.unifiedEquipment.categoryBreakdown({
+    planId: planIdRaw && UUID_RX.test(planIdRaw) ? planIdRaw : undefined,
+    scope: parseEquipmentScope(params.scope),
+  });
+  return {
+    items: result.items as unknown as Record<string, unknown>[],
+    totalCount: result.totalCount,
+    asOf: nowIso(),
+  };
+};
+
+const listEquipmentInRevisionBook: ExecutiveToolHandler = async (
+  params,
+  ctx,
+  deps,
+) => {
+  assertExecutiveRole(ctx);
+  const revisionIdRaw = String(params.revisionId ?? '');
+  if (!deps.unifiedEquipment || !UUID_RX.test(revisionIdRaw)) {
+    return {
+      items: [],
+      totalCount: 0,
+      limit: 50,
+      offset: 0,
+      nextOffset: null,
+      revisionMeta: {
+        revisionId: NIL_UUID,
+        revisionNumber: 0,
+        revisionTypeName: '(ไม่ระบุ)',
+        isOpen: false,
+        isBooked: false,
+      },
+      asOf: nowIso(),
+      message: !deps.unifiedEquipment
+        ? EQUIPMENT_BACKEND_UNAVAILABLE_MSG
+        : 'revisionId ต้องเป็น UUID ที่ได้จาก listDevelopmentPlanRevisions.items[i].revisionId เท่านั้น กรุณาเรียก listDevelopmentPlanRevisions ก่อน',
+    };
+  }
+  const result = await deps.unifiedEquipment.listInRevisionBook(revisionIdRaw, {
+    limit: Number(params.limit ?? 50),
+    offset: Number(params.offset ?? 0),
+  });
+  return {
+    items: result.items as unknown as Record<string, unknown>[],
+    totalCount: result.totalCount,
+    limit: result.limit,
+    offset: result.offset,
+    nextOffset: result.nextOffset,
+    revisionMeta: result.revisionMeta,
+    asOf: nowIso(),
+    ...(result.totalCount === 0
+      ? {
+          message:
+            'ไม่พบรายการครุภัณฑ์ในเล่มแก้ไข/เปลี่ยนแปลงนี้ — โปรดยืนยันว่า revisionId มาจาก listDevelopmentPlanRevisions และเล่มนี้มีรายการครุภัณฑ์ (ผ.03)',
+        }
+      : {}),
+  };
+};
+
+const listEquipmentInSupplementBook: ExecutiveToolHandler = async (
+  params,
+  ctx,
+  deps,
+) => {
+  assertExecutiveRole(ctx);
+  const supplementIdRaw = String(params.supplementId ?? '');
+  if (!deps.unifiedEquipment || !UUID_RX.test(supplementIdRaw)) {
+    return {
+      items: [],
+      totalCount: 0,
+      limit: 50,
+      offset: 0,
+      nextOffset: null,
+      supplementMeta: {
+        supplementId: NIL_UUID,
+        supplementNumber: 0,
+        isOpen: false,
+        isBooked: false,
+      },
+      asOf: nowIso(),
+      message: !deps.unifiedEquipment
+        ? EQUIPMENT_BACKEND_UNAVAILABLE_MSG
+        : 'supplementId ต้องเป็น UUID ที่ได้จาก listDevelopmentPlanSupplements.items[i].supplementId เท่านั้น กรุณาเรียก listDevelopmentPlanSupplements ก่อน',
+    };
+  }
+  const result = await deps.unifiedEquipment.listInSupplementBook(
+    supplementIdRaw,
+    {
+      limit: Number(params.limit ?? 50),
+      offset: Number(params.offset ?? 0),
+    },
+  );
+  return {
+    items: result.items as unknown as Record<string, unknown>[],
+    totalCount: result.totalCount,
+    limit: result.limit,
+    offset: result.offset,
+    nextOffset: result.nextOffset,
+    supplementMeta: result.supplementMeta,
+    asOf: nowIso(),
+    ...(result.totalCount === 0
+      ? {
+          message:
+            'ไม่พบรายการครุภัณฑ์ในเล่มเพิ่มเติมนี้ — โปรดยืนยันว่า supplementId มาจาก listDevelopmentPlanSupplements และเล่มนี้มีรายการครุภัณฑ์ (ผ.03)',
+        }
+      : {}),
+  };
+};
+
+// ────────────────────────────────────────────────────────────────────
 // Export: handler map keyed by registry tool name.
 // ────────────────────────────────────────────────────────────────────
 
@@ -6584,6 +7112,7 @@ export const EXECUTIVE_TOOL_HANDLERS: ExecutiveToolHandlerMap = {
   getCrossPlanInsights,
   // Wave 61 — Mode 3 lineage handlers.
   getProjectHeadBook,
+  listProjectHeadRoster,
   getProjectLineage,
   // Wave 66 W66-BE-AGG-01 — explicit "no responsibleAgency" lister.
   listProjectsWithoutResponsibleAgency,
@@ -6614,6 +7143,17 @@ export const EXECUTIVE_TOOL_HANDLERS: ExecutiveToolHandlerMap = {
   // retrieval via `deps.knowledgeSearch` (§17.15.4 exposure invariant;
   // §17.2 advisory — derived data wins on conflict).
   searchKnowledgeBase,
+  // Wave AI-Exec-Chat-Equipment-ผ.03 (2026-07-18) — seven equipment
+  // (ผ.03) handlers via `deps.unifiedEquipment` (§17.2 advisory;
+  // §17.3 read-only + PII-free items; §17.11 role assertion inside).
+  searchEquipmentByKeyword,
+  listEquipmentInPlan,
+  listEquipmentHeadRoster,
+  getEquipmentBudgetSummary,
+  getEquipmentStatusBreakdown,
+  getEquipmentCategoryBreakdown,
+  listEquipmentInRevisionBook,
+  listEquipmentInSupplementBook,
 };
 
 // Unused but-exported so downstream files can import the context type

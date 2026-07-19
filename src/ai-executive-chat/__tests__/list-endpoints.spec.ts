@@ -102,6 +102,7 @@ function makeService(args: {
     noop as never, // ProjectLineageService (Wave 61)
     noop as never, // AgencyProjectsCanonicalAggregatorService (Wave 103 PR2)
     noop as never, // KnowledgeSearchService (Wave AI-Knowledge-Hub BE-04)
+    noop as never, // UnifiedEquipmentAggregatorService (Wave AI-Exec-Chat-Equipment-P03)
   );
 }
 
@@ -356,6 +357,7 @@ describe('BE-W46-01 / listConversationsForOwner', () => {
       {} as never, // ProjectLineageService (Wave 61)
       {} as never, // AgencyProjectsCanonicalAggregatorService (Wave 103 PR2)
       {} as never, // KnowledgeSearchService (Wave AI-Knowledge-Hub BE-04)
+      {} as never, // UnifiedEquipmentAggregatorService (Wave AI-Exec-Chat-Equipment-P03)
     );
     await svc.listConversationsForOwner(OWNER_WH);
 
@@ -488,6 +490,7 @@ describe('BE-W46-01 / listMessagesForConversation', () => {
       {} as never, // ProjectLineageService (Wave 61)
       {} as never, // AgencyProjectsCanonicalAggregatorService (Wave 103 PR2)
       {} as never, // KnowledgeSearchService (Wave AI-Knowledge-Hub BE-04)
+      {} as never, // UnifiedEquipmentAggregatorService (Wave AI-Exec-Chat-Equipment-P03)
     );
     await svc.listMessagesForConversation('conv-1', OWNER_WH);
 

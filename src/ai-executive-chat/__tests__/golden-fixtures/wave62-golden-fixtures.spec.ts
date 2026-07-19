@@ -289,7 +289,10 @@ describe('Wave 62 W62-QA-01 / golden fixture suite', () => {
       ]);
 
       const out = await handler(
-        { planId: UUID_PLAN_STRATEGY, groupBy: 'flat' },
+        // Wave HEAD-BOOK-ROSTER-AND-VERBOSE-OMIT — goal/expected/indicator/
+        // developmentIssueLabel are verbose-only (rule #60); opt in to exercise
+        // the format-aware verbose emission + truncation.
+        { planId: UUID_PLAN_STRATEGY, groupBy: 'flat', verbose: true },
         makeCtx(),
         deps,
       );
@@ -340,7 +343,10 @@ describe('Wave 62 W62-QA-01 / golden fixture suite', () => {
         },
       ]);
       const out = await handler(
-        { planId: UUID_PLAN_STRATEGY, groupBy: 'flat' },
+        // Wave HEAD-BOOK-ROSTER-AND-VERBOSE-OMIT — goal/expected/indicator/
+        // developmentIssueLabel are verbose-only (rule #60); opt in to exercise
+        // the format-aware verbose emission + truncation.
+        { planId: UUID_PLAN_STRATEGY, groupBy: 'flat', verbose: true },
         makeCtx(),
         deps,
       );
@@ -393,7 +399,8 @@ describe('Wave 62 W62-QA-01 / golden fixture suite', () => {
       ]);
 
       const out = await handler(
-        { planId: UUID_PLAN_ISSUE, groupBy: 'flat' },
+        // Wave HEAD-BOOK-ROSTER-AND-VERBOSE-OMIT — verbose-only fields (rule #60).
+        { planId: UUID_PLAN_ISSUE, groupBy: 'flat', verbose: true },
         makeCtx(),
         deps,
       );
@@ -441,7 +448,8 @@ describe('Wave 62 W62-QA-01 / golden fixture suite', () => {
         },
       ]);
       const out = await handler(
-        { planId: UUID_PLAN_ISSUE, groupBy: 'flat' },
+        // Wave HEAD-BOOK-ROSTER-AND-VERBOSE-OMIT — verbose-only fields (rule #60).
+        { planId: UUID_PLAN_ISSUE, groupBy: 'flat', verbose: true },
         makeCtx(),
         deps,
       );

@@ -423,7 +423,8 @@ describe('Wave 57 W57-QA-01 / golden fixture suite', () => {
       expect(envelope.data.planId).toBe(PLAN_A_ID);
       expect(envelope.data.totalBudget).toBe(1_650_000);
       // Project count is the HEAD pool size (rule #20 disclosure).
-      expect(envelope.data.projectCount).toBe(5);
+      // BUG2 — field renamed `projectCount` → `headProjectCount`.
+      expect(envelope.data.headProjectCount).toBe(5);
     });
   });
 

@@ -48,6 +48,7 @@ type RevisionRow = {
   isLatest: boolean;
   isOpen: boolean;
   isBooked: boolean;
+  description?: string | null;
   revisionType: { id: string; name: string } | null;
 };
 
@@ -224,6 +225,42 @@ describe('BE-W53-04 / listDevelopmentPlanRevisions', () => {
       expect(out.planId).toBe(UUID_PLAN);
       expect(typeof (out as { asOf?: unknown }).asOf).toBe('string');
       assertNoPii(out);
+    });
+
+    it('roundLabel: uses DPR description verbatim when present; static fallback when empty (BOOK-TIMELINE-VIEW)', async () => {
+      const deps = makeDeps(
+        [
+          {
+            id: UUID_DPR1,
+            revisionNumber: 1,
+            isLatest: false,
+            isOpen: false,
+            isBooked: true,
+            description: 'แก้ไข ครั้งที่ 1/2569',
+            revisionType: { id: 'rt-edit', name: 'แก้ไข' },
+          },
+          {
+            id: UUID_DPR2,
+            revisionNumber: 2,
+            isLatest: true,
+            isOpen: true,
+            isBooked: false,
+            description: null,
+            revisionType: { id: 'rt-change', name: 'เปลี่ยนแปลง' },
+          },
+        ],
+        [
+          { dprid: UUID_DPR1, cnt: '1' },
+          { dprid: UUID_DPR2, cnt: '0' },
+        ],
+      );
+      const out = await handler({ planId: UUID_PLAN }, makeCtx(), deps);
+      const items = out.items as Array<Record<string, unknown>>;
+      const byId = new Map(items.map((i) => [i.revisionId, i]));
+      // description present → verbatim.
+      expect(byId.get(UUID_DPR1)?.roundLabel).toBe('แก้ไข ครั้งที่ 1/2569');
+      // description null + change type → static change fallback (edit≠change).
+      expect(byId.get(UUID_DPR2)?.roundLabel).toBe('เล่มเปลี่ยนแปลงครั้งที่ 2');
     });
 
     it('revisionType null falls back to "(ไม่ระบุ)"', async () => {

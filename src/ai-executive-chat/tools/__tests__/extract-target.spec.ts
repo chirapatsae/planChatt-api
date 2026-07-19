@@ -133,13 +133,64 @@ describe('BE-W45-01 / extractTargetFromToolResult', () => {
     ).toBeNull();
   });
 
-  it('registry is frozen and contains exactly the 3 Wave 45 tools', () => {
+  it('registry is frozen and contains exactly the 3 Wave 45 tools + equipment search', () => {
     // Defensive: guarantees future drift (e.g. silently adding a tool)
     // is caught by CI. Adding a new extractable tool requires touching
     // this test too, which is the desired review surface.
+    // Wave AI-Exec-Chat-Equipment-ผ.03 (2026-07-18) — deliberately added
+    // `searchEquipmentByKeyword` (kind equipment-project-group).
     expect(Object.isFrozen(TARGET_EXTRACTION_REGISTRY)).toBe(true);
     expect(Object.keys(TARGET_EXTRACTION_REGISTRY).sort()).toEqual(
-      [...ELIGIBLE_TOOLS].sort(),
+      [...ELIGIBLE_TOOLS, 'searchEquipmentByKeyword'].sort(),
     );
+  });
+
+  // Wave AI-Exec-Chat-Equipment-ผ.03 (2026-07-18) — equipment search is the
+  // 4th extractable tool. Mirrors the ผ.02 trio above but reads
+  // `equipmentId` and maps to targetKind 'equipment-project-group'.
+  describe('searchEquipmentByKeyword (equipment-project-group)', () => {
+    it('single item → { targetId, targetKind: equipment-project-group }', () => {
+      const result = {
+        items: [{ equipmentId: UUID_A, name: 'ครุภัณฑ์ทดสอบ' }],
+        asOf: '2026-07-18T00:00:00.000Z',
+      };
+      expect(
+        extractTargetFromToolResult('searchEquipmentByKeyword', result),
+      ).toEqual({
+        targetId: UUID_A,
+        targetKind: 'equipment-project-group',
+      });
+    });
+
+    it('empty items → null', () => {
+      expect(
+        extractTargetFromToolResult('searchEquipmentByKeyword', {
+          items: [],
+          asOf: '2026-07-18T00:00:00.000Z',
+        }),
+      ).toBeNull();
+    });
+
+    it('two items → null (ambiguous)', () => {
+      expect(
+        extractTargetFromToolResult('searchEquipmentByKeyword', {
+          items: [{ equipmentId: UUID_A }, { equipmentId: UUID_B }],
+          asOf: '2026-07-18T00:00:00.000Z',
+        }),
+      ).toBeNull();
+    });
+
+    it('missing/invalid equipmentId → null', () => {
+      expect(
+        extractTargetFromToolResult('searchEquipmentByKeyword', {
+          items: [{ name: 'no id' }],
+        }),
+      ).toBeNull();
+      expect(
+        extractTargetFromToolResult('searchEquipmentByKeyword', {
+          items: [{ equipmentId: 'not-a-uuid' }],
+        }),
+      ).toBeNull();
+    });
   });
 });

@@ -97,6 +97,16 @@ export const TARGET_EXTRACTION_REGISTRY: Readonly<
     shape: 'single-items-array',
     idField: 'projectId',
   },
+  // Wave AI-Exec-Chat-Equipment-ผ.03 (2026-07-18) — the only equipment
+  // tool that can resolve to a single concrete row. The static kind is
+  // the generic `equipment-project-group` (the extractor is per-tool
+  // static metadata; RELPG/SEPG rows degrade to the same advisory kind
+  // — target_id is §17.3 audit-by-UUID-no-FK metadata, never a gate).
+  searchEquipmentByKeyword: {
+    kind: 'equipment-project-group',
+    shape: 'single-items-array',
+    idField: 'equipmentId',
+  },
 });
 
 /**

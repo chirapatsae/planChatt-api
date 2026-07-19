@@ -207,6 +207,7 @@ function makeSvc(ds: { transaction: unknown }): AiExecutiveChatService {
     noop as never, // ProjectLineageService (Wave 61)
     noop as never, // AgencyProjectsCanonicalAggregatorService (Wave 103 PR2)
     noop as never, // KnowledgeSearchService (Wave AI-Knowledge-Hub BE-04)
+    noop as never, // UnifiedEquipmentAggregatorService (Wave AI-Exec-Chat-Equipment-P03)
   );
 }
 

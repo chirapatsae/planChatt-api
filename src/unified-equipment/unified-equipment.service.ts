@@ -115,6 +115,64 @@ export class UnifiedEquipmentService {
   }
 
   /**
+   * DOCUMENT-level executive equipment list. Same wire shape + W67 in-flight
+   * strip + `executiveStatusGroup` tag as `executiveList`, but WITHOUT the
+   * §14.2 HEAD-of-lineage anti-join: a main-book equipment that was later
+   * revised still surfaces in the main book (and the revision surfaces in
+   * its own book). This mirrors the ผ.02 project catalog's document-level
+   * listing (`listProjectsInPlan` byBookCompleteness) and keeps the
+   * per-book listing consistent with `documentCountsByBook` so
+   * "เล่มหลักมี N ครุภัณฑ์" (count) equals the enumerated names (listing).
+   *
+   * Used by the executive AI chat book-scoped equipment listing
+   * (`listEquipmentInPlan`). Analytical tools (budget / status / category)
+   * intentionally stay on the HEAD `executiveList` path.
+   *
+   * §17.2 advisory / READ-only. Authority: SAME executive read gate as
+   * `executiveList` (enforced at the controller / tool handler).
+   */
+  async documentList(
+    query: { developmentPlanId?: string },
+  ): Promise<UnifiedEquipmentRow[]> {
+    return this.executiveListWithScope(query, null, true);
+  }
+
+  /**
+   * Wave AI-EXEC-CHAT-EQUIPMENT-HEAD-ROSTER — classify the ORIGIN book of a
+   * revised-equipment (RELPG) HEAD row by walking its lineage backward via
+   * `(prev_project_id, prev_project_type)` until it reaches the root:
+   *   - `prev_project_type = 'equipment'`        → root is an EPG → 'main'
+   *   - `prev_project_type = 'revised_equipment'` → walk up to the parent RELPG
+   *   - null / missing parent                     → born in a revision → 'revised'
+   *
+   * EPG heads ('main') and SEPG heads ('supplement') are classified by the
+   * caller via `kind` and never call this. Bounded backward walk (cycles /
+   * long chains capped). READ-only.
+   */
+  async resolveEquipmentOriginBookType(
+    revisedEquipmentId: string,
+  ): Promise<'main' | 'revised'> {
+    let curId: string | null = revisedEquipmentId;
+    for (let depth = 0; depth < 25 && curId; depth++) {
+      const cur: { prevProjectId?: string | null; prevProjectType?: string | null } | undefined =
+        await this.relpgRepo
+          .createQueryBuilder('r')
+          .select(['r.id', 'r.prevProjectId', 'r.prevProjectType'])
+          .where('r.id = :id', { id: curId })
+          .andWhere('r.deletedAt IS NULL')
+          .getOne()
+          .then((row) => row ?? undefined);
+      if (!cur) return 'revised';
+      if (cur.prevProjectType === 'equipment') return 'main';
+      if (cur.prevProjectType !== 'revised_equipment' || !cur.prevProjectId) {
+        return 'revised';
+      }
+      curId = cur.prevProjectId;
+    }
+    return 'revised';
+  }
+
+  /**
    * Staff-workspace, AREA-SCOPED analog of `executiveList`. Response
    * shape is BYTE-IDENTICAL to `executiveList` (`UnifiedEquipmentRow[]`
    * with the same W67 exclusion + `executiveStatusGroup` tag) so the FE
@@ -174,6 +232,100 @@ export class UnifiedEquipmentService {
   }
 
   /**
+   * DOCUMENT-level equipment counts per book (ผ.03 as printed).
+   *
+   * Unlike `ownerList`/`executiveList`/`staffList` — which all apply the
+   * §14.2 HEAD-of-lineage anti-join (a revised EPG REPLACES its parent) —
+   * this counts EVERY non-deleted EPG/RELPG/SEPG row in each book, exactly
+   * as the physical ผ.03 document of that book lists them. A main-book
+   * equipment that was later revised still counts in the main book here
+   * (the revision also counts in its own revision book). No status filter
+   * (mirrors how the ผ.02 project catalog counts every ProjectGroup row) so
+   * "เล่มหลักมี N ครุภัณฑ์" matches the issued document.
+   *
+   * READ-only aggregate (COUNT + GROUP BY, no row hydration). Used by the
+   * executive AI chat book-catalog answer (per-child-book breakdown).
+   */
+  async documentCountsByBook(developmentPlanId: string): Promise<{
+    main: number;
+    byRevision: Array<{
+      revisionId: string;
+      revisionNumber: number;
+      revisionTypeName: string;
+      itemCount: number;
+    }>;
+    bySupplement: Array<{
+      supplementId: string;
+      supplementNumber: number;
+      itemCount: number;
+    }>;
+  }> {
+    const manager = this.epgRepo.manager;
+
+    const mainRows: Array<{ n: string }> = await manager.query(
+      `SELECT count(*) AS n
+         FROM equipment_project_groups
+        WHERE development_plan_id = $1
+          AND deleted_at IS NULL`,
+      [developmentPlanId],
+    );
+
+    const revRows: Array<{
+      revision_id: string;
+      revision_number: number | null;
+      revision_type_name: string | null;
+      n: string;
+    }> = await manager.query(
+      `SELECT dpr.id                AS revision_id,
+              dpr.revision_number   AS revision_number,
+              rt.name               AS revision_type_name,
+              count(r.id)           AS n
+         FROM revised_equipment_project_groups r
+         JOIN development_plan_revision dpr
+           ON dpr.id = r.development_plan_revision_id
+         LEFT JOIN revision_type rt
+           ON rt.id = dpr.revision_type_id
+        WHERE dpr.development_plan_id = $1
+          AND r.deleted_at IS NULL
+        GROUP BY dpr.id, dpr.revision_number, rt.name`,
+      [developmentPlanId],
+    );
+
+    const supRows: Array<{
+      supplement_id: string;
+      supplement_number: number | null;
+      n: string;
+    }> = await manager.query(
+      `SELECT dps.id                AS supplement_id,
+              dps.supplement_number AS supplement_number,
+              count(s.id)           AS n
+         FROM supplement_equipment_project_groups s
+         JOIN development_plan_supplement dps
+           ON dps.id = s.development_plan_supplement_id
+        WHERE dps.development_plan_id = $1
+          AND s.deleted_at IS NULL
+        GROUP BY dps.id, dps.supplement_number`,
+      [developmentPlanId],
+    );
+
+    return {
+      main: Number(mainRows[0]?.n ?? 0),
+      byRevision: revRows.map((r) => ({
+        revisionId: r.revision_id,
+        revisionNumber: Number(r.revision_number ?? 0),
+        // 'แก้ไข' fallback mirrors the aggregator/W58 default.
+        revisionTypeName: r.revision_type_name ?? 'แก้ไข',
+        itemCount: Number(r.n ?? 0),
+      })),
+      bySupplement: supRows.map((s) => ({
+        supplementId: s.supplement_id,
+        supplementNumber: Number(s.supplement_number ?? 0),
+        itemCount: Number(s.n ?? 0),
+      })),
+    };
+  }
+
+  /**
    * Shared executive-list pipeline parameterised by an optional area
    * scope. `executiveList` (null → system-wide) and `staffList` (area
    * scope) both delegate here so the W67 strip/tag post-processing is
@@ -188,11 +340,17 @@ export class UnifiedEquipmentService {
   private async executiveListWithScope(
     query: { developmentPlanId?: string },
     areaScope: { amphoeIds: string[]; agencyIds: string[] } | null,
+    // Wave AI-EXEC-CHAT-DOCUMENT-EQUIPMENT-LISTING — `true` → document-level
+    // (all EPG/RELPG/SEPG rows per book, no HEAD REPLACE). The W67 in-flight
+    // strip + `executiveStatusGroup` tag below are applied IDENTICALLY in
+    // both modes so the executive never sees an in-flight row (§51).
+    includeSuperseded = false,
   ): Promise<UnifiedEquipmentRow[]> {
     const merged = await this.loadMergedHeadRows(
       query.developmentPlanId,
       null,
       areaScope,
+      includeSuperseded,
     );
 
     const excluded = new Set<string>(EXECUTIVE_EXCLUDED_STATUS_NAMES);
@@ -222,6 +380,9 @@ export class UnifiedEquipmentService {
     developmentPlanId: string | undefined,
     ownerWorkHistoryId: string | null,
     areaScope: { amphoeIds: string[]; agencyIds: string[] } | null = null,
+    // Wave AI-EXEC-CHAT-DOCUMENT-EQUIPMENT-LISTING — `true` skips the §14.2
+    // HEAD anti-join in the EPG/RELPG loaders (document-level view).
+    includeSuperseded = false,
   ): Promise<UnifiedEquipmentRow[]> {
     // EPG is amphoe-bound; RELPG is agency-bound (§3 / §4.1). A dimension
     // with zero ids under an active area scope yields no rows for that
@@ -235,11 +396,17 @@ export class UnifiedEquipmentService {
     // per §5.3 — no descendants, no HEAD anti-join needed.
     const sepgAgencyIds = areaScope ? areaScope.agencyIds : null;
     const [epgRows, relpgRows, sepgRows] = await Promise.all([
-      this.loadEpgHeadRows(developmentPlanId, ownerWorkHistoryId, epgAmphoeIds),
+      this.loadEpgHeadRows(
+        developmentPlanId,
+        ownerWorkHistoryId,
+        epgAmphoeIds,
+        includeSuperseded,
+      ),
       this.loadRelpgHeadRows(
         developmentPlanId,
         ownerWorkHistoryId,
         relpgAgencyIds,
+        includeSuperseded,
       ),
       this.loadSepgHeadRows(
         developmentPlanId,
@@ -282,6 +449,14 @@ export class UnifiedEquipmentService {
      * no-match (`1 = 0`), never a global scan.
      */
     amphoeIds: string[] | null = null,
+    /**
+     * Wave AI-EXEC-CHAT-DOCUMENT-EQUIPMENT-LISTING — when `true`, SKIP the
+     * §14.2 HEAD anti-join so a main-book EPG that was later revised still
+     * surfaces in its own book (document-level view — matches the physical
+     * ผ.03 book and `documentCountsByBook`). Default `false` preserves the
+     * HEAD-of-lineage REPLACE semantic used by the executive/owner lists.
+     */
+    includeSuperseded = false,
   ): Promise<UnifiedEquipmentRow[]> {
     const qb = this.epgRepo
       .createQueryBuilder('epg')
@@ -299,16 +474,18 @@ export class UnifiedEquipmentService {
       .leftJoinAndSelect('epg.budgets', 'budgets')
       .leftJoinAndSelect('epg.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
+      .where('epg.deletedAt IS NULL');
+
+    if (!includeSuperseded) {
       // §14.2 HEAD anti-join — drop EPGs that already have a live RELPG.
-      .leftJoin(
+      qb.leftJoin(
         RevisedEquipmentProjectGroup,
         'epg_desc',
         `epg_desc.prev_project_id = epg.id ` +
           `AND epg_desc.prev_project_type = 'equipment' ` +
           `AND epg_desc.deleted_at IS NULL`,
-      )
-      .where('epg.deletedAt IS NULL')
-      .andWhere('epg_desc.id IS NULL');
+      ).andWhere('epg_desc.id IS NULL');
+    }
 
     if (developmentPlanId) {
       qb.andWhere('developmentPlan.id = :planId', {
@@ -347,6 +524,13 @@ export class UnifiedEquipmentService {
      * fail-closed no-match (`1 = 0`), never a global scan.
      */
     agencyIds: string[] | null = null,
+    /**
+     * Wave AI-EXEC-CHAT-DOCUMENT-EQUIPMENT-LISTING — when `true`, SKIP the
+     * §14.2 HEAD anti-join so a RELPG that was later re-revised still
+     * surfaces in its own revision book (document-level view). Default
+     * `false` keeps the chain-head-only REPLACE semantic.
+     */
+    includeSuperseded = false,
   ): Promise<UnifiedEquipmentRow[]> {
     const qb = this.relpgRepo
       .createQueryBuilder('relpg')
@@ -379,16 +563,18 @@ export class UnifiedEquipmentService {
       .leftJoinAndSelect('relpg.budgets', 'budgets')
       .leftJoinAndSelect('relpg.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
+      .where('relpg.deletedAt IS NULL');
+
+    if (!includeSuperseded) {
       // §14.2 HEAD anti-join — keep only RELPG chain heads.
-      .leftJoin(
+      qb.leftJoin(
         RevisedEquipmentProjectGroup,
         'relpg_desc',
         `relpg_desc.prev_project_id = relpg.id ` +
           `AND relpg_desc.prev_project_type = 'revised_equipment' ` +
           `AND relpg_desc.deleted_at IS NULL`,
-      )
-      .where('relpg.deletedAt IS NULL')
-      .andWhere('relpg_desc.id IS NULL');
+      ).andWhere('relpg_desc.id IS NULL');
+    }
 
     if (developmentPlanId) {
       // §10 plan-scope binding — match either the DPR's parent plan OR

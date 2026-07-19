@@ -44,6 +44,7 @@ import { PrevProjectType } from 'src/revised-project-group/dto/create-revised-pr
 import {
   REVISION_ROUND_LABEL_MAIN,
   resolveRevisionRoundLabel,
+  bookDisplayLabel,
   type RevisionRoundType,
 } from '../constants/revision-round-label';
 
@@ -65,6 +66,12 @@ export interface ProjectHeadBookResult {
   headRevisionNumber: number | null;
   headDprId: string | null;
   headDpsId: string | null;
+  // Wave HEAD-BOOK-ROSTER-AND-VERBOSE-OMIT — page + canonical status of the
+  // HEAD row so the origin-book→head-book roster (rule #61) can render
+  // "โครงการ X → เล่ม{headBookLabel} หน้า {headPageNumber} (สถานะ)".
+  headPageNumber: number | null;
+  headStatusName: string | null;
+  headTitle: string;
   isInputHead: boolean;
   advisories: string[];
   asOf: string;
@@ -91,6 +98,22 @@ export interface ProjectLineageResult {
   chain: ProjectLineageStep[];
   asOf: string;
   advisories: string[];
+}
+
+/**
+ * Wave HEAD-BOOK-ROSTER — one row per project lineage in a plan, pointing at
+ * the CURRENT HEAD book + page + status. Deduped (1 row per lineage).
+ */
+export interface ProjectHeadRosterRow {
+  originProjectId: string;
+  projectTitle: string;
+  originBookType: LineageBookType;
+  headProjectId: string;
+  headBookLabel: string;
+  headBookType: LineageBookType;
+  headRevisionNumber: number | null;
+  headPageNumber: number | null;
+  headStatusName: string | null;
 }
 
 interface ResolvedRow {
@@ -128,15 +151,21 @@ export class ProjectLineageService {
 
     const headRow = await this.walkToHead(resolved, advisories);
     const meta = await this.describeRowAsBook(headRow);
+    const headStatusName = await this.loadLatestStatus(headRow);
 
     return {
       projectId,
       headProjectId: meta.projectId,
-      headBookLabel: meta.bookLabel,
+      // Wave BOOK-LABEL-DOUBLING-FIX — self-contained label (always exactly
+      // one "เล่ม" prefix) so rule #33/#61/#62 render templates emit verbatim.
+      headBookLabel: bookDisplayLabel(meta.bookLabel),
       headBookType: meta.bookType,
       headRevisionNumber: meta.revisionNumber,
       headDprId: meta.dprId,
       headDpsId: meta.dpsId,
+      headPageNumber: meta.pageNumber,
+      headStatusName,
+      headTitle: meta.title,
       isInputHead: meta.projectId === projectId,
       advisories,
       asOf: new Date().toISOString(),
@@ -224,6 +253,103 @@ export class ProjectLineageService {
       asOf: new Date().toISOString(),
       advisories,
     };
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Public API — Wave HEAD-BOOK-ROSTER: per-plan HEAD roster
+  // ────────────────────────────────────────────────────────────────
+
+  /**
+   * Wave AI-EXEC-CHAT-HEAD-BOOK-ROSTER-AND-VERBOSE-OMIT (rework D1/D2) —
+   * deterministic, single-call roster of the HEAD-of-lineage of every
+   * project in a plan (one row per lineage, deduped). Replaces the
+   * prompt-chain (loop getProjectHeadBook) that the LLM failed to trigger
+   * in live E2E.
+   *
+   * Enumeration: every ProjectGroup (origin = เล่มหลัก) and every
+   * SupplementProjectGroup (origin = เล่มเพิ่มเติม, standalone per §11.3) in
+   * the plan is a lineage ROOT; each is walked forward to its HEAD.
+   * RevisedProjectGroups are reached via `walkToHead` from their PG root —
+   * NOT enumerated directly — so a revised project appears exactly once,
+   * under its origin lineage (no duplicate rows).
+   *
+   * `originScope` filters by the lineage's ORIGIN book type:
+   *   - 'main'       → PG-rooted lineages only (C1 "โครงการในเล่มหลัก")
+   *   - 'supplement' → SPG standalone rows only
+   *   - undefined    → all lineages in the plan (C2 plan HEAD roster)
+   * ('revised'-origin lineages — a project born directly in a revision with
+   * no PG parent — are not enumerated in v1; vanishingly rare in practice.)
+   *
+   * Read-only; N+1 walk bounded by MAX_CHAIN_DEPTH per lineage.
+   */
+  async listHeadRoster(
+    planId: string,
+    originScope?: 'main' | 'revised' | 'supplement',
+  ): Promise<ProjectHeadRosterRow[]> {
+    if (!planId) return [];
+    const rows: ProjectHeadRosterRow[] = [];
+    const advisories: string[] = [];
+
+    const wantMain = !originScope || originScope === 'main';
+    const wantSupplement = !originScope || originScope === 'supplement';
+
+    if (wantMain) {
+      const pgRoots = await this.dataSource
+        .getRepository(ProjectGroup)
+        .createQueryBuilder('pg')
+        .where('pg.deletedAt IS NULL')
+        .andWhere('pg.development_plan_id = :planId', { planId })
+        .orderBy('pg.createdAt', 'ASC')
+        .getMany();
+      for (const pg of pgRoots) {
+        const head = await this.walkToHead({ kind: 'main', pgRow: pg }, advisories);
+        const meta = await this.describeRowAsBook(head);
+        const status = await this.loadLatestStatus(head);
+        rows.push({
+          originProjectId: pg.id,
+          projectTitle: meta.title || (pg.title ?? ''),
+          originBookType: 'main',
+          headProjectId: meta.projectId,
+          // Wave BOOK-LABEL-DOUBLING-FIX — self-contained label.
+          headBookLabel: bookDisplayLabel(meta.bookLabel),
+          headBookType: meta.bookType,
+          headRevisionNumber: meta.revisionNumber,
+          headPageNumber: meta.pageNumber,
+          headStatusName: status,
+        });
+      }
+    }
+
+    if (wantSupplement) {
+      const spgRoots = await this.dataSource
+        .getRepository(SupplementProjectGroup)
+        .createQueryBuilder('spg')
+        .leftJoinAndSelect('spg.developmentPlanSupplement', 'dps')
+        .where('spg.deletedAt IS NULL')
+        .andWhere('dps.development_plan_id = :planId', { planId })
+        .orderBy('spg.createdAt', 'ASC')
+        .getMany();
+      for (const spg of spgRoots) {
+        // SPG is its own HEAD (§11.3 — not part of the PG/RPG chain).
+        const resolved: ResolvedRow = { kind: 'supplement', spgRow: spg };
+        const meta = await this.describeRowAsBook(resolved);
+        const status = await this.loadLatestStatus(resolved);
+        rows.push({
+          originProjectId: spg.id,
+          projectTitle: meta.title || (spg.title ?? ''),
+          originBookType: 'supplement',
+          headProjectId: meta.projectId,
+          // Wave BOOK-LABEL-DOUBLING-FIX — self-contained label.
+          headBookLabel: bookDisplayLabel(meta.bookLabel),
+          headBookType: meta.bookType,
+          headRevisionNumber: meta.revisionNumber,
+          headPageNumber: meta.pageNumber,
+          headStatusName: status,
+        });
+      }
+    }
+
+    return rows;
   }
 
   // ────────────────────────────────────────────────────────────────
@@ -392,6 +518,9 @@ export class ProjectLineageService {
     revisionNumber: number | null;
     dprId: string | null;
     dpsId: string | null;
+    // Wave HEAD-BOOK-ROSTER-AND-VERBOSE-OMIT — page of the row in its own
+    // book (ผ.02). Nullable until the book is compiled.
+    pageNumber: number | null;
   }> {
     if (row.kind === 'main') {
       const pg = row.pgRow!;
@@ -403,6 +532,7 @@ export class ProjectLineageService {
         revisionNumber: null,
         dprId: null,
         dpsId: null,
+        pageNumber: pg.pageNumber ?? null,
       };
     }
     if (row.kind === 'revised') {
@@ -442,6 +572,7 @@ export class ProjectLineageService {
         revisionNumber,
         dprId: dpr?.id ?? null,
         dpsId: null,
+        pageNumber: rpg.pageNumber ?? null,
       };
     }
     // supplement
@@ -471,6 +602,7 @@ export class ProjectLineageService {
       revisionNumber: supNum,
       dprId: null,
       dpsId: dps?.id ?? null,
+      pageNumber: spg.pageNumber ?? null,
     };
   }
 

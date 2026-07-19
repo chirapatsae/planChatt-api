@@ -174,8 +174,25 @@ describe('UnifiedEquipmentService.executiveList', () => {
 
     // System-wide executive read → null owner + null area scope on both
     // dimensions (loaders receive a 3rd null scope arg post-staff-list).
-    expect(epgSpy).toHaveBeenCalledWith('plan-7', null, null);
-    expect(relpgSpy).toHaveBeenCalledWith('plan-7', null, null);
+    expect(epgSpy).toHaveBeenCalledWith('plan-7', null, null, false);
+    expect(relpgSpy).toHaveBeenCalledWith('plan-7', null, null, false);
+  });
+
+  it('documentList — passes includeSuperseded=true so the §14.2 HEAD anti-join is skipped (document-level per-book listing)', async () => {
+    const epgSpy = jest
+      .spyOn(service as any, 'loadEpgHeadRows')
+      .mockResolvedValue([]);
+    const relpgSpy = jest
+      .spyOn(service as any, 'loadRelpgHeadRows')
+      .mockResolvedValue([]);
+
+    await service.documentList({ developmentPlanId: 'plan-7' });
+
+    // Document mode (Wave AI-EXEC-CHAT-DOCUMENT-EQUIPMENT-LISTING) → the 4th
+    // arg flips to `true` so a main-book EPG that was later revised still
+    // surfaces in its own book (matches the printed ผ.03 + documentCountsByBook).
+    expect(epgSpy).toHaveBeenCalledWith('plan-7', null, null, true);
+    expect(relpgSpy).toHaveBeenCalledWith('plan-7', null, null, true);
   });
 });
 
@@ -247,8 +264,8 @@ describe('UnifiedEquipmentService.staffList — area scope (§1/§3/§4.1)', () 
     });
 
     // EPG loader received the amphoe ids; RELPG loader received the agency ids.
-    expect(epgSpy).toHaveBeenCalledWith('plan-1', null, ['amp-1']);
-    expect(relpgSpy).toHaveBeenCalledWith('plan-1', null, ['77']);
+    expect(epgSpy).toHaveBeenCalledWith('plan-1', null, ['amp-1'], false);
+    expect(relpgSpy).toHaveBeenCalledWith('plan-1', null, ['77'], false);
     expect(out.map((r) => r.id).sort()).toEqual(['epg-in', 'relpg-in']);
   });
 
@@ -269,8 +286,8 @@ describe('UnifiedEquipmentService.staffList — area scope (§1/§3/§4.1)', () 
 
     await service.staffList('admin-user', { developmentPlanId: 'plan-1' });
 
-    expect(epgSpy).toHaveBeenCalledWith('plan-1', null, null);
-    expect(relpgSpy).toHaveBeenCalledWith('plan-1', null, null);
+    expect(epgSpy).toHaveBeenCalledWith('plan-1', null, null, false);
+    expect(relpgSpy).toHaveBeenCalledWith('plan-1', null, null, false);
   });
 
   it('fail-closed: plain staff with zero responsibilities → [] without loader calls', async () => {
@@ -322,9 +339,9 @@ describe('UnifiedEquipmentService.staffList — area scope (§1/§3/§4.1)', () 
 
     await service.staffList('amp-only', { developmentPlanId: 'plan-1' });
 
-    expect(epgSpy).toHaveBeenCalledWith('plan-1', null, ['amp-9']);
+    expect(epgSpy).toHaveBeenCalledWith('plan-1', null, ['amp-9'], false);
     // RELPG gets an EMPTY array (not null) → loader emits `1 = 0`, never a
     // system-wide scan.
-    expect(relpgSpy).toHaveBeenCalledWith('plan-1', null, []);
+    expect(relpgSpy).toHaveBeenCalledWith('plan-1', null, [], false);
   });
 });
