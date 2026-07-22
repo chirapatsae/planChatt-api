@@ -420,6 +420,28 @@ export class PublicArchiveService {
   }
 
   /**
+   * Set of `development_plan_supplement.id` values that have ≥1 COMPLETED
+   * `supplement_assembly_versions` row — i.e. supplement books that are
+   * PUBLICLY PUBLISHED.
+   *
+   * A supplement project's publication vehicle is its SUPPLEMENT book, NOT
+   * the parent plan's main book. `getProjectDetail` already requires a
+   * COMPLETED supplement version (else 404), so `searchProjects` MUST apply
+   * the same gate — otherwise it surfaces supplement rows whose supplement
+   * book was never published, and every such row 404s on click. Mirrors
+   * `getPublishedPlanIds` (main book) + the `supplements[]` plan-view gate.
+   */
+  private async getPublishedSupplementIds(): Promise<Set<string>> {
+    const publishedSupplementVersions = await this.supplementVersionRepo.find({
+      where: { status: SupplementAssemblyVersionStatus.COMPLETED },
+      select: { developmentPlanSupplementId: true },
+    });
+    return new Set(
+      publishedSupplementVersions.map((v) => v.developmentPlanSupplementId),
+    );
+  }
+
+  /**
    * Public project map (แผนที่โครงการสำหรับประชาชน).
    *
    * Returns the executive district-map aggregation (Amphoe > LAO > Project),
@@ -460,6 +482,12 @@ export class PublicArchiveService {
       endYear: p.endYear,
     }));
 
+    // Supplement (เล่มเพิ่มเติม) projects appear on the PUBLIC map only when
+    // their supplement book is published — same gate as public search/detail/
+    // books. Without this the map leaks Approved supplement projects whose
+    // book was never assembled.
+    const publishedSupplementIds = await this.getPublishedSupplementIds();
+
     // A supplied planId scopes to ONE published plan (PDPA / §10: never leak
     // an unpublished plan). This path is kept for back-compat / deep-links.
     if (planId) {
@@ -471,6 +499,7 @@ export class PublicArchiveService {
         targetPlan,
         true,
         ['Approved'],
+        publishedSupplementIds,
       );
       return { ...mapData, availablePlans };
     }
@@ -481,7 +510,12 @@ export class PublicArchiveService {
     // a clean union (no double-count). Approved-only; no auth gate.
     const maps = await Promise.all(
       publishedPlans.map((p) =>
-        this.projectGroupsService.buildMapDistrictData(p, true, ['Approved']),
+        this.projectGroupsService.buildMapDistrictData(
+          p,
+          true,
+          ['Approved'],
+          publishedSupplementIds,
+        ),
       ),
     );
     return { ...this.mergeMapData(maps), availablePlans };
@@ -1082,6 +1116,17 @@ export class PublicArchiveService {
     const wantRpg = wantEdit || wantChange;
     const CHANGE = 'เปลี่ยนแปลง';
 
+    // Supplement projects are public ONLY when their supplement book is
+    // published (≥1 COMPLETED supplement_assembly_versions). `getProjectDetail`
+    // enforces this; the search MUST match, else unpublished supplement rows
+    // appear but 404 on click. Empty set ⇒ no SPG contributes (guarded below
+    // so the `IN (:...ids)` never receives an empty array).
+    const publishedSupplementIds = wantSupplement
+      ? await this.getPublishedSupplementIds()
+      : new Set<string>();
+    const supplementIds = Array.from(publishedSupplementIds);
+    const hasPublishedSupplements = supplementIds.length > 0;
+
     // Apply the COMMON predicate (title / not-deleted / Approved + optional
     // year / amphoe / agency filters) onto an already-base-joined builder.
     const applyCommon = (
@@ -1090,7 +1135,16 @@ export class PublicArchiveService {
     ) => {
       qb.andWhere(`${alias}.title ILIKE :q`, { q: pattern })
         .andWhere(`${alias}.deletedAt IS NULL`)
-        .andWhere('status.name = :statusName', { statusName: 'Approved' });
+        .andWhere('status.name = :statusName', { statusName: 'Approved' })
+        // §14.10 head-of-lineage — show ONLY the lineage TIP (one row per
+        // lineage). Drop any project (PG / RPG / SPG) that has a LIVE revised
+        // descendant, i.e. whose id is referenced by a non-deleted
+        // RevisedProjectGroup's `prev_project_id`. Mirrors the `/project` list
+        // and the public project-map dedup. The `IS NOT NULL` guard keeps the
+        // NOT IN subquery free of NULLs (a NULL would make NOT IN match none).
+        .andWhere(
+          `${alias}.id NOT IN (SELECT lin.prev_project_id FROM revised_project_groups lin WHERE lin.deleted_at IS NULL AND lin.prev_project_id IS NOT NULL)`,
+        );
       // Plan-book filter — every base builder joins its parent plan as 'plan'.
       if (planId) {
         qb.andWhere('plan.id = :planId', { planId });
@@ -1154,7 +1208,7 @@ export class PublicArchiveService {
             ),
           ).getCount()
         : Promise.resolve(0),
-      wantSupplement
+      wantSupplement && hasPublishedSupplements
         ? applyCommon(
             this.supplementProjectGroupRepo
               .createQueryBuilder('spg')
@@ -1163,7 +1217,8 @@ export class PublicArchiveService {
               .leftJoin('spg.trackingStatus', 'ts', 'ts.isLatest = true')
               .leftJoin('ts.statusId', 'status')
               .where('plan.id IN (:...planIds)', { planIds })
-              .andWhere('sup.deleted_at IS NULL'),
+              .andWhere('sup.deleted_at IS NULL')
+              .andWhere('sup.id IN (:...supplementIds)', { supplementIds }),
             'spg',
           ).getCount()
         : Promise.resolve(0),
@@ -1205,7 +1260,7 @@ export class PublicArchiveService {
             .limit(windowSize)
             .getMany()
         : Promise.resolve([]),
-      wantSupplement
+      wantSupplement && hasPublishedSupplements
         ? applyCommon(
             this.supplementProjectGroupRepo
               .createQueryBuilder('spg')
@@ -1214,7 +1269,8 @@ export class PublicArchiveService {
               .leftJoin('spg.trackingStatus', 'ts', 'ts.isLatest = true')
               .leftJoin('ts.statusId', 'status')
               .where('plan.id IN (:...planIds)', { planIds })
-              .andWhere('sup.deleted_at IS NULL'),
+              .andWhere('sup.deleted_at IS NULL')
+              .andWhere('sup.id IN (:...supplementIds)', { supplementIds }),
             'spg',
           )
             .orderBy(`spg.${orderCol}`, 'DESC')

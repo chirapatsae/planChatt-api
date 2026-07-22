@@ -3600,6 +3600,12 @@ export class ProjectGroupsService {
     developmentPlan: DevelopmentPlan,
     isUsingMainPlan: boolean,
     allowedStatuses?: string[],
+    // PUBLIC map only: the set of supplement ids whose supplement book is
+    // PUBLISHED (≥1 COMPLETED supplement_assembly_version). When provided,
+    // supplement (เล่มเพิ่มเติม) projects whose book is not yet published are
+    // dropped so the public map matches the public search/detail/books gate.
+    // Internal/executive callers omit it → every supplement is shown.
+    publishedSupplementIds?: Set<string>,
   ): Promise<any> {
     // Get all amphoes
     const amphoes = await this.amphoeRepo.find({
@@ -3619,11 +3625,19 @@ export class ProjectGroupsService {
     // (SPG / "เล่มเพิ่มเติม") rows are bound to the SAME DevelopmentPlan via
     // their supplement's parent plan (§10 scope binding) and bucketed by the
     // transform's agency-origin '3001027' special case.
-    const [originalProjects, revisedProjects, supplementProjects] = await Promise.all([
+    const [originalProjects, revisedProjects, supplementProjectsRaw] = await Promise.all([
       this.findOriginalLatestProjects(developmentPlan.id),
       this.findRevisedLatestProjects(developmentPlan.id),
       this.findSupplementLatestProjects(developmentPlan.id),
     ]);
+    // Public map: drop supplement projects whose supplement book is not yet
+    // published (see param doc). Executive/internal callers pass no set →
+    // all supplements retained.
+    const supplementProjects = publishedSupplementIds
+      ? supplementProjectsRaw.filter((sp: any) =>
+          publishedSupplementIds.has(sp?.developmentPlanSupplement?.id),
+        )
+      : supplementProjectsRaw;
     const allProjectsRaw = [...originalProjects, ...revisedProjects, ...supplementProjects];
 
     // §14 head-of-lineage dedup — a revised lineage (PG → RPG → RPG, or

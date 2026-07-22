@@ -74,9 +74,11 @@ export class TotpService {
     const pendingUntil = new Date(Date.now() + 10 * 60 * 1000);
 
     const safeLabel = (accountLabel || 'user').replace(/[^a-zA-Z0-9@.+-]/g, '_');
+    // Issuer = the system name shown in the authenticator app (Google
+    // Authenticator / Authy). Brand is "PlanCHATT" (แผนชัด), not "ProjectBank".
     const otpauthUri = authenticator.keyuri(
       safeLabel,
-      'ProjectBank',
+      'PlanCHATT',
       secretBase32,
     );
     const qrDataUrl = await qrcode.toDataURL(otpauthUri);
