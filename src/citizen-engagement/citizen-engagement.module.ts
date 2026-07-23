@@ -9,8 +9,10 @@ import { UsersModule } from '../users/users.module';
 import { WorkHistory } from '../work-history/entities/work-history.entity';
 import { RolesGuard } from '../auth/roles.guard';
 import { WorkStatusApprovedGuard } from '../auth/work-status-approved.guard';
+import { EmailModule } from '../util/email/email.module';
 import { CitizenAuthController } from './citizen-auth/citizen-auth.controller';
 import { CitizenAuthService } from './citizen-auth/citizen-auth.service';
+import { CitizenPasswordResetService } from './citizen-auth/citizen-password-reset.service';
 import { Argon2Service } from '../backup-login/argon2.service';
 import { CitizenJwtGuard } from './citizen-auth/citizen-jwt.guard';
 import { CitizenOptionalJwtGuard } from './citizen-auth/citizen-optional-jwt.guard';
@@ -30,6 +32,7 @@ import { CitizenFollow } from './entities/citizen-follow.entity';
 import { CitizenIdentity } from './entities/citizen-identity.entity';
 import { CitizenModerationLog } from './entities/citizen-moderation-log.entity';
 import { CitizenNotification } from './entities/citizen-notification.entity';
+import { CitizenPasswordResetToken } from './entities/citizen-password-reset-token.entity';
 import { CitizenPollOption } from './entities/citizen-poll-option.entity';
 import { CitizenPollVote } from './entities/citizen-poll-vote.entity';
 import { CitizenHashtag } from './entities/citizen-hashtag.entity';
@@ -40,6 +43,8 @@ import { CitizenPostCommentReaction } from './entities/citizen-post-comment-reac
 import { CitizenPostMedia } from './entities/citizen-post-media.entity';
 import { CitizenPostReaction } from './entities/citizen-post-reaction.entity';
 import { CitizenStory } from './entities/citizen-story.entity';
+import { CitizenStoryView } from './entities/citizen-story-view.entity';
+import { CitizenStoryReaction } from './entities/citizen-story-reaction.entity';
 import { CitizenChatConversation } from './entities/citizen-chat-conversation.entity';
 import { CitizenChatMessage } from './entities/citizen-chat-message.entity';
 import { CitizenChatReadState } from './entities/citizen-chat-read-state.entity';
@@ -49,6 +54,7 @@ import { CitizenChatGateway } from './chat/citizen-chat.gateway';
 import { CitizenPresenceService } from './chat/citizen-presence.service';
 import { CitizenStoryController } from './stories/citizen-story.controller';
 import { CitizenStoryService } from './stories/citizen-story.service';
+import { CitizenStoryEngagementService } from './stories/citizen-story-engagement.service';
 import { CitizenBookmarkController } from './bookmark/citizen-bookmark.controller';
 import { CitizenBookmarkService } from './bookmark/citizen-bookmark.service';
 import { CitizenPollController } from './poll/citizen-poll.controller';
@@ -118,6 +124,11 @@ import { CitizenRetentionCron } from './citizen-retention.cron';
   imports: [
     TypeOrmModule.forFeature([
       CitizenIdentity,
+      // Password-reset tokens for the email/password citizen login. Isolated
+      // `citizen_*` namespace; `identity_id` is a PLAIN uuid (NO FK), mirroring
+      // citizen_audit_logs so a PDPA erase never cascades (§17.3). Stores only
+      // the token HASH, never plaintext.
+      CitizenPasswordResetToken,
       CitizenPost,
       CitizenPostComment,
       CitizenPostCommentReaction,
@@ -140,6 +151,12 @@ import { CitizenRetentionCron } from './citizen-retention.cron';
       // W-GATE-3 ephemeral 24h stories — isolated `citizen_*` namespace; the
       // only FK is author_identity_id → citizen_identities (§17.3).
       CitizenStory,
+      // FB-6 story VIEW tracking + emoji REACTIONS — isolated `citizen_*`
+      // namespace; story_id / viewer_identity_id / identity_id are ALL PLAIN
+      // uuid (NO FK), so a PDPA erase never cascades and the 24h retention sweep
+      // purges independently (§17.3).
+      CitizenStoryView,
+      CitizenStoryReaction,
       // W-T1 block/mute — isolated `citizen_*` namespace; the only FK is
       // blocker_identity_id → citizen_identities (§17.3). blocked_identity_id is
       // a PLAIN uuid (no FK), like citizen_follow.target_key.
@@ -186,6 +203,10 @@ import { CitizenRetentionCron } from './citizen-retention.cron';
     // + agency via UsersService (a CONTROLLER-layer bridge — plain strings into
     // citizen_* columns, no data FK; §17.3 table-level invariant intact).
     UsersModule,
+    // AUTH-REDESIGN §3.2 follow-up — the sandbox-aware EmailService chokepoint
+    // for the citizen password-reset transactional email. NOT the staff
+    // NotificationsEmailService (which is coupled to the `users` table).
+    EmailModule,
   ],
   controllers: [
     CitizenAuthController,
@@ -212,6 +233,10 @@ import { CitizenRetentionCron } from './citizen-retention.cron';
   ],
   providers: [
     CitizenAuthService,
+    // AUTH-REDESIGN §3.2 follow-up — email/password reset flow (token issue +
+    // consume). Uses the reset-token repo (forFeature above), Argon2Service,
+    // and the sandbox-aware EmailService (EmailModule).
+    CitizenPasswordResetService,
     // AUTH-REDESIGN (2026-07-08) — Argon2id hashing for citizen
     // email/password register + login. Standalone injectable (no deps),
     // provided directly so CitizenAuthService can inject it without
@@ -249,6 +274,9 @@ import { CitizenRetentionCron } from './citizen-retention.cron';
     CitizenPollService,
     CitizenHashtagService,
     CitizenStoryService,
+    // FB-6 — story VIEW tracking + emoji REACTIONS + owner-only audience page.
+    // Reuses the citizen_story* repos (forFeature above) + CitizenBlockService.
+    CitizenStoryEngagementService,
     CitizenBlockService,
     CitizenChatService,
     CitizenChatGateway,

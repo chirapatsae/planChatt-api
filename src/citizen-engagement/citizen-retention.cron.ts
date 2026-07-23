@@ -6,6 +6,8 @@ import { LessThan, Not, Repository } from 'typeorm';
 
 import { CitizenPostMedia } from './entities/citizen-post-media.entity';
 import { CitizenStory } from './entities/citizen-story.entity';
+import { CitizenStoryReaction } from './entities/citizen-story-reaction.entity';
+import { CitizenStoryView } from './entities/citizen-story-view.entity';
 import { CitizenStorageService } from './media/citizen-storage.service';
 
 /**
@@ -77,6 +79,10 @@ export class CitizenRetentionCron {
     private readonly storyRepo: Repository<CitizenStory>,
     @InjectRepository(CitizenPostMedia)
     private readonly mediaRepo: Repository<CitizenPostMedia>,
+    @InjectRepository(CitizenStoryView)
+    private readonly storyViewRepo: Repository<CitizenStoryView>,
+    @InjectRepository(CitizenStoryReaction)
+    private readonly storyReactionRepo: Repository<CitizenStoryReaction>,
     private readonly storage: CitizenStorageService,
   ) {}
 
@@ -99,11 +105,13 @@ export class CitizenRetentionCron {
     try {
       const stories = await this.sweepStories(cutoff, batchSize);
       const media = await this.sweepMedia(cutoff, batchSize);
+      const engagement = await this.sweepStoryEngagement(cutoff, batchSize);
 
       const durationMs = Date.now() - startedAt;
       this.logger.log(
         `[citizen-retention] swept stories{${this.fmt(stories)}} ` +
           `media{${this.fmt(media)}} ` +
+          `storyEngagement{${this.fmtEngagement(engagement)}} ` +
           `cutoff=${cutoff.toISOString()} graceHours=${graceHours} ` +
           `batchSize=${batchSize} durationMs=${durationMs}`,
       );
@@ -169,6 +177,74 @@ export class CitizenRetentionCron {
       rows.map((r) => ({ id: r.id, key: r.storageKey })),
       (id) => this.mediaRepo.update({ id }, { storageKey: '' }),
     );
+  }
+
+  /**
+   * FB-6 story-engagement sweep: HARD-DELETE `citizen_story_views` +
+   * `citizen_story_reactions` rows whose parent story is expired OR soft-deleted
+   * beyond the grace window. These tables carry NO on-disk blob (unlike stories /
+   * media), so there is nothing to unlink — a straight row purge is sufficient.
+   *
+   * Same tick, same grace `cutoff`, same `batchSize` env var, and the SAME
+   * per-row failure discipline as `sweepStories`: candidates are the
+   * still-populated expired stories (so the sweep progresses and never re-scans
+   * an already-emptied story), and one bad story never aborts the batch — the
+   * next tick retries whatever remains.
+   */
+  private async sweepStoryEngagement(
+    cutoff: Date,
+    batchSize: number,
+  ): Promise<EngagementSweepStats> {
+    // Candidate story ids: expired/soft-deleted past the cutoff that STILL carry
+    // engagement rows (join the engagement tables → only populated stories
+    // surface, so the sweep advances instead of re-scanning emptied stories).
+    const [viewStories, reactionStories] = await Promise.all([
+      this.storyViewRepo
+        .createQueryBuilder('v')
+        .innerJoin(CitizenStory, 's', 's.id = v.story_id')
+        .where('(s.expires_at < :cutoff OR s.deleted_at < :cutoff)', { cutoff })
+        .select('DISTINCT v.story_id', 'storyId')
+        .limit(batchSize)
+        .getRawMany<{ storyId: string }>(),
+      this.storyReactionRepo
+        .createQueryBuilder('r')
+        .innerJoin(CitizenStory, 's', 's.id = r.story_id')
+        .where('(s.expires_at < :cutoff OR s.deleted_at < :cutoff)', { cutoff })
+        .select('DISTINCT r.story_id', 'storyId')
+        .limit(batchSize)
+        .getRawMany<{ storyId: string }>(),
+    ]);
+
+    const storyIds = [
+      ...new Set(
+        [...viewStories, ...reactionStories].map((x) => x.storyId),
+      ),
+    ];
+
+    const stats: EngagementSweepStats = {
+      scanned: storyIds.length,
+      viewsDeleted: 0,
+      reactionsDeleted: 0,
+      storiesProcessed: 0,
+      errors: 0,
+    };
+
+    for (const storyId of storyIds) {
+      try {
+        const views = await this.storyViewRepo.delete({ storyId });
+        const reactions = await this.storyReactionRepo.delete({ storyId });
+        stats.viewsDeleted += views.affected ?? 0;
+        stats.reactionsDeleted += reactions.affected ?? 0;
+        stats.storiesProcessed++;
+      } catch (err) {
+        stats.errors++;
+        this.logger.warn(
+          `[citizen-retention] story ${storyId} engagement purge failed: ${this.msg(err)}`,
+        );
+      }
+    }
+
+    return stats;
   }
 
   // ---------------------------------------------------------------------------
@@ -295,6 +371,14 @@ export class CitizenRetentionCron {
     );
   }
 
+  private fmtEngagement(s: EngagementSweepStats): string {
+    return (
+      `scanned=${s.scanned} viewsDeleted=${s.viewsDeleted} ` +
+      `reactionsDeleted=${s.reactionsDeleted} ` +
+      `storiesProcessed=${s.storiesProcessed} errors=${s.errors}`
+    );
+  }
+
   private msg(err: unknown): string {
     return err instanceof Error ? err.message : String(err);
   }
@@ -307,5 +391,14 @@ interface SweepStats {
   alreadyAbsent: number;
   rowsCleared: number;
   skippedUnsafe: number;
+  errors: number;
+}
+
+/** FB-6 story-engagement sweep counters (no on-disk blob → row purge only). */
+interface EngagementSweepStats {
+  scanned: number;
+  viewsDeleted: number;
+  reactionsDeleted: number;
+  storiesProcessed: number;
   errors: number;
 }

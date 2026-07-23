@@ -164,7 +164,7 @@ export class DigestFlexBuilderService {
         contents: [
           {
             type: 'text',
-            text: 'ธนาคารโครงการ · เทศบาลตำบลหนองกระทุ่ม',
+            text: 'แผนชัด (PlanCHATT) · เทศบาลตำบลหนองกระทุ่ม',
             size: 'xxs',
             color: '#6B7280',
             weight: 'regular',

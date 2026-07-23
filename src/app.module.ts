@@ -161,6 +161,7 @@ import { EngagementLike } from './public-engagement/entities/engagement-like.ent
 import { CitizenEngagementModule } from './citizen-engagement/citizen-engagement.module';
 import { CitizenPlanningModule } from './citizen-planning/citizen-planning.module';
 import { CitizenIdentity } from './citizen-engagement/entities/citizen-identity.entity';
+import { CitizenPasswordResetToken } from './citizen-engagement/entities/citizen-password-reset-token.entity';
 import { CitizenPost } from './citizen-engagement/entities/citizen-post.entity';
 import { CitizenPostComment } from './citizen-engagement/entities/citizen-post-comment.entity';
 import { CitizenPostReaction } from './citizen-engagement/entities/citizen-post-reaction.entity';
@@ -179,6 +180,8 @@ import { CitizenPollVote } from './citizen-engagement/entities/citizen-poll-vote
 import { CitizenHashtag } from './citizen-engagement/entities/citizen-hashtag.entity';
 import { CitizenPostHashtag } from './citizen-engagement/entities/citizen-post-hashtag.entity';
 import { CitizenStory } from './citizen-engagement/entities/citizen-story.entity';
+import { CitizenStoryView } from './citizen-engagement/entities/citizen-story-view.entity';
+import { CitizenStoryReaction } from './citizen-engagement/entities/citizen-story-reaction.entity';
 import { CitizenBlock } from './citizen-engagement/entities/citizen-block.entity';
 import { CitizenChatConversation } from './citizen-engagement/entities/citizen-chat-conversation.entity';
 import { CitizenChatMessage } from './citizen-engagement/entities/citizen-chat-message.entity';
@@ -667,6 +670,11 @@ import { UnifiedEquipmentModule } from './unified-equipment/unified-equipment.mo
         // Owned by `CitizenEngagementModule` via `forFeature`; root
         // registration here is required for metadata resolution (Wave 41 footgun).
         CitizenIdentity,
+        // Password-reset tokens (email/password citizen login). Isolated
+        // `citizen_*` namespace; `identity_id` is a PLAIN uuid (NO FK), so a
+        // PDPA erase never cascades (§17.3). Root registration is required for
+        // metadata resolution (Wave 41 footgun — explicit entities[] array).
+        CitizenPasswordResetToken,
         CitizenPost,
         CitizenPostComment,
         CitizenPostReaction,
@@ -702,6 +710,13 @@ import { UnifiedEquipmentModule } from './unified-equipment/unified-equipment.mo
         // registration here is required for metadata resolution (Wave 41
         // footgun — the root uses an explicit entities[] array).
         CitizenStory,
+        // FB-6 story VIEW tracking + emoji REACTIONS — isolated `citizen_*`
+        // namespace; story_id / viewer_identity_id / identity_id are ALL PLAIN
+        // uuid (NO FK), so a PDPA erase never cascades (§17.3). Root
+        // registration here is required for metadata resolution (Wave 41
+        // footgun — the root uses an explicit entities[] array).
+        CitizenStoryView,
+        CitizenStoryReaction,
         // W-T1 block/mute — isolated `citizen_*` namespace, the only FK is
         // blocker_identity_id → citizen_identities (§17.3); blocked_identity_id
         // is a PLAIN uuid (no FK). Root registration here is required for

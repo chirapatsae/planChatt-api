@@ -1,6 +1,10 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
+import { InjectRepository } from '@nestjs/typeorm';
 import { ExtractJwt, Strategy } from 'passport-jwt';
+import { Repository } from 'typeorm';
+
+import { CitizenIdentity } from '../entities/citizen-identity.entity';
 
 /** `req.user` shape for an authenticated CITIZEN (never carries `role`). */
 export interface CitizenJwtUser {
@@ -21,10 +25,26 @@ export interface CitizenJwtUser {
  * makes passport-jwt REJECT any token without `aud:'citizen'` (i.e. every
  * internal staff token), and the distinct secret rejects it at the signature
  * layer too. The internal `JwtStrategy` symmetrically rejects `aud:'citizen'`.
+ *
+ * BE-5 session revocation: `validate()` loads the identity by PK (single
+ * indexed lookup) and rejects the token if the identity is missing, its
+ * `session_version` no longer matches the token's, or the account is
+ * unambiguously dead (`blocked` / `deleted`) — so bumping `session_version`
+ * (e.g. after a password reset) revokes ALL issued tokens.
+ *
+ * `suspended` is DELIBERATELY passed through here: the W-T3 offender ladder
+ * keeps a suspended citizen's session valid (they may still READ) and the
+ * strict `CitizenJwtGuard` owns the distinct 403 `CITIZEN_SUSPENDED` on the
+ * WRITE surfaces. Rejecting `suspended` in the strategy would collapse that
+ * nuance to a 401 and drop the viewer's read personalization under the
+ * optional guard — so we scope the status gate to blocked/deleted only.
  */
 @Injectable()
 export class CitizenJwtStrategy extends PassportStrategy(Strategy, 'citizen-jwt') {
-  constructor() {
+  constructor(
+    @InjectRepository(CitizenIdentity)
+    private readonly identityRepo: Repository<CitizenIdentity>,
+  ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
@@ -39,10 +59,35 @@ export class CitizenJwtStrategy extends PassportStrategy(Strategy, 'citizen-jwt'
     if (payload.aud !== 'citizen') {
       throw new UnauthorizedException('Wrong token audience');
     }
+
+    const tokenSessionVersion = payload.sessionVersion ?? 0;
+
+    // BE-5 — enforce session revocation. Single PK lookup; runs on every
+    // citizen-authenticated request (only when a token is present). Select
+    // just the columns we need.
+    const identity = await this.identityRepo.findOne({
+      where: { id: payload.sub },
+      select: { id: true, status: true, sessionVersion: true },
+    });
+    // SEC F6 — explicit ALLOW-list (fail-closed as the status enum grows):
+    // only 'active' + 'suspended' pass the strategy. The strict write-guard
+    // still owns the suspended 403 and the optional guard only narrows a
+    // suspended viewer's reads; every other/unknown status (blocked, deleted,
+    // or any future value) is rejected here.
+    const statusOk =
+      identity?.status === 'active' || identity?.status === 'suspended';
+    if (
+      !identity ||
+      !statusOk ||
+      (identity.sessionVersion ?? 0) !== tokenSessionVersion
+    ) {
+      throw new UnauthorizedException('Citizen session is no longer valid');
+    }
+
     return {
       identityId: payload.sub,
       loginMethod: payload.loginMethod ?? 'password',
-      sessionVersion: payload.sessionVersion ?? 0,
+      sessionVersion: tokenSessionVersion,
       aud: 'citizen',
     };
   }

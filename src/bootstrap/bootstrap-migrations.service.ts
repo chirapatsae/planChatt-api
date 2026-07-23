@@ -489,6 +489,154 @@ export class BootstrapMigrationsService implements OnApplicationBootstrap {
       name: 'citizen_identities.google_sub_hash partial-unique (AUTH-REDESIGN §3.2)',
       sql: `CREATE UNIQUE INDEX IF NOT EXISTS "uq_citizen_identities_google_sub_hash" ON "citizen_identities" ("google_sub_hash") WHERE "google_sub_hash" IS NOT NULL;`,
     },
+
+    // ===================================================================
+    // Citizen password-reset tokens (AUTH-REDESIGN §3.2 follow-up).
+    //
+    // Single-use, hash-only reset tokens for the email/password citizen
+    // login. Mirrors migration
+    // `1799000000000-CreateCitizenPasswordResetTokens.ts` for dev boxes that
+    // run `synchronize: true` WITHOUT the migration runner, and for prod
+    // parity. All statements idempotent:
+    //   - CREATE TABLE IF NOT EXISTS is a no-op once present.
+    //   - CREATE INDEX IF NOT EXISTS is a no-op once present.
+    //
+    // §17.3 isolation preserved — `identity_id` is a PLAIN uuid with NO FK
+    // into `citizen_identities` (mirrors citizen_audit_logs), so a PDPA erase
+    // never cascades. NO FK into any project / users / work_history /
+    // tracking_status table. Only the token HASH is stored, never plaintext.
+    // §17.11 no role exemption — schema-level integrity only.
+    // ===================================================================
+    {
+      name: 'citizen_password_reset_tokens CREATE TABLE (AUTH-REDESIGN §3.2)',
+      sql: `
+        CREATE TABLE IF NOT EXISTS "citizen_password_reset_tokens" (
+          "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
+          "identity_id" uuid NOT NULL,
+          "token_hash" varchar(64) NOT NULL,
+          "expires_at" timestamptz NOT NULL,
+          "used_at" timestamptz NULL,
+          "request_ip" varchar(45) NULL,
+          "request_user_agent" varchar(256) NULL,
+          "created_at" timestamptz NOT NULL DEFAULT now(),
+          CONSTRAINT "pk_citizen_password_reset_tokens" PRIMARY KEY ("id"),
+          CONSTRAINT "uq_citizen_prt_token_hash" UNIQUE ("token_hash")
+        );
+      `,
+    },
+    {
+      name: 'citizen_password_reset_tokens (identity_id, used_at) index (AUTH-REDESIGN §3.2)',
+      sql: `
+        CREATE INDEX IF NOT EXISTS "ix_citizen_prt_identity_used"
+        ON "citizen_password_reset_tokens" ("identity_id", "used_at");
+      `,
+    },
+    {
+      name: 'citizen_password_reset_tokens expires_at index (AUTH-REDESIGN §3.2)',
+      sql: `
+        CREATE INDEX IF NOT EXISTS "ix_citizen_prt_expires_at"
+        ON "citizen_password_reset_tokens" ("expires_at");
+      `,
+    },
+
+    // ===================================================================
+    // Citizen story engagement — VIEW tracking + emoji REACTIONS (FB-6).
+    //
+    // Story views ("who saw my story") + one-emoji-per-citizen reactions on
+    // the ephemeral 24h citizen stories. Mirrors migration
+    // `1799200000000-CreateCitizenStoryEngagement.ts` for dev boxes that run
+    // `synchronize: true` WITHOUT the migration runner, and for prod parity.
+    // All statements idempotent:
+    //   - CREATE TABLE IF NOT EXISTS is a no-op once present.
+    //   - CREATE (UNIQUE) INDEX IF NOT EXISTS is a no-op once present.
+    //   - The emoji CHECK is DROP IF EXISTS + ADD so it converges even when
+    //     `synchronize` created the table WITHOUT emitting the CHECK.
+    //
+    // §17.3 isolation preserved — `story_id`, `viewer_identity_id`, and
+    // `identity_id` are ALL PLAIN uuid with NO FK (mirrors
+    // citizen_password_reset_tokens / citizen_audit_logs), so a PDPA erase
+    // never cascades and the 24h retention sweep purges independently. NO FK
+    // into any project / users / work_history / tracking_status table.
+    // §17.11 no role exemption — schema-level integrity only.
+    // ===================================================================
+    {
+      name: 'citizen_story_views CREATE TABLE (FB-6)',
+      sql: `
+        CREATE TABLE IF NOT EXISTS "citizen_story_views" (
+          "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
+          "story_id" uuid NOT NULL,
+          "viewer_identity_id" uuid NOT NULL,
+          "viewed_at" timestamptz NOT NULL DEFAULT now(),
+          CONSTRAINT "pk_citizen_story_views" PRIMARY KEY ("id")
+        );
+      `,
+    },
+    {
+      name: 'citizen_story_views (story_id, viewer_identity_id) unique index (FB-6)',
+      sql: `
+        CREATE UNIQUE INDEX IF NOT EXISTS "uq_citizen_story_view_story_viewer"
+        ON "citizen_story_views" ("story_id", "viewer_identity_id");
+      `,
+    },
+    {
+      name: 'citizen_story_views (story_id, viewed_at DESC) index (FB-6)',
+      sql: `
+        CREATE INDEX IF NOT EXISTS "ix_citizen_story_view_story_viewed"
+        ON "citizen_story_views" ("story_id", "viewed_at" DESC);
+      `,
+    },
+    {
+      name: 'citizen_story_views (viewer_identity_id) DSAR index (FB-6)',
+      sql: `
+        CREATE INDEX IF NOT EXISTS "ix_citizen_story_view_viewer"
+        ON "citizen_story_views" ("viewer_identity_id");
+      `,
+    },
+    {
+      name: 'citizen_story_reactions CREATE TABLE (FB-6)',
+      sql: `
+        CREATE TABLE IF NOT EXISTS "citizen_story_reactions" (
+          "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
+          "story_id" uuid NOT NULL,
+          "identity_id" uuid NOT NULL,
+          "emoji" varchar(16) NOT NULL,
+          "created_at" timestamptz NOT NULL DEFAULT now(),
+          "updated_at" timestamptz NOT NULL DEFAULT now(),
+          CONSTRAINT "pk_citizen_story_reactions" PRIMARY KEY ("id")
+        );
+      `,
+    },
+    // Closed-set emoji-key CHECK (FB-6). DROP+ADD so it converges even when
+    // `synchronize` created the table without emitting the CHECK.
+    {
+      name: 'citizen_story_reactions emoji CHECK — DROP (FB-6)',
+      sql: `ALTER TABLE IF EXISTS "citizen_story_reactions" DROP CONSTRAINT IF EXISTS "ck_citizen_story_reaction_emoji";`,
+    },
+    {
+      name: 'citizen_story_reactions emoji CHECK — ADD (FB-6)',
+      sql: `ALTER TABLE IF EXISTS "citizen_story_reactions" ADD CONSTRAINT "ck_citizen_story_reaction_emoji" CHECK ("emoji" IN ('love','haha','wow','sad','angry','like'));`,
+    },
+    {
+      name: 'citizen_story_reactions (story_id, identity_id) unique index (FB-6)',
+      sql: `
+        CREATE UNIQUE INDEX IF NOT EXISTS "uq_citizen_story_reaction_story_identity"
+        ON "citizen_story_reactions" ("story_id", "identity_id");
+      `,
+    },
+    {
+      name: 'citizen_story_reactions (story_id) breakdown index (FB-6)',
+      sql: `
+        CREATE INDEX IF NOT EXISTS "ix_citizen_story_reaction_story"
+        ON "citizen_story_reactions" ("story_id");
+      `,
+    },
+    {
+      name: 'citizen_story_reactions (identity_id) DSAR index (FB-6)',
+      sql: `
+        CREATE INDEX IF NOT EXISTS "ix_citizen_story_reaction_identity"
+        ON "citizen_story_reactions" ("identity_id");
+      `,
+    },
   ];
 
   async onApplicationBootstrap(): Promise<void> {

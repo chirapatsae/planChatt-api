@@ -47,6 +47,12 @@ export const CITIZEN_RATE_LIMITS = {
   SEARCH: 30,
   /** W-GATE-3 ephemeral stories — an image write (strip + store), tight cap. */
   CREATE_STORY: 10,
+  /** FB-6 story VIEW ping — a passive read-signal fired on every story open;
+   *  highest ceiling of the story surface (a viewer may sweep many stories fast). */
+  VIEW_STORY: 120,
+  /** FB-6 story emoji REACTION — an ACTIVE one-tap write; same ceiling as the
+   *  post reaction toggle (the most frequent legit engagement action). */
+  STORY_REACTION: 60,
   /** W-T1 block/mute set — a low-frequency moderation action; capped against churn. */
   SET_BLOCK: 20,
   /** W-G1 PDPA data export — a heavy full-account read; very low cap. */
@@ -57,4 +63,8 @@ export const CITIZEN_RATE_LIMITS = {
   SUBMIT_APPEAL: 5,
   /** Community Chat — 1:1 DM send; frequent like comments, bounded against flood. */
   SEND_MESSAGE: 40,
+  /** Password-reset REQUEST — anti-enumeration + anti-mailbomb; per-IP, tight. */
+  FORGOT_PASSWORD: 5,
+  /** Password-reset CONSUME/verify — bounded token-guessing (hash lookup is cheap). */
+  RESET_PASSWORD: 10,
 } as const;

@@ -15,6 +15,8 @@ import { CitizenPostMedia } from '../entities/citizen-post-media.entity';
 import { CitizenPostReaction } from '../entities/citizen-post-reaction.entity';
 import { CitizenReport } from '../entities/citizen-report.entity';
 import { CitizenStory } from '../entities/citizen-story.entity';
+import { CitizenStoryReaction } from '../entities/citizen-story-reaction.entity';
+import { CitizenStoryView } from '../entities/citizen-story-view.entity';
 import { CitizenChatConversation } from '../entities/citizen-chat-conversation.entity';
 import { CitizenChatMessage } from '../entities/citizen-chat-message.entity';
 import { CitizenChatReadState } from '../entities/citizen-chat-read-state.entity';
@@ -44,6 +46,10 @@ export interface CitizenDsarExport {
   follows: Array<Record<string, unknown>>;
   pollVotes: Array<Record<string, unknown>>;
   stories: Array<Record<string, unknown>>;
+  /** FB-6 — stories the caller has VIEWED (viewer side). */
+  storyViews: Array<Record<string, unknown>>;
+  /** FB-6 — the caller's story emoji REACTIONS (reactor side). */
+  storyReactions: Array<Record<string, unknown>>;
   blocks: Array<Record<string, unknown>>;
   reports: Array<Record<string, unknown>>;
   /** Community Chat — the caller's conversations + their authored messages
@@ -112,6 +118,8 @@ export class CitizenDsarService {
       follows,
       pollVotes,
       stories,
+      storyViews,
+      storyReactions,
       blocks,
       reports,
     ] = await Promise.all([
@@ -148,6 +156,16 @@ export class CitizenDsarService {
       this.dataSource.getRepository(CitizenStory).find({
         where: { authorIdentityId: identityId },
         withDeleted: true,
+        order: { createdAt: 'ASC' },
+      }),
+      // FB-6 — stories the caller has VIEWED (no soft-delete column: hard rows).
+      this.dataSource.getRepository(CitizenStoryView).find({
+        where: { viewerIdentityId: identityId },
+        order: { viewedAt: 'ASC' },
+      }),
+      // FB-6 — the caller's story emoji REACTIONS (no soft-delete column).
+      this.dataSource.getRepository(CitizenStoryReaction).find({
+        where: { identityId },
         order: { createdAt: 'ASC' },
       }),
       this.dataSource.getRepository(CitizenBlock).find({
@@ -208,6 +226,8 @@ export class CitizenDsarService {
       follows: follows.map((f) => this.toExportRow(f)),
       pollVotes: pollVotes.map((v) => this.toExportRow(v)),
       stories: stories.map((s) => this.toExportRow(s)),
+      storyViews: storyViews.map((v) => this.toExportRow(v)),
+      storyReactions: storyReactions.map((r) => this.toExportRow(r)),
       blocks: blocks.map((b) => this.toExportRow(b)),
       reports: reports.map((r) => this.toExportRow(r)),
       chatConversations: chatConversations.map((c) => ({
@@ -290,6 +310,14 @@ export class CitizenDsarService {
         }),
         stories: await this.softDeleteOwned(em, CitizenStory, {
           authorIdentityId: identityId,
+        }),
+        // FB-6 — the caller's story VIEW + REACTION rows carry NO soft-delete
+        // column (24h-ephemeral by design), so erasure HARD-deletes them.
+        storyViews: await this.hardDeleteOwned(em, CitizenStoryView, {
+          viewerIdentityId: identityId,
+        }),
+        storyReactions: await this.hardDeleteOwned(em, CitizenStoryReaction, {
+          identityId,
         }),
         blocks: await this.softDeleteOwned(em, CitizenBlock, {
           blockerIdentityId: identityId,
@@ -377,6 +405,21 @@ export class CitizenDsarService {
     criteria: Record<string, unknown>,
   ): Promise<number> {
     const result = await em.getRepository(entity).softDelete(criteria as never);
+    return result.affected ?? 0;
+  }
+
+  /**
+   * HARD-delete every row of `entity` matching the owner-scoped `criteria` inside
+   * the caller's transaction. For citizen_* tables with NO soft-delete column
+   * (FB-6 story views/reactions are 24h-ephemeral), erasure removes the rows
+   * outright. Returns the affected row count.
+   */
+  private async hardDeleteOwned<T extends object>(
+    em: EntityManager,
+    entity: new () => T,
+    criteria: Record<string, unknown>,
+  ): Promise<number> {
+    const result = await em.getRepository(entity).delete(criteria as never);
     return result.affected ?? 0;
   }
 
