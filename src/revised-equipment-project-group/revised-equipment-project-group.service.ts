@@ -28,6 +28,7 @@ import { LineageLockService } from 'src/common/lineage-lock/lineage-lock.service
 import { ReportFormat } from 'src/development-plan/types/report-format.enum';
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
 import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
+import { SupplementEquipmentProjectGroup } from 'src/supplement-equipment-project-group/entities/supplement-equipment-project-group.entity';
 import { DevelopmentIssue } from 'src/development-issue/entities/development-issue.entity';
 import { Strategy } from 'src/strategy/entities/strategy.entity';
 import { Tactic } from 'src/tactic/entities/tactic.entity';
@@ -158,25 +159,37 @@ export class RevisedEquipmentProjectGroupService {
       // 4-5. §1 classification + agency-only gate (Layer-2 defense).
       this.assertAgencyWorkHistory(workHistory);
 
-      // 6a. Resolve the lineage source. EXACTLY ONE of the two source ids is
+      // 6a. Resolve the lineage source. EXACTLY ONE of the three source ids is
       //     accepted (§14.1/§14.7 Phase 3):
-      //       - `equipmentProjectGroupId`        → fork an EPG root
+      //       - `equipmentProjectGroupId`            → fork an EPG root
       //         (`prev_project_type='equipment'`).
-      //       - `revisedEquipmentProjectGroupId` → fork an Approved RELPG tip
-      //         (`prev_project_type='revised_equipment'`, RELPG→RELPG chain).
+      //       - `revisedEquipmentProjectGroupId`     → fork an Approved RELPG
+      //         tip (`prev_project_type='revised_equipment'`, RELPG→RELPG chain).
+      //       - `supplementEquipmentProjectGroupId`  → fork an Approved SEPG
+      //         (`prev_project_type='supplement_equipment'`, a lineage ROOT —
+      //         the equipment analog of the project SPG-source fork).
       const hasEpgSource = !!dto.equipmentProjectGroupId;
       const hasRelpgSource = !!dto.revisedEquipmentProjectGroupId;
-      if (hasEpgSource === hasRelpgSource) {
+      const hasSepgSource = !!dto.supplementEquipmentProjectGroupId;
+      const sourceCount = [hasEpgSource, hasRelpgSource, hasSepgSource].filter(
+        Boolean,
+      ).length;
+      if (sourceCount !== 1) {
         throw new BadRequestException(
-          'Exactly one of equipmentProjectGroupId / revisedEquipmentProjectGroupId must be supplied',
+          'Exactly one of equipmentProjectGroupId / revisedEquipmentProjectGroupId / supplementEquipmentProjectGroupId must be supplied',
         );
       }
 
-      // The lineage-root EPG (FK kept populated on the new RELPG regardless of
-      // source kind) and the §14 lineage edge the new RELPG points at.
-      let rootEpg: EquipmentProjectGroup;
+      // The lineage-root EPG (FK kept populated on the new RELPG for EPG/RELPG
+      // sources; NULL for an SEPG source, which has no EPG root) and the §14
+      // lineage edge the new RELPG points at.
+      let rootEpg: EquipmentProjectGroup | null = null;
       let prevProjectId: string;
       let prevProjectType: PrevEquipmentProjectType;
+      // §10 same-bucket guard for the SEPG-source path — deferred until the
+      // target DPR's parent plan is resolved (step 9). Holds the source SEPG's
+      // parent-supplement DevelopmentPlan id.
+      let sourceSepgPlanId: string | null = null;
 
       if (hasEpgSource) {
         // Load source EPG (lineage root). Must exist, not soft-deleted,
@@ -203,7 +216,7 @@ export class RevisedEquipmentProjectGroupService {
         rootEpg = epg;
         prevProjectId = epg.id;
         prevProjectType = PrevEquipmentProjectType.EQUIPMENT;
-      } else {
+      } else if (hasRelpgSource) {
         // Load source RELPG tip. Must exist, not soft-deleted, latest status =
         // Approved. Its own `equipmentProjectGroup` is the lineage-root EPG.
         const srcRelpg = await manager.findOne(RevisedEquipmentProjectGroup, {
@@ -233,6 +246,36 @@ export class RevisedEquipmentProjectGroupService {
         rootEpg = srcRelpg.equipmentProjectGroup;
         prevProjectId = srcRelpg.id;
         prevProjectType = PrevEquipmentProjectType.REVISED_EQUIPMENT;
+      } else {
+        // SEPG-source fork — the equipment analog of the project SPG-source
+        // fork. Load the source SupplementEquipmentProjectGroup with the
+        // parent-supplement plan chain needed for the §10 same-bucket guard.
+        // An SEPG-sourced RELPG has NO lineage-root EPG (`rootEpg` stays null,
+        // so `equipment_project_group_id` persists NULL).
+        const sepg = await manager.findOne(SupplementEquipmentProjectGroup, {
+          where: { id: dto.supplementEquipmentProjectGroupId },
+          relations: [
+            'developmentPlanSupplement',
+            'developmentPlanSupplement.developmentPlan',
+          ],
+        });
+        if (!sepg) {
+          throw new NotFoundException(
+            `SupplementEquipmentProjectGroup (source) not found: ${dto.supplementEquipmentProjectGroupId}`,
+          );
+        }
+        // Latest TrackingStatus MUST be Approved (mirrors the EPG/RELPG gate
+        // and the project SPG-source Approved rule).
+        await this.assertSepgApproved(manager, sepg.id);
+
+        // Capture the SEPG's parent-supplement plan id for the §10 same-bucket
+        // guard, applied once the target DPR's plan is resolved (step 9).
+        sourceSepgPlanId =
+          sepg.developmentPlanSupplement?.developmentPlan?.id ?? null;
+
+        rootEpg = null;
+        prevProjectId = sepg.id;
+        prevProjectType = PrevEquipmentProjectType.SUPPLEMENT_EQUIPMENT;
       }
       const epg = rootEpg;
 
@@ -271,6 +314,19 @@ export class RevisedEquipmentProjectGroupService {
         throw new NotFoundException(
           `Parent DevelopmentPlan not found for revision ${dpr.id}`,
         );
+      }
+
+      // §10 same-bucket guard (SEPG-source path). The source SEPG's parent
+      // supplement MUST live under the SAME DevelopmentPlan as the target
+      // revision (DPR). Otherwise the lineage would cross book buckets,
+      // breaking §15.2 parallel-sibling semantics. Mirrors the project
+      // SPG-source `LINEAGE_PLAN_MISMATCH` check.
+      if (prevProjectType === PrevEquipmentProjectType.SUPPLEMENT_EQUIPMENT) {
+        if (!sourceSepgPlanId || sourceSepgPlanId !== developmentPlan.id) {
+          throw new BadRequestException(
+            'LINEAGE_PLAN_MISMATCH: รายการครุภัณฑ์ต้นฉบับ (SEPG) อยู่ภายใต้แผนพัฒนาฯ คนละเล่มกับรอบการแก้ไข/เปลี่ยนแปลง',
+          );
+        }
       }
 
       let strategy: Strategy | null = null;
@@ -323,10 +379,12 @@ export class RevisedEquipmentProjectGroupService {
       const entity = manager.create(RevisedEquipmentProjectGroup, {
         developmentPlanRevision: dpr,
         developmentPlan,
-        // FK kept on the lineage-root EPG regardless of source kind.
+        // FK kept on the lineage-root EPG for EPG/RELPG sources; NULL for an
+        // SEPG source (which has no EPG root — the root is the SEPG itself,
+        // reachable via `prevProjectId` + `prev_project_type='supplement_equipment'`).
         equipmentProjectGroup: epg,
         // §14 lineage edge — EPG source → 'equipment'; RELPG source →
-        // 'revised_equipment' (§14.1/§14.7 Phase 3 chain).
+        // 'revised_equipment'; SEPG source → 'supplement_equipment' (a ROOT).
         prevProjectId,
         prevProjectType,
         equipmentName: dto.equipmentName,
@@ -390,7 +448,7 @@ export class RevisedEquipmentProjectGroupService {
       }
 
       this.logger.log(
-        `Created RELPG id=${saved.id} format=${format} epg=${epg.id} createdBy=${workHistory.id} draft=${isDraft}`,
+        `Created RELPG id=${saved.id} format=${format} epg=${epg?.id ?? 'none'} prev=${prevProjectType}:${prevProjectId} createdBy=${workHistory.id} draft=${isDraft}`,
       );
       return this.findOneInternal(manager, saved.id);
     });
@@ -1808,6 +1866,31 @@ export class RevisedEquipmentProjectGroupService {
   }
 
   /**
+   * SEPG-source variant of `assertEpgApproved` — the source
+   * SupplementEquipmentProjectGroup must have its latest TrackingStatus =
+   * Approved before it can be forked into a revision. Mirrors the project
+   * SPG-source Approved gate (§7.2 / §11). The SEPG audit hook is the
+   * `supplement_equipment_project_group_id` FK on `tracking_status`.
+   */
+  private async assertSepgApproved(
+    manager: EntityManager,
+    sepgId: string,
+  ): Promise<void> {
+    const latest = await manager.findOne(TrackingStatus, {
+      where: {
+        supplementEquipmentProjectGroupId: { id: sepgId },
+        isLatest: true,
+      },
+      relations: ['statusId'],
+    });
+    if (!latest || latest.statusId?.name !== STATUS_NAMES.APPROVED) {
+      throw new BadRequestException(
+        'รายการครุภัณฑ์ต้นฉบับต้องมีสถานะ Approved เท่านั้นจึงจะสามารถยื่นขอแก้ไขหรือเปลี่ยนแปลงได้',
+      );
+    }
+  }
+
+  /**
    * §9 / §10 — load the DPR and assert `isOpen = true`. Scope is bound to
    * the supplied DPR, never a global latest lookup.
    */
@@ -2073,8 +2156,13 @@ export class RevisedEquipmentProjectGroupService {
    * lineage forward to collect every live RELPG descendant.
    *
    * Lineage edges (§14, Phase 3):
-   *   - `prev_project_type = 'equipment'`         → parent is the EPG root
-   *   - `prev_project_type = 'revised_equipment'` → parent is another RELPG
+   *   - `prev_project_type = 'equipment'`            → parent is the EPG root
+   *   - `prev_project_type = 'revised_equipment'`    → parent is another RELPG
+   *   - `prev_project_type = 'supplement_equipment'` → root is an SEPG (no EPG
+   *     root exists). Treated as a lineage ROOT, like `'equipment'`. Mirroring
+   *     the project SPG-rooted behavior (Wave SUPP-4), an SEPG-rooted chain
+   *     returns a minimal single-entry envelope (`original: null`); a deeper
+   *     SEPG-side chain walker can land in a follow-up wave.
    *
    * Read-only — NO writes, NO TrackingStatus, NO status changes. Reads are
    * unrestricted per §5.3 (NO agency-only gate); we still require an
@@ -2183,7 +2271,8 @@ export class RevisedEquipmentProjectGroupService {
         cursor = parent;
       }
 
-      // `cursor` is now the first-fork RELPG (prevProjectType='equipment').
+      // `cursor` is now the first-fork RELPG (prevProjectType='equipment' or
+      // 'supplement_equipment').
       const rootEpgId =
         cursor?.prevProjectType === PrevEquipmentProjectType.EQUIPMENT
           ? cursor.prevProjectId
@@ -2196,6 +2285,26 @@ export class RevisedEquipmentProjectGroupService {
         });
       }
       if (!epgRoot) {
+        // SEPG-rooted lineage: the first-fork RELPG points at an SEPG via
+        // `prev_project_type='supplement_equipment'`, so no EPG root exists.
+        // Mirror the project SPG-rooted behavior (Wave SUPP-4): return a
+        // minimal single-entry envelope (the requested RELPG only, no
+        // EPG-based sibling chain). A deeper SEPG-side walker can land later.
+        const sepgRooted =
+          cursor?.prevProjectType ===
+            PrevEquipmentProjectType.SUPPLEMENT_EQUIPMENT ||
+          requestedRelpg?.prevProjectType ===
+            PrevEquipmentProjectType.SUPPLEMENT_EQUIPMENT;
+        if (sepgRooted) {
+          await this.maskCreatedByUserOnRelpg([requestedRelpg as any]);
+          this.projectLatestStatusOnRelpg([requestedRelpg as any]);
+          return {
+            original: null,
+            current: requestedRelpg,
+            currentId: id,
+            revisions: [requestedRelpg],
+          };
+        }
         throw new NotFoundException('ไม่พบโครงการต้นฉบับของรายการแก้ไขนี้');
       }
     }

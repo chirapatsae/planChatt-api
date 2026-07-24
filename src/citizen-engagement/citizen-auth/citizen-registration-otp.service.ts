@@ -22,6 +22,7 @@ import { CitizenRegistrationOtp } from '../entities/citizen-registration-otp.ent
 import { CitizenAuditLog } from '../entities/citizen-audit-log.entity';
 import { citizenAvatarUrl } from '../media/citizen-avatar.util';
 import type { CitizenProfile } from './citizen-auth.service';
+import { CitizenSessionMintService } from './citizen-session-mint.service';
 
 /** OTP validity window — product decision: 5 minutes (mirrors login-OTP). */
 const OTP_TTL_SEC = 300;
@@ -116,6 +117,9 @@ export class CitizenRegistrationOtpService {
     private readonly argon2: Argon2Service,
     private readonly emailService: EmailService,
     private readonly dataSource: DataSource,
+    // Batch 2 — records the per-session row + fires the new-device alert (both
+    // flag-gated). Injected here because complete() is a citizen mint point.
+    private readonly sessionMint: CitizenSessionMintService,
   ) {}
 
   private get citizenSecret(): string {
@@ -166,14 +170,19 @@ export class CitizenRegistrationOtpService {
     };
   }
 
-  /** Mint the REAL 30-day session (mirrors CitizenAuthService.sign). */
-  private signSession(identity: CitizenIdentity): string {
+  /**
+   * Mint the REAL 30-day session (mirrors CitizenAuthService.sign). `sid` is
+   * added ONLY when the session registry is enabled — undefined ⇒ byte-for-byte
+   * identical to the pre-Batch-2 token.
+   */
+  private signSession(identity: CitizenIdentity, sid?: string): string {
     return this.jwtService.sign(
       {
         sub: identity.id,
         typ: 'citizen',
         loginMethod: 'password',
         sessionVersion: identity.sessionVersion ?? 0,
+        ...(sid ? { sid } : {}),
       },
       { secret: this.citizenSecret, expiresIn: '30d', audience: 'citizen' },
     );
@@ -557,6 +566,8 @@ export class CitizenRegistrationOtpService {
   async complete(
     registrationToken: string,
     input: { password: string; displayName?: string; consentAccepted: boolean },
+    ip: string | null = null,
+    userAgent: string | null = null,
   ): Promise<{ accessToken: string; profile: CitizenProfile }> {
     if (input.consentAccepted !== true) {
       throw new BadRequestException(
@@ -661,12 +672,22 @@ export class CitizenRegistrationOtpService {
       throw error;
     }
 
+    // Batch 2 — record the per-session row (flag-gated). This is a first-ever
+    // session for a just-created identity, so the mint helper NEVER fires a
+    // new-device alert here (no "new sign-in" email on signup).
+    const sid = await this.sessionMint.establish({
+      identity: saved,
+      loginMethod: 'register',
+      ip,
+      userAgent,
+    });
+
     this.logger.log(
       `citizen.register.completed identityId=${saved.id} at=${now.toISOString()}`,
     );
 
     return {
-      accessToken: this.signSession(saved),
+      accessToken: this.signSession(saved, sid),
       profile: this.toProfile(saved),
     };
   }

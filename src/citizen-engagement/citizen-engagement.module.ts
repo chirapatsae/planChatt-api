@@ -36,6 +36,11 @@ import { CitizenModerationLog } from './entities/citizen-moderation-log.entity';
 import { CitizenNotification } from './entities/citizen-notification.entity';
 import { CitizenPasswordResetToken } from './entities/citizen-password-reset-token.entity';
 import { CitizenLoginOtp } from './entities/citizen-login-otp.entity';
+import { CitizenSession } from './entities/citizen-session.entity';
+import { CitizenSessionRegistryService } from './citizen-auth/citizen-session-registry.service';
+import { CitizenSessionMintService } from './citizen-auth/citizen-session-mint.service';
+import { CitizenLoginAlertService } from './citizen-auth/citizen-login-alert.service';
+import { CitizenSessionController } from './citizen-auth/citizen-session.controller';
 import { CitizenRegistrationOtp } from './entities/citizen-registration-otp.entity';
 import { CitizenPollOption } from './entities/citizen-poll-option.entity';
 import { CitizenPollVote } from './entities/citizen-poll-vote.entity';
@@ -138,6 +143,11 @@ import { CitizenRetentionCron } from './citizen-retention.cron';
       // citizen_password_reset_tokens so a PDPA erase never cascades (§17.3).
       // Stores only the code HASH, never the plaintext 6-digit code.
       CitizenLoginOtp,
+      // Per-session (per-device) registry for the citizen cohort. Isolated
+      // `citizen_*` namespace; `identity_id` is a PLAIN uuid (NO FK), so a PDPA
+      // erase never cascades (§17.3). The PK IS the JWT `sid`; the client IP is
+      // AES-encrypted (`ip_enc`). Enforcement is flag-gated (SESSION_REGISTRY_ENABLED).
+      CitizenSession,
       // Verify-email-first registration OTP challenges. Isolated `citizen_*`
       // namespace with NO identity_id / NO FK at all — the identity does not
       // exist until `register/complete` creates it (§17.3), so there are never
@@ -225,6 +235,9 @@ import { CitizenRetentionCron } from './citizen-retention.cron';
   ],
   controllers: [
     CitizenAuthController,
+    // Batch 2 — citizen device/session self-management (list + revoke +
+    // revoke-others), gated by CitizenJwtGuard.
+    CitizenSessionController,
     CitizenPostController,
     CitizenSearchController,
     CitizenProfileController,
@@ -266,6 +279,15 @@ import { CitizenRetentionCron } from './citizen-retention.cron';
     // provided directly so CitizenAuthService can inject it without
     // importing BackupLoginModule.
     Argon2Service,
+    // Per-session registry (login-alerts / device-session-management, Batch 1).
+    // Injected by CitizenJwtStrategy for flag-gated per-session revocation;
+    // exposes record/revoke/revokeOthers for Batch 2's mint + device-manager.
+    CitizenSessionRegistryService,
+    // Batch 2 — the mint seam (records a session + fires the new-device alert,
+    // both flag-gated) called by the three citizen mint points, and the
+    // self-contained "แผนชัด" new-device alert email service.
+    CitizenSessionMintService,
+    CitizenLoginAlertService,
     CitizenJwtStrategy,
     CitizenJwtGuard,
     CitizenOptionalJwtGuard,

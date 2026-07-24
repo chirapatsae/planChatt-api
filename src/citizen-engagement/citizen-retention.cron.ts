@@ -6,6 +6,7 @@ import { LessThan, Not, Repository } from 'typeorm';
 
 import { CitizenLoginOtp } from './entities/citizen-login-otp.entity';
 import { CitizenRegistrationOtp } from './entities/citizen-registration-otp.entity';
+import { CitizenSession } from './entities/citizen-session.entity';
 import { CitizenPostMedia } from './entities/citizen-post-media.entity';
 import { CitizenStory } from './entities/citizen-story.entity';
 import { CitizenStoryReaction } from './entities/citizen-story-reaction.entity';
@@ -67,6 +68,14 @@ export class CitizenRetentionCron {
   private static readonly DEFAULT_BATCH_SIZE = 1000;
 
   /**
+   * Session rows get a longer, FIXED 7-day grace past expiry/revoke (so a
+   * recently-used device lingers briefly in the device-manager listing before
+   * being purged), independent of the short blob-grace used for the OTP/media
+   * sweeps above.
+   */
+  private static readonly SESSION_GRACE_DAYS = 7;
+
+  /**
    * The ONLY directories this cron may ever unlink under. A storage key that
    * does not sit beneath one of these is treated as corrupt and skipped — the
    * sweeper never deletes a file outside the citizen upload roots.
@@ -89,6 +98,8 @@ export class CitizenRetentionCron {
     private readonly loginOtpRepo: Repository<CitizenLoginOtp>,
     @InjectRepository(CitizenRegistrationOtp)
     private readonly registrationOtpRepo: Repository<CitizenRegistrationOtp>,
+    @InjectRepository(CitizenSession)
+    private readonly sessionRepo: Repository<CitizenSession>,
     private readonly storage: CitizenStorageService,
   ) {}
 
@@ -114,6 +125,12 @@ export class CitizenRetentionCron {
       const engagement = await this.sweepStoryEngagement(cutoff, batchSize);
       const loginOtp = await this.sweepLoginOtp(cutoff, batchSize);
       const registrationOtp = await this.sweepRegistrationOtp(cutoff, batchSize);
+      // Sessions use their OWN 7-day grace cutoff (not the short blob cutoff).
+      const sessionCutoff = new Date(
+        Date.now() -
+          CitizenRetentionCron.SESSION_GRACE_DAYS * 24 * 60 * 60 * 1000,
+      );
+      const sessions = await this.sweepCitizenSessions(sessionCutoff, batchSize);
 
       const durationMs = Date.now() - startedAt;
       this.logger.log(
@@ -122,7 +139,9 @@ export class CitizenRetentionCron {
           `storyEngagement{${this.fmtEngagement(engagement)}} ` +
           `loginOtp{${this.fmtOtp(loginOtp)}} ` +
           `registrationOtp{${this.fmtOtp(registrationOtp)}} ` +
+          `sessions{${this.fmtOtp(sessions)}} ` +
           `cutoff=${cutoff.toISOString()} graceHours=${graceHours} ` +
+          `sessionCutoff=${sessionCutoff.toISOString()} ` +
           `batchSize=${batchSize} durationMs=${durationMs}`,
       );
     } catch (err) {
@@ -323,6 +342,39 @@ export class CitizenRetentionCron {
         stats.errors++;
         this.logger.warn(
           `[citizen-retention] registration-otp ${row.id} purge failed: ${this.msg(err)}`,
+        );
+      }
+    }
+    return stats;
+  }
+
+  /**
+   * Session sweep: HARD-DELETE `citizen_session` rows whose `expires_at` OR
+   * `revoked_at` is older than the 7-day session grace `cutoff`. Clone of
+   * `sweepLoginOtp` discipline — no on-disk blob, straight row purge, one bad
+   * row never aborts the batch. `revoked_at < cutoff` never matches a NULL
+   * (still-active) row, so a live session is never touched.
+   */
+  private async sweepCitizenSessions(
+    cutoff: Date,
+    batchSize: number,
+  ): Promise<OtpSweepStats> {
+    const rows = await this.sessionRepo.find({
+      where: [{ expiresAt: LessThan(cutoff) }, { revokedAt: LessThan(cutoff) }],
+      order: { createdAt: 'ASC' },
+      take: batchSize,
+      select: { id: true },
+    });
+
+    const stats: OtpSweepStats = { scanned: rows.length, deleted: 0, errors: 0 };
+    for (const row of rows) {
+      try {
+        const res = await this.sessionRepo.delete({ id: row.id });
+        stats.deleted += res.affected ?? 0;
+      } catch (err) {
+        stats.errors++;
+        this.logger.warn(
+          `[citizen-retention] session ${row.id} purge failed: ${this.msg(err)}`,
         );
       }
     }

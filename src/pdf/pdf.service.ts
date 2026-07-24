@@ -17,6 +17,7 @@ import { DevelopmentPlan } from 'src/development-plan/entities/development-plan.
 import { DevelopmentPlanRevision } from 'src/development-plan-revision/entities/development-plan-revision.entity';
 import { ProjectGroup } from 'src/project-groups/entities/project-group.entity';
 import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-project-group.entity';
+import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
 import { User } from 'src/users/entities/user.entity';
 
 // --- PDF Entities ---
@@ -133,6 +134,8 @@ export class PdfService {
     private readonly projectGroupRepo: Repository<ProjectGroup>,
     @InjectRepository(RevisedProjectGroup)
     private readonly revisedProjectGroupRepo: Repository<RevisedProjectGroup>,
+    @InjectRepository(SupplementProjectGroup)
+    private readonly supplementProjectGroupRepo: Repository<SupplementProjectGroup>,
     @InjectRepository(PdfDevelopmentPlanDraftAgencyDocument)
     private readonly pdfDraftAgencyRepo: Repository<PdfDevelopmentPlanDraftAgencyDocument>,
     @InjectRepository(PdfRevisionEditDraftDocument)
@@ -614,11 +617,15 @@ export class PdfService {
     developmentPlanId: string,
   ): Promise<{
     current: any;
-    previous: ProjectGroup | RevisedProjectGroup | null;
+    previous: ProjectGroup | RevisedProjectGroup | SupplementProjectGroup | null;
     oldAdditionDetail?: string | null;
     additionalDetail?: string | null;
   }> {
-    let previous: ProjectGroup | RevisedProjectGroup | null = null;
+    let previous:
+      | ProjectGroup
+      | RevisedProjectGroup
+      | SupplementProjectGroup
+      | null = null;
 
     // W57-DB-01: prevProjectId is `string | null | undefined` after the
     // entity-type tightening. Skip the lookup when missing — a row without
@@ -642,12 +649,28 @@ export class PdfService {
           'trackingStatus.createdBy.user', 'originAgencyId', 'responsibleAgency', 'amphoe',
         ],
       });
+    } else if (current.prevProjectType === "supplement" && current.prevProjectId) {
+      // Wave SUPP-4 — the revision was forked from an SPG (เล่มเพิ่มเติม), so
+      // the "โครงการเดิม" baseline lives in `supplement_project_groups`, NOT
+      // `project_groups`/`revised_project_groups`. Without this branch the PDF's
+      // OLD column rendered blank. Mirrors findProjectComparison's SPG load.
+      previous = await this.supplementProjectGroupRepo.findOne({
+        where: { id: current.prevProjectId },
+        relations: [
+          'developmentPlanSupplement', 'developmentPlanSupplement.developmentPlan',
+          'strategy', 'tactic', 'plan', 'developmentIssue', 'createdBy', 'createdBy.user',
+          'budgets', 'trackingStatus', 'trackingStatus.statusId', 'trackingStatus.createdBy',
+          'trackingStatus.createdBy.user', 'originAgencyId', 'responsibleAgency', 'amphoe',
+        ],
+      });
     }
 
     const previousUnified = previous
       ? previous instanceof ProjectGroup
         ? UnifiedProjectMapper.fromProjectGroup(previous)
-        : UnifiedProjectMapper.fromRevisedProjectGroup(previous)
+        : previous instanceof SupplementProjectGroup
+          ? UnifiedProjectMapper.fromSupplementProjectGroup(previous)
+          : UnifiedProjectMapper.fromRevisedProjectGroup(previous)
       : null;
 
     return {

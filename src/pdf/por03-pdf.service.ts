@@ -687,6 +687,7 @@ export class Por03PdfService {
     let previous:
       | EquipmentProjectGroup
       | RevisedEquipmentProjectGroup
+      | SupplementEquipmentProjectGroup
       | null = null;
 
     const equipmentRelations = {
@@ -712,6 +713,18 @@ export class Por03PdfService {
       current.prevProjectId
     ) {
       previous = await this.revisedEquipmentRepo.findOne({
+        where: { id: current.prevProjectId, deletedAt: IsNull() },
+        relations: equipmentRelations,
+      });
+    } else if (
+      current.prevProjectType ===
+        PrevEquipmentProjectType.SUPPLEMENT_EQUIPMENT &&
+      current.prevProjectId
+    ) {
+      // The RELPG was forked from an SEPG (ครุภัณฑ์ เล่มเพิ่มเติม) — the
+      // "โครงการเดิม" baseline lives in `supplement_equipment_project_groups`,
+      // not EPG/RELPG. Without this branch the PDF's OLD column was blank.
+      previous = await this.supplementEquipmentRepo.findOne({
         where: { id: current.prevProjectId, deletedAt: IsNull() },
         relations: equipmentRelations,
       });

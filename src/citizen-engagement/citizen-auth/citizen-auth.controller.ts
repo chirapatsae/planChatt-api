@@ -173,9 +173,17 @@ export class CitizenAuthController {
   })
   @UseGuards(ThrottlerGuard)
   @Post('login/otp')
-  loginOtp(@Body() dto: CitizenLoginOtpDto) {
+  loginOtp(@Body() dto: CitizenLoginOtpDto, @Req() req: Request) {
     this.assertOtpEnabled();
-    return this.loginOtpService.verify(dto.otpChallengeToken, dto.code);
+    // Thread the STEP-2 request's ip/ua (cleaner than trusting the step-1
+    // fingerprint) so the recorded session reflects the device that actually
+    // completed the login. No-op unless SESSION_REGISTRY_ENABLED === 'true'.
+    return this.loginOtpService.verify(
+      dto.otpChallengeToken,
+      dto.code,
+      this.clientIp(req),
+      req.headers['user-agent'] ?? null,
+    );
   }
 
   /**
@@ -267,13 +275,18 @@ export class CitizenAuthController {
   })
   @UseGuards(ThrottlerGuard)
   @Post('register/complete')
-  registerComplete(@Body() dto: CitizenRegisterCompleteDto) {
+  registerComplete(@Body() dto: CitizenRegisterCompleteDto, @Req() req: Request) {
     this.assertVerifyFirstEnabled();
-    return this.registrationOtpService.complete(dto.registrationToken, {
-      password: dto.password,
-      displayName: dto.displayName,
-      consentAccepted: dto.consentAccepted,
-    });
+    return this.registrationOtpService.complete(
+      dto.registrationToken,
+      {
+        password: dto.password,
+        displayName: dto.displayName,
+        consentAccepted: dto.consentAccepted,
+      },
+      this.clientIp(req),
+      req.headers['user-agent'] ?? null,
+    );
   }
 
   // ===================================================================

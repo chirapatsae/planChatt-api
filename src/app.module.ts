@@ -163,6 +163,7 @@ import { CitizenPlanningModule } from './citizen-planning/citizen-planning.modul
 import { CitizenIdentity } from './citizen-engagement/entities/citizen-identity.entity';
 import { CitizenPasswordResetToken } from './citizen-engagement/entities/citizen-password-reset-token.entity';
 import { CitizenLoginOtp } from './citizen-engagement/entities/citizen-login-otp.entity';
+import { CitizenSession } from './citizen-engagement/entities/citizen-session.entity';
 import { CitizenRegistrationOtp } from './citizen-engagement/entities/citizen-registration-otp.entity';
 import { CitizenPost } from './citizen-engagement/entities/citizen-post.entity';
 import { CitizenPostComment } from './citizen-engagement/entities/citizen-post-comment.entity';
@@ -428,6 +429,8 @@ import { BackupCredential } from './backup-login/entities/backup-credential.enti
 import { TotpEnrollment } from './backup-login/entities/totp-enrollment.entity';
 import { PasswordHistory } from './backup-login/entities/password-history.entity';
 import { BackupLoginAuditLog } from './backup-login/entities/backup-login-audit-log.entity';
+import { StaffSession } from './backup-login/entities/staff-session.entity';
+import { StaffSessionRegistryModule } from './backup-login/staff-session-registry.module';
 import { BackupLoginKillSwitchConfig } from './backup-login/entities/backup-login-kill-switch-config.entity';
 // Wave wave-backup-login-thaid-fallback / BE-01 — backup-login module
 // wiring (services + controller + crons + boot hook). Imported AFTER
@@ -682,6 +685,11 @@ import { UnifiedEquipmentModule } from './unified-equipment/unified-equipment.mo
         // PDPA erase never cascades (§17.3). Root registration is required for
         // metadata resolution (Wave 41 footgun — explicit entities[] array).
         CitizenLoginOtp,
+        // Per-session (per-device) registry (login-alerts / device-session-
+        // management). Isolated `citizen_*` namespace; `identity_id` is a PLAIN
+        // uuid (NO FK), so a PDPA erase never cascades (§17.3); IP AES-encrypted.
+        // Root registration is required for metadata resolution (Wave 41 footgun).
+        CitizenSession,
         // Verify-email-first registration OTP challenges. Isolated `citizen_*`
         // namespace; NO identity_id / NO FK at all — the identity is created only
         // at `register/complete` (§17.3). Root registration is required for
@@ -773,6 +781,12 @@ import { UnifiedEquipmentModule } from './unified-equipment/unified-equipment.mo
         TotpEnrollment,
         PasswordHistory,
         BackupLoginAuditLog,
+        // Per-session (per-device) registry for the STAFF cohort (login-alerts
+        // / device-session-management). Staff boundary — `user_id` MAY FK into
+        // `users` (SET NULL). Root registration is required for metadata
+        // resolution (Wave 41 footgun); the service is provided by the
+        // @Global() StaffSessionRegistryModule.
+        StaffSession,
         BackupLoginKillSwitchConfig,
         // Wave Equipment ผ.03, Phase 1 — DB-01. Reference-data tables;
         // no FK into project / plan / tracking / users (CLAUDE.md §10).
@@ -999,6 +1013,10 @@ import { UnifiedEquipmentModule } from './unified-equipment/unified-equipment.mo
     // already in place; the module owns its own JwtModule.register
     // for sign + verify of mfaChallengeToken / final session JWT.
     BackupLoginModule,
+    // login-alerts / device-session-management (Batch 1). @Global() so the
+    // app-wide staff `JwtAuthGuard` can inject `StaffSessionRegistryService`
+    // without every consuming module importing backup-login.
+    StaffSessionRegistryModule,
     // Wave Equipment ผ.03, Phase 1 — DB-01. Module skeleton only
     // (service + controller deferred to BE-01). Order is irrelevant;
     // no cyclical dependency. `forFeature` registration here unblocks

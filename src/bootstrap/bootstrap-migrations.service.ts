@@ -748,6 +748,127 @@ export class BootstrapMigrationsService implements OnApplicationBootstrap {
         ON "citizen_story_reactions" ("identity_id");
       `,
     },
+
+    // ===================================================================
+    // Per-session (per-device) registry — login-alerts /
+    // device-session-management (Batch 1 / DB-1). Two tables: the citizen
+    // `citizen_session` (§17.3-isolated, IP AES-encrypted) and the staff
+    // `staff_session` (staff boundary, user_id FK SET NULL, IP plain).
+    //
+    // Mirrors migrations `1799500000000-CreateCitizenSession.ts` +
+    // `1799500000001-CreateStaffSession.ts` for dev boxes that run
+    // `synchronize: true` WITHOUT the migration runner, and for prod parity.
+    // All statements idempotent (CREATE TABLE / INDEX IF NOT EXISTS; the FK
+    // ADD is wrapped in a NOT EXISTS guard). Enforcement is flag-gated
+    // (SESSION_REGISTRY_ENABLED) — the tables are inert until Batch 2 mints
+    // rows. §17.3 preserved for citizen_session (no FK); §17.11 no role
+    // exemption — schema-level integrity only.
+    // ===================================================================
+    {
+      name: 'citizen_session CREATE TABLE (device-session Batch 1)',
+      sql: `
+        CREATE TABLE IF NOT EXISTS "citizen_session" (
+          "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
+          "identity_id" uuid NOT NULL,
+          "session_version" int NOT NULL,
+          "login_method" varchar(16) NOT NULL,
+          "device_hash" varchar(64) NOT NULL,
+          "browser_label" varchar(48) NULL,
+          "os_label" varchar(48) NULL,
+          "ip_enc" varchar(512) NULL,
+          "subnet24" varchar(64) NULL,
+          "geo_country" varchar(8) NULL,
+          "geo_city" varchar(64) NULL,
+          "created_at" timestamptz NOT NULL DEFAULT now(),
+          "last_seen_at" timestamptz NOT NULL DEFAULT now(),
+          "expires_at" timestamptz NOT NULL,
+          "revoked_at" timestamptz NULL,
+          "revoked_reason" varchar(32) NULL,
+          CONSTRAINT "pk_citizen_session" PRIMARY KEY ("id")
+        );
+      `,
+    },
+    {
+      name: 'citizen_session (identity_id, revoked_at) index (device-session Batch 1)',
+      sql: `
+        CREATE INDEX IF NOT EXISTS "ix_citizen_session_identity_revoked"
+        ON "citizen_session" ("identity_id", "revoked_at");
+      `,
+    },
+    {
+      name: 'citizen_session (device_hash) index (device-session Batch 1)',
+      sql: `
+        CREATE INDEX IF NOT EXISTS "ix_citizen_session_device_hash"
+        ON "citizen_session" ("device_hash");
+      `,
+    },
+    {
+      name: 'citizen_session (expires_at) index (device-session Batch 1)',
+      sql: `
+        CREATE INDEX IF NOT EXISTS "ix_citizen_session_expires_at"
+        ON "citizen_session" ("expires_at");
+      `,
+    },
+    {
+      name: 'staff_session CREATE TABLE (device-session Batch 1)',
+      sql: `
+        CREATE TABLE IF NOT EXISTS "staff_session" (
+          "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
+          "user_id" uuid NULL,
+          "session_version" int NOT NULL,
+          "login_method" varchar(16) NOT NULL,
+          "device_hash" varchar(64) NOT NULL,
+          "browser_label" varchar(48) NULL,
+          "os_label" varchar(48) NULL,
+          "ip_address" varchar(64) NULL,
+          "subnet24" varchar(64) NULL,
+          "geo_country" varchar(8) NULL,
+          "geo_city" varchar(64) NULL,
+          "created_at" timestamptz NOT NULL DEFAULT now(),
+          "last_seen_at" timestamptz NOT NULL DEFAULT now(),
+          "expires_at" timestamptz NOT NULL,
+          "revoked_at" timestamptz NULL,
+          "revoked_reason" varchar(32) NULL,
+          CONSTRAINT "pk_staff_session" PRIMARY KEY ("id")
+        );
+      `,
+    },
+    {
+      name: 'staff_session FK user_id -> users SET NULL (device-session Batch 1)',
+      sql: `
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint WHERE conname = 'fk_staff_session_user'
+          ) THEN
+            ALTER TABLE "staff_session"
+            ADD CONSTRAINT "fk_staff_session_user"
+            FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE SET NULL;
+          END IF;
+        END $$;
+      `,
+    },
+    {
+      name: 'staff_session (user_id, revoked_at) index (device-session Batch 1)',
+      sql: `
+        CREATE INDEX IF NOT EXISTS "ix_staff_session_user_revoked"
+        ON "staff_session" ("user_id", "revoked_at");
+      `,
+    },
+    {
+      name: 'staff_session (device_hash) index (device-session Batch 1)',
+      sql: `
+        CREATE INDEX IF NOT EXISTS "ix_staff_session_device_hash"
+        ON "staff_session" ("device_hash");
+      `,
+    },
+    {
+      name: 'staff_session (expires_at) index (device-session Batch 1)',
+      sql: `
+        CREATE INDEX IF NOT EXISTS "ix_staff_session_expires_at"
+        ON "staff_session" ("expires_at");
+      `,
+    },
   ];
 
   async onApplicationBootstrap(): Promise<void> {

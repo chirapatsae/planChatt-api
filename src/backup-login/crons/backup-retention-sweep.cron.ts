@@ -44,5 +44,37 @@ export class BackupRetentionSweepCron {
         `[BackupRetentionSweep] failed: ${(err as Error).message}`,
       );
     }
+
+    // Batch 2 — staff_session retention. Delete rows whose expiry OR revoke is
+    // older than a 7-day grace (so a recently-used device lingers briefly in
+    // the device-manager listing). Independent try so a session-sweep failure
+    // never masks the audit-log sweep above. `staff_session` carries NO
+    // BEFORE-DELETE trigger (unlike backup_login_audit_logs), so a plain
+    // batched DELETE is sufficient; `revoked_at < ...` never matches a NULL
+    // (still-active) row.
+    await this.sweepStaffSessions();
+  }
+
+  /** Purge expired / revoked `staff_session` rows past the 7-day grace. */
+  private async sweepStaffSessions(): Promise<void> {
+    try {
+      const result: Array<{ id: string }> = await this.dataSource.query(
+        `DELETE FROM staff_session
+         WHERE id IN (
+           SELECT id FROM staff_session
+           WHERE expires_at < NOW() - INTERVAL '7 days'
+              OR revoked_at < NOW() - INTERVAL '7 days'
+           LIMIT 5000
+         )
+         RETURNING id`,
+      );
+      this.logger.log(
+        `[BackupRetentionSweep] deleted ${result.length} staff_session row(s) past 7d grace`,
+      );
+    } catch (err) {
+      this.logger.error(
+        `[BackupRetentionSweep] staff_session sweep failed: ${(err as Error).message}`,
+      );
+    }
   }
 }

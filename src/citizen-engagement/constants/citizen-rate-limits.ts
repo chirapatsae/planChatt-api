@@ -80,4 +80,7 @@ export const CITIZEN_RATE_LIMITS = {
   /** Verify-email-first REGISTER complete — the account-creation write (Argon2 +
    *  insert); bound per-IP against churn/abuse. */
   REGISTER_COMPLETE: 5,
+  /** Device/session self-management (list + revoke + revoke-others) — an
+   *  authenticated self-service surface; bounded against churn/abuse. */
+  MANAGE_SESSIONS: 30,
 } as const;

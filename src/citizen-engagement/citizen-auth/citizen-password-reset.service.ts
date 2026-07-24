@@ -9,6 +9,8 @@ import { EmailService } from 'src/util/email/email.service';
 import { CitizenIdentity } from '../entities/citizen-identity.entity';
 import { CitizenPasswordResetToken } from '../entities/citizen-password-reset-token.entity';
 import { CitizenAuditLog } from '../entities/citizen-audit-log.entity';
+import { CitizenSessionRegistryService } from './citizen-session-registry.service';
+import { sessionRegistryEnabled } from 'src/common/session-registry/session-registry.flag';
 
 /** Token validity window — product decision: 30 minutes. */
 const TOKEN_TTL_MS = 30 * 60 * 1000;
@@ -53,6 +55,7 @@ export class CitizenPasswordResetService {
     private readonly argon2: Argon2Service,
     private readonly emailService: EmailService,
     private readonly dataSource: DataSource,
+    private readonly citizenSessionRegistry: CitizenSessionRegistryService,
   ) {}
 
   private static resolveFrontendBase(): string {
@@ -343,6 +346,17 @@ export class CitizenPasswordResetService {
         detail: { via: 'reset_link' },
       });
     });
+
+    // [SEC P3-1] The session_version bump above invalidates every issued citizen
+    // JWT via the guard's version check, but leaves the identity's session-
+    // registry rows `revoked_at = NULL` → the device-manager would still list
+    // them as "active". A reset via link is a FULL revocation (no session is
+    // being carried forward), so revoke ALL of the identity's rows — the empty
+    // `currentSid` drops the `id <>` predicate (SEC P2-1). No-ops with the flag
+    // off (no registry rows exist).
+    if (sessionRegistryEnabled()) {
+      await this.citizenSessionRegistry.revokeOthers(identity.id, '');
+    }
 
     this.logger.log(
       `citizen.password_reset.completed identityId=${identity.id} at=${now.toISOString()}`,

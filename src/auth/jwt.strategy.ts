@@ -24,6 +24,12 @@ export interface JwtPayloadUser {
   mfaVerified: boolean;
   sessionVersion: number;
   requirePasswordChange: boolean;
+  // Per-session id (login-alerts / device-session-management). Optional so
+  // legacy tokens minted BEFORE the registry landed (no `sid`) still parse and
+  // authenticate during rollout. Attached to `req.user` so the guard can
+  // enforce per-session revocation and device-manager controllers can identify
+  // the CURRENT session.
+  sid?: string;
 }
 
 @Injectable()
@@ -57,6 +63,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       mfaVerified: payload.mfaVerified ?? true,
       sessionVersion: payload.sessionVersion ?? 0,
       requirePasswordChange: payload.requirePasswordChange ?? false,
+      // Surface the current session id to the guard + controllers (undefined
+      // for legacy tokens minted before the registry landed).
+      ...(payload.sid ? { sid: payload.sid } : {}),
       // `purpose` is set on the short-lived `mfaChallengeToken`; the
       // JwtAuthGuard rejects any token that carries a `purpose` claim
       // (those tokens are only consumed by `/complete` which verifies

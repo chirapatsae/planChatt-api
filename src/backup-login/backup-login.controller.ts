@@ -237,7 +237,11 @@ export class BackupLoginController {
     @Body() dto: ChangePasswordDto,
     @Req()
     req: Request & {
-      user: { userId: string; loginMethod?: 'thaid' | 'backup' | 'password' };
+      user: {
+        userId: string;
+        loginMethod?: 'thaid' | 'backup' | 'password';
+        sid?: string;
+      };
     },
   ) {
     // Returns a NEW accessToken because the password change bumps
@@ -257,6 +261,11 @@ export class BackupLoginController {
       dto.newPassword,
       dto.totpCode,
       req.user.loginMethod ?? 'password',
+      // Batch 2 — reuse the CURRENT device's sid on the re-issued token (same
+      // device); ip/ua are only used for the rare no-current-sid fallback.
+      req.user.sid,
+      req.ip || '0.0.0.0',
+      (req.headers['user-agent'] as string) || null,
     );
     return { ok: true, accessToken };
   }
@@ -283,7 +292,7 @@ export class BackupLoginController {
     @Body() dto: TotpEnrollCompleteDto,
     @Req()
     req: Request & {
-      user: { userId: string; requireTotpEnrollment?: boolean };
+      user: { userId: string; requireTotpEnrollment?: boolean; sid?: string };
     },
   ) {
     // Pass `requireTotpEnrollment` JWT claim down to the service so it
@@ -298,6 +307,10 @@ export class BackupLoginController {
       req.user.userId,
       dto.totpCode,
       isForcedFlow,
+      // Batch 2 — reuse the CURRENT device's sid on the re-issued token.
+      req.user.sid,
+      req.ip || '0.0.0.0',
+      (req.headers['user-agent'] as string) || null,
     );
     return { ok: true, accessToken, user };
   }

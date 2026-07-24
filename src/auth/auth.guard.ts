@@ -9,6 +9,8 @@ import { AuthGuard } from '@nestjs/passport';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { SESSION_INVALIDATED_CODE } from 'src/backup-login/constants/error-messages';
+import { StaffSessionRegistryService } from 'src/backup-login/staff-session-registry.service';
+import { sessionRegistryEnabled } from 'src/common/session-registry/session-registry.flag';
 
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
@@ -17,6 +19,9 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
   constructor(
     @InjectDataSource()
     private readonly dataSource: DataSource,
+    // Resolvable app-wide via the @Global() StaffSessionRegistryModule (this
+    // guard is used by ~40 modules; a non-global dep would fail their boot).
+    private readonly staffSessionRegistry: StaffSessionRegistryService,
   ) {
     super();
   }
@@ -41,6 +46,7 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
           userId?: string;
           purpose?: string;
           sessionVersion?: number;
+          sid?: string;
         }
       | undefined;
     if (user?.purpose) {
@@ -74,6 +80,17 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
           `[JwtAuthGuard] session-version read failed: ${(err as Error).message}`,
         );
       }
+    }
+
+    // Per-session revocation (login-alerts / device-session-management).
+    // Flag-gated + legacy-safe: only enforced when SESSION_REGISTRY_ENABLED is
+    // exactly 'true' AND the token actually carries a `sid`. Flag OFF or a
+    // legacy token (no `sid`) ⇒ this is a no-op and behavior is UNCHANGED.
+    // Unlike the session_version read above (which fails OPEN on a DB hiccup),
+    // a session that is provably revoked/expired MUST fail closed — so any
+    // UnauthorizedException from the registry propagates.
+    if (sessionRegistryEnabled() && user?.sid && user?.userId) {
+      await this.staffSessionRegistry.assertStaffActive(user.sid, user.userId);
     }
 
     return true;

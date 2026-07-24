@@ -16,6 +16,7 @@ import { Argon2Service } from 'src/backup-login/argon2.service';
 import { CitizenIdentity } from '../entities/citizen-identity.entity';
 import { citizenAvatarUrl } from '../media/citizen-avatar.util';
 import { CitizenLoginOtpService } from './citizen-login-otp.service';
+import { CitizenSessionMintService } from './citizen-session-mint.service';
 
 /** Current privacy-policy version accepted at registration (PDPA). */
 const CONSENT_VERSION = process.env.PRIVACY_POLICY_VERSION || 'v1';
@@ -81,6 +82,9 @@ export class CitizenAuthService {
     // Mandatory email-OTP 2FA. One-way dependency (this service calls
     // issueChallenge; the OTP service NEVER calls back → no DI cycle).
     private readonly loginOtp: CitizenLoginOtpService,
+    // Batch 2 — records the per-session row + fires the new-device alert on the
+    // OTP-DISABLED direct-mint fallback paths (both flag-gated).
+    private readonly sessionMint: CitizenSessionMintService,
   ) {
     this.googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
   }
@@ -136,16 +140,45 @@ export class CitizenAuthService {
     };
   }
 
-  private sign(identity: CitizenIdentity, loginMethod: 'password' | 'google'): string {
+  private sign(
+    identity: CitizenIdentity,
+    loginMethod: 'password' | 'google',
+    sid?: string,
+  ): string {
     return this.jwtService.sign(
       {
         sub: identity.id,
         typ: 'citizen',
         loginMethod,
         sessionVersion: identity.sessionVersion ?? 0,
+        // Added ONLY when the session registry is enabled (sid present);
+        // undefined ⇒ byte-for-byte identical to the pre-Batch-2 token.
+        ...(sid ? { sid } : {}),
       },
       { secret: this.citizenSecret, expiresIn: '30d', audience: 'citizen' },
     );
+  }
+
+  /**
+   * Direct-mint helper for the OTP-DISABLED fallback paths (register / login /
+   * google when `CITIZEN_LOGIN_OTP_ENABLED='false'`). Records a session +
+   * fires the new-device alert (both flag-gated in the mint helper), then signs
+   * the token WITH the resulting `sid`. When the registry flag is OFF the sid is
+   * undefined and the token is byte-for-byte identical to the legacy output.
+   */
+  private async signWithSession(
+    identity: CitizenIdentity,
+    loginMethod: 'password' | 'google',
+    ip: string | null,
+    userAgent: string | null,
+  ): Promise<string> {
+    const sid = await this.sessionMint.establish({
+      identity,
+      loginMethod,
+      ip,
+      userAgent,
+    });
+    return this.sign(identity, loginMethod, sid);
   }
 
   /**
@@ -231,7 +264,13 @@ export class CitizenAuthService {
       return { otpRequired: true, ...challenge };
     }
 
-    return { accessToken: this.sign(saved, 'password'), profile: this.toProfile(saved) };
+    const accessToken = await this.signWithSession(
+      saved,
+      'password',
+      input.ip ?? null,
+      input.userAgent ?? null,
+    );
+    return { accessToken, profile: this.toProfile(saved) };
   }
 
   // ===================================================================
@@ -281,7 +320,13 @@ export class CitizenAuthService {
     this.logger.log(
       `citizen.login identityId=${saved.id} at=${new Date().toISOString()}`,
     );
-    return { accessToken: this.sign(saved, 'password'), profile: this.toProfile(saved) };
+    const accessToken = await this.signWithSession(
+      saved,
+      'password',
+      input.ip ?? null,
+      input.userAgent ?? null,
+    );
+    return { accessToken, profile: this.toProfile(saved) };
   }
 
   // ===================================================================
@@ -394,7 +439,13 @@ export class CitizenAuthService {
     this.logger.log(
       `citizen.google.login identityId=${saved.id} at=${new Date().toISOString()}`,
     );
-    return { accessToken: this.sign(saved, 'google'), profile: this.toProfile(saved) };
+    const accessToken = await this.signWithSession(
+      saved,
+      'google',
+      ip ?? null,
+      userAgent ?? null,
+    );
+    return { accessToken, profile: this.toProfile(saved) };
   }
 
   /** The authenticated citizen's own public profile. */

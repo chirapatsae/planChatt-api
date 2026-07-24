@@ -15,6 +15,9 @@ import { BackupLoginAuditLog } from './entities/backup-login-audit-log.entity';
 import { BackupLoginKillSwitchConfig } from './entities/backup-login-kill-switch-config.entity';
 import { BackupLoginService } from './backup-login.service';
 import { BackupLoginController } from './backup-login.controller';
+import { StaffSessionController } from './staff-session.controller';
+import { StaffLoginAlertService } from './staff-login-alert.service';
+import { EmailModule } from 'src/util/email/email.module';
 import { Argon2Service } from './argon2.service';
 import { TotpService } from './totp.service';
 import { PasswordPolicyService } from './password-policy.service';
@@ -69,6 +72,9 @@ import { WorkHistoryModule } from 'src/work-history/work-history.module';
       { name: 'backup-login-subnet', ttl: 60_000, limit: 100 },
     ]),
     LineModule,
+    // Batch 2 — the sandbox-aware EmailService chokepoint for the staff
+    // new-device alert email (StaffLoginAlertService).
+    EmailModule,
     // AUTH-REDESIGN (2026-07-08) — admin create-member orchestration:
     // UsersService (create the member row) + WorkHistoryService (place
     // role + org). Both modules export their service; neither imports
@@ -76,9 +82,13 @@ import { WorkHistoryModule } from 'src/work-history/work-history.module';
     UsersModule,
     WorkHistoryModule,
   ],
-  controllers: [BackupLoginController],
+  controllers: [BackupLoginController, StaffSessionController],
   providers: [
     BackupLoginService,
+    // Batch 2 — self-contained staff new-device alert email (uses the User repo
+    // above + EmailService). The StaffSessionRegistryService it partners with is
+    // resolved app-wide via the @Global() StaffSessionRegistryModule.
+    StaffLoginAlertService,
     Argon2Service,
     TotpService,
     PasswordPolicyService,

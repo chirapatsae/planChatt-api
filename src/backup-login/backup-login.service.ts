@@ -24,6 +24,9 @@ import { TotpService } from './totp.service';
 import { KillSwitchService } from './kill-switch.service';
 import { BackupAttemptAuditService } from './backup-attempt-audit.service';
 import { BackupLineNotifier } from './backup-line-notifier.service';
+import { StaffSessionRegistryService } from './staff-session-registry.service';
+import { StaffLoginAlertService } from './staff-login-alert.service';
+import { sessionRegistryEnabled } from 'src/common/session-registry/session-registry.flag';
 import {
   BACKUP_LOGIN_DENIED_CODE,
   BACKUP_LOGIN_DENIED_MESSAGE,
@@ -66,9 +69,16 @@ interface BackupSessionPayload {
   sessionVersion: number;
   requirePasswordChange?: boolean;
   requireTotpEnrollment?: boolean;
+  // Batch 2 — per-session id (login-alerts / device-session-management). Added
+  // ONLY when SESSION_REGISTRY_ENABLED === 'true'; absent ⇒ byte-for-byte the
+  // legacy token.
+  sid?: string;
   iat?: number;
   exp?: number;
 }
+
+/** Staff session lifetime — matches the 8h JWT (`expiresIn:'8h'`). */
+const STAFF_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 
 /**
  * Orchestrator for the backup-login flow (SECURITY-01 §7.8 / §7.9).
@@ -99,6 +109,12 @@ export class BackupLoginService {
     private readonly killSwitch: KillSwitchService,
     private readonly audit: BackupAttemptAuditService,
     private readonly lineNotifier: BackupLineNotifier,
+    // Batch 2 — per-session registry (records the row + embeds `sid`) and the
+    // self-contained new-device alert email. Both flag-gated
+    // (SESSION_REGISTRY_ENABLED). The registry is app-wide via the @Global()
+    // StaffSessionRegistryModule; the alert service is provided by this module.
+    private readonly staffSessionRegistry: StaffSessionRegistryService,
+    private readonly staffLoginAlert: StaffLoginAlertService,
     // AUTH-REDESIGN (2026-07-08) — admin create-member orchestration.
     private readonly usersService: UsersService,
     private readonly workHistoryService: WorkHistoryService,
@@ -586,6 +602,29 @@ export class BackupLoginService {
     });
 
     const sessionVersion = await this.sessionVersion.read(user.id);
+
+    // Batch 2 — record the per-session row + fire the new-device alert (both
+    // no-ops unless SESSION_REGISTRY_ENABLED === 'true'). This is the staff mint
+    // point; the forced-flow token (change-password / TOTP-enroll) reuses THIS
+    // `sid` on its re-issue rather than minting a new device.
+    let sid: string | undefined;
+    if (sessionRegistryEnabled()) {
+      const recorded = await this.staffSessionRegistry.record({
+        userId: user.id,
+        sessionVersion,
+        loginMethod: 'password',
+        ip: args.ip,
+        userAgent: args.userAgent,
+        expiresAt: new Date(Date.now() + STAFF_SESSION_TTL_MS),
+      });
+      sid = recorded.row.id;
+      if (recorded.isNewDevice && !recorded.isFirstSession) {
+        void this.staffLoginAlert
+          .sendNewDeviceAlert(user.id, recorded.row)
+          .catch(() => undefined);
+      }
+    }
+
     const sessionPayload: BackupSessionPayload = {
       sub: user.id,
       role: roleName,
@@ -595,6 +634,7 @@ export class BackupLoginService {
       sessionVersion,
       ...(requirePasswordChange ? { requirePasswordChange: true } : {}),
       ...(requireTotpEnrollment ? { requireTotpEnrollment: true } : {}),
+      ...(sid ? { sid } : {}),
     };
     const accessToken = this.jwtService.sign(sessionPayload, {
       secret: process.env.JWT_SECRET,
@@ -823,6 +863,12 @@ export class BackupLoginService {
     newPassword: string,
     totpCode: string | undefined,
     callerLoginMethod: 'thaid' | 'backup' | 'password' | undefined,
+    // Batch 2 — the CURRENT session id from the caller's token (+ ip/ua for the
+    // rare fallback where there is no current sid). A password change is the
+    // SAME device, so the re-issued token REUSES this sid — never a new device.
+    currentSid?: string,
+    ip?: string | null,
+    userAgent?: string | null,
   ): Promise<{ accessToken: string }> {
     const user = await this.userRepo.findOne({ where: { id: callerUserId } });
     if (!user) throw new NotFoundException('USER_NOT_FOUND');
@@ -976,6 +1022,27 @@ export class BackupLoginService {
     const hasConfirmedTotpAfter = await this.totp.hasConfirmed(callerUserId);
     const requireTotpEnrollment = !hasConfirmedTotpAfter;
     const sessionVersion = await this.sessionVersion.read(callerUserId);
+    // Reuse the CURRENT device's sid (same device); record one only if there is
+    // no current sid (first-login forced change, or a token minted while the
+    // flag was OFF). No new-device alert — this is a continuation, not a new
+    // sign-in.
+    const sid = await this.resolveReuseSid(
+      callerUserId,
+      currentSid,
+      sessionVersion,
+      ip ?? null,
+      userAgent ?? null,
+    );
+    // [SEC P3-1] The session_version bump above invalidates every SIBLING
+    // session via the guard's version check, but their registry rows keep
+    // `revoked_at = NULL` → the device-manager would still list them as
+    // "active". Revoke those other rows now, preserving THIS re-issued session
+    // (`sid`, the same device). `sid` is defined whenever the registry flag is
+    // on (resolveReuseSid records one when there is no current sid), so this
+    // no-ops with the flag off.
+    if (sid) {
+      await this.staffSessionRegistry.revokeOthers(callerUserId, sid);
+    }
     const sessionPayload: BackupSessionPayload = {
       sub: callerUserId,
       role: roleName,
@@ -984,12 +1051,41 @@ export class BackupLoginService {
       mfaVerified: false,
       sessionVersion,
       ...(requireTotpEnrollment ? { requireTotpEnrollment: true } : {}),
+      ...(sid ? { sid } : {}),
     };
     const accessToken = this.jwtService.sign(sessionPayload, {
       secret: process.env.JWT_SECRET,
       expiresIn: '8h',
     });
     return { accessToken };
+  }
+
+  /**
+   * Batch 2 — resolve the `sid` to embed on a staff token RE-ISSUE (change-
+   * password / TOTP-enroll). A re-issue is the SAME device, so it REUSES the
+   * caller's current sid. When the flag is OFF → undefined (legacy token). When
+   * ON but there is no current sid (first-login forced-change, or a token minted
+   * before the flag flipped) → record ONE session so the token carries a real
+   * sid. NEVER fires a new-device alert (a re-issue is not a new sign-in).
+   */
+  private async resolveReuseSid(
+    userId: string,
+    currentSid: string | undefined,
+    sessionVersion: number,
+    ip: string | null,
+    userAgent: string | null,
+  ): Promise<string | undefined> {
+    if (!sessionRegistryEnabled()) return undefined;
+    if (currentSid) return currentSid;
+    const recorded = await this.staffSessionRegistry.record({
+      userId,
+      sessionVersion,
+      loginMethod: 'password',
+      ip,
+      userAgent,
+      expiresAt: new Date(Date.now() + STAFF_SESSION_TTL_MS),
+    });
+    return recorded.row.id;
   }
 
   // ============================================================
@@ -1009,6 +1105,11 @@ export class BackupLoginService {
     callerUserId: string,
     code: string,
     isForcedFlow = false,
+    // Batch 2 — the CURRENT session id (+ ip/ua fallback). A TOTP enroll is the
+    // SAME device, so the re-issued token REUSES this sid — never a new device.
+    currentSid?: string,
+    ip?: string | null,
+    userAgent?: string | null,
   ): Promise<{ accessToken: string; user: Record<string, unknown> | null }> {
     const ok = await this.totp.enrollComplete(callerUserId, code);
     if (!ok) {
@@ -1041,6 +1142,21 @@ export class BackupLoginService {
     const roleName = wh?.role?.name ?? null;
     const workStatusName = wh?.workStatus?.name ?? null;
     const sessionVersion = await this.sessionVersion.read(callerUserId);
+    const sid = await this.resolveReuseSid(
+      callerUserId,
+      currentSid,
+      sessionVersion,
+      ip ?? null,
+      userAgent ?? null,
+    );
+    // [SEC P3-1] Only the forced flow bumped session_version above, so mirror
+    // that condition: revoke the OTHER sessions' registry rows (which the bump
+    // otherwise leaves `revoked_at = NULL` and thus still "active" in the
+    // device-manager), preserving THIS re-issued session (`sid`). The self-
+    // enroll path did not bump → no siblings to revoke.
+    if (isForcedFlow && sid) {
+      await this.staffSessionRegistry.revokeOthers(callerUserId, sid);
+    }
     const sessionPayload: BackupSessionPayload = {
       sub: callerUserId,
       role: roleName,
@@ -1048,6 +1164,7 @@ export class BackupLoginService {
       loginMethod: 'password',
       mfaVerified: true,
       sessionVersion,
+      ...(sid ? { sid } : {}),
     };
     const accessToken = this.jwtService.sign(sessionPayload, {
       secret: process.env.JWT_SECRET,

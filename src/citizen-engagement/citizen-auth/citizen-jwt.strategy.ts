@@ -5,6 +5,8 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { Repository } from 'typeorm';
 
 import { CitizenIdentity } from '../entities/citizen-identity.entity';
+import { CitizenSessionRegistryService } from './citizen-session-registry.service';
+import { sessionRegistryEnabled } from '../../common/session-registry/session-registry.flag';
 
 /** `req.user` shape for an authenticated CITIZEN (never carries `role`). */
 export interface CitizenJwtUser {
@@ -14,6 +16,11 @@ export interface CitizenJwtUser {
   loginMethod: string;
   sessionVersion: number;
   aud: 'citizen';
+  // Per-session id (login-alerts / device-session-management). Optional so
+  // legacy tokens minted BEFORE the registry landed (no `sid`) still parse and
+  // authenticate during rollout. Attached to `req.user` so device-manager
+  // controllers can identify the CURRENT session.
+  sid?: string;
 }
 
 /**
@@ -44,6 +51,7 @@ export class CitizenJwtStrategy extends PassportStrategy(Strategy, 'citizen-jwt'
   constructor(
     @InjectRepository(CitizenIdentity)
     private readonly identityRepo: Repository<CitizenIdentity>,
+    private readonly citizenSessionRegistry: CitizenSessionRegistryService,
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -84,11 +92,26 @@ export class CitizenJwtStrategy extends PassportStrategy(Strategy, 'citizen-jwt'
       throw new UnauthorizedException('Citizen session is no longer valid');
     }
 
+    // Per-session revocation (login-alerts / device-session-management).
+    // Flag-gated + legacy-safe: only enforced when SESSION_REGISTRY_ENABLED is
+    // exactly 'true' AND the token actually carries a `sid`. Flag OFF or a
+    // legacy token (no `sid`) ⇒ this is a no-op and behavior is UNCHANGED.
+    if (sessionRegistryEnabled() && payload.sid) {
+      await this.citizenSessionRegistry.assertCitizenActive(
+        payload.sid,
+        identity.id,
+      );
+    }
+
     return {
       identityId: payload.sub,
       loginMethod: payload.loginMethod ?? 'password',
       sessionVersion: tokenSessionVersion,
       aud: 'citizen',
+      // Surface the current session id to controllers (undefined for legacy
+      // tokens). Present regardless of the flag so Batch 2's device-manager can
+      // still identify "this device" once minting embeds `sid`.
+      ...(payload.sid ? { sid: payload.sid } : {}),
     };
   }
 }

@@ -69,6 +69,19 @@ export class CreateRevisedEquipmentProjectGroupDto {
   @IsUUID()
   revisedEquipmentProjectGroupId?: string;
 
+  /**
+   * Alternate source — an Approved SupplementEquipmentProjectGroup (SEPG),
+   * the equipment analog of the project SPG-source fork. Becomes
+   * `prevProjectId` with `prev_project_type='supplement_equipment'` (a
+   * lineage ROOT, like `equipmentProjectGroupId`). The SEPG's parent
+   * supplement MUST live under the SAME DevelopmentPlan as the target DPR
+   * (§10 same-bucket guard, service-enforced). Mutually exclusive with the
+   * two source ids above — the service enforces the exactly-one XOR.
+   */
+  @IsOptional()
+  @IsUUID()
+  supplementEquipmentProjectGroupId?: string;
+
   // Classification — STRATEGY_BASED slots (natural-key strings like
   // 'TACT004' / 'PLAN003'). Mutually exclusive with `developmentIssueId`.
   @IsOptional()

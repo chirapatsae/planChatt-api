@@ -1,6 +1,7 @@
 import type { TDocumentDefinitions } from 'pdfmake/interfaces';
 import type { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equipment-project-group.entity';
 import type { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project-group/entities/revised-equipment-project-group.entity';
+import type { SupplementEquipmentProjectGroup } from 'src/supplement-equipment-project-group/entities/supplement-equipment-project-group.entity';
 
 /**
  * Wave Revision/Change Equipment ผ.03 Print (OLD vs NEW) — BE-01
@@ -44,7 +45,14 @@ import type { RevisedEquipmentProjectGroup } from 'src/revised-equipment-project
  */
 export interface EquipmentRevisionPair {
   current: RevisedEquipmentProjectGroup;
-  previous: EquipmentProjectGroup | RevisedEquipmentProjectGroup | null;
+  // Wave SUPP-4 (equipment) — `previous` may be a SupplementEquipmentProjectGroup
+  // when the RELPG was forked from an SEPG (ครุภัณฑ์ เล่มเพิ่มเติม). The OLD-row
+  // renderer duck-types the shared equipment fields, so the SEPG shape works.
+  previous:
+    | EquipmentProjectGroup
+    | RevisedEquipmentProjectGroup
+    | SupplementEquipmentProjectGroup
+    | null;
 }
 
 /**
@@ -115,7 +123,11 @@ const hasChanged = (oldValue: any, newValue: any): boolean => {
 
 /** Per-year budget map keyed by Number(year) → Number(quantity). */
 const budgetByYear = (
-  row: EquipmentProjectGroup | RevisedEquipmentProjectGroup | null,
+  row:
+    | EquipmentProjectGroup
+    | RevisedEquipmentProjectGroup
+    | SupplementEquipmentProjectGroup
+    | null,
 ): Map<number, number> => {
   const map = new Map<number, number>();
   if (!row?.budgets) return map;

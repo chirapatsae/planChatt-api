@@ -11,6 +11,7 @@ import { CitizenLoginOtp } from '../entities/citizen-login-otp.entity';
 import { CitizenAuditLog } from '../entities/citizen-audit-log.entity';
 import { citizenAvatarUrl } from '../media/citizen-avatar.util';
 import type { CitizenProfile } from './citizen-auth.service';
+import { CitizenSessionMintService } from './citizen-session-mint.service';
 
 /** OTP validity window — product decision: 5 minutes. */
 const OTP_TTL_SEC = 300;
@@ -86,6 +87,9 @@ export class CitizenLoginOtpService {
     private readonly auditRepo: Repository<CitizenAuditLog>,
     private readonly jwtService: JwtService,
     private readonly emailService: EmailService,
+    // Batch 2 — records the per-session row + fires the new-device alert (both
+    // flag-gated). Injected here because verify() is the citizen mint point.
+    private readonly sessionMint: CitizenSessionMintService,
   ) {}
 
   private get citizenSecret(): string {
@@ -112,10 +116,17 @@ export class CitizenLoginOtpService {
     };
   }
 
-  /** Mint the REAL 30-day session — the ONLY place this happens post-OTP. */
+  /**
+   * Mint the REAL 30-day session — the ONLY place this happens post-OTP.
+   *
+   * `sid` is added to the claims ONLY when the session registry is enabled (the
+   * mint helper returned a session id). When it is `undefined` (flag OFF) the
+   * signed token is byte-for-byte identical to the pre-Batch-2 output.
+   */
   private signSession(
     identity: CitizenIdentity,
     loginMethod: 'password' | 'google',
+    sid?: string,
   ): string {
     return this.jwtService.sign(
       {
@@ -123,6 +134,7 @@ export class CitizenLoginOtpService {
         typ: 'citizen',
         loginMethod,
         sessionVersion: identity.sessionVersion ?? 0,
+        ...(sid ? { sid } : {}),
       },
       { secret: this.citizenSecret, expiresIn: '30d', audience: 'citizen' },
     );
@@ -216,6 +228,8 @@ export class CitizenLoginOtpService {
   async verify(
     otpChallengeToken: string,
     code: string,
+    ip: string | null = null,
+    userAgent: string | null = null,
   ): Promise<{ accessToken: string; profile: CitizenProfile }> {
     let payload: OtpChallengePayload;
     try {
@@ -319,12 +333,23 @@ export class CitizenLoginOtpService {
     const sessionMethod: 'password' | 'google' =
       row.loginMethod === 'google' ? 'google' : 'password';
 
+    // Batch 2 — record the per-session row + fire the new-device alert (both
+    // no-ops when SESSION_REGISTRY_ENABLED !== 'true'). The stored login_method
+    // is the precise OTP path ('password' | 'google' | 'register'); the JWT
+    // claim stays the collapsed `sessionMethod`.
+    const sid = await this.sessionMint.establish({
+      identity: saved,
+      loginMethod: row.loginMethod,
+      ip,
+      userAgent,
+    });
+
     this.logger.log(
       `citizen.login_otp.verified identityId=${saved.id} method=${row.loginMethod} at=${now.toISOString()}`,
     );
 
     return {
-      accessToken: this.signSession(saved, sessionMethod),
+      accessToken: this.signSession(saved, sessionMethod, sid),
       profile: this.toProfile(saved),
     };
   }

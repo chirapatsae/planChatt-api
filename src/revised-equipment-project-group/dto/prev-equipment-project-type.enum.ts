@@ -15,11 +15,18 @@
  *   enum (`prev_project_type_enum`), which would have to be widened via
  *   `ALTER TYPE ... ADD VALUE` and could not be rolled back cleanly.
  *
- * - `EQUIPMENT`         → parent is an `EquipmentProjectGroup` (the
- *                         first-generation fork from an approved EPG).
- * - `REVISED_EQUIPMENT` → parent is a `RevisedEquipmentProjectGroup`
- *                         (chained RELPG-to-RELPG fork, if a subsequent
- *                         revision of an RELPG is ever created).
+ * - `EQUIPMENT`            → parent is an `EquipmentProjectGroup` (the
+ *                            first-generation fork from an approved EPG).
+ * - `REVISED_EQUIPMENT`    → parent is a `RevisedEquipmentProjectGroup`
+ *                            (chained RELPG-to-RELPG fork, if a subsequent
+ *                            revision of an RELPG is ever created).
+ * - `SUPPLEMENT_EQUIPMENT` → parent is a `SupplementEquipmentProjectGroup`
+ *                            (SEPG). The equipment analog of the project
+ *                            SPG-source fork: an approved supplement
+ *                            equipment item revised into a DPR context.
+ *                            Like `EQUIPMENT` this is a lineage ROOT — an
+ *                            SEPG-sourced RELPG has no further
+ *                            equipment-revision ancestors.
  *
  * Source of truth: CLAUDE.md §14 (Version Lineage Immutability), §14.7
  * (detection SQL), §5.3 (equipment sub-type — Phase 3 RELPG).
@@ -27,4 +34,5 @@
 export enum PrevEquipmentProjectType {
   EQUIPMENT = 'equipment',
   REVISED_EQUIPMENT = 'revised_equipment',
+  SUPPLEMENT_EQUIPMENT = 'supplement_equipment',
 }
