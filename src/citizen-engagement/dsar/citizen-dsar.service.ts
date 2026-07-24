@@ -361,6 +361,17 @@ export class CitizenDsarService {
       identity.thaidSubHash = '';
       identity.nationalIdEnc = null;
       identity.fullNameEnc = null;
+      // AUTH-REDESIGN (2026-07): scrub the email/password/Google auth PII too.
+      // Without this the encrypted email (email_enc) survives a right-to-erasure
+      // request, and email_hash / google_sub_hash keep the address "taken" so the
+      // owner can never re-register. Nulling all four erases the PII AND frees the
+      // identifiers (both hashes are partial-unique WHERE NOT NULL, so multiple
+      // erased tombstones coexist). email_verified_at cleared for consistency.
+      identity.emailEnc = null;
+      identity.emailHash = null;
+      identity.passwordHash = null;
+      identity.googleSubHash = null;
+      identity.emailVerifiedAt = null;
       identity.displayAlias = ERASED_DISPLAY_ALIAS;
       identity.status = 'deleted';
       // Bump session_version so the live citizen JWT is rejected by

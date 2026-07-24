@@ -37,6 +37,9 @@ type StubRepo = {
   save: jest.Mock;
   create: jest.Mock;
   softDelete: jest.Mock;
+  // hardDeleteOwned (story view/reaction, chat read-state) + chat-body update.
+  delete: jest.Mock;
+  update: jest.Mock;
 };
 
 function makeRepo(): StubRepo {
@@ -46,6 +49,8 @@ function makeRepo(): StubRepo {
     save: jest.fn(async (x) => x),
     create: jest.fn((x) => x),
     softDelete: jest.fn(async () => ({ affected: 0 })),
+    delete: jest.fn(async () => ({ affected: 1 })),
+    update: jest.fn(async () => ({ affected: 1 })),
   };
 }
 
@@ -69,9 +74,16 @@ describe('CitizenDsarService', () => {
       CitizenFollow: makeRepo(),
       CitizenPollVote: makeRepo(),
       CitizenStory: makeRepo(),
+      // FB-6 ephemeral story engagement — HARD-deleted on erasure (no soft col).
+      CitizenStoryView: makeRepo(),
+      CitizenStoryReaction: makeRepo(),
       CitizenBlock: makeRepo(),
       CitizenReport: makeRepo(),
       CitizenNotification: makeRepo(),
+      // Community chat — caller's messages soft-deleted + body-nulled; read-state deleted.
+      CitizenChatConversation: makeRepo(),
+      CitizenChatMessage: makeRepo(),
+      CitizenChatReadState: makeRepo(),
       CitizenAuditLog: makeRepo(),
     };
     repoByName.CitizenAuditLog.save = jest.fn(async (x) => {
@@ -200,6 +212,11 @@ describe('CitizenDsarService', () => {
         nationalIdHash: 'NID_HASH',
         nationalIdEnc: 'iv:cipher',
         fullNameEnc: 'iv:cipher2',
+        emailEnc: 'iv:emailcipher',
+        emailHash: 'EMAIL_HASH',
+        passwordHash: 'argon2hash',
+        googleSubHash: 'GOOGLE_SUB_HASH',
+        emailVerifiedAt: JOINED,
         status: 'active',
         sessionVersion: 4,
         deletedAt: null,
@@ -247,6 +264,13 @@ describe('CitizenDsarService', () => {
       expect(identity.thaidSubHash).toBe('');
       expect(identity.nationalIdEnc).toBeNull();
       expect(identity.fullNameEnc).toBeNull();
+      // AUTH-REDESIGN PDPA scrub — email/password/Google auth PII erased so the
+      // encrypted email doesn't survive erasure and the address is freed.
+      expect(identity.emailEnc).toBeNull();
+      expect(identity.emailHash).toBeNull();
+      expect(identity.passwordHash).toBeNull();
+      expect(identity.googleSubHash).toBeNull();
+      expect(identity.emailVerifiedAt).toBeNull();
       expect(identity.displayAlias).toBe(ERASED_DISPLAY_ALIAS);
       expect(identity.status).toBe('deleted');
       // session_version bumped (invalidates the live JWT via CitizenJwtGuard)

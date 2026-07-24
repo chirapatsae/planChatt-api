@@ -15,6 +15,7 @@ import { encryption, hashEmail, hashSecret } from 'src/util/encryption.util';
 import { Argon2Service } from 'src/backup-login/argon2.service';
 import { CitizenIdentity } from '../entities/citizen-identity.entity';
 import { citizenAvatarUrl } from '../media/citizen-avatar.util';
+import { CitizenLoginOtpService } from './citizen-login-otp.service';
 
 /** Current privacy-policy version accepted at registration (PDPA). */
 const CONSENT_VERSION = process.env.PRIVACY_POLICY_VERSION || 'v1';
@@ -31,6 +32,25 @@ export interface CitizenProfile {
   /** AUTH-REDESIGN — whether the login email has been verified. */
   emailVerified: boolean;
 }
+
+/** A fully-authenticated citizen session (OTP disabled, or step 2 complete). */
+export interface CitizenSessionResult {
+  accessToken: string;
+  profile: CitizenProfile;
+}
+
+/**
+ * Step-1 result when mandatory email-OTP is enabled: NO session is minted yet.
+ * The FE exchanges the `otpChallengeToken` + code at `/auth/login/otp`.
+ */
+export interface CitizenOtpRequiredResult {
+  otpRequired: true;
+  otpChallengeToken: string;
+  expiresInSec: number;
+  resendCooldownSec: number;
+}
+
+export type CitizenAuthResult = CitizenSessionResult | CitizenOtpRequiredResult;
 
 /**
  * CitizenAuthService — AUTH-REDESIGN (2026-07-08).
@@ -58,12 +78,35 @@ export class CitizenAuthService {
     private readonly identityRepo: Repository<CitizenIdentity>,
     private readonly jwtService: JwtService,
     private readonly argon2: Argon2Service,
+    // Mandatory email-OTP 2FA. One-way dependency (this service calls
+    // issueChallenge; the OTP service NEVER calls back → no DI cycle).
+    private readonly loginOtp: CitizenLoginOtpService,
   ) {
     this.googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
   }
 
   private get citizenSecret(): string {
     return process.env.CITIZEN_JWT_SECRET || process.env.JWT_SECRET || 'defaultSecret';
+  }
+
+  // -------------------------------------------------------------------
+  // Mandatory email-OTP 2FA feature flags (all default ON; only an explicit
+  // '=false' disables — matching the master-flag rollback contract).
+  // -------------------------------------------------------------------
+
+  /** Master flag — when false, ALL three flows keep today's direct-session mint. */
+  private otpEnabled(): boolean {
+    return process.env.CITIZEN_LOGIN_OTP_ENABLED !== 'false';
+  }
+
+  /** Whether Google logins ALSO route through OTP. */
+  private enforceGoogleOtp(): boolean {
+    return process.env.CITIZEN_OTP_ENFORCE_GOOGLE !== 'false';
+  }
+
+  /** Whether registration routes through OTP (doubles as email verification). */
+  private otpOnRegister(): boolean {
+    return process.env.CITIZEN_OTP_ON_REGISTER !== 'false';
   }
 
   /** "สมชาย มานะ" → "สมชาย ม." — never expose the full family name. */
@@ -124,7 +167,9 @@ export class CitizenAuthService {
     password: string;
     displayName?: string;
     consentAccepted: boolean;
-  }): Promise<{ accessToken: string; profile: CitizenProfile }> {
+    ip?: string | null;
+    userAgent?: string | null;
+  }): Promise<CitizenAuthResult> {
     if (!input.consentAccepted) {
       throw new BadRequestException('ต้องยอมรับนโยบายความเป็นส่วนตัวก่อนสมัครสมาชิก');
     }
@@ -172,6 +217,20 @@ export class CitizenAuthService {
     this.logger.log(
       `citizen.register identityId=${saved.id} at=${new Date().toISOString()}`,
     );
+
+    // Mandatory email-OTP: route registration through the OTP challenge (the
+    // 'register' code doubles as email verification — verify sets
+    // `email_verified_at`). NO session is minted until step 2.
+    if (this.otpEnabled() && this.otpOnRegister()) {
+      const challenge = await this.loginOtp.issueChallenge(
+        saved,
+        'register',
+        input.ip ?? null,
+        input.userAgent ?? null,
+      );
+      return { otpRequired: true, ...challenge };
+    }
+
     return { accessToken: this.sign(saved, 'password'), profile: this.toProfile(saved) };
   }
 
@@ -182,7 +241,9 @@ export class CitizenAuthService {
   async login(input: {
     email: string;
     password: string;
-  }): Promise<{ accessToken: string; profile: CitizenProfile }> {
+    ip?: string | null;
+    userAgent?: string | null;
+  }): Promise<CitizenAuthResult> {
     const emailNorm = input.email.trim().toLowerCase();
     const identity = await this.identityRepo.findOne({
       where: { emailHash: hashEmail(emailNorm) },
@@ -201,6 +262,19 @@ export class CitizenAuthService {
     }
     this.assertUsable(identity);
 
+    // Mandatory email-OTP: credentials are correct, but DON'T mint a session —
+    // hand off to the OTP challenge. `last_login_at` is set only on OTP verify
+    // so it reflects a COMPLETED login.
+    if (this.otpEnabled()) {
+      const challenge = await this.loginOtp.issueChallenge(
+        identity,
+        'password',
+        input.ip ?? null,
+        input.userAgent ?? null,
+      );
+      return { otpRequired: true, ...challenge };
+    }
+
     identity.lastLoginAt = new Date();
     const saved = await this.identityRepo.save(identity);
 
@@ -216,7 +290,9 @@ export class CitizenAuthService {
 
   async loginWithGoogle(
     idToken: string,
-  ): Promise<{ accessToken: string; profile: CitizenProfile }> {
+    ip?: string | null,
+    userAgent?: string | null,
+  ): Promise<CitizenAuthResult> {
     if (!process.env.GOOGLE_CLIENT_ID) {
       this.logger.error('citizen.google.login GOOGLE_CLIENT_ID not configured');
       throw new InternalServerErrorException('Google login not configured');
@@ -300,6 +376,20 @@ export class CitizenAuthService {
       }
     }
     this.assertUsable(saved);
+
+    // Mandatory email-OTP for Google logins (CITIZEN_OTP_ENFORCE_GOOGLE).
+    // Google already verified the email, but the product decision is that
+    // EVERY citizen login is 2FA-gated — so route through the OTP challenge
+    // and mint NO session here.
+    if (this.otpEnabled() && this.enforceGoogleOtp()) {
+      const challenge = await this.loginOtp.issueChallenge(
+        saved,
+        'google',
+        ip ?? null,
+        userAgent ?? null,
+      );
+      return { otpRequired: true, ...challenge };
+    }
 
     this.logger.log(
       `citizen.google.login identityId=${saved.id} at=${new Date().toISOString()}`,

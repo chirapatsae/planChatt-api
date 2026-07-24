@@ -12,6 +12,8 @@ import { WorkStatusApprovedGuard } from '../auth/work-status-approved.guard';
 import { EmailModule } from '../util/email/email.module';
 import { CitizenAuthController } from './citizen-auth/citizen-auth.controller';
 import { CitizenAuthService } from './citizen-auth/citizen-auth.service';
+import { CitizenLoginOtpService } from './citizen-auth/citizen-login-otp.service';
+import { CitizenRegistrationOtpService } from './citizen-auth/citizen-registration-otp.service';
 import { CitizenPasswordResetService } from './citizen-auth/citizen-password-reset.service';
 import { Argon2Service } from '../backup-login/argon2.service';
 import { CitizenJwtGuard } from './citizen-auth/citizen-jwt.guard';
@@ -33,6 +35,8 @@ import { CitizenIdentity } from './entities/citizen-identity.entity';
 import { CitizenModerationLog } from './entities/citizen-moderation-log.entity';
 import { CitizenNotification } from './entities/citizen-notification.entity';
 import { CitizenPasswordResetToken } from './entities/citizen-password-reset-token.entity';
+import { CitizenLoginOtp } from './entities/citizen-login-otp.entity';
+import { CitizenRegistrationOtp } from './entities/citizen-registration-otp.entity';
 import { CitizenPollOption } from './entities/citizen-poll-option.entity';
 import { CitizenPollVote } from './entities/citizen-poll-vote.entity';
 import { CitizenHashtag } from './entities/citizen-hashtag.entity';
@@ -129,6 +133,17 @@ import { CitizenRetentionCron } from './citizen-retention.cron';
       // citizen_audit_logs so a PDPA erase never cascades (§17.3). Stores only
       // the token HASH, never plaintext.
       CitizenPasswordResetToken,
+      // Mandatory email-OTP 2FA challenges for the citizen login. Isolated
+      // `citizen_*` namespace; `identity_id` is a PLAIN uuid (NO FK), mirroring
+      // citizen_password_reset_tokens so a PDPA erase never cascades (§17.3).
+      // Stores only the code HASH, never the plaintext 6-digit code.
+      CitizenLoginOtp,
+      // Verify-email-first registration OTP challenges. Isolated `citizen_*`
+      // namespace with NO identity_id / NO FK at all — the identity does not
+      // exist until `register/complete` creates it (§17.3), so there are never
+      // orphan identities. Stores only the code HASH (a random DECOY for the
+      // existing-email anti-enum branch); the email is AES-encrypted.
+      CitizenRegistrationOtp,
       CitizenPost,
       CitizenPostComment,
       CitizenPostCommentReaction,
@@ -237,6 +252,15 @@ import { CitizenRetentionCron } from './citizen-retention.cron';
     // consume). Uses the reset-token repo (forFeature above), Argon2Service,
     // and the sandbox-aware EmailService (EmailModule).
     CitizenPasswordResetService,
+    // Mandatory email-OTP 2FA — issues/verifies/resends the login OTP challenge
+    // and mints the real session on verify. Injected by CitizenAuthService
+    // (one-way; no DI cycle) and the two /login/otp* controller routes.
+    CitizenLoginOtpService,
+    // Verify-email-first 3-step registration (request-otp / verify-otp /
+    // otp/resend / complete). Creates the citizen_identities row ONLY at
+    // complete (no orphan identities). Self-contained — uses the registration-otp
+    // repo (forFeature above), Argon2Service, JwtService, EmailService, DataSource.
+    CitizenRegistrationOtpService,
     // AUTH-REDESIGN (2026-07-08) — Argon2id hashing for citizen
     // email/password register + login. Standalone injectable (no deps),
     // provided directly so CitizenAuthService can inject it without

@@ -15,10 +15,18 @@ import {
   CITIZEN_THROTTLE_TTL_MS,
 } from '../constants/citizen-rate-limits';
 import { CitizenAuthService } from './citizen-auth.service';
+import { CitizenLoginOtpService } from './citizen-login-otp.service';
+import { CitizenRegistrationOtpService } from './citizen-registration-otp.service';
 import { CitizenPasswordResetService } from './citizen-password-reset.service';
 import { CitizenJwtGuard } from './citizen-jwt.guard';
 import { CitizenRegisterDto } from './dto/citizen-register.dto';
+import { CitizenRegisterRequestOtpDto } from './dto/citizen-register-request-otp.dto';
+import { CitizenRegisterVerifyOtpDto } from './dto/citizen-register-verify-otp.dto';
+import { CitizenRegisterResendDto } from './dto/citizen-register-resend.dto';
+import { CitizenRegisterCompleteDto } from './dto/citizen-register-complete.dto';
 import { CitizenLoginDto } from './dto/citizen-login.dto';
+import { CitizenLoginOtpDto } from './dto/citizen-login-otp.dto';
+import { CitizenOtpResendDto } from './dto/citizen-otp-resend.dto';
 import { CitizenGoogleLoginDto } from './dto/citizen-google-login.dto';
 import { CitizenForgotPasswordDto } from './dto/citizen-forgot-password.dto';
 import { CitizenResetPasswordDto } from './dto/citizen-reset-password.dto';
@@ -35,6 +43,8 @@ import { CitizenResetPasswordDto } from './dto/citizen-reset-password.dto';
 export class CitizenAuthController {
   constructor(
     private readonly citizenAuthService: CitizenAuthService,
+    private readonly loginOtpService: CitizenLoginOtpService,
+    private readonly registrationOtpService: CitizenRegistrationOtpService,
     private readonly passwordResetService: CitizenPasswordResetService,
   ) {}
 
@@ -45,6 +55,39 @@ export class CitizenAuthController {
    */
   private assertResetEnabled(): void {
     if (process.env.CITIZEN_PASSWORD_RESET_ENABLED === 'false') {
+      throw new NotFoundException();
+    }
+  }
+
+  /**
+   * Master feature flag for mandatory email-OTP 2FA. ENABLED by default; only
+   * an explicit `CITIZEN_LOGIN_OTP_ENABLED='false'` disables the OTP endpoints
+   * (→ 404, indistinguishable from a route that does not exist). When disabled,
+   * login/register/google mint a session directly (rollback path) so these
+   * step-2 routes carry no challenge to verify.
+   */
+  private assertOtpEnabled(): void {
+    if (process.env.CITIZEN_LOGIN_OTP_ENABLED === 'false') {
+      throw new NotFoundException();
+    }
+  }
+
+  /**
+   * Verify-email-first 3-step registration master flag. ENABLED by default; only
+   * an explicit `CITIZEN_VERIFY_FIRST_REGISTER='false'` disables it. The two
+   * paths are MUTUALLY EXCLUSIVE (mirror-guard):
+   *   - ON  → the 4 `register/*` step routes live; the legacy one-shot
+   *           `POST register` returns 404 (indistinguishable from a missing
+   *           route) so no identity is ever created without a verified email.
+   *   - OFF → the 4 step routes return 404; the legacy `POST register`
+   *           (create-account-then-OTP) works again (rollback path).
+   */
+  private verifyFirstEnabled(): boolean {
+    return process.env.CITIZEN_VERIFY_FIRST_REGISTER !== 'false';
+  }
+
+  private assertVerifyFirstEnabled(): void {
+    if (!this.verifyFirstEnabled()) {
       throw new NotFoundException();
     }
   }
@@ -68,12 +111,23 @@ export class CitizenAuthController {
   })
   @UseGuards(ThrottlerGuard)
   @Post('register')
-  register(@Body() dto: CitizenRegisterDto) {
+  register(@Body() dto: CitizenRegisterDto, @Req() req: Request) {
+    // Mirror-guard: when verify-email-first is ON (default) the legacy one-shot
+    // register is retired → 404 (indistinguishable from a missing route), so an
+    // identity is never created without a verified email. Flip
+    // CITIZEN_VERIFY_FIRST_REGISTER='false' to restore this rollback path (the
+    // old register() + CITIZEN_OTP_ON_REGISTER code is kept intact for exactly
+    // that — it is a NO-OP while verify-first is ON).
+    if (this.verifyFirstEnabled()) {
+      throw new NotFoundException();
+    }
     return this.citizenAuthService.register({
       email: dto.email,
       password: dto.password,
       displayName: dto.displayName,
       consentAccepted: dto.consentAccepted,
+      ip: this.clientIp(req),
+      userAgent: req.headers['user-agent'] ?? null,
     });
   }
 
@@ -82,10 +136,12 @@ export class CitizenAuthController {
   })
   @UseGuards(ThrottlerGuard)
   @Post('login')
-  login(@Body() dto: CitizenLoginDto) {
+  login(@Body() dto: CitizenLoginDto, @Req() req: Request) {
     return this.citizenAuthService.login({
       email: dto.email,
       password: dto.password,
+      ip: this.clientIp(req),
+      userAgent: req.headers['user-agent'] ?? null,
     });
   }
 
@@ -94,8 +150,130 @@ export class CitizenAuthController {
   })
   @UseGuards(ThrottlerGuard)
   @Post('google')
-  google(@Body() dto: CitizenGoogleLoginDto) {
-    return this.citizenAuthService.loginWithGoogle(dto.idToken);
+  google(@Body() dto: CitizenGoogleLoginDto, @Req() req: Request) {
+    return this.citizenAuthService.loginWithGoogle(
+      dto.idToken,
+      this.clientIp(req),
+      req.headers['user-agent'] ?? null,
+    );
+  }
+
+  // ===================================================================
+  //  Mandatory email-OTP 2FA (step 2) — the ONLY place a login session
+  //  is minted. Step 1 (login/register/google) returns an otpChallengeToken.
+  // ===================================================================
+
+  /**
+   * Verify the 6-digit code against the challenge → `{ accessToken, profile }`.
+   * EVERY failure surfaces the SAME generic 401 from the service (never
+   * distinguishes bad-token / expired / consumed / attempt-cap / wrong-code).
+   */
+  @Throttle({
+    default: { limit: CITIZEN_RATE_LIMITS.OTP_VERIFY, ttl: CITIZEN_THROTTLE_TTL_MS },
+  })
+  @UseGuards(ThrottlerGuard)
+  @Post('login/otp')
+  loginOtp(@Body() dto: CitizenLoginOtpDto) {
+    this.assertOtpEnabled();
+    return this.loginOtpService.verify(dto.otpChallengeToken, dto.code);
+  }
+
+  /**
+   * Re-issue a fresh code on the SAME challenge. ALWAYS 200
+   * `{ ok:true, resendCooldownSec }` — silent no-op on cooldown / cap / bad
+   * token (anti-enumeration + anti-mailbomb).
+   */
+  @Throttle({
+    default: { limit: CITIZEN_RATE_LIMITS.OTP_RESEND, ttl: CITIZEN_THROTTLE_TTL_MS },
+  })
+  @UseGuards(ThrottlerGuard)
+  @Post('login/otp/resend')
+  loginOtpResend(
+    @Body() dto: CitizenOtpResendDto,
+  ): Promise<{ ok: true; resendCooldownSec: number }> {
+    this.assertOtpEnabled();
+    return this.loginOtpService.resend(dto.otpChallengeToken);
+  }
+
+  // ===================================================================
+  //  Verify-email-first registration (3 steps). Prove email ownership BEFORE
+  //  any identity is created — the citizen_identities row is minted ONLY at
+  //  `register/complete`. Gated by CITIZEN_VERIFY_FIRST_REGISTER (default ON;
+  //  mutually exclusive with the legacy `POST register`).
+  // ===================================================================
+
+  /**
+   * STEP 1 — email a 6-digit code, return a `challengeToken`. NO identity is
+   * created. ALWAYS uniform (anti-enumeration): a registered email gets an
+   * "account already exists" notice instead of an OTP, but the response shape +
+   * timing are indistinguishable.
+   */
+  @Throttle({
+    default: { limit: CITIZEN_RATE_LIMITS.REGISTER_OTP_REQUEST, ttl: CITIZEN_THROTTLE_TTL_MS },
+  })
+  @UseGuards(ThrottlerGuard)
+  @Post('register/request-otp')
+  registerRequestOtp(
+    @Body() dto: CitizenRegisterRequestOtpDto,
+    @Req() req: Request,
+  ) {
+    this.assertVerifyFirstEnabled();
+    return this.registrationOtpService.requestOtp(
+      dto.email,
+      this.clientIp(req),
+      req.headers['user-agent'] ?? null,
+    );
+  }
+
+  /**
+   * STEP 2 — verify the 6-digit code against the challenge → `registrationToken`.
+   * EVERY failure surfaces the SAME generic 401 from the service (never
+   * distinguishes bad-token / expired / consumed / attempt-cap / wrong-code).
+   */
+  @Throttle({
+    default: { limit: CITIZEN_RATE_LIMITS.OTP_VERIFY, ttl: CITIZEN_THROTTLE_TTL_MS },
+  })
+  @UseGuards(ThrottlerGuard)
+  @Post('register/verify-otp')
+  registerVerifyOtp(@Body() dto: CitizenRegisterVerifyOtpDto) {
+    this.assertVerifyFirstEnabled();
+    return this.registrationOtpService.verifyOtp(dto.challengeToken, dto.code);
+  }
+
+  /**
+   * STEP 2 helper — re-issue a fresh code on the SAME challenge. ALWAYS 200
+   * `{ ok:true, resendCooldownSec }` — silent no-op on cooldown / cap / bad
+   * token (anti-enumeration + anti-mailbomb).
+   */
+  @Throttle({
+    default: { limit: CITIZEN_RATE_LIMITS.OTP_RESEND, ttl: CITIZEN_THROTTLE_TTL_MS },
+  })
+  @UseGuards(ThrottlerGuard)
+  @Post('register/otp/resend')
+  registerOtpResend(
+    @Body() dto: CitizenRegisterResendDto,
+  ): Promise<{ ok: true; resendCooldownSec: number }> {
+    this.assertVerifyFirstEnabled();
+    return this.registrationOtpService.resend(dto.challengeToken);
+  }
+
+  /**
+   * STEP 3 — create the citizen identity (email already verified) + mint the
+   * real session. Requires `consentAccepted===true` (PDPA). EVERY token failure
+   * surfaces the SAME generic error from the service.
+   */
+  @Throttle({
+    default: { limit: CITIZEN_RATE_LIMITS.REGISTER_COMPLETE, ttl: CITIZEN_THROTTLE_TTL_MS },
+  })
+  @UseGuards(ThrottlerGuard)
+  @Post('register/complete')
+  registerComplete(@Body() dto: CitizenRegisterCompleteDto) {
+    this.assertVerifyFirstEnabled();
+    return this.registrationOtpService.complete(dto.registrationToken, {
+      password: dto.password,
+      displayName: dto.displayName,
+      consentAccepted: dto.consentAccepted,
+    });
   }
 
   // ===================================================================

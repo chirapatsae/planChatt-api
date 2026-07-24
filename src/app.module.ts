@@ -162,6 +162,8 @@ import { CitizenEngagementModule } from './citizen-engagement/citizen-engagement
 import { CitizenPlanningModule } from './citizen-planning/citizen-planning.module';
 import { CitizenIdentity } from './citizen-engagement/entities/citizen-identity.entity';
 import { CitizenPasswordResetToken } from './citizen-engagement/entities/citizen-password-reset-token.entity';
+import { CitizenLoginOtp } from './citizen-engagement/entities/citizen-login-otp.entity';
+import { CitizenRegistrationOtp } from './citizen-engagement/entities/citizen-registration-otp.entity';
 import { CitizenPost } from './citizen-engagement/entities/citizen-post.entity';
 import { CitizenPostComment } from './citizen-engagement/entities/citizen-post-comment.entity';
 import { CitizenPostReaction } from './citizen-engagement/entities/citizen-post-reaction.entity';
@@ -675,6 +677,16 @@ import { UnifiedEquipmentModule } from './unified-equipment/unified-equipment.mo
         // PDPA erase never cascades (§17.3). Root registration is required for
         // metadata resolution (Wave 41 footgun — explicit entities[] array).
         CitizenPasswordResetToken,
+        // Mandatory email-OTP 2FA challenges (citizen login). Isolated
+        // `citizen_*` namespace; `identity_id` is a PLAIN uuid (NO FK), so a
+        // PDPA erase never cascades (§17.3). Root registration is required for
+        // metadata resolution (Wave 41 footgun — explicit entities[] array).
+        CitizenLoginOtp,
+        // Verify-email-first registration OTP challenges. Isolated `citizen_*`
+        // namespace; NO identity_id / NO FK at all — the identity is created only
+        // at `register/complete` (§17.3). Root registration is required for
+        // metadata resolution (Wave 41 footgun — explicit entities[] array).
+        CitizenRegistrationOtp,
         CitizenPost,
         CitizenPostComment,
         CitizenPostReaction,

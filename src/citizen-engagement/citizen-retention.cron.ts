@@ -4,6 +4,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { normalize, sep } from 'path';
 import { LessThan, Not, Repository } from 'typeorm';
 
+import { CitizenLoginOtp } from './entities/citizen-login-otp.entity';
+import { CitizenRegistrationOtp } from './entities/citizen-registration-otp.entity';
 import { CitizenPostMedia } from './entities/citizen-post-media.entity';
 import { CitizenStory } from './entities/citizen-story.entity';
 import { CitizenStoryReaction } from './entities/citizen-story-reaction.entity';
@@ -83,6 +85,10 @@ export class CitizenRetentionCron {
     private readonly storyViewRepo: Repository<CitizenStoryView>,
     @InjectRepository(CitizenStoryReaction)
     private readonly storyReactionRepo: Repository<CitizenStoryReaction>,
+    @InjectRepository(CitizenLoginOtp)
+    private readonly loginOtpRepo: Repository<CitizenLoginOtp>,
+    @InjectRepository(CitizenRegistrationOtp)
+    private readonly registrationOtpRepo: Repository<CitizenRegistrationOtp>,
     private readonly storage: CitizenStorageService,
   ) {}
 
@@ -106,12 +112,16 @@ export class CitizenRetentionCron {
       const stories = await this.sweepStories(cutoff, batchSize);
       const media = await this.sweepMedia(cutoff, batchSize);
       const engagement = await this.sweepStoryEngagement(cutoff, batchSize);
+      const loginOtp = await this.sweepLoginOtp(cutoff, batchSize);
+      const registrationOtp = await this.sweepRegistrationOtp(cutoff, batchSize);
 
       const durationMs = Date.now() - startedAt;
       this.logger.log(
         `[citizen-retention] swept stories{${this.fmt(stories)}} ` +
           `media{${this.fmt(media)}} ` +
           `storyEngagement{${this.fmtEngagement(engagement)}} ` +
+          `loginOtp{${this.fmtOtp(loginOtp)}} ` +
+          `registrationOtp{${this.fmtOtp(registrationOtp)}} ` +
           `cutoff=${cutoff.toISOString()} graceHours=${graceHours} ` +
           `batchSize=${batchSize} durationMs=${durationMs}`,
       );
@@ -247,6 +257,78 @@ export class CitizenRetentionCron {
     return stats;
   }
 
+  /**
+   * Login-OTP sweep: HARD-DELETE `citizen_login_otp` rows that are expired OR
+   * consumed beyond the grace window. These are short-lived 2FA challenges with
+   * NO on-disk blob (like the story-engagement tables), so a straight row purge
+   * is sufficient. `consumed_at < cutoff` never matches a NULL (unconsumed) row,
+   * so a live-but-unexpired challenge is never touched.
+   *
+   * Same tick, same grace `cutoff`, same `batchSize` env var, and the SAME
+   * per-row failure discipline as the other sweeps: one bad row never aborts the
+   * batch — the next tick retries whatever remains.
+   */
+  private async sweepLoginOtp(
+    cutoff: Date,
+    batchSize: number,
+  ): Promise<OtpSweepStats> {
+    const rows = await this.loginOtpRepo.find({
+      where: [{ expiresAt: LessThan(cutoff) }, { consumedAt: LessThan(cutoff) }],
+      order: { createdAt: 'ASC' },
+      take: batchSize,
+      select: { id: true },
+    });
+
+    const stats: OtpSweepStats = { scanned: rows.length, deleted: 0, errors: 0 };
+    for (const row of rows) {
+      try {
+        const res = await this.loginOtpRepo.delete({ id: row.id });
+        stats.deleted += res.affected ?? 0;
+      } catch (err) {
+        stats.errors++;
+        this.logger.warn(
+          `[citizen-retention] login-otp ${row.id} purge failed: ${this.msg(err)}`,
+        );
+      }
+    }
+    return stats;
+  }
+
+  /**
+   * Registration-OTP sweep: HARD-DELETE `citizen_registration_otp` rows that are
+   * expired OR consumed beyond the grace window. Clone of `sweepLoginOtp` — these
+   * are short-lived verify-email-first challenges with NO on-disk blob and NO
+   * identity FK, so a straight row purge is sufficient. `consumed_at < cutoff`
+   * never matches a NULL (unconsumed) row, so a live-but-unexpired challenge is
+   * never touched. Same tick / grace `cutoff` / `batchSize` / per-row failure
+   * discipline as the other sweeps.
+   */
+  private async sweepRegistrationOtp(
+    cutoff: Date,
+    batchSize: number,
+  ): Promise<OtpSweepStats> {
+    const rows = await this.registrationOtpRepo.find({
+      where: [{ expiresAt: LessThan(cutoff) }, { consumedAt: LessThan(cutoff) }],
+      order: { createdAt: 'ASC' },
+      take: batchSize,
+      select: { id: true },
+    });
+
+    const stats: OtpSweepStats = { scanned: rows.length, deleted: 0, errors: 0 };
+    for (const row of rows) {
+      try {
+        const res = await this.registrationOtpRepo.delete({ id: row.id });
+        stats.deleted += res.affected ?? 0;
+      } catch (err) {
+        stats.errors++;
+        this.logger.warn(
+          `[citizen-retention] registration-otp ${row.id} purge failed: ${this.msg(err)}`,
+        );
+      }
+    }
+    return stats;
+  }
+
   // ---------------------------------------------------------------------------
   // shared purge engine
   // ---------------------------------------------------------------------------
@@ -379,6 +461,10 @@ export class CitizenRetentionCron {
     );
   }
 
+  private fmtOtp(s: OtpSweepStats): string {
+    return `scanned=${s.scanned} deleted=${s.deleted} errors=${s.errors}`;
+  }
+
   private msg(err: unknown): string {
     return err instanceof Error ? err.message : String(err);
   }
@@ -400,5 +486,12 @@ interface EngagementSweepStats {
   viewsDeleted: number;
   reactionsDeleted: number;
   storiesProcessed: number;
+  errors: number;
+}
+
+/** Login-OTP sweep counters (no on-disk blob → row purge only). */
+interface OtpSweepStats {
+  scanned: number;
+  deleted: number;
   errors: number;
 }

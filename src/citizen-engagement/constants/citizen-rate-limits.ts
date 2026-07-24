@@ -67,4 +67,17 @@ export const CITIZEN_RATE_LIMITS = {
   FORGOT_PASSWORD: 5,
   /** Password-reset CONSUME/verify — bounded token-guessing (hash lookup is cheap). */
   RESET_PASSWORD: 10,
+  /** Login-OTP VERIFY — bounded code-guessing; the per-challenge attempt cap (5)
+   *  is the primary defense, this per-IP throttle blunts distributed guessing. */
+  OTP_VERIFY: 10,
+  /** Login-OTP RESEND — anti-mailbomb; the per-challenge resend cap (3) +
+   *  60s cooldown are the primary defense, this per-IP throttle backs them up. */
+  OTP_RESEND: 5,
+  /** Verify-email-first REGISTER request-otp — anti-enumeration + anti-mailbomb
+   *  (creates NO identity); per-IP, tight. The verify-otp / otp/resend steps
+   *  reuse OTP_VERIFY (10) / OTP_RESEND (5) — same posture as the login OTP. */
+  REGISTER_OTP_REQUEST: 5,
+  /** Verify-email-first REGISTER complete — the account-creation write (Argon2 +
+   *  insert); bound per-IP against churn/abuse. */
+  REGISTER_COMPLETE: 5,
 } as const;

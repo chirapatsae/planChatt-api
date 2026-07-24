@@ -540,6 +540,117 @@ export class BootstrapMigrationsService implements OnApplicationBootstrap {
     },
 
     // ===================================================================
+    // Citizen login OTP — mandatory email-2FA challenges on every citizen
+    // login (password / google / register).
+    //
+    // Short-lived, single-use, hash-only 6-digit codes. Mirrors migration
+    // `1799300000000-CreateCitizenLoginOtp.ts` for dev boxes that run
+    // `synchronize: true` WITHOUT the migration runner, and for prod parity.
+    // All statements idempotent:
+    //   - CREATE TABLE IF NOT EXISTS is a no-op once present.
+    //   - CREATE (UNIQUE) INDEX IF NOT EXISTS is a no-op once present.
+    //
+    // §17.3 isolation preserved — `identity_id` is a PLAIN uuid with NO FK
+    // into `citizen_identities` (mirrors citizen_password_reset_tokens /
+    // citizen_audit_logs), so a PDPA erase never cascades and the retention
+    // sweep purges by expiry/consumption independently. NO FK into any
+    // project / users / work_history / tracking_status table. Only the code
+    // HASH is stored, never plaintext. §17.11 no role exemption — schema-level
+    // integrity only.
+    // ===================================================================
+    {
+      name: 'citizen_login_otp CREATE TABLE (citizen 2FA)',
+      sql: `
+        CREATE TABLE IF NOT EXISTS "citizen_login_otp" (
+          "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
+          "identity_id" uuid NOT NULL,
+          "challenge_id" varchar(64) NOT NULL,
+          "code_hash" varchar(64) NOT NULL,
+          "login_method" varchar(16) NOT NULL,
+          "expires_at" timestamptz NOT NULL,
+          "consumed_at" timestamptz NULL,
+          "attempt_count" int NOT NULL DEFAULT 0,
+          "resend_count" int NOT NULL DEFAULT 0,
+          "request_ip" varchar(45) NULL,
+          "request_user_agent" varchar(256) NULL,
+          "created_at" timestamptz NOT NULL DEFAULT now(),
+          CONSTRAINT "pk_citizen_login_otp" PRIMARY KEY ("id"),
+          CONSTRAINT "uq_citizen_login_otp_challenge_id" UNIQUE ("challenge_id")
+        );
+      `,
+    },
+    {
+      name: 'citizen_login_otp (identity_id, consumed_at) index (citizen 2FA)',
+      sql: `
+        CREATE INDEX IF NOT EXISTS "ix_citizen_login_otp_identity_consumed"
+        ON "citizen_login_otp" ("identity_id", "consumed_at");
+      `,
+    },
+    {
+      name: 'citizen_login_otp expires_at index (citizen 2FA)',
+      sql: `
+        CREATE INDEX IF NOT EXISTS "ix_citizen_login_otp_expires_at"
+        ON "citizen_login_otp" ("expires_at");
+      `,
+    },
+
+    // ===================================================================
+    // Citizen registration OTP — verify-email-first CITIZEN registration.
+    //
+    // Short-lived, single-use, hash-only 6-digit codes emailed BEFORE any
+    // identity exists. Mirrors migration
+    // `1799400000000-CreateCitizenRegistrationOtp.ts` for dev boxes that run
+    // `synchronize: true` WITHOUT the migration runner, and for prod parity.
+    // All statements idempotent:
+    //   - CREATE TABLE IF NOT EXISTS is a no-op once present.
+    //   - CREATE (UNIQUE) INDEX IF NOT EXISTS is a no-op once present.
+    //
+    // §17.3 isolation preserved — there is NO `identity_id` column and NO FK at
+    // all (the identity does not exist until `register/complete` creates it), so
+    // there are never orphan identities and a PDPA erase never cascades here. NO
+    // FK into any project / users / work_history / tracking_status table. Only
+    // the code HASH is stored (a random DECOY hash for the existing-email
+    // anti-enumeration branch), never plaintext; the email is AES-encrypted.
+    // §17.11 no role exemption — schema-level integrity only.
+    // ===================================================================
+    {
+      name: 'citizen_registration_otp CREATE TABLE (verify-email-first register)',
+      sql: `
+        CREATE TABLE IF NOT EXISTS "citizen_registration_otp" (
+          "id" uuid NOT NULL DEFAULT uuid_generate_v4(),
+          "challenge_id" varchar(64) NOT NULL,
+          "email_hash" varchar(64) NOT NULL,
+          "email_enc" varchar(512) NOT NULL,
+          "code_hash" varchar(64) NOT NULL,
+          "expires_at" timestamptz NOT NULL,
+          "verified_at" timestamptz NULL,
+          "consumed_at" timestamptz NULL,
+          "attempt_count" int NOT NULL DEFAULT 0,
+          "resend_count" int NOT NULL DEFAULT 0,
+          "request_ip" varchar(45) NULL,
+          "request_user_agent" varchar(256) NULL,
+          "created_at" timestamptz NOT NULL DEFAULT now(),
+          CONSTRAINT "pk_citizen_registration_otp" PRIMARY KEY ("id"),
+          CONSTRAINT "uq_citizen_registration_otp_challenge_id" UNIQUE ("challenge_id")
+        );
+      `,
+    },
+    {
+      name: 'citizen_registration_otp email_hash index (verify-email-first register)',
+      sql: `
+        CREATE INDEX IF NOT EXISTS "ix_citizen_registration_otp_email_hash"
+        ON "citizen_registration_otp" ("email_hash");
+      `,
+    },
+    {
+      name: 'citizen_registration_otp expires_at index (verify-email-first register)',
+      sql: `
+        CREATE INDEX IF NOT EXISTS "ix_citizen_registration_otp_expires_at"
+        ON "citizen_registration_otp" ("expires_at");
+      `,
+    },
+
+    // ===================================================================
     // Citizen story engagement — VIEW tracking + emoji REACTIONS (FB-6).
     //
     // Story views ("who saw my story") + one-emoji-per-citizen reactions on
