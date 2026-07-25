@@ -647,6 +647,16 @@ export class EquipmentProjectGroupService {
       });
     }
 
+    // Staff review queues opt in to exclude เข้าเล่ม (booked) rows so a
+    // finalized book stops surfacing actionable items (parity with the
+    // project finder's `projectGroup.isBooked = false` filter at
+    // project-groups.service.ts). Per-row flag is authoritative — the
+    // revision-equipment source picker omits this and still sees booked
+    // originals as valid revision sources.
+    if (query.excludeBooked) {
+      qb.andWhere('equipment.isBooked = :notBooked', { notBooked: false });
+    }
+
     if (query.status) {
       qb.andWhere(
         'EXISTS (SELECT 1 FROM tracking_status ts ' +

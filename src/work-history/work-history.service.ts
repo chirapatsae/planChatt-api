@@ -248,7 +248,18 @@ export class WorkHistoryService {
         )
         .leftJoinAndSelect('responsibilities.amphoe', 'respAmphoe')
         .leftJoinAndSelect('governmentAgenciesResponsibilities.governmentAgency', 'respGovernmentAgency')
-        .where('work_history.isCurrent = :isCurrent', { isCurrent: true });
+        .where('work_history.isCurrent = :isCurrent', { isCurrent: true })
+        // Drop rows whose user was soft-deleted (`users.delete_at` set) or
+        // is missing. TypeORM's @DeleteDateColumn already excludes the
+        // soft-deleted user from the leftJoin, so `work_history.user`
+        // comes back NULL — which left an orphaned "ghost" row (tombstone
+        // user "ลบแล้ว") in the admin user list and previously crashed the
+        // <User> table on `wh.user.lastname`. An EXISTS on a non-deleted
+        // user removes the work_history row entirely (independent of the
+        // join's auto soft-delete behavior).
+        .andWhere(
+          'EXISTS (SELECT 1 FROM users u WHERE u.id = work_history.user_id AND u.delete_at IS NULL)',
+        );
       if (workStatusName)
         query.andWhere('workStatus.name = :workStatusName', { workStatusName });
       if (roleName) query.andWhere('role.name = :roleName', { roleName });

@@ -1365,6 +1365,24 @@ export class RevisedEquipmentProjectGroupService {
       // Area responsibility (staff only; admin / super-admin bypass).
       await this.assertStaffAreaResponsibility(manager, workHistory, existing);
 
+      // Book-lock guard — a booked round OR a booked row belongs to a
+      // finalized book and must never be reverted. This mirrors the
+      // RPG/SPG/SEPG rollback gates; staff rollback does NOT gate on
+      // isOpen, only on isBooked. (Previously ABSENT here — a booked
+      // RELPG could be rolled back, corrupting a finalized เล่มแก้ไข/
+      // เปลี่ยนแปลง book.)
+      const dpr = existing.developmentPlanRevision;
+      if (dpr?.isBooked) {
+        throw new BadRequestException(
+          'รอบการแก้ไข/เปลี่ยนแปลงถูกรวมเล่มแล้ว ไม่สามารถดึงกลับได้',
+        );
+      }
+      if (existing.isBooked) {
+        throw new BadRequestException(
+          'รายการครุภัณฑ์นี้ถูกเข้าเล่มแล้ว ไม่สามารถย้อนสถานะได้',
+        );
+      }
+
       // §14 leaf guard — a RELPG that itself has a live RELPG descendant
       // cannot be rolled back (would orphan the descendant). MUST run
       // BEFORE the tracking-history cleanup so a non-leaf row never has its

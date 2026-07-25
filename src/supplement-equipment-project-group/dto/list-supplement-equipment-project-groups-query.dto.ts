@@ -25,6 +25,17 @@ export class ListSupplementEquipmentProjectGroupsQueryDto {
   @Type(() => Boolean)
   mineOnly?: boolean;
 
+  /**
+   * When `true`, excludes rows already เข้าเล่ม (booked): `sepg.isBooked
+   * = true`. Opt-in so the staff review queues hide finalized-supplement
+   * items (parity with the main-plan `excludeBooked` filter) WITHOUT
+   * affecting owner/source-picker reads that legitimately list booked
+   * supplement equipment.
+   */
+  @IsOptional()
+  @Type(() => Boolean)
+  excludeBooked?: boolean;
+
   @IsOptional()
   @Type(() => Number)
   @IsInt()

@@ -737,6 +737,13 @@ export class SupplementEquipmentProjectGroupService {
       });
     }
 
+    // Staff review queues opt in to exclude เข้าเล่ม (booked) rows so a
+    // finalized supplement book stops surfacing actionable items (parity
+    // with the main-plan equipment finder). Per-row flag is authoritative.
+    if (query.excludeBooked) {
+      qb.andWhere('sepg.isBooked = :notBooked', { notBooked: false });
+    }
+
     if (query.status) {
       qb.andWhere(
         'EXISTS (SELECT 1 FROM tracking_status ts ' +

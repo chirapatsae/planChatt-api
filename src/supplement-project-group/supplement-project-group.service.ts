@@ -784,6 +784,13 @@ export class SupplementProjectGroupService {
       // Defensive — exclude rows with no responsibleAgency.
       qb.andWhere('responsibleAgency.id IS NOT NULL');
 
+      // Exclude เข้าเล่ม (booked) rows — once a supplement is finalized
+      // its projects are locked and must not surface in the staff review
+      // queue with actionable rollback/approve controls (parity with the
+      // main-plan `projectGroup.isBooked = false` staff filter). This is
+      // the staff queue only; owner/source-picker reads are unaffected.
+      qb.andWhere('spg.isBooked = :notBooked', { notBooked: false });
+
       // Optional scope filters.
       if (opts.developmentPlanId) {
         qb.andWhere('developmentPlan.id = :developmentPlanId', {

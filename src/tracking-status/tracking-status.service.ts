@@ -3665,6 +3665,13 @@ export class TrackingStatusService {
         const dp = projectGroup.developmentPlan;
         if (!dp?.isLatest) throw new BadRequestException('แผนพัฒนาฯ ไม่ใช่แผนปัจจุบัน');
         if (dp?.isBooked) throw new BadRequestException('แผนพัฒนาฯ ถูกรวมเล่มแล้ว');
+        // 6.0 Per-row book-lock guard (authoritative). Mirrors the EPG
+        //     rollback guard: `dp.isBooked` is a coarse plan-level proxy
+        //     that can drift from the row's own flag. A booked project
+        //     belongs to a finalized book and must never be reverted.
+        if (projectGroup.isBooked) {
+          throw new BadRequestException('โครงการนี้ถูกเข้าเล่มแล้ว ไม่สามารถย้อนสถานะได้');
+        }
 
         // 6.5 CLAUDE.md §14 — Version Lineage Immutability.
         // A main-plan ProjectGroup that already has a non-deleted
@@ -3808,6 +3815,11 @@ export class TrackingStatusService {
         }
         if (dpr?.isBooked) {
           throw new BadRequestException('รอบการแก้ไข/เปลี่ยนแปลงถูกรวมเล่มแล้ว ไม่สามารถดึงกลับได้');
+        }
+        // Per-row book-lock guard (authoritative, defense-in-depth vs
+        // round/row flag drift). A booked RPG belongs to a finalized book.
+        if (revisionProjectGroup.isBooked) {
+          throw new BadRequestException('โครงการนี้ถูกเข้าเล่มแล้ว ไม่สามารถย้อนสถานะได้');
         }
 
         // 6.5 CLAUDE.md §14 — Version Lineage Immutability.
@@ -4668,6 +4680,14 @@ export class TrackingStatusService {
             'รอบเพิ่มเติมถูกรวมเล่มแล้ว ไม่สามารถดึงกลับได้',
           );
         }
+        // Per-row book-lock guard (authoritative, defense-in-depth vs
+        // round/row flag drift). A booked SPG belongs to a finalized
+        // supplement book and must never be reverted.
+        if (spg.isBooked) {
+          throw new BadRequestException(
+            'โครงการนี้ถูกเข้าเล่มแล้ว ไม่สามารถย้อนสถานะได้',
+          );
+        }
 
         // 6.5 CLAUDE.md §14 — Version Lineage Immutability (Wave SUPP-4).
         // An SPG with a non-deleted RPG descendant
@@ -5446,6 +5466,18 @@ export class TrackingStatusService {
         if (dp?.isBooked) {
           throw new BadRequestException('แผนพัฒนาฯ ถูกรวมเล่มแล้ว');
         }
+        // 6.1 Per-row book-lock guard (authoritative). The plan-level
+        //     `dp.isBooked` above is a coarse proxy that only holds while
+        //     the plan flag and the per-row flag agree; the unbook path
+        //     (development-plan.service.ts rollbackBook) resets projects
+        //     but NOT equipment, so an EPG can carry isBooked=true while
+        //     dp.isBooked=false. A booked item belongs to a finalized
+        //     book and must never be reverted — check the row's own flag.
+        if (equipment.isBooked) {
+          throw new BadRequestException(
+            'รายการครุภัณฑ์นี้ถูกเข้าเล่มแล้ว ไม่สามารถย้อนสถานะได้',
+          );
+        }
 
         // 6.5 §14 descendant guard — VACUOUS for equipment (R3=NO). No
         //     `prev_project_id` edge can point at an equipment row, so
@@ -5931,6 +5963,14 @@ export class TrackingStatusService {
         if (dps.isBooked) {
           throw new BadRequestException(
             'รอบเพิ่มเติมถูกรวมเล่มแล้ว ไม่สามารถดึงกลับได้',
+          );
+        }
+        // Per-row book-lock guard (authoritative, defense-in-depth vs
+        // round/row flag drift). A booked SEPG belongs to a finalized
+        // supplement book and must never be reverted.
+        if (sepg.isBooked) {
+          throw new BadRequestException(
+            'รายการครุภัณฑ์นี้ถูกเข้าเล่มแล้ว ไม่สามารถย้อนสถานะได้',
           );
         }
 
