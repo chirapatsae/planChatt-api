@@ -253,7 +253,7 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
         ? this.loadRevised(planId, revisedBudget, includeHistorical, filters)
         : Promise.resolve<RevisedRawRow[]>([]),
       supplementBudget > 0
-        ? this.loadSupplement(planId, supplementBudget, filters)
+        ? this.loadSupplement(planId, supplementBudget, includeHistorical, filters)
         : Promise.resolve<SupplementRawRow[]>([]),
     ]);
 
@@ -391,7 +391,7 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
         ? this.countRevisedByStatus(planId, includeHistorical, filters)
         : Promise.resolve<Array<{ statusname: string; cnt: string }>>([]),
       scopeSet.has('supplement')
-        ? this.countSupplementByStatus(planId, filters)
+        ? this.countSupplementByStatus(planId, includeHistorical, filters)
         : Promise.resolve<Array<{ statusname: string; cnt: string }>>([]),
     ]);
 
@@ -531,6 +531,7 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
   /** COUNT(*) GROUP BY status.name for SupplementProjectGroup. */
   private countSupplementByStatus(
     planId: string | undefined,
+    includeHistorical: boolean,
     filters: UnifiedProjectQuery['filters'],
   ): Promise<Array<{ statusname: string; cnt: string }>> {
     const visible = [...EXEC_VISIBLE_STATUSES];
@@ -564,9 +565,20 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
       qb.andWhere('dp.id = :planId', { planId });
     }
 
-    // SPG is not part of the §14.1 PG / RPG revision chain so head-of-
-    // lineage filtering is intentionally skipped (see §14.2 + the
-    // `includeHistoricalVersions` doc comment in the interface).
+    // §14.2 head-of-lineage — mirror `loadSupplement`. Since Wave SUPP-4 an
+    // SPG can be revised (RevisedProjectGroup with `prev_project_type =
+    // 'supplement'`), which makes the SPG a superseded ancestor. Drop it so
+    // the count matches the head-deduped list path (else a revised
+    // supplement item is double-counted: once here + once under `revised`).
+    if (!includeHistorical) {
+      qb.leftJoin(
+        RevisedProjectGroup,
+        'spg_desc',
+        'spg_desc.prev_project_id = spg.id ' +
+          "AND spg_desc.prev_project_type = 'supplement' " +
+          'AND spg_desc.deleted_at IS NULL',
+      ).andWhere('spg_desc.id IS NULL');
+    }
 
     this.applyFilters(qb, filters, 'supplement');
 
@@ -1869,6 +1881,7 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
   private loadSupplement(
     planId: string | undefined,
     limit: number,
+    includeHistorical: boolean,
     filters: UnifiedProjectQuery['filters'],
   ): Promise<SupplementRawRow[]> {
     const qb: SelectQueryBuilder<SupplementProjectGroup> = this.dataSource
@@ -1903,6 +1916,25 @@ export class UnifiedProjectAggregator implements IUnifiedProjectAggregator {
 
     if (planId) {
       qb.andWhere('dp.id = :planId', { planId });
+    }
+
+    // §14.2 head-of-lineage filter. Since Wave SUPP-4 an SPG IS a lineage
+    // root: a supplement project may be revised into a DPR context, which
+    // creates a RevisedProjectGroup carrying `prev_project_type =
+    // 'supplement'` + `prev_project_id = spg.id`. When such a live RPG
+    // descendant exists the SPG is NO LONGER head-of-lineage and MUST be
+    // dropped — otherwise the row appears twice (once under เพิ่มเติม here,
+    // once under its แก้ไข/เปลี่ยนแปลง round via `loadRevised`). Mirrors the
+    // PG/RPG anti-joins above; keyed on the RevisedProjectGroup entity so no
+    // raw table literal is introduced (wave54-no-raw-sql.spec.ts).
+    if (!includeHistorical) {
+      qb.leftJoin(
+        RevisedProjectGroup,
+        'spg_desc',
+        'spg_desc.prev_project_id = spg.id ' +
+          "AND spg_desc.prev_project_type = 'supplement' " +
+          'AND spg_desc.deleted_at IS NULL',
+      ).andWhere('spg_desc.id IS NULL');
     }
 
     // Wave 55 W55-BE-06 — plumb DSL `filters` into the aggregator.

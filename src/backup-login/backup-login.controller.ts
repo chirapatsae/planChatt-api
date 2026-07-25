@@ -16,7 +16,7 @@ import { JwtAuthGuard } from 'src/auth/auth.guard';
 import { RolesGuard } from 'src/auth/roles.guard';
 import { Roles } from 'src/auth/roles.decorator';
 import { WorkStatusApprovedGuard } from 'src/auth/work-status-approved.guard';
-import { SUPER_ADMIN_ONLY, STAFF_LEAD, ADMIN_OR_ABOVE } from 'src/auth/role-groups';
+import { SUPER_ADMIN_ONLY, ADMIN_OR_ABOVE } from 'src/auth/role-groups';
 import { CreateMemberDto } from './dto/create-member.dto';
 import { BackupLoginService } from './backup-login.service';
 import { BackupLoginInitDto } from './dto/backup-login-init.dto';
@@ -352,10 +352,13 @@ export class BackupLoginController {
     WorkStatusApprovedGuard,
     RequirePasswordChangeNotPendingGuard,
   )
-  // Wave 2026-05-27 — widened from SUPER_ADMIN_ONLY → STAFF_LEAD per
-  // user direction. Staff handle daily user-support credential ops;
-  // only kill-switch (GET+PATCH below) stays SUPER_ADMIN_ONLY.
-  @Roles(...STAFF_LEAD)
+  // 2026-07-25 — REVERTED to SUPER_ADMIN_ONLY per user ("ตัดด้วย"): the
+  // whole credential console (issue / reset / revoke / unfreeze / totp-reset
+  // + audit listing/stats) is super-admin-only again, matching the FE route +
+  // page guard lockdown. Reverts the 2026-05-27 STAFF_LEAD widening. Member
+  // creation (`POST members`, ADMIN_OR_ABOVE) and self-service credential
+  // endpoints are intentionally left as-is.
+  @Roles(...SUPER_ADMIN_ONLY)
   async adminIssue(
     @Body() dto: IssueCredentialDto,
     @Req() req: Request & { user: { userId: string } },
@@ -370,7 +373,7 @@ export class BackupLoginController {
     WorkStatusApprovedGuard,
     RequirePasswordChangeNotPendingGuard,
   )
-  @Roles(...STAFF_LEAD)
+  @Roles(...SUPER_ADMIN_ONLY)
   async adminReset(
     @Param('userId', new ParseUUIDPipe()) targetUserId: string,
     @Body() dto: ResetCredentialDto,
@@ -390,7 +393,7 @@ export class BackupLoginController {
     WorkStatusApprovedGuard,
     RequirePasswordChangeNotPendingGuard,
   )
-  @Roles(...STAFF_LEAD)
+  @Roles(...SUPER_ADMIN_ONLY)
   async adminRevoke(
     @Param('userId', new ParseUUIDPipe()) targetUserId: string,
     @Body() dto: RevokeCredentialDto,
@@ -411,7 +414,7 @@ export class BackupLoginController {
     WorkStatusApprovedGuard,
     RequirePasswordChangeNotPendingGuard,
   )
-  @Roles(...STAFF_LEAD)
+  @Roles(...SUPER_ADMIN_ONLY)
   async adminUnfreeze(
     @Param('userId', new ParseUUIDPipe()) targetUserId: string,
     @Req() req: Request & { user: { userId: string } },
@@ -427,7 +430,7 @@ export class BackupLoginController {
     WorkStatusApprovedGuard,
     RequirePasswordChangeNotPendingGuard,
   )
-  @Roles(...STAFF_LEAD)
+  @Roles(...SUPER_ADMIN_ONLY)
   async adminResetTotp(
     @Param('userId', new ParseUUIDPipe()) targetUserId: string,
     @Req() req: Request & { user: { userId: string } },
@@ -483,7 +486,7 @@ export class BackupLoginController {
     WorkStatusApprovedGuard,
     RequirePasswordChangeNotPendingGuard,
   )
-  @Roles(...STAFF_LEAD)
+  @Roles(...SUPER_ADMIN_ONLY)
   async adminAuditLogs(@Query() query: ListAttemptsDto) {
     return this.audit.list({
       userId: query.userId,
@@ -509,7 +512,7 @@ export class BackupLoginController {
     WorkStatusApprovedGuard,
     RequirePasswordChangeNotPendingGuard,
   )
-  @Roles(...STAFF_LEAD)
+  @Roles(...SUPER_ADMIN_ONLY)
   async adminAuditStats(@Query() query: AttemptStatsQueryDto) {
     return this.audit.computeStats(query.days ?? 30);
   }

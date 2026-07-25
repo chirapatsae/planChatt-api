@@ -392,8 +392,9 @@ export class UnifiedEquipmentService {
     const relpgAgencyIds = areaScope ? areaScope.agencyIds : null;
     // SEPG (ครุภัณฑ์ เล่มเพิ่มเติม) is agency-scoped for staff, matching
     // `StaffHomeService.aggregateSupplementLane` (both SPG and SEPG fan
-    // out by `responsible_agency_id`). §14 lineage is vacuous in v1
-    // per §5.3 — no descendants, no HEAD anti-join needed.
+    // out by `responsible_agency_id`). A SEPG CAN now be revised (RELPG
+    // with `prev_project_type = 'supplement_equipment'`), so the HEAD
+    // anti-join IS applied inside `loadSepgHeadRows` (see there).
     const sepgAgencyIds = areaScope ? areaScope.agencyIds : null;
     const [epgRows, relpgRows, sepgRows] = await Promise.all([
       this.loadEpgHeadRows(
@@ -412,6 +413,7 @@ export class UnifiedEquipmentService {
         developmentPlanId,
         ownerWorkHistoryId,
         sepgAgencyIds,
+        includeSuperseded,
       ),
     ]);
 
@@ -604,9 +606,14 @@ export class UnifiedEquipmentService {
 
   // ──────────────────────────────────────────────────────────────────
   //  SEPG head rows — ครุภัณฑ์ ผ.03 under DevelopmentPlanSupplement.
-  //  §14 lineage is vacuous in v1 per §5.3 (no revised-supplement-
-  //  equipment sub-type) so no HEAD anti-join is needed. §10 plan-scope
-  //  resolves via the parent supplement's developmentPlan.
+  //  §14 lineage is NO LONGER vacuous: a SEPG can be revised into a DPR
+  //  context, creating a RevisedEquipmentProjectGroup with
+  //  `prev_project_type = 'supplement_equipment'` (see
+  //  `PrevEquipmentProjectType`). When such a live RELPG descendant
+  //  exists the SEPG is superseded and MUST be dropped from the head
+  //  view — else it appears twice (once under เพิ่มเติมครุภัณฑ์ here, once
+  //  under its แก้ไข/เปลี่ยนแปลง round via `loadRelpgHeadRows`). §10
+  //  plan-scope resolves via the parent supplement's developmentPlan.
   // ──────────────────────────────────────────────────────────────────
 
   private async loadSepgHeadRows(
@@ -619,6 +626,9 @@ export class UnifiedEquipmentService {
      * bypass. EMPTY array → fail-closed `1 = 0` no-match.
      */
     agencyIds: string[] | null = null,
+    // Wave AI-EXEC-CHAT-DOCUMENT-EQUIPMENT-LISTING — `true` skips the §14.2
+    // HEAD anti-join (document-level view), matching the EPG/RELPG loaders.
+    includeSuperseded = false,
   ): Promise<UnifiedEquipmentRow[]> {
     const qb = this.sepgRepo
       .createQueryBuilder('sepg')
@@ -644,6 +654,20 @@ export class UnifiedEquipmentService {
       .leftJoinAndSelect('sepg.trackingStatus', 'trackingStatus')
       .leftJoinAndSelect('trackingStatus.statusId', 'status')
       .where('sepg.deletedAt IS NULL');
+
+    if (!includeSuperseded) {
+      // §14.2 HEAD anti-join — drop SEPGs that a live RELPG has revised
+      // (prev_project_type = 'supplement_equipment'). Mirrors the EPG /
+      // RELPG anti-joins; keyed on the RevisedEquipmentProjectGroup entity
+      // so no raw table literal is introduced.
+      qb.leftJoin(
+        RevisedEquipmentProjectGroup,
+        'sepg_desc',
+        `sepg_desc.prev_project_id = sepg.id ` +
+          `AND sepg_desc.prev_project_type = 'supplement_equipment' ` +
+          `AND sepg_desc.deleted_at IS NULL`,
+      ).andWhere('sepg_desc.id IS NULL');
+    }
 
     if (developmentPlanId) {
       qb.andWhere('developmentPlan.id = :planId', {

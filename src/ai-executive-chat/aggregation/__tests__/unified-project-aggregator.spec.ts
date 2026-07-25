@@ -571,10 +571,12 @@ describe('BE-W54-02 / UnifiedProjectAggregator', () => {
         ).toBe(true);
       });
 
-      it('does NOT attach any lineage anti-join on supplement scope', async () => {
-        // SPG is NOT part of the PG/RPG revision chain (§14.1) — the
-        // loadSupplement reader stays untouched and must emit no
-        // lineage left-join.
+      it('attaches an SPG anti-join on supplement scope by default', async () => {
+        // Since Wave SUPP-4 an SPG IS a lineage root (§14.1): a supplement
+        // project can be revised into a DPR context, creating a
+        // RevisedProjectGroup with `prev_project_type = 'supplement'`. The
+        // loadSupplement reader MUST drop such superseded SPGs (else the row
+        // shows twice — under เพิ่มเติม + under its แก้ไข round).
         const { dataSource, calls } = makeDataSource({
           rowsByRepo: { SupplementProjectGroup: [row('spg-1')] },
         });
@@ -583,9 +585,28 @@ describe('BE-W54-02 / UnifiedProjectAggregator', () => {
           (c) => c.repositoryName === 'SupplementProjectGroup',
         );
         expect(supCall).toBeDefined();
+        // Anti-join target is the RevisedProjectGroup entity class.
+        expect(supCall!.leftJoinTargets).toContain('RevisedProjectGroup');
+        expect(
+          supCall!.whereChain.some((w) => /spg_desc\.id IS NULL/.test(w)),
+        ).toBe(true);
+      });
+
+      it('SHORT-CIRCUITS the anti-join when includeHistoricalVersions=true (supplement)', async () => {
+        const { dataSource, calls } = makeDataSource({
+          rowsByRepo: { SupplementProjectGroup: [row('spg-1')] },
+        });
+        await svc(dataSource).listUnifiedProjects({
+          scope: ['supplement'],
+          includeHistoricalVersions: true,
+        });
+        const supCall = calls.find(
+          (c) => c.repositoryName === 'SupplementProjectGroup',
+        );
+        expect(supCall).toBeDefined();
         expect(supCall!.leftJoinTargets).not.toContain('RevisedProjectGroup');
         expect(
-          supCall!.whereChain.some((w) => /_desc\.id IS NULL/.test(w)),
+          supCall!.whereChain.some((w) => /spg_desc\.id IS NULL/.test(w)),
         ).toBe(false);
       });
 
