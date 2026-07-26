@@ -65,6 +65,8 @@ function makeRow(
       firstName: 'สมชาย',
       lastName: 'ทดสอบ',
       profileImageUrl: null,
+      email: null,
+      joinDate: null,
     },
     createdByWorkHistoryId: 'wh-1',
     responsibleAgency: { id: '1', name: 'สำนักปลัด' },

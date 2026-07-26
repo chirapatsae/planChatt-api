@@ -104,13 +104,18 @@ export interface UnifiedEquipmentBudget {
   quantity: number;
 }
 
-/** Creator-side display metadata. PII (email/phone/citizenId) masked. */
+/** Creator-side display metadata. Raw PII (phone/citizenId/raw email) never
+ *  surfaced — `email` is MASKED (`t***@example.com`). */
 export interface UnifiedEquipmentCreator {
   workHistoryId: string;
   firstName: string | null;
   lastName: string | null;
   /** Public avatar URL (not contact PII) — lets the owner table render a photo. */
   profileImageUrl: string | null;
+  /** MASKED creator email (never raw) — powers the avatar hover card. */
+  email: string | null;
+  /** Creator's account-creation date (ISO) — "Member Since". Not PII. */
+  joinDate: string | null;
 }
 
 /**

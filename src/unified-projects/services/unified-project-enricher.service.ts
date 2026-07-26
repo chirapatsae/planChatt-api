@@ -63,6 +63,8 @@ import { RevisedProjectGroup } from 'src/revised-project-group/entities/revised-
 import { SupplementProjectGroup } from 'src/supplement-project-group/entities/supplement-project-group.entity';
 import { LineageLockService } from 'src/common/lineage-lock/lineage-lock.service';
 import { mapToExecutiveStatusGroup } from 'src/ai-executive-chat/aggregation/constants/executive-status-groups';
+import { UsersService } from 'src/users/users.service';
+import { maskCreatedByUserOnProjects } from 'src/utils/mask-project-creator.util';
 import type { UnifiedProject } from 'src/ai-executive-chat/aggregation/types';
 
 import type {
@@ -120,6 +122,7 @@ export class UnifiedProjectEnricherService {
     @InjectDataSource()
     private readonly dataSource: DataSource,
     private readonly lineageLock: LineageLockService,
+    private readonly usersService: UsersService,
   ) { }
 
   /**
@@ -159,13 +162,11 @@ export class UnifiedProjectEnricherService {
     // checks fan out as 2 more queries (PG + RPG batch); SPG is `false`
     // by definition until Wave SUPP-4 lands.
     const manager = this.dataSource.manager;
-    // PII discipline (§17): we load `createdBy` as a relation but
-    // project ONLY `createdBy.id` into the enriched envelope. The
-    // relation's other columns (firstName / lastName / citizenId / etc.
-    // — all on the related `User`, not on `WorkHistory` itself) are
-    // not transitively loaded because we do not request `createdBy.user`
-    // in `relations`. `WorkHistory` itself carries only role / amphoe /
-    // LAO id scalars, no person-level fields.
+    // We load `createdBy.user` so the enriched envelope can surface the
+    // creator's name / avatar / org context and a MASKED email (parity
+    // with the `/project` card). Raw contact PII never leaves the service:
+    // `maskCreatedByUserOnProjects` (below) decrypts then masks email and
+    // nulls phone / citizenId in place before any mapper reads the user.
     const [pgRows, rpgRows, spgRows] = await Promise.all([
       mainIds.length > 0
         ? manager.find(ProjectGroup, {
@@ -227,6 +228,18 @@ export class UnifiedProjectEnricherService {
           },
         })
         : Promise.resolve([] as SupplementProjectGroup[]),
+    ]);
+
+    // Decrypt-then-mask the creator `User` on every loaded row IN PLACE
+    // before `mapCreator` reads `user.email`. Reuses the same shared
+    // pipeline as the `/project` list (`decryptUserPii` → `maskEmail`,
+    // WeakSet-deduped, idempotent) so the enriched envelope surfaces a
+    // MASKED email and NEVER a raw one; phone / citizenId are nulled.
+    // Applies to both staff-list and executive-list (shared enricher).
+    await maskCreatedByUserOnProjects(this.usersService, [
+      ...pgRows,
+      ...rpgRows,
+      ...spgRows,
     ]);
 
     // Lineage-lock fan-out. The current `LineageLockService` API takes
@@ -538,6 +551,11 @@ function mapCreator(wh: {
     firstname?: string | null;
     lastname?: string | null;
     profileImageUrl?: string | null;
+    // Already decrypt-then-MASKED in place by `maskCreatedByUserOnProjects`
+    // before this mapper runs — never a raw address.
+    email?: string | null;
+    // Account-creation date — powers "Member Since". Not PII.
+    createAt?: Date | string | null;
   } | null;
   amphoe?: { id: string; name: string } | null;
   localAdministrativeOrganization?: { id: string; name: string } | null;
@@ -554,6 +572,10 @@ function mapCreator(wh: {
       }
       : null,
     profileImageUrl: absoluteProfileImage(wh.user?.profileImageUrl),
+    email: wh.user?.email ?? null,
+    joinDate: wh.user?.createAt
+      ? new Date(wh.user.createAt as string | Date).toISOString()
+      : null,
   };
 }
 

@@ -8,6 +8,7 @@ import { WorkHistory } from 'src/work-history/entities/work-history.entity';
 
 import { WorkStatusApprovedGuard } from 'src/auth/work-status-approved.guard';
 import { RolesGuard } from 'src/auth/roles.guard';
+import { UsersModule } from 'src/users/users.module';
 
 import { UnifiedEquipmentController } from './unified-equipment.controller';
 import { UnifiedEquipmentService } from './unified-equipment.service';
@@ -47,6 +48,10 @@ import { UnifiedEquipmentService } from './unified-equipment.service';
       SupplementEquipmentProjectGroup,
       WorkHistory,
     ]),
+    // Masked-creator email on the browse card — the service injects
+    // `UsersService` to decrypt-then-mask before projection. `UsersModule`
+    // exports `UsersService`.
+    UsersModule,
   ],
   controllers: [UnifiedEquipmentController],
   providers: [

@@ -109,12 +109,19 @@ export interface EnrichedBudget {
  *   `/project` list and the unified-equipment browse already show. This
  *   is a display avatar, not contact PII; consistent with those
  *   surfaces (added 2026-07-16).
+ * - `email` — MASKED creator email (e.g. `te****@example.com`), surfaced
+ *   so the browse-table avatar hover card matches `/project` (which also
+ *   shows a masked creator email). Produced by the same decrypt-then-mask
+ *   pipeline (`maskCreatedByUserOnProjects` → `maskEmail`) used on the
+ *   `/project` list, so NO raw email ever leaves the service. Phone /
+ *   citizenId stay forbidden. Added 2026-07-26 per owner direction to
+ *   surface on BOTH staff-list and executive-list.
  *
- * Strict contact PII (`citizenId`, `email`, `phone`) is NOT surfaced —
- * those remain forbidden per §17 PII discipline. The §17 intent is to
- * prevent person-level identifiers from leaking into AI surfaces;
- * user-facing dashboards have always shown name + org + avatar and this
- * enriched envelope preserves that contract.
+ * Strict contact PII (`citizenId`, `phone`, and RAW `email`) is NEVER
+ * surfaced — only a masked email is exposed, matching `/project`. The §17
+ * intent is to prevent person-level identifiers from leaking into AI
+ * surfaces; a masked email preserves that contract while giving the
+ * user-facing dashboards parity with the long-standing `/project` card.
  */
 export interface EnrichedCreator {
   workHistoryId: string;
@@ -124,6 +131,10 @@ export interface EnrichedCreator {
   localAdministrativeOrganization: { id: string; name: string } | null;
   /** Public avatar URL (absolute) — powers the browse-table creator avatar. */
   profileImageUrl: string | null;
+  /** MASKED creator email (never raw) — matches the `/project` hover card. */
+  email: string | null;
+  /** Creator's account-creation date (ISO) — powers the "Member Since" line. Not PII. */
+  joinDate: string | null;
 }
 
 /**

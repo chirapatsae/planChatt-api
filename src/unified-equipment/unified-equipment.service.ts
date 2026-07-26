@@ -10,6 +10,8 @@ import {
   EXECUTIVE_EXCLUDED_STATUS_NAMES,
   mapToExecutiveStatusGroup,
 } from 'src/ai-executive-chat/aggregation/constants/executive-status-groups';
+import { UsersService } from 'src/users/users.service';
+import { maskCreatedByUserOnProjects } from 'src/utils/mask-project-creator.util';
 
 import { ListUnifiedEquipmentQueryDto } from './dto/list-unified-equipment-query.dto';
 import type {
@@ -63,6 +65,7 @@ export class UnifiedEquipmentService {
     private readonly sepgRepo: Repository<SupplementEquipmentProjectGroup>,
     @InjectRepository(WorkHistory)
     private readonly workHistoryRepo: Repository<WorkHistory>,
+    private readonly usersService: UsersService,
   ) {}
 
   /**
@@ -419,10 +422,10 @@ export class UnifiedEquipmentService {
 
     const merged = [...epgRows, ...relpgRows, ...sepgRows];
     // §17.3 PII — the projected wire shape (`UnifiedEquipmentCreator`)
-    // surfaces ONLY firstName/lastName. No email / phone / citizenId is
-    // ever projected, so there is no contact PII on the response and no
-    // decrypt-then-mask step is required (unlike the EPG/RELPG detail
-    // read paths, which DO surface masked email for the staff table).
+    // surfaces name + avatar + MASKED email + join date. The decrypt-then-
+    // mask step runs per load method (`maskCreatedByUserOnProjects`) BEFORE
+    // projection, so raw email / phone / citizenId never leave the service
+    // — parity with the project browse card.
 
     // Newest-first by the row's own createdAt (mirrors EPG/RELPG findAll
     // `ORDER BY createdAt DESC`).
@@ -507,6 +510,9 @@ export class UnifiedEquipmentService {
     }
 
     const rows = await qb.getMany();
+    // Decrypt-then-mask the creator email in place before projection (same
+    // pipeline as the project browse card). Raw email never leaves here.
+    await maskCreatedByUserOnProjects(this.usersService, rows as any[]);
     return rows.map((epg) => this.projectEpg(epg));
   }
 
@@ -601,6 +607,7 @@ export class UnifiedEquipmentService {
     }
 
     const rows = await qb.getMany();
+    await maskCreatedByUserOnProjects(this.usersService, rows as any[]);
     return rows.map((relpg) => this.projectRelpg(relpg));
   }
 
@@ -689,6 +696,7 @@ export class UnifiedEquipmentService {
     }
 
     const rows = await qb.getMany();
+    await maskCreatedByUserOnProjects(this.usersService, rows as any[]);
     return rows.map((sepg) => this.projectSepg(sepg));
   }
 
@@ -748,6 +756,8 @@ export class UnifiedEquipmentService {
             firstName: this.creatorFirstName(epg.createdBy),
             lastName: this.creatorLastName(epg.createdBy),
             profileImageUrl: this.creatorProfileImage(epg.createdBy),
+            email: this.creatorEmail(epg.createdBy),
+            joinDate: this.creatorJoinDate(epg.createdBy),
           }
         : null,
       createdByWorkHistoryId: epg.createdBy?.id ?? null,
@@ -832,6 +842,8 @@ export class UnifiedEquipmentService {
             firstName: this.creatorFirstName(relpg.createdBy),
             lastName: this.creatorLastName(relpg.createdBy),
             profileImageUrl: this.creatorProfileImage(relpg.createdBy),
+            email: this.creatorEmail(relpg.createdBy),
+            joinDate: this.creatorJoinDate(relpg.createdBy),
           }
         : null,
       createdByWorkHistoryId: relpg.createdBy?.id ?? null,
@@ -911,6 +923,8 @@ export class UnifiedEquipmentService {
             firstName: this.creatorFirstName(sepg.createdBy),
             lastName: this.creatorLastName(sepg.createdBy),
             profileImageUrl: this.creatorProfileImage(sepg.createdBy),
+            email: this.creatorEmail(sepg.createdBy),
+            joinDate: this.creatorJoinDate(sepg.createdBy),
           }
         : null,
       createdByWorkHistoryId: sepg.createdBy?.id ?? null,
@@ -1002,6 +1016,23 @@ export class UnifiedEquipmentService {
     if (/^https?:\/\//i.test(raw)) return raw;
     const base = (process.env.APP_URL ?? '').replace(/\/+$/, '');
     return base ? `${base}${raw.startsWith('/') ? '' : '/'}${raw}` : raw;
+  }
+
+  // MASKED email only — the WorkHistory.user has already been decrypted +
+  // masked in place by `maskCreatedByUserOnProjects` before projection, so
+  // this reads the masked value (`t***@example.com`), NEVER a raw address.
+  // Mirrors the project browse card.
+  private creatorEmail(wh: WorkHistory): string | null {
+    const u = (wh as unknown as { user?: { email?: string | null } }).user;
+    return u?.email ?? null;
+  }
+
+  // Creator's account-creation date (ISO) — powers the "Member Since" line
+  // in the avatar hover card. Not contact PII.
+  private creatorJoinDate(wh: WorkHistory): string | null {
+    const u = (wh as unknown as { user?: { createAt?: Date | string | null } })
+      .user;
+    return this.toIso(u?.createAt ?? null);
   }
 
   private toIso(value: Date | string | null | undefined): string | null {

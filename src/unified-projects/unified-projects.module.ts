@@ -44,6 +44,7 @@ import { AggregationModule } from 'src/ai-executive-chat/aggregation/aggregation
 import { RolesGuard } from 'src/auth/roles.guard';
 import { WorkStatusApprovedGuard } from 'src/auth/work-status-approved.guard';
 import { LineageLockModule } from 'src/common/lineage-lock/lineage-lock.module';
+import { UsersModule } from 'src/users/users.module';
 
 import { UnifiedProjectsController } from './unified-projects.controller';
 import { UnifiedProjectsService } from './unified-projects.service';
@@ -68,6 +69,11 @@ import { UnifiedProjectEnricherService } from './services/unified-project-enrich
     // hand-rolling a query) guarantees the FE `hasDescendant` flag
     // never drifts from the workflow write paths.
     LineageLockModule,
+    // Wave — masked-creator email on the browse card. The enricher injects
+    // `UsersService` to decrypt-then-mask the creator email (same pipeline
+    // as the `/project` list) before surfacing it. `UsersModule` exports
+    // `UsersService`.
+    UsersModule,
   ],
   controllers: [UnifiedProjectsController],
   providers: [
