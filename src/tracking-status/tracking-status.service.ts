@@ -57,8 +57,6 @@ import { EquipmentProjectGroup } from 'src/equipment-project-group/entities/equi
 import { SupplementEquipmentProjectGroup } from 'src/supplement-equipment-project-group/entities/supplement-equipment-project-group.entity';
 import { handleException } from 'src/util/handleException';
 import { AnnouncementsService } from 'src/announcements/announcements.service';
-import { Role } from 'src/roles/entities/role.entity';
-import { AnnouncementStatus, NotificationType } from 'src/announcements/entities/announcement.entity';
 import { WorkHistoryAmphoeResponsibility } from 'src/work-history-amphoe-responsibility/entities/work-history-amphoe-responsibility.entity';
 import { WorkHistoryGovernmentAgencyResponsibility } from 'src/work-history-government-agency-responsibility/entities/work-history-government-agency-responsibility.entity';
 import { LineageLockService } from 'src/common/lineage-lock/lineage-lock.service';
@@ -527,10 +525,101 @@ export class TrackingStatusService {
           `[Notify-line] emit-failed event=${args.eventType} project=${args.projectId} err=${(lineErr as Error).message}`,
         );
       }
+
+      // In-app (bell) fanout — ALWAYS sent, targeted to the SAME `recipients`
+      // resolved above (decoupled from email/LINE; no preference gate). Runs
+      // for EVERY event type. Wrapped in its own try/catch (belt-and-braces,
+      // same style as the email/line blocks) — an in-app failure MUST NOT
+      // cascade into the workflow caller.
+      try {
+        await this.announcementsService.createTargetedProjectNotification(
+          recipients.map((r) => ({
+            userId: r.userId,
+            workHistoryId: r.workHistoryId,
+          })),
+          this.buildInAppCopy(
+            args.eventType,
+            args.projectTitle,
+            args.projectKind,
+            args.reason,
+          ),
+          args.actorUserId ?? null,
+        );
+      } catch (inAppErr) {
+        this.logger.warn(
+          `[Notify-inapp] emit-failed event=${args.eventType} project=${args.projectId} err=${(inAppErr as Error).message}`,
+        );
+      }
     } catch (err) {
       this.logger.warn(
         `[Notify] emit-failed event=${args.eventType} project=${args.projectId} err=${(err as Error).message}`,
       );
+    }
+  }
+
+  /**
+   * Build the Thai in-app (bell) copy for a workflow event. Mirrors the
+   * recipient targeting of email/LINE but with concise bell-appropriate text.
+   * Only the events that reach `dispatchPhaseOneNotification` are handled
+   * explicitly; any other type falls back to a safe generic line.
+   */
+  private buildInAppCopy(
+    eventType: ProjectNotificationEventType,
+    projectTitle: string,
+    projectKind:
+      | 'project-group'
+      | 'revised-project-group'
+      | 'supplement-project-group',
+    reason?: string | null,
+  ): { title: string; description: string } {
+    const kindLabel =
+      projectKind === 'revised-project-group'
+        ? 'โครงการ (แก้ไข)'
+        : projectKind === 'supplement-project-group'
+          ? 'โครงการเพิ่มเติม'
+          : 'โครงการ';
+
+    switch (eventType) {
+      case 'PROJECT_SUBMITTED':
+        return {
+          title: 'มีรายการรอตรวจสอบ',
+          description: `${kindLabel} "${projectTitle}" ถูกส่งเข้าตรวจสอบ`,
+        };
+      case 'PROJECT_SUBMITTED_OWNER':
+        return {
+          title: 'ส่งรายการสำเร็จ',
+          description: `${kindLabel} "${projectTitle}" ถูกส่งเข้าสู่ระบบแล้ว`,
+        };
+      case 'PROJECT_VERIFIED_OWNER':
+        return {
+          title: 'ผ่านการตรวจสอบ',
+          description: `${kindLabel} "${projectTitle}" ผ่านการตรวจสอบแล้ว`,
+        };
+      case 'PROJECT_RETURNED_FOR_REVISION':
+        return {
+          title: 'ถูกส่งกลับให้แก้ไข',
+          description: `${kindLabel} "${projectTitle}" ถูกส่งกลับให้แก้ไข${reason ? ` — เหตุผล: ${reason}` : ''}`,
+        };
+      case 'PROJECT_APPROVED':
+        return {
+          title: 'ได้รับอนุมัติ',
+          description: `${kindLabel} "${projectTitle}" ได้รับอนุมัติแล้ว`,
+        };
+      case 'PROJECT_REJECTED_OWNER':
+        return {
+          title: 'ไม่ได้รับอนุมัติ',
+          description: `${kindLabel} "${projectTitle}" ไม่ได้รับอนุมัติ`,
+        };
+      case 'PROJECT_PULLED_BACK':
+        return {
+          title: 'มีการขอดึงกลับ',
+          description: `${kindLabel} "${projectTitle}" ขอดึงกลับ`,
+        };
+      default:
+        return {
+          title: 'อัปเดตสถานะโครงการ',
+          description: `${kindLabel} "${projectTitle}"`,
+        };
     }
   }
 
@@ -967,22 +1056,9 @@ export class TrackingStatusService {
           await manager.save(Comment, commentEntities);
         }
 
-        if (status.name === 'Pull_Back') {
-          try {
-            const staffRole = await manager.findOne(Role, { where: { name: 'staff' } });
-            if (staffRole) {
-              await this.announcementsService.create({
-                title: 'มีการขอดึงกลับโครงการ',
-                description: `โครงการ "${projectGroup.title}" ขอดึงกลับโดย ${workHistory.user?.firstname} ${workHistory.user?.lastname}`,
-                type: NotificationType.PROJECT,
-                status: AnnouncementStatus.PUBLISHED,
-                roleIds: [staffRole.id],
-              }, userId);
-            }
-          } catch (err) {
-            this.logger.error('Failed to send pull back notification', err);
-          }
-        }
+        // Pull_Back in-app notification is now handled by the targeted
+        // PROJECT_PULLED_BACK dispatch in dispatchPhaseOneNotification (Part C).
+        // The former role-fanout announcement (to ALL staff) was removed.
 
         return {
           saved: savedTracking,
@@ -4280,34 +4356,9 @@ export class TrackingStatusService {
           await manager.save(Comment, commentEntities);
         }
 
-        // Pull_Back announcement (reuse the existing announcement template;
-        // notification copy substitution per Q7 happens at presentation time).
-        if (status.name === 'Pull_Back') {
-          try {
-            const staffRole = await manager.findOne(Role, {
-              where: { name: 'staff' },
-            });
-            if (staffRole) {
-              await this.announcementsService.create(
-                {
-                  title: 'มีการขอดึงกลับโครงการเพิ่มเติม',
-                  description:
-                    `โครงการเพิ่มเติม "${spg.title}" ขอดึงกลับโดย ` +
-                    `${workHistory.user?.firstname} ${workHistory.user?.lastname}`,
-                  type: NotificationType.PROJECT,
-                  status: AnnouncementStatus.PUBLISHED,
-                  roleIds: [staffRole.id],
-                },
-                userId,
-              );
-            }
-          } catch (err) {
-            this.logger.error(
-              'Failed to send SPG pull back announcement',
-              err,
-            );
-          }
-        }
+        // Pull_Back in-app notification is now handled by the targeted
+        // PROJECT_PULLED_BACK dispatch in dispatchPhaseOneNotification (Part C).
+        // The former role-fanout announcement (to ALL staff) was removed.
 
         // SUPP_AI_BE_05 (2026-05-15) — §17.4 baseline snapshot fires
         // INSIDE the workflow transaction so that a snapshot-write
@@ -5300,27 +5351,9 @@ export class TrackingStatusService {
           await manager.save(Comment, commentEntities);
         }
 
-        if (status.name === 'Pull_Back') {
-          try {
-            const staffRole = await manager.findOne(Role, { where: { name: 'staff' } });
-            if (staffRole) {
-              await this.announcementsService.create(
-                {
-                  title: 'มีการขอดึงกลับรายการครุภัณฑ์',
-                  description:
-                    `รายการครุภัณฑ์ "${equipment.equipmentName}" ขอดึงกลับโดย ` +
-                    `${workHistory.user?.firstname} ${workHistory.user?.lastname}`,
-                  type: NotificationType.PROJECT,
-                  status: AnnouncementStatus.PUBLISHED,
-                  roleIds: [staffRole.id],
-                },
-                userId,
-              );
-            }
-          } catch (err) {
-            this.logger.error('Failed to send equipment pull back announcement', err);
-          }
-        }
+        // Pull_Back in-app notification is now handled by the targeted
+        // PROJECT_PULLED_BACK dispatch in dispatchPhaseOneNotification (Part C).
+        // The former role-fanout announcement (to ALL staff) was removed.
 
         return {
           saved: savedTracking,
@@ -5580,7 +5613,7 @@ export class TrackingStatusService {
         );
       }
 
-      return await this.dataSource.transaction(async (manager) => {
+      const txResult = await this.dataSource.transaction(async (manager) => {
         // 1-3. WorkHistory + workStatus.
         const workHistory = await manager.findOne(WorkHistory, {
           where: { user: { id: userId }, isCurrent: true },
@@ -5786,6 +5819,16 @@ export class TrackingStatusService {
           }
         }
 
+        // Capture fromStatus BEFORE the isLatest flip for post-commit emit.
+        const emitFromTracking = await manager.findOne(TrackingStatus, {
+          where: {
+            supplementEquipmentProjectGroupId: { id: sepg.id },
+            isLatest: true,
+          },
+          relations: ['statusId'],
+        });
+        const emitFromStatus = emitFromTracking?.statusId?.name ?? '';
+
         // §12 Audit — flip prior latest, insert new row.
         await manager.update(
           TrackingStatus,
@@ -5822,41 +5865,59 @@ export class TrackingStatusService {
           await manager.save(Comment, commentEntities);
         }
 
-        if (status.name === 'Pull_Back') {
-          try {
-            const staffRole = await manager.findOne(Role, {
-              where: { name: 'staff' },
-            });
-            if (staffRole) {
-              await this.announcementsService.create(
-                {
-                  title: 'มีการขอดึงกลับรายการครุภัณฑ์ (เล่มเพิ่มเติม)',
-                  description:
-                    `รายการครุภัณฑ์ "${sepg.equipmentName}" ขอดึงกลับโดย ` +
-                    `${workHistory.user?.firstname} ${workHistory.user?.lastname}`,
-                  type: NotificationType.PROJECT,
-                  status: AnnouncementStatus.PUBLISHED,
-                  roleIds: [staffRole.id],
-                },
-                userId,
-              );
-            }
-          } catch (err) {
-            this.logger.error(
-              'Failed to send SEPG pull back announcement',
-              err,
-            );
-          }
-        }
-
         // §17.4 — NO snapshot here. The SEPG `no-ai-baseline` row is
         // fired at create-time in
         // `SupplementEquipmentProjectGroupService.create` (publish path),
         // mirroring EPG. Firing again on the transition would duplicate
         // the authoring-time trigger.
 
-        return savedTracking;
+        return {
+          saved: savedTracking,
+          fromStatus: emitFromStatus,
+          toStatus: status.name,
+          project: {
+            id: sepg.id,
+            title: sepg.equipmentName ?? '',
+            responsibleAgencyId: sepg.responsibleAgency?.id ?? null,
+            createdByWorkHistoryId: sepg.createdBy?.id ?? null,
+            planName:
+              sepg.developmentPlanSupplement?.developmentPlan?.name ?? null,
+          },
+          actorUserId: workHistory.user?.id ?? null,
+          actorWorkHistoryId: workHistory.id ?? null,
+        };
       });
+
+      // POST-COMMIT notification dispatch (best-effort; never cascades).
+      // SEPG (ครุภัณฑ์ เล่มเพิ่มเติม) mirrors the supplement routing: staff-lead
+      // by responsibleAgency via `projectKind: 'supplement-project-group'`
+      // (same borrow-the-PG-kind placeholder as the EPG path, since the
+      // notification union has no dedicated equipment kind yet). This wires the
+      // FULL lifecycle (submit/verify/return/approve/reject/pull-back) across
+      // all three channels and REPLACES the former role-fanout Pull_Back
+      // announcement (which went to ALL staff and is now removed).
+      const eventTypes = this.resolveNotificationEventTypes(
+        txResult.fromStatus,
+        txResult.toStatus,
+      );
+      for (const eventType of eventTypes) {
+        await this.dispatchPhaseOneNotification({
+          eventType,
+          fromStatus: txResult.fromStatus,
+          toStatus: txResult.toStatus,
+          projectId: txResult.project.id,
+          projectKind: 'supplement-project-group',
+          projectTitle: txResult.project.title,
+          projectResponsibleAgencyId: txResult.project.responsibleAgencyId,
+          createdByWorkHistoryId: txResult.project.createdByWorkHistoryId,
+          reason: dto.comment ?? dto.staffRemark ?? null,
+          planName: txResult.project.planName,
+          actorUserId: txResult.actorUserId,
+          actorWorkHistoryId: txResult.actorWorkHistoryId,
+        });
+      }
+
+      return txResult.saved;
     } catch (error) {
       handleException(this.logger, error);
     }

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { CreateAnnouncementDto } from './dto/create-announcement.dto';
@@ -16,6 +16,8 @@ import { UsersService } from 'src/users/users.service';
 
 @Injectable()
 export class AnnouncementsService {
+  private readonly logger = new Logger(AnnouncementsService.name);
+
   constructor(
     @InjectRepository(Announcement)
     private announcementRepository: Repository<Announcement>,
@@ -107,6 +109,66 @@ export class AnnouncementsService {
     }
 
     return this.findOne(savedAnnouncement.id);
+  }
+
+  /**
+   * Targeted in-app (bell) notification for the project workflow lifecycle.
+   *
+   * Unlike `create()` (role-fanout via AnnouncementRole rows), this delivers
+   * to a specific set of recipients resolved by the workflow dispatcher — the
+   * SAME recipients as the email/LINE channels. It writes NO AnnouncementRole
+   * rows; delivery is per-user via `UserNotificationsService.createBulk`.
+   *
+   * ALWAYS sent (in-app is not gated on any preference — decoupled from
+   * email/LINE). Best-effort + advisory: the whole body is wrapped in
+   * try/catch and NEVER throws, so an in-app failure cannot cascade into the
+   * workflow transition (§4.1).
+   */
+  async createTargetedProjectNotification(
+    recipients: { userId: string; workHistoryId: string }[],
+    input: { title: string; description: string },
+    actorUserId: string | null,
+  ): Promise<void> {
+    if (!recipients || recipients.length === 0) {
+      return;
+    }
+    try {
+      // Resolve the actor's WorkHistory for `createdBy` — same lookup as
+      // create(). Missing actor (or not found) → leave createdBy undefined.
+      let createdBy: { id: string } | undefined = undefined;
+      if (actorUserId) {
+        const workHistory = await this.workHistoryRepository.findOne({
+          where: { user: { id: actorUserId } },
+          relations: ['user'],
+        });
+        if (workHistory) {
+          createdBy = { id: workHistory.id };
+        }
+      }
+
+      const announcement = this.announcementRepository.create({
+        type: NotificationType.PROJECT,
+        status: AnnouncementStatus.PUBLISHED,
+        title: input.title,
+        description: input.description,
+        publishDateTime: new Date(),
+        notificationStatus: NotificationStatus.SENT,
+        createdBy,
+      });
+      const savedAnnouncement = await this.announcementRepository.save(announcement);
+
+      // Per-user delivery. createBulk only reads `wh.user.id` + `wh.user`, so
+      // a minimal `{ user: { id } }` object is a sufficient work-history stand-in.
+      await this.userNotificationsService.createBulk(
+        savedAnnouncement,
+        recipients.map((r) => ({ user: { id: r.userId } })),
+      );
+    } catch (err) {
+      this.logger.error(
+        `Failed to create targeted project notification: ${(err as Error).message}`,
+        (err as Error).stack,
+      );
+    }
   }
 
   async findAll(): Promise<Announcement[]> {

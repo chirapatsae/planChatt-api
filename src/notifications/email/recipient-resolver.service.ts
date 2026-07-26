@@ -31,13 +31,21 @@ const STAFF_LEAD_ROLES = ['staff', 'admin', 'super-admin'];
  * Filtering rules (applied in SQL where possible, in JS for the last mile):
  *   - workStatus.name = 'approved'            (§2 workStatus rule)
  *   - role.name IN (staff, admin, super-admin) for staff-lead queries
- *   - user.email IS NOT NULL AND user.email <> ''
- *   - user.allowEmailNotification = true      (preference double-gate, first layer)
  *   - workHistory.isCurrent = true AND workHistory.deletedAt IS NULL
  *
- * The preference filter here is an optimization — the NotificationsEmailService
- * preference gate at enqueue time + processor time remains the single source of
- * truth (§2.4).
+ * CHANNEL-AGNOSTIC RESOLUTION — this resolver returns the RAW candidate
+ * recipient set (deduped-by-user + fanout-capped). It deliberately does NOT
+ * gate on any channel preference (no `allowEmailNotification`, no
+ * `allowLineNotification`, no email-presence). Each channel gates
+ * INDEPENDENTLY at its own worker:
+ *   - email  → NotificationsEmailService.sendPreparedJob re-checks
+ *     `allowEmailNotification` (skipped-preference) + email-verified
+ *     (skipped-not-verified).
+ *   - LINE   → NotificationsLineService re-checks `allowLineNotification`
+ *     (skipped-preference) + active binding (skipped-not-linked).
+ *   - in-app → always delivered (bell) per the targeted-notification helper.
+ * Moving the preference gate out of the resolver is what decouples the three
+ * channels: a user who opted out of email still receives LINE / in-app.
  */
 @Injectable()
 export class RecipientResolverService {
@@ -75,7 +83,7 @@ export class RecipientResolverService {
       relations: ['user'],
     });
     if (!wh || !wh.user) return [];
-    return this.filterAndCap([wh], 'resolveOwner');
+    return this.dedupeAndCap([wh], 'resolveOwner');
   }
 
   /**
@@ -102,7 +110,7 @@ export class RecipientResolverService {
     const whList = rows
       .map((r) => r.workHistory)
       .filter((wh): wh is WorkHistory => !!wh);
-    return this.filterAndCap(whList, 'resolveStaffLeadByAmphoe');
+    return this.dedupeAndCap(whList, 'resolveStaffLeadByAmphoe');
   }
 
   /**
@@ -129,7 +137,7 @@ export class RecipientResolverService {
     const whList = rows
       .map((r) => r.workHistory)
       .filter((wh): wh is WorkHistory => !!wh);
-    return this.filterAndCap(whList, 'resolveStaffLeadByAgency');
+    return this.dedupeAndCap(whList, 'resolveStaffLeadByAgency');
   }
 
   /**
@@ -257,14 +265,22 @@ export class RecipientResolverService {
 
   // ---------------------------------------------------------------------------
 
-  private filterAndCap(
+  /**
+   * CHANNEL-AGNOSTIC dedupe + cap. Returns the raw candidate recipient set
+   * with NO channel preference gating — opt-out is enforced independently at
+   * each channel's worker (see class doc). Keeps only:
+   *   - the must-have-`wh.user` guard (rows with no joined user are skipped)
+   *   - dedupe by `user.id`
+   *   - the RECIPIENT_FANOUT_CAP slice (W21 R5 blast-radius bound)
+   * The returned `email` is `user.email ?? ''` — it may be empty; the email
+   * worker re-loads + re-checks the real (encrypted) address at send time.
+   */
+  private dedupeAndCap(
     workHistories: WorkHistory[],
     source: string,
   ): ProjectNotificationRecipient[] {
     const seen = new Set<string>();
     const kept: ProjectNotificationRecipient[] = [];
-    let skippedPreference = 0;
-    let skippedNoEmail = 0;
     let skippedDuplicate = 0;
 
     for (const wh of workHistories) {
@@ -272,14 +288,6 @@ export class RecipientResolverService {
         continue;
       }
       const user = wh.user;
-      if (!user.email || user.email.trim() === '') {
-        skippedNoEmail++;
-        continue;
-      }
-      if (user.allowEmailNotification === false) {
-        skippedPreference++;
-        continue;
-      }
       if (seen.has(user.id)) {
         skippedDuplicate++;
         continue;
@@ -287,7 +295,7 @@ export class RecipientResolverService {
       seen.add(user.id);
       kept.push({
         userId: user.id,
-        email: user.email,
+        email: user.email ?? '',
         workHistoryId: wh.id,
       });
     }
@@ -299,9 +307,9 @@ export class RecipientResolverService {
       return kept.slice(0, RECIPIENT_FANOUT_CAP);
     }
 
-    if (skippedNoEmail + skippedPreference + skippedDuplicate > 0) {
+    if (skippedDuplicate > 0) {
       this.logger.debug(
-        `[Notify] filter source=${source} kept=${kept.length} no-email=${skippedNoEmail} preference-off=${skippedPreference} duplicate=${skippedDuplicate}`,
+        `[Notify] dedupe source=${source} kept=${kept.length} duplicate=${skippedDuplicate}`,
       );
     }
 

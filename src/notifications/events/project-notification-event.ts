@@ -84,7 +84,7 @@ export const LINE_EVENT_ALLOWLIST: ReadonlySet<ProjectNotificationEventType> =
     // and a queue-arrival LINE alert materially improves response time.
     //   PROJECT_SUBMITTED   — staff-lead in amphoe gets "new project to review"
     //   PROJECT_PULLED_BACK — staff-lead gets "project withdrawn from queue"
-    // The fanout cap at RecipientResolverService.filterAndCap (W21 R5) still
+    // The fanout cap at RecipientResolverService.dedupeAndCap (W21 R5) still
     // bounds blast radius for busy amphoes.
     'PROJECT_SUBMITTED',
     'PROJECT_PULLED_BACK',
