@@ -2687,8 +2687,19 @@ export class ProjectGroupsService {
     });
     if (!developmentPlan)
       throw new NotFoundException('Development plan not found');
-    // ดึง revision ล่าสุดของแต่ละ ProjectGroup
-    let latestRevised = await this.findLatestRevisedProjects(developmentPlanId, 'Approved', true);
+    // ดึง revision ล่าสุด (head-of-lineage LEAF) ของแต่ละสาย — Approved.
+    // 2026-07-26 FIX: was `findLatestRevisedProjects` (MAX revisionNumber keyed
+    // on `project_group_id`). A revision sourced from a SUPPLEMENT project
+    // (Wave SUPP-4 — `prev_project_type='supplement'`) has NO `project_group_id`
+    // (NULL), so the `revisedProject.project_group_id = maxTable.projectGroupId`
+    // inner-join dropped it (NULL = NULL is false) → that project vanished from
+    // the revision/change fork pool. `findLineageLeafRevisedProjects` keys on
+    // the §14 `prev_project_id` edge (anti-join), so it is lineage-root-agnostic
+    // and correctly returns supplement-sourced (and mid-lineage) leaves.
+    let latestRevised = await this.findLineageLeafRevisedProjects(
+      developmentPlanId,
+      'Approved',
+    );
 
     // ดึง original ที่ไม่เคยถูก revise
     let original = await this.findOriginalWithoutRevision(developmentPlanId, 'Approved', true);
@@ -3072,13 +3083,16 @@ export class ProjectGroupsService {
    * then drops — making the whole lineage vanish. Keying on the §14 edge
    * (`prev_project_id`) selects the true leaf regardless of round counters.
    *
-   * No status filter — the leaf surfaces with its CURRENT status (Approved or
-   * in-progress), per the §14.10 "เวอร์ชันล่าสุด + สถานะล่าสุด" requirement.
-   * `trackingStatus.isLatest = true` is kept so each row carries its latest
-   * status row only.
+   * Optional `status` filter: when omitted the leaf surfaces with its CURRENT
+   * status (Approved or in-progress), per the §14.10 "เวอร์ชันล่าสุด +
+   * สถานะล่าสุด" requirement (the /project owner-home caller). When provided
+   * (e.g. `'Approved'` from the revision/change fork pool) only leaves whose
+   * LATEST status matches are returned. `trackingStatus.isLatest = true` is
+   * kept so each row carries its latest status row only.
    */
   private async findLineageLeafRevisedProjects(
     developmentPlanId: string,
+    status?: string,
   ): Promise<RevisedProjectGroup[]> {
     const query = this.revisedProjectGroupRepo
       .createQueryBuilder('revisedProject')
@@ -3122,6 +3136,10 @@ export class ProjectGroupsService {
             AND child.deleted_at IS NULL
         )`,
       );
+
+    if (status) {
+      query.andWhere('status.name = :statusName', { statusName: status });
+    }
 
     const projects = await query.getMany();
     // W100 PR1 — mask createdBy + tracking-status actor PII (default #3).

@@ -771,6 +771,30 @@ export class SupplementEquipmentProjectGroupService {
     const [items, total] = await qb.getManyAndCount();
     await this.maskCreatedByUserOnSepg(items);
 
+    // CLAUDE.md §14 — decorate each SEPG with `hasDescendant` so the
+    // revision-equipment "select source" pool locks / hides a SEPG that has
+    // already been revised (a live RELPG with prev_project_type =
+    // 'supplement_equipment', deleted_at IS NULL references it). Without this
+    // the SEPG source rows carried NO `hasDescendant`, so a forked
+    // ครุภัณฑ์เพิ่มเติม kept re-appearing as selectable after its head-of-
+    // lineage moved to the แก้ไข/เปลี่ยนแปลง book. Mirrors the EPG decoration
+    // in equipment-project-group.service.ts.
+    if (items.length > 0) {
+      const rows = (await this.dataSource.query(
+        `SELECT DISTINCT prev_project_id AS "parentId"
+           FROM revised_equipment_project_groups
+          WHERE prev_project_id = ANY($1::uuid[])
+            AND prev_project_type = 'supplement_equipment'
+            AND deleted_at IS NULL`,
+        [items.map((i) => i.id)],
+      )) as Array<{ parentId: string }>;
+      const lockedIds = new Set(rows.map((r) => r.parentId));
+      items.forEach((i) => {
+        (i as unknown as { hasDescendant: boolean }).hasDescendant =
+          lockedIds.has(i.id);
+      });
+    }
+
     return {
       items,
       total,

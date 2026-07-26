@@ -238,12 +238,16 @@ export class RevisedEquipmentProjectGroupService {
           manager,
         );
 
-        if (!srcRelpg.equipmentProjectGroup) {
-          throw new NotFoundException(
-            `Lineage-root EquipmentProjectGroup not found for RELPG ${srcRelpg.id}`,
-          );
-        }
-        rootEpg = srcRelpg.equipmentProjectGroup;
+        // A RELPG whose OWN lineage root is a SEPG (ครุภัณฑ์เพิ่มเติม) has NO
+        // root EquipmentProjectGroup — its `equipment_project_group_id` is
+        // NULL (set null by the SEPG-source branch below). Re-revising such a
+        // RELPG IS valid: the chain continues via prevProjectId +
+        // 'revised_equipment' with `rootEpg` staying null (persists NULL), the
+        // equipment analog of the project supplement→revision→revision fix.
+        // Previously this threw 404 ("Lineage-root EquipmentProjectGroup not
+        // found for RELPG"), blocking any 2nd revision of a supplement-sourced
+        // equipment item.
+        rootEpg = srcRelpg.equipmentProjectGroup ?? null;
         prevProjectId = srcRelpg.id;
         prevProjectType = PrevEquipmentProjectType.REVISED_EQUIPMENT;
       } else {

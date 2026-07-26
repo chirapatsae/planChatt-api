@@ -219,8 +219,10 @@ export class UnifiedProjectMapper {
    *   - `projectType = 'supplement'` so FE-01 can echo it back as
    *     `prevProjectType` on the create-RPG POST.
    *   - `projectGroup` is null — SPGs are not children of any PG.
-   *   - `isBooked` / `bookedAt` / `additionalDetail` are NOT mirrored
-   *     on the SPG entity in the same shape; default sensibly.
+   *   - `isBooked` / `bookedAt` ARE mirrored from the SPG's own columns
+   *     (added in convergence-milestone-2-spg-booked-fields / DB-01,
+   *     2026-05-25 — same shape as PG/RPG). Previously hardcoded `false`,
+   *     which made a booked supplement version render "ยังไม่เข้าเล่ม".
    *   - `developmentPlan` is resolved via the parent supplement chain
    *     so downstream consumers can read `report_format` without an
    *     additional JOIN.
@@ -259,8 +261,8 @@ export class UnifiedProjectMapper {
       budgets: spg.budgets,
       trackingStatus: spg.trackingStatus,
       attachments: spg.attachments as any,
-      isBooked: false,
-      bookedAt: null,
+      isBooked: spg.isBooked,
+      bookedAt: spg.bookedAt,
       pageNumber: spg.pageNumber,
       additionalDetail: spg.additionalDetail,
       hasDescendant: hasDescendant ?? false,
