@@ -175,6 +175,7 @@ export class WorkHistoryGovernmentAgencyResponsibilityService {
         relations: [
           'workHistory',
           'workHistory.user',
+          'workHistory.amphoe',
           'workHistory.localAdministrativeOrganization',
           'workHistory.governmentAgencies'
         ],
@@ -188,7 +189,13 @@ export class WorkHistoryGovernmentAgencyResponsibilityService {
               lastname: true,
               prefix: true,
               email: true,
+              // Needed by the avatar hover card on the tracking-status
+              // "ผู้ตรวจ" step: photo + "Member Since". Without these the
+              // reviewer avatar fell back to initials + showed no detail.
+              profileImageUrl: true,
+              createAt: true,
             },
+            amphoe: true,
             localAdministrativeOrganization: true,
             governmentAgencies: true
           }

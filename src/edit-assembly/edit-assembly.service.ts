@@ -663,12 +663,29 @@ export class EditAssemblyService {
       );
     }
 
+    // Bake the ผ.03 (equipment revision) section INTO the Part 3 file so the
+    // saved ส่วนที่ 3 IS the complete revision section (ผ.02 โครงการ + ผ.03
+    // ครุภัณฑ์ = one document) — mirroring the MAIN/combined-draft behavior.
+    // ผ.02 restarts at page 1 (§21.3.4); ผ.03 continues from its page count.
+    // Degrades to ผ.02-only when no Approved RELPG exists. merge/preview then
+    // just concatenate the parts (they do NOT re-append ผ.03).
+    const por02Buffer = pageMap.buffer;
+    const por02PageCount = (await PDFDocument.load(por02Buffer)).getPageCount();
+    const por03 =
+      await this.por03Service.renderApprovedRevisionScopedPor03Buffer(
+        developmentPlanRevisionId,
+        por02PageCount,
+      );
+    const part3Buffer = por03
+      ? await this.mergePdfBuffers([por02Buffer, por03.buffer])
+      : por02Buffer;
+
     const generateLocation = await this.resolveEditLocation(developmentPlanRevisionId);
     const filePath = this.fileService.savePartFile(
       generateLocation,
       draft.targetVersion,
       3,
-      pageMap.buffer,
+      part3Buffer,
     );
 
     draft.part3Status = EditAssemblyPartUploadStatus.GENERATED;
@@ -767,20 +784,10 @@ export class EditAssemblyService {
     const part2 = this.fileService.readPartFileByStored(draft.part2FilePath);
     const part3 = this.fileService.readPartFileByStored(draft.part3FilePath);
 
-    // wave-edit-change-assembly-por03-append (§5.3 Phase 3 / §21.3 /
-    // §17.2) — append the formal ผ.03 revision section (RELPG OLD-vs-NEW),
-    // Approved-only + STRATEGY_BASED-only, read-only. ผ.02 Part 3 ของ
-    // EDIT/CHANGE เริ่มนับหน้า 1 ใหม่ (§21.3.4) — ผ.03 ต่อจาก Part 3
-    // จึง offset = pageCount(part3) เท่านั้น (ไม่รวม part1/part2). Degrades to null when no
-    // Approved RELPG exists → ผ.02 book is produced verbatim.
-    const por03Offset = (await PDFDocument.load(part3)).getPageCount();
-    const por03 = await this.por03Service.renderApprovedRevisionScopedPor03Buffer(
-      developmentPlanRevisionId,
-      por03Offset,
-    );
-    return this.mergePdfBuffers(
-      por03 ? [part1, part2, part3, por03.buffer] : [part1, part2, part3],
-    );
+    // ผ.03 (equipment revision) is BAKED into Part 3 by generatePart3, so the
+    // preview just concatenates the parts — no separate ผ.03 render/append
+    // (that would duplicate the section). Part 3 already carries ผ.02 + ผ.03.
+    return this.mergePdfBuffers([part1, part2, part3]);
   }
 
   /**
@@ -847,15 +854,23 @@ export class EditAssemblyService {
       // `equipmentIds`/`pageMap` ARE consumed below to stamp RELPG
       // `is_booked` / `booked_at` / `page_number` per row — the §20.2
       // Phase 3 deferral note is lifted by the booking-stamp step.
-      const por03Offset = (await PDFDocument.load(part3)).getPageCount();
+      // ผ.03 is BAKED into Part 3 by generatePart3 — do NOT append it again
+      // (that would duplicate the section). Re-render ผ.03 ONLY to recover the
+      // equipment ids + per-row LOCAL page numbers for the booking stamp below;
+      // the buffer itself is discarded. ผ.02 page count (where ผ.03 starts in
+      // Part 3) = Part 3 pages − ผ.03 pages, so absolute page = por02PageCount
+      // + local, matching the footer baked into Part 3.
       const por03 =
         await this.por03Service.renderApprovedRevisionScopedPor03Buffer(
           developmentPlanRevisionId,
-          por03Offset,
+          0,
         );
-      const mergedBuffer = await this.mergePdfBuffers(
-        por03 ? [part1, part2, part3, por03.buffer] : [part1, part2, part3],
-      );
+      const part3PageCount = (await PDFDocument.load(part3)).getPageCount();
+      const por03PageCount = por03
+        ? (await PDFDocument.load(por03.buffer)).getPageCount()
+        : 0;
+      const por02PageCount = part3PageCount - por03PageCount;
+      const mergedBuffer = await this.mergePdfBuffers([part1, part2, part3]);
       const mergedPdf = await PDFDocument.load(mergedBuffer);
       const totalPages = mergedPdf.getPageCount();
 
@@ -920,7 +935,7 @@ export class EditAssemblyService {
         const relpgBookedAt = new Date();
         const relpgPages: (number | null)[] = relpgIds.map((id) => {
           const local = por03.pageMap.get(id);
-          return local === undefined ? null : por03Offset + local;
+          return local === undefined ? null : por02PageCount + local;
         });
         await manager.query(
           `UPDATE revised_equipment_project_groups e

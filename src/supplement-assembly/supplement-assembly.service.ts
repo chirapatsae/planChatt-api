@@ -1512,6 +1512,22 @@ export class SupplementAssemblyService {
           reportType: 'inAuthority',
         });
 
+      // Bake the SEPG ผ.03 (equipment) section INTO the Part 3 file so the
+      // saved ส่วนที่ 3 IS the complete section (ผ.02 โครงการ + ผ.03 ครุภัณฑ์ =
+      // one document) — mirroring MAIN/combined-draft. ผ.02 restarts at page 1
+      // (§21.3.4); ผ.03 continues from its page count. Degrades to ผ.02-only
+      // when no Approved SEPG exists. preview/merge then just concatenate the
+      // parts (they do NOT re-append ผ.03).
+      const por02PageCount = (await PDFDocument.load(buffer)).getPageCount();
+      const por03Gen =
+        await this.por03Service.renderApprovedSupplementScopedPor03Buffer(
+          supplementId,
+          por02PageCount,
+        );
+      const part3Buffer = por03Gen
+        ? await this.mergePdfBuffers([buffer, por03Gen.buffer])
+        : buffer;
+
       const targetVersion = await this.computeNextVersion(
         supplementId,
         manager,
@@ -1521,7 +1537,7 @@ export class SupplementAssemblyService {
       const part3Location = await this.resolveLocation(supplementId, manager);
       this.fileService.ensureVersionFolders(part3Location, targetVersion);
       const filename = `part-3.pdf`;
-      this.fileService.writePart(part3Location, targetVersion, 3, buffer);
+      this.fileService.writePart(part3Location, targetVersion, 3, part3Buffer);
 
       draft.part3Status = SupplementAssemblyPartUploadStatus.GENERATED;
       draft.part3Source = SupplementAssemblyPartSource.GENERATED;
@@ -1694,14 +1710,10 @@ export class SupplementAssemblyService {
     // and produce the §21.3.4 visible-jump bug). `equipmentIds`/`pageMap`
     // are intentionally discarded — no SEPG booking-state stamping this
     // wave (deferred per §20.2, mirroring EDIT/CHANGE).
-    const por03Offset = (await PDFDocument.load(part3)).getPageCount();
-    const por03 = await this.por03Service.renderApprovedSupplementScopedPor03Buffer(
-      supplementId,
-      por03Offset,
-    );
-    return this.mergePdfBuffers(
-      por03 ? [part1, part2, part3, por03.buffer] : [part1, part2, part3],
-    );
+    // ผ.03 (SEPG equipment) is BAKED into Part 3 by generatePart3, so the
+    // preview just concatenates the parts — no separate ผ.03 render/append
+    // (that would duplicate the section). Part 3 already carries ผ.02 + ผ.03.
+    return this.mergePdfBuffers([part1, part2, part3]);
   }
 
   // ===================================================================
@@ -1888,24 +1900,31 @@ export class SupplementAssemblyService {
       // `equipmentIds`/`pageMap` ARE consumed below to stamp SEPG
       // `is_booked` / `booked_at` / `page_number` per row alongside the
       // SPG stamp (§20.3 Invariant 1).
-      const por03Offset = (await PDFDocument.load(part3Buffer)).getPageCount();
+      // ผ.03 (SEPG equipment) is BAKED into Part 3 by generatePart3 — do NOT
+      // append it again (that would duplicate the section). Re-render ผ.03
+      // ONLY to recover the equipment ids + per-row LOCAL page numbers for the
+      // booking stamp below; the buffer itself is discarded. ผ.02 page count
+      // (where ผ.03 starts in Part 3) = Part 3 pages − ผ.03 pages, so absolute
+      // page = por02PageCount + local, matching the footer baked into Part 3.
       const por03 =
         await this.por03Service.renderApprovedSupplementScopedPor03Buffer(
           supplementId,
-          por03Offset,
+          0,
         );
+      const part3PageCount = (await PDFDocument.load(part3Buffer)).getPageCount();
+      const por03PageCount = por03
+        ? (await PDFDocument.load(por03.buffer)).getPageCount()
+        : 0;
+      const por02PageCount = part3PageCount - por03PageCount;
       // wave-supplement-assembly-metadata-parity / BE-01 — use the
       // pageCount-emitting merge variant so the version row carries
       // `totalPages` without a second PDFDocument.load roundtrip.
-      // `mergedPageCount` is null only on the (defensive) catch path
-      // inside `mergePdfBuffersWithMeta` for the single-buffer
-      // shortcut — the standard multi-buffer path always yields a number.
       const { buffer: mergedBuffer, pageCount: mergedPageCount } =
-        await this.mergePdfBuffersWithMeta(
-          por03
-            ? [part1Buffer, part2Buffer, part3Buffer, por03.buffer]
-            : [part1Buffer, part2Buffer, part3Buffer],
-        );
+        await this.mergePdfBuffersWithMeta([
+          part1Buffer,
+          part2Buffer,
+          part3Buffer,
+        ]);
       // `mergedPath` is the RELATIVE KEY (umbrella §7.2) — persisted
       // verbatim to `supplement_assembly_versions.merged_file_path`.
       const mergedPath = this.fileService.writeMerged(
@@ -2032,7 +2051,7 @@ export class SupplementAssemblyService {
         const sepgIds = por03.equipmentIds;
         const sepgPages: (number | null)[] = sepgIds.map((id) => {
           const local = por03.pageMap.get(id);
-          return local === undefined ? null : por03Offset + local;
+          return local === undefined ? null : por02PageCount + local;
         });
         await manager.query(
           `UPDATE supplement_equipment_project_groups e

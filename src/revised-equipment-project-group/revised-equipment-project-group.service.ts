@@ -2484,6 +2484,12 @@ export class RevisedEquipmentProjectGroupService {
         'createdBy.user',
         'developmentPlan',
         'developmentPlanRevision',
+        // Fallback plan sources for the target-book selector (§10): when the
+        // direct `development_plan_id` FK is NULL on some fork paths, the FE
+        // still resolves the plan via the revision's / source EPG's plan.
+        // Mirrors the project comparison endpoint's robustness.
+        'developmentPlanRevision.developmentPlan',
+        'equipmentProjectGroup.developmentPlan',
         'equipmentProjectGroup',
         'strategy',
         'tactic',
