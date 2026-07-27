@@ -2362,24 +2362,146 @@ export class RevisedProjectGroupService {
       rootProjectGroupId = requestedRevisedProject.projectGroup?.id || null;
 
       if (!rootProjectGroupId) {
-        // Wave SUPP-4 — when this RPG is the head of an SPG-rooted
-        // lineage (`prev_project_type='supplement'`), no parent
-        // ProjectGroup exists. The chain root is the SPG itself.
-        //
-        // Returning a minimal envelope (current RPG only, no PG-based
-        // sibling list) is acceptable: FE-01 will treat SPG-rooted
-        // chains as single-entry version trees in Wave SUPP-4. A
-        // deeper SPG-side walker (collecting all RPGs forked from the
-        // same SPG into a chain view) can land in a follow-up wave.
-        if (requestedRevisedProject.prevProjectType === PrevProjectType.SUPPLEMENT) {
-          return {
-            original: null,
-            current: currentProject,
-            currentId: projectId,
-            revisions: [currentProject],
-          };
+        // Wave SUPP-4 — SPG-rooted lineage: no parent ProjectGroup exists,
+        // so `project_group_id` is NULL for the ENTIRE chain (the first RPG
+        // has `prev_project_type='supplement'`; every re-revision of it has
+        // `'revised'`). The PG-keyed sibling query below can't run, so we
+        // reconstruct the version chain by walking the prev/next links:
+        // SPG (root) → RPG → RPG → …, so the admin detail page's version
+        // navigator works instead of collapsing to a single entry.
+        const rpgChainRelations = [
+          'developmentPlanRevision',
+          'developmentPlanRevision.developmentPlan',
+          'developmentPlanRevision.revisionType',
+          'projectGroup',
+          'createdBy',
+          'createdBy.user',
+          'createdBy.amphoe',
+          'createdBy.localAdministrativeOrganization',
+          'strategy',
+          'tactic',
+          'plan',
+          'developmentPlan',
+          'budgets',
+          'trackingStatus',
+          'trackingStatus.statusId',
+          'trackingStatus.comments',
+          'trackingStatus.createdBy',
+          'trackingStatus.createdBy.user',
+          'responsibleAgency',
+          'originAgencyId',
+          'attachments',
+        ];
+
+        const chainById = new Map<string, RevisedProjectGroup>();
+        let supplementRootId: string | null = null;
+
+        // Backward walk: current → ancestors, until the first RPG (the one
+        // forked directly off the SPG, `prev_project_type='supplement'`).
+        let cursor: RevisedProjectGroup | null = requestedRevisedProject;
+        while (cursor && !chainById.has(cursor.id)) {
+          chainById.set(cursor.id, cursor);
+          if (cursor.prevProjectType === PrevProjectType.SUPPLEMENT) {
+            supplementRootId = cursor.prevProjectId ?? null;
+            break;
+          }
+          if (
+            cursor.prevProjectType === PrevProjectType.REVISION &&
+            cursor.prevProjectId
+          ) {
+            cursor = await this.revisedProjectGroupRepo.findOne({
+              where: { id: cursor.prevProjectId },
+              relations: rpgChainRelations,
+            });
+          } else {
+            break;
+          }
         }
-        throw new NotFoundException('ไม่พบโครงการต้นฉบับของรายการแก้ไขนี้');
+
+        // Forward walk: current → descendants (each RPG whose prev pointer
+        // targets the running tip). Linear by construction; `order` keeps it
+        // deterministic if a branch ever exists.
+        let tipId: string | null = requestedRevisedProject.id;
+        while (tipId) {
+          const child: RevisedProjectGroup | null =
+            await this.revisedProjectGroupRepo.findOne({
+              where: {
+                prevProjectId: tipId,
+                prevProjectType: PrevProjectType.REVISION,
+              },
+              relations: rpgChainRelations,
+              order: { createdAt: 'ASC' },
+            });
+          if (!child || chainById.has(child.id)) break;
+          chainById.set(child.id, child);
+          tipId = child.id;
+        }
+
+        const chainRevisions = Array.from(chainById.values()).sort(
+          (a, b) =>
+            new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+        );
+
+        // The SPG root becomes the chain baseline (`original`), diffed like a
+        // ProjectGroup would be for a main-rooted chain.
+        const supplementRoot = supplementRootId
+          ? await this.supplementProjectGroupRepo.findOne({
+              where: { id: supplementRootId },
+              relations: [
+                'developmentPlanSupplement',
+                'developmentPlanSupplement.developmentPlan',
+                'strategy',
+                'tactic',
+                'plan',
+                'developmentIssue',
+                'createdBy',
+                'createdBy.user',
+                'createdBy.amphoe',
+                'createdBy.localAdministrativeOrganization',
+                'budgets',
+                'trackingStatus',
+                'trackingStatus.statusId',
+                'trackingStatus.comments',
+                'trackingStatus.createdBy',
+                'trackingStatus.createdBy.user',
+                'responsibleAgency',
+                'originAgencyId',
+                'attachments',
+              ],
+            })
+          : null;
+
+        // W100 PR2 — mask every node before the unified mapper runs.
+        await this.maskCreatedByUser([
+          ...(supplementRoot ? [supplementRoot as any] : []),
+          ...chainRevisions.map((r) => r as any),
+        ]);
+
+        const chainLockIds =
+          await this.findRevisedProjectGroupIdsWithDescendants(
+            chainRevisions.map((r) => r.id),
+          );
+
+        const unifiedOriginal = supplementRoot
+          ? UnifiedProjectMapper.fromSupplementProjectGroup(supplementRoot)
+          : null;
+
+        const unifiedRevisions = chainRevisions.map((r) =>
+          UnifiedProjectMapper.fromRevisedProjectGroup(
+            r,
+            chainLockIds.has(r.id),
+          ),
+        );
+
+        const foundCurrent = unifiedRevisions.find((r) => r.id === projectId);
+        if (foundCurrent) currentProject = foundCurrent;
+
+        return {
+          original: unifiedOriginal,
+          current: currentProject,
+          currentId: projectId,
+          revisions: unifiedRevisions,
+        };
       }
 
       // 3) ใช้ root project group id ไปดึง original project

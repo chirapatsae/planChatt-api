@@ -2308,23 +2308,110 @@ export class RevisedEquipmentProjectGroupService {
       }
       if (!epgRoot) {
         // SEPG-rooted lineage: the first-fork RELPG points at an SEPG via
-        // `prev_project_type='supplement_equipment'`, so no EPG root exists.
-        // Mirror the project SPG-rooted behavior (Wave SUPP-4): return a
-        // minimal single-entry envelope (the requested RELPG only, no
-        // EPG-based sibling chain). A deeper SEPG-side walker can land later.
+        // `prev_project_type='supplement_equipment'`, so no EPG root exists
+        // (`equipment_project_group_id` is NULL for the whole chain).
         const sepgRooted =
           cursor?.prevProjectType ===
             PrevEquipmentProjectType.SUPPLEMENT_EQUIPMENT ||
           requestedRelpg?.prevProjectType ===
             PrevEquipmentProjectType.SUPPLEMENT_EQUIPMENT;
         if (sepgRooted) {
-          await this.maskCreatedByUserOnRelpg([requestedRelpg as any]);
-          this.projectLatestStatusOnRelpg([requestedRelpg as any]);
+          // Reconstruct the FULL chain (SEPG root → RELPG → RELPG → …) so the
+          // detail page's version navigator works — parity with the project
+          // SPG-rooted deep walk. (Previously returned a single-entry stub,
+          // which hid the "ดูเวอร์ชันก่อนหน้า" navigator since the FE only
+          // shows it when the chain has > 1 entry.)
+          const sepgRelations = [
+            'createdBy',
+            'createdBy.user',
+            'developmentPlanSupplement',
+            'developmentPlanSupplement.developmentPlan',
+            'strategy',
+            'tactic',
+            'plan',
+            'developmentIssue',
+            'equipmentCategory',
+            'responsibleAgency',
+            'amphoe',
+            'localAdministrativeOrganization',
+            'budgets',
+            'trackingStatus',
+            'trackingStatus.statusId',
+            'trackingStatus.comments',
+            'trackingStatus.createdBy',
+            'trackingStatus.createdBy.user',
+          ];
+
+          // `cursor` is the first-fork RELPG (prev='supplement_equipment');
+          // its `prevProjectId` is the SEPG root.
+          const firstFork =
+            cursor?.prevProjectType ===
+              PrevEquipmentProjectType.SUPPLEMENT_EQUIPMENT
+              ? cursor
+              : requestedRelpg;
+          const sepgRootId = firstFork?.prevProjectId ?? null;
+
+          const sepgRoot = sepgRootId
+            ? await manager.findOne(SupplementEquipmentProjectGroup, {
+                where: { id: sepgRootId },
+                relations: sepgRelations,
+              })
+            : null;
+
+          // Forward walk collecting live RELPG descendants oldest→newest.
+          // Seed from the SEPG root when resolvable; otherwise from the
+          // first-fork RELPG itself so a missing SEPG never drops the chain.
+          const chainRelpgs: RevisedEquipmentProjectGroup[] = [];
+          const visited = new Set<string>();
+          let parentId: string | null;
+          let parentType: PrevEquipmentProjectType;
+          if (sepgRoot) {
+            parentId = sepgRoot.id;
+            parentType = PrevEquipmentProjectType.SUPPLEMENT_EQUIPMENT;
+          } else if (firstFork) {
+            chainRelpgs.push(firstFork);
+            visited.add(firstFork.id);
+            parentId = firstFork.id;
+            parentType = PrevEquipmentProjectType.REVISED_EQUIPMENT;
+          } else {
+            parentId = null;
+            parentType = PrevEquipmentProjectType.REVISED_EQUIPMENT;
+          }
+          while (parentId) {
+            const children = await manager.find(
+              RevisedEquipmentProjectGroup,
+              {
+                where: { prevProjectId: parentId, prevProjectType: parentType },
+                relations: relpgRelations,
+                order: { createdAt: 'ASC' },
+              },
+            );
+            const next = children[0];
+            if (!next || visited.has(next.id)) break;
+            visited.add(next.id);
+            chainRelpgs.push(next);
+            parentId = next.id;
+            parentType = PrevEquipmentProjectType.REVISED_EQUIPMENT;
+          }
+
+          await this.maskCreatedByUserOnRelpg(chainRelpgs);
+          this.projectLatestStatusOnRelpg(chainRelpgs);
+          if (sepgRoot) {
+            await this.maskCreatedByUserOnRelpg([sepgRoot as any]);
+            this.projectLatestStatusOnRelpg([sepgRoot as any]);
+          }
+
+          const current =
+            chainRelpgs.find((r) => r.id === id) ?? requestedRelpg;
+          const revisions = sepgRoot
+            ? [sepgRoot, ...chainRelpgs]
+            : [...chainRelpgs];
+
           return {
-            original: null,
-            current: requestedRelpg,
+            original: sepgRoot,
+            current,
             currentId: id,
-            revisions: [requestedRelpg],
+            revisions,
           };
         }
         throw new NotFoundException('ไม่พบโครงการต้นฉบับของรายการแก้ไขนี้');
