@@ -398,7 +398,12 @@ export class DevelopmentPlanSupplementService {
       .leftJoin('supplement.developmentPlan', 'developmentPlan')
       .where('developmentPlan.id = :developmentPlanId', { developmentPlanId })
       .andWhere('supplement.startDate IS NOT NULL')
-      .andWhere('supplement.endDate IS NOT NULL');
+      .andWhere('supplement.endDate IS NOT NULL')
+      // Only ACTIVE (not-yet-finalized) supplement rounds block a new
+      // overlapping range. A round that is already รวมเล่มแล้ว (`isBooked =
+      // true`) is closed & finalized — its date window must NOT prevent
+      // opening a new round even if the dates overlap (owner direction).
+      .andWhere('supplement.isBooked = :isBooked', { isBooked: false });
 
     if (excludeSupplementId) {
       qb.andWhere('supplement.id != :excludeSupplementId', { excludeSupplementId });
